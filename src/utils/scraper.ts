@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { parseScheduleCells, ParsedClass } from './aiParser';
 
 export interface Degree {
   name: string;
@@ -23,7 +24,7 @@ export interface ClassEvent {
   room: string;
   startTime: string;
   endTime: string;
-  duration: number; // hours
+  duration: number;
 }
 
 export interface ScheduleData {
@@ -89,8 +90,11 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
       const nameMatch = content.match(/name:\s*"([^"]+)"/);
       const urlMatch = content.match(/pageUrl:\s*"([^"]+)"/);
       if (nameMatch && urlMatch) {
+        const rawName = nameMatch[1];
+        // Salta tab "Mappa Edifici" o simili
+        if (/mappa/i.test(rawName)) continue;
         tabs.push({
-          name: nameMatch[1],
+          name: shortenTabName(rawName),
           url: urlMatch[1].replace(/\\/g, ''),
         });
       }
@@ -103,31 +107,40 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
 }
 
 /**
- * Parsa una cella del tipo: "FISICA II (14) PATERA Vincenzo"
- * Estrae: materia, numero aula, docente
+ * Abbrevia i nomi dei tab dal formato lungo del foglio Google
+ * Es: "2026-27 I anno I sem Canale A-L" → "1° Anno (A-L)"
+ *     "2026-27 II anno I sem" → "2° Anno"
+ *     "III anno I sem" → "3° Anno"
  */
-function parseCell(cell: string): { subject: string; roomNum: string; teacher: string } | null {
-  if (!cell || cell.trim() === '') return null;
+function shortenTabName(raw: string): string {
+  // Rimuovi anno accademico (es. "2026-27 ")
+  let name = raw.replace(/\d{4}-\d{2,4}\s*/g, '').trim();
   
-  // Decode HTML entities
-  const decoded = cell.replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+  // Estrai il numero dell'anno (I, II, III, IV, V o 1, 2, 3, 4, 5)
+  const romanMatch = name.match(/\b(I{1,3}V?|IV|V)\s*°?\s*anno/i);
+  const arabicMatch = name.match(/\b([1-5])\s*°?\s*anno/i);
   
-  // Formato: "MATERIA (NUM_AULA) COGNOME Nome"
-  const match = decoded.match(/^(.+?)\s*\((\d+)\)\s*(.+)$/);
-  if (match) {
-    return {
-      subject: match[1].trim(),
-      roomNum: match[2].trim(),
-      teacher: match[3].trim(),
-    };
+  let yearNum = '';
+  if (romanMatch) {
+    const romanMap: Record<string, string> = { 'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5' };
+    yearNum = romanMap[romanMatch[1].toUpperCase()] || romanMatch[1];
+  } else if (arabicMatch) {
+    yearNum = arabicMatch[1];
   }
   
-  // Fallback: no aula number
-  return {
-    subject: decoded.trim(),
-    roomNum: '',
-    teacher: '',
-  };
+  // Estrai il canale (A-L, M-Z, ecc.)
+  const channelMatch = name.match(/[Cc]anale\s+([A-Z]-[A-Z])/);
+  const channel = channelMatch ? ` (${channelMatch[1]})` : '';
+  
+  if (yearNum) {
+    return `${yearNum}° Anno${channel}`;
+  }
+  
+  // Fallback: abbrevia il semestre
+  return name
+    .replace(/\s*I\s*sem(estre)?/i, '')
+    .replace(/\s*II\s*sem(estre)?/i, '')
+    .trim() || raw;
 }
 
 export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
@@ -151,7 +164,13 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
       let tdMatch;
       while ((tdMatch = tdRegex.exec(trContent)) !== null) {
-        const text = tdMatch[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        const text = tdMatch[1]
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&#39;/g, "'")
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim();
         row.push(text);
       }
       if (row.length > 0) rows.push(row);
@@ -159,30 +178,19 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
 
     const data = { ...defaultData };
 
-    // Parsa le info dall'intestazione (righe 0-8)
+    // Parsa le info dall'intestazione
     for (const row of rows.slice(0, 10)) {
       const joined = row.join(' ').toLowerCase();
-      if (joined.includes('facoltà di') || joined.includes('facolta di')) {
-        data.info.faculty = row.slice(1).join(' ').trim();
-      }
-      if (joined.includes('corso di studi') || joined.includes('laurea in')) {
-        data.info.course = row[2] || row[1] || '';
-      }
-      if (joined.includes('anno di corso')) {
-        data.info.year = row[2] || '';
-      }
       if (joined.includes('a.a.')) {
-        data.info.academicYear = row[1]?.replace('A.A.', '').trim() || '';
-      }
-      if (joined.includes('canale')) {
-        data.info.channel = row[2] || '';
+        const aaMatch = row.join(' ').match(/\d{4}-\d{2,4}/);
+        if (aaMatch) data.info.academicYear = aaMatch[0];
       }
       if (joined.includes('semestre')) {
         data.info.semester = row.slice(1).join(' ').trim();
       }
     }
 
-    // Parsa le aule (righe che contengono "AULA" e un codice edificio tipo RM006)
+    // Parsa le aule
     for (const row of rows.slice(0, 10)) {
       if (row[1] && /^AULA\s+/i.test(row[1])) {
         data.classrooms.push({
@@ -193,7 +201,7 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       }
     }
 
-    // Trova la riga con i giorni (lunedì, martedì, ecc.)
+    // Trova la riga con i giorni
     let dayRowIndex = -1;
     for (let i = 0; i < rows.length; i++) {
       const joined = rows[i].join(' ').toLowerCase();
@@ -202,11 +210,9 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
         break;
       }
     }
-
     if (dayRowIndex === -1) return data;
 
-    // Righe orario sono dalla dayRowIndex + 1 in poi
-    // Col 0 = orario, Col 1-5 = LUN-VEN
+    // Raccogli tutti gli slot orari
     const timeSlots: { time: string; cells: string[] }[] = [];
     for (let i = dayRowIndex + 1; i < rows.length; i++) {
       const row = rows[i];
@@ -218,45 +224,48 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       });
     }
 
-    // Mappa aula number -> ClassroomInfo
-    const aulaMap: Record<string, ClassroomInfo> = {};
-    for (const cr of data.classrooms) {
-      const numMatch = cr.aulaName.match(/\d+/);
-      if (numMatch) {
-        aulaMap[numMatch[0]] = cr;
+    // Raccogli tutte le celle non vuote per inviarle all'AI in batch
+    const allCells: string[] = [];
+    const cellMap: { day: number; slotIndex: number }[] = [];
+    
+    for (let slotIdx = 0; slotIdx < timeSlots.length; slotIdx++) {
+      for (let day = 0; day < 5; day++) {
+        const cellText = timeSlots[slotIdx].cells[day];
+        allCells.push(cellText);
+        cellMap.push({ day, slotIndex: slotIdx });
       }
     }
 
-    // Accorpa slot adiacenti con la stessa materia nello stesso giorno
+    // Parsa con AI (o fallback regex)
+    const parsed: ParsedClass[] = await parseScheduleCells(allCells);
+
+    // Ricostruisci gli eventi per giorno, accorpando slot adiacenti
     for (let day = 0; day < 5; day++) {
       const events: ClassEvent[] = [];
       let currentEvent: ClassEvent | null = null;
 
-      for (const slot of timeSlots) {
-        const cellText = slot.cells[day];
-        const parsed = parseCell(cellText);
+      for (let slotIdx = 0; slotIdx < timeSlots.length; slotIdx++) {
+        const flatIdx = slotIdx * 5 + day;
+        const p = parsed[flatIdx];
+        const slot = timeSlots[slotIdx];
 
-        if (parsed && parsed.subject) {
+        if (p && p.subject) {
+          const roomLabel = p.room ? `Aula ${p.room}` : '';
+          
           if (
             currentEvent &&
-            currentEvent.subject === parsed.subject &&
-            currentEvent.teacher === parsed.teacher
+            currentEvent.subject === p.subject &&
+            currentEvent.teacher === p.teacher
           ) {
-            // Stesso evento, estendi la durata
+            // Estendi la durata
             currentEvent.endTime = slot.time.split('-')[1] || slot.time;
             currentEvent.duration += 1;
           } else {
-            // Nuovo evento
             if (currentEvent) events.push(currentEvent);
-            
             const times = slot.time.split('-');
-            const roomLabel = parsed.roomNum
-              ? `Aula ${parsed.roomNum}`
-              : '';
-            
             currentEvent = {
-              subject: parsed.subject,
-              teacher: parsed.teacher,
+              subject: p.subject,
+              teacher: p.teacher,
               room: roomLabel,
               startTime: times[0] || slot.time,
               endTime: times[1] || '',
@@ -278,40 +287,5 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
   } catch (error) {
     console.error('Error fetching schedule:', error);
     return defaultData;
-  }
-}
-
-// Legacy function, kept for compatibility
-export async function fetchSchedule(tabUrl: string): Promise<string[][]> {
-  try {
-    const res = await axios.get(tabUrl);
-    const html = res.data;
-    const schedule: string[][] = [];
-    
-    const tableRegex = /<table[^>]*class=["'][^"']*waffle[^"']*["'][^>]*>([\s\S]*?)<\/table>/i;
-    const tableMatch = tableRegex.exec(html);
-    const tableContent = tableMatch ? tableMatch[1] : html;
-    
-    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let trMatch;
-    
-    while ((trMatch = trRegex.exec(tableContent)) !== null) {
-      const trContent = trMatch[1];
-      const row: string[] = [];
-      const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-      let tdMatch;
-      while ((tdMatch = tdRegex.exec(trContent)) !== null) {
-        const text = tdMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        row.push(text);
-      }
-      if (row.some(r => r !== '')) {
-        schedule.push(row);
-      }
-    }
-    
-    return schedule;
-  } catch (error) {
-    console.error('Error fetching schedule:', error);
-    return [];
   }
 }

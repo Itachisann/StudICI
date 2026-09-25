@@ -20,7 +20,9 @@ export default function ScheduleScreen() {
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
   const [degreeName, setDegreeName] = useState<string>('');
-  const [selectedDay, setSelectedDay] = useState(0);
+  // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
+  const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
+  const [selectedDay, setSelectedDay] = useState(todayIdx);
 
   useFocusEffect(
     useCallback(() => {
@@ -152,13 +154,13 @@ export default function ScheduleScreen() {
         <View style={styles.daysRow}>
           {DAYS.map((day, i) => {
             const isActive = selectedDay === i;
-            const hasClasses = (schedule?.days[i]?.length || 0) > 0;
+              const isToday = i === todayIdx;
             return (
               <TouchableOpacity key={i} onPress={() => setSelectedDay(i)} style={styles.dayItem}>
                 <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
                   <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
                 </View>
-                {hasClasses && <View style={[styles.dayDot, isActive && styles.dayDotActive]} />}
+                {isToday && <View style={[styles.dayDot, isActive && styles.dayDotActive]} />}
               </TouchableOpacity>
             );
           })}
@@ -287,11 +289,11 @@ const styles = StyleSheet.create({
   badgeText: { color: '#ef4444', fontSize: 11, fontWeight: '700' },
 
   /* Tabs */
-  tabsRow: { paddingHorizontal: 16, paddingBottom: 12 },
+  tabsRow: { paddingHorizontal: 16, paddingBottom: 10 },
   tabChip: {
     backgroundColor: '#1c1c1e',
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 16, marginRight: 8,
+    paddingHorizontal: 14, paddingVertical: 5,
+    borderRadius: 14, marginRight: 8,
     borderWidth: 1, borderColor: '#2c2c2e',
   },
   tabChipActive: { backgroundColor: SAPIENZA_RED, borderColor: SAPIENZA_RED },
