@@ -1,21 +1,30 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
+import React, { useState, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Linking, SafeAreaView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BlurView } from 'expo-blur';
 import { fetchTabs, fetchSchedule, Tab } from '../utils/scraper';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SAPIENZA_RED = '#822433';
+const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
+const ACCENT_COLORS = ['#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ef4444'];
+
+interface ClassEvent {
+  time: string;
+  text: string;
+  title: string;
+  teacher: string;
+  room: string;
+  color: string;
+}
 
 export default function ScheduleScreen() {
-  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [scheduleData, setScheduleData] = useState<string[][]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -53,27 +62,67 @@ export default function ScheduleScreen() {
     setLoading(false);
   };
 
-  const openMapForClass = (text: string) => {
-    // Cerchiamo "Aula X" o "AULA X" o "RM002" etc.
-    const aulaMatch = text.match(/Aula\s*[a-zA-Z0-9]+/i) || text.match(/RM\d+/i);
-    if (aulaMatch) {
-      const query = encodeURIComponent(`Sapienza Università di Roma ${aulaMatch[0]}`);
-      const url = `http://maps.apple.com/?q=${query}`;
-      Linking.openURL(url).catch(err => console.error("Couldn't open maps", err));
-    }
+  const openMapForClass = (room: string) => {
+    if (!room) return;
+    const query = encodeURIComponent(`Sapienza Università di Roma ${room}`);
+    const url = `http://maps.apple.com/?q=${query}`;
+    Linking.openURL(url).catch(err => console.error("Couldn't open maps", err));
   };
+
+  // Parso le lezioni in base al giorno selezionato
+  const dayClasses = useMemo(() => {
+    if (!scheduleData || scheduleData.length === 0) return [];
+    
+    const classes: ClassEvent[] = [];
+    let colorIndex = 0;
+    
+    // Supponiamo che la prima colonna (index 0) sia l'orario e le colonne 1-5 siano LUN-VEN
+    // (a volte 0 è vuoto o ha un header, quindi saltiamo righe senza orario valido)
+    scheduleData.forEach((row) => {
+      if (row.length < 2) return;
+      
+      const timeStr = row[0] || '';
+      // Se non sembra un orario, saltiamo
+      if (!timeStr.match(/\d/)) return;
+      
+      const cell = row[selectedDay + 1]; // +1 perché l'indice 0 è il tempo
+      if (cell && cell.trim() !== '') {
+        const lines = cell.split('\n').map(l => l.trim()).filter(l => l !== '');
+        let title = lines[0] || cell;
+        let teacher = lines.length > 1 ? lines.slice(1).join(' - ') : '';
+        let room = '';
+        
+        // Estrai l'aula (es. "Aula 14", "RM002")
+        const roomMatch = cell.match(/Aula\s*[a-zA-Z0-9]+/i) || cell.match(/RM\d+/i);
+        if (roomMatch) {
+          room = roomMatch[0];
+          title = title.replace(roomMatch[0], '').replace(/\(\s*\)/, '').trim();
+          teacher = teacher.replace(roomMatch[0], '').replace(/\(\s*\)/, '').trim();
+        }
+
+        classes.push({
+          time: timeStr,
+          text: cell,
+          title: title.toUpperCase(),
+          teacher: teacher || 'Docente non specificato',
+          room: room,
+          color: ACCENT_COLORS[colorIndex % ACCENT_COLORS.length]
+        });
+        colorIndex++;
+      }
+    });
+    
+    return classes;
+  }, [scheduleData, selectedDay]);
 
   if (!degreeUrl && !loading) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={styles.container}>
         <View style={styles.centerContainer}>
           <Ionicons name="school" size={80} color={SAPIENZA_RED} style={{ marginBottom: 20 }} />
-          <Text style={styles.welcomeText}>Benvenuto</Text>
-          <Text style={styles.subText}>Configura il tuo corso di laurea per iniziare.</Text>
-          <TouchableOpacity 
-            style={styles.primaryButton}
-            onPress={() => router.push('/settings')}
-          >
+          <Text style={styles.welcomeText}>Benvenuto in StudICI</Text>
+          <Text style={styles.subText}>Seleziona il tuo corso per iniziare.</Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={() => router.push('/settings')}>
             <Text style={styles.primaryButtonText}>Scegli Corso</Text>
             <Ionicons name="chevron-forward" size={20} color="#fff" />
           </TouchableOpacity>
@@ -83,73 +132,110 @@ export default function ScheduleScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <Text style={styles.largeTitle}>Orario</Text>
-
-      {loading ? (
-        <ActivityIndicator size="large" color={SAPIENZA_RED} style={{ marginTop: 100 }} />
-      ) : (
-        <>
-          <View style={styles.segmentedControlContainer}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.segmentedControl}>
-              {tabs.map((tab, i) => {
-                const isActive = selectedTab?.url === tab.url;
-                return (
-                  <TouchableOpacity key={i} onPress={() => selectTab(tab)} style={[styles.segment, isActive && styles.segmentActive]}>
-                    <Text style={[styles.segmentText, isActive && styles.segmentTextActive]}>
-                      {tab.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        
+        {/* Header App */}
+        <View style={styles.header}>
+          <View style={styles.headerTitleRow}>
+            <View style={styles.logoCircle}>
+              <Ionicons name="school" size={24} color="#fff" />
+            </View>
+            <View>
+              <Text style={styles.appName}>StudICI</Text>
+              <Text style={styles.appSubtitle}>Sapienza Università di Roma</Text>
+            </View>
           </View>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>A.A. 2026-27</Text>
+          </View>
+        </View>
 
-          <ScrollView style={styles.scheduleContainer} contentContainerStyle={{ paddingBottom: 100, paddingTop: 10 }}>
-            {scheduleData.map((row, i) => {
-              if (row.length < 3 || !row[0]) return null;
+        {/* Tabs / Canali */}
+        <View style={styles.tabsContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
+            {tabs.map((tab, i) => {
+              const isActive = selectedTab?.url === tab.url;
               return (
-                <View key={i} style={styles.card}>
-                  <Text style={styles.timeText}>{row[0]}</Text>
-                  <View style={styles.cardContent}>
-                    {row.slice(1).map((cell, j) => {
-                      if (!cell) return null;
-                      const hasAula = /Aula\s*[a-zA-Z0-9]+/i.test(cell) || /RM\d+/i.test(cell);
-                      return (
-                        <TouchableOpacity key={j} activeOpacity={hasAula ? 0.7 : 1} onPress={() => hasAula && openMapForClass(cell)}>
-                          <View style={styles.classItem}>
-                            <View style={styles.classDot} />
-                            <Text style={styles.cardText}>{cell}</Text>
-                            {hasAula && (
-                              <Ionicons name="location" size={16} color={SAPIENZA_RED} style={{ marginLeft: 6 }} />
-                            )}
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
+                <TouchableOpacity key={i} onPress={() => selectTab(tab)} style={[styles.tabChip, isActive && styles.tabChipActive]}>
+                  <Text style={[styles.tabChipText, isActive && styles.tabChipTextActive]}>
+                    {tab.name}
+                  </Text>
+                </TouchableOpacity>
               );
             })}
           </ScrollView>
-        </>
-      )}
-    </View>
+        </View>
+
+        {/* Selettore Giorni */}
+        <View style={styles.daysSelector}>
+          <TouchableOpacity style={styles.navArrow}><Ionicons name="chevron-back" size={20} color="#666" /></TouchableOpacity>
+          <View style={styles.daysRow}>
+            {DAYS.map((day, i) => {
+              const isActive = selectedDay === i;
+              return (
+                <TouchableOpacity key={i} onPress={() => setSelectedDay(i)} style={styles.dayItem}>
+                  <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
+                    <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <TouchableOpacity style={styles.navArrow}><Ionicons name="chevron-forward" size={20} color="#666" /></TouchableOpacity>
+        </View>
+
+        {loading ? (
+          <ActivityIndicator size="large" color={SAPIENZA_RED} style={{ marginTop: 100 }} />
+        ) : (
+          <ScrollView style={styles.scheduleContainer} contentContainerStyle={{ paddingBottom: 120 }}>
+            <Text style={styles.dayLabel}>
+              {DAYS[selectedDay] === 'LUN' ? 'LUNEDÌ' : 
+               DAYS[selectedDay] === 'MAR' ? 'MARTEDÌ' : 
+               DAYS[selectedDay] === 'MER' ? 'MERCOLEDÌ' : 
+               DAYS[selectedDay] === 'GIO' ? 'GIOVEDÌ' : 'VENERDÌ'} • {dayClasses.length} LEZIONI
+            </Text>
+
+            {dayClasses.map((cls, i) => (
+              <View key={i} style={styles.classCard}>
+                <View style={[styles.colorAccent, { backgroundColor: cls.color }]} />
+                <View style={styles.cardContent}>
+                  <Text style={styles.classTitle} numberOfLines={2}>{cls.title}</Text>
+                  
+                  <View style={styles.infoRow}>
+                    <Ionicons name="time-outline" size={16} color="#8e8e93" />
+                    <Text style={styles.infoText}>{cls.time}</Text>
+                  </View>
+                  
+                  <View style={styles.infoRow}>
+                    <Ionicons name="person-outline" size={16} color="#8e8e93" />
+                    <Text style={styles.infoText} numberOfLines={1}>{cls.teacher}</Text>
+                  </View>
+
+                  {cls.room ? (
+                    <TouchableOpacity style={styles.roomBadge} onPress={() => openMapForClass(cls.room)}>
+                      <Ionicons name="location-outline" size={14} color="#ef4444" />
+                      <Text style={styles.roomText}>{cls.room}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#111111',
+  },
   container: {
     flex: 1,
-    backgroundColor: 'transparent', // Eredita il nero da _layout
-  },
-  largeTitle: {
-    fontSize: 34,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 10,
+    backgroundColor: '#111111',
   },
   centerContainer: {
     flex: 1,
@@ -165,12 +251,12 @@ const styles = StyleSheet.create({
   },
   subText: {
     fontSize: 16,
-    color: '#8e8e93', // iOS gray
+    color: '#8e8e93',
     textAlign: 'center',
     marginBottom: 40,
   },
   primaryButton: {
-    backgroundColor: '#1c1c1e', // Dark mode button
+    backgroundColor: SAPIENZA_RED,
     flexDirection: 'row',
     paddingVertical: 14,
     paddingHorizontal: 24,
@@ -183,71 +269,170 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginRight: 10,
   },
-  segmentedControlContainer: {
-    paddingHorizontal: 15,
-    marginBottom: 10,
-  },
-  segmentedControl: {
-    backgroundColor: '#1c1c1e', // Sfondo scuro segmentato
-    borderRadius: 8,
-    padding: 2,
+  header: {
     flexDirection: 'row',
-  },
-  segment: {
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingTop: 10,
+    paddingBottom: 16,
   },
-  segmentActive: {
-    backgroundColor: '#3a3a3c', // Highlight grigio iOS
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  segmentText: {
+  logoCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: SAPIENZA_RED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  appName: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  appSubtitle: {
     color: '#8e8e93',
-    fontWeight: '500',
+    fontSize: 13,
+  },
+  badge: {
+    backgroundColor: 'rgba(130,36,51,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  badgeText: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tabsContainer: {
+    marginBottom: 20,
+  },
+  tabChip: {
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  tabChipActive: {
+    backgroundColor: SAPIENZA_RED,
+  },
+  tabChipText: {
+    color: '#8e8e93',
+    fontWeight: '600',
     fontSize: 14,
   },
-  segmentTextActive: {
+  tabChipTextActive: {
     color: '#ffffff',
-    fontWeight: '600',
+  },
+  daysSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 20,
+  },
+  navArrow: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#1c1c1e',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  daysRow: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+  },
+  dayItem: {
+    alignItems: 'center',
+  },
+  dayCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dayCircleActive: {
+    backgroundColor: SAPIENZA_RED,
+  },
+  dayText: {
+    color: '#8e8e93',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  dayTextActive: {
+    color: '#ffffff',
   },
   scheduleContainer: {
     flex: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
-  card: {
-    backgroundColor: '#1c1c1e', // Card in stile iOS puro
-    padding: 16,
-    borderRadius: 12,
+  dayLabel: {
+    color: '#8e8e93',
+    fontSize: 12,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    marginBottom: 12,
+  },
+  classCard: {
+    backgroundColor: '#1c1c1e',
+    borderRadius: 16,
     marginBottom: 16,
     flexDirection: 'row',
+    overflow: 'hidden',
   },
-  timeText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
-    width: 60,
+  colorAccent: {
+    width: 4,
+    marginTop: 16,
+    marginBottom: 16,
+    marginLeft: 16,
+    borderRadius: 2,
   },
   cardContent: {
     flex: 1,
-    justifyContent: 'center',
+    padding: 16,
+    paddingLeft: 12,
   },
-  classItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+  classTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
     marginBottom: 8,
   },
-  classDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: SAPIENZA_RED,
-    marginTop: 6,
-    marginRight: 8,
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
   },
-  cardText: {
-    color: '#ffffff',
-    fontSize: 15,
+  infoText: {
+    color: '#8e8e93',
+    fontSize: 14,
+    marginLeft: 6,
     flex: 1,
-    lineHeight: 20,
   },
+  roomBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  roomText: {
+    color: '#ef4444',
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 4,
+  }
 });

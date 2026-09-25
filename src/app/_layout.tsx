@@ -51,6 +51,6 @@ export default function AppLayout() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000', // Sfondo scuro e pulito
+    backgroundColor: '#111111', // Sfondo scuro e pulito
   }
 });
