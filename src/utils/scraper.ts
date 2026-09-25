@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { parseScheduleCells, ParsedClass } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, ParsedClass } from './aiParser';
 
 export interface Degree {
   name: string;
@@ -79,9 +79,7 @@ export async function fetchDegrees(): Promise<Degree[]> {
   }
 }
 
-import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, ParsedClass } from './aiParser';
 
-// ... (other interfaces)
 
 export async function fetchTabs(url: string): Promise<Tab[]> {
   try {
