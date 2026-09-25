@@ -114,6 +114,7 @@ export default function ScheduleScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.tabsScroll}
         contentContainerStyle={styles.tabsRow}
       >
         {tabs.map((tab, i) => {
@@ -289,12 +290,17 @@ const styles = StyleSheet.create({
   badgeText: { color: '#ef4444', fontSize: 11, fontWeight: '700' },
 
   /* Tabs */
-  tabsRow: { paddingHorizontal: 16, paddingBottom: 10 },
+  tabsScroll: { maxHeight: 34, marginBottom: 10 },
+  tabsRow: { paddingHorizontal: 16, alignItems: 'center' },
   tabChip: {
     backgroundColor: '#1c1c1e',
-    paddingHorizontal: 14, paddingVertical: 5,
-    borderRadius: 14, marginRight: 8,
-    borderWidth: 1, borderColor: '#2c2c2e',
+    paddingHorizontal: 14,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    justifyContent: 'center',
   },
   tabChipActive: { backgroundColor: SAPIENZA_RED, borderColor: SAPIENZA_RED },
   tabChipText: { color: '#8e8e93', fontWeight: '600', fontSize: 12 },
