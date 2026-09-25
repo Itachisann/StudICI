@@ -30,7 +30,7 @@ jobs:
           cd ios
           # The scheme is usually the project name (lowercase or CamelCase).
           # Let's dynamically find the workspace/scheme.
-          PROJECT_NAME=$(ls *.xcworkspace | sed 's/\.xcworkspace//')
+          PROJECT_NAME=$(basename -s .xcworkspace *.xcworkspace)
           
           # Build the archive without code signing
           xcodebuild archive \
@@ -46,7 +46,7 @@ jobs:
       - name: Package IPA
         run: |
           mkdir -p Payload
-          PROJECT_NAME=$(ls ios/*.xcworkspace | sed 's/ios\///' | sed 's/\.xcworkspace//')
+          PROJECT_NAME=$(basename -s .xcworkspace ios/*.xcworkspace)
           # Copy the .app from the archive to the Payload folder
           cp -r build/${PROJECT_NAME}.xcarchive/Products/Applications/${PROJECT_NAME}.app Payload/
           # Zip it into an IPA
