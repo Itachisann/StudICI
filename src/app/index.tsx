@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Linking, SafeAreaView
+  TouchableOpacity, Linking, SafeAreaView, Modal
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchTabs, fetchScheduleData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
@@ -24,11 +24,15 @@ export default function ScheduleScreen() {
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
 
+  const [alertsModalVisible, setAlertsModalVisible] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       loadData();
     }, [])
   );
+  
+  // ... rest of loadData etc.
 
   const loadData = async () => {
     setLoading(true);
@@ -90,51 +94,50 @@ export default function ScheduleScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="school" size={22} color="#fff" />
-          </View>
-          <View>
-            <Text style={styles.appName}>StudICI</Text>
-            <Text style={styles.appSubtitle} numberOfLines={1}>
-              {degreeName || 'Sapienza Roma'}
-            </Text>
-          </View>
-        </View>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>
-            {schedule?.info.academicYear ? `A.A. ${schedule.info.academicYear}` : 'A.A. 2026-27'}
-          </Text>
-        </View>
+      {/* ── Tab Canali (pill chips) ── */}
+      <View style={styles.topTabsContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tabsScroll}
+          contentContainerStyle={styles.tabsRow}
+        >
+          {tabs.map((tab, i) => {
+            const isActive = selectedTab?.url === tab.url;
+            return (
+              <TouchableOpacity
+                key={i}
+                onPress={() => selectTab(tab)}
+                style={[styles.tabChip, isActive && styles.tabChipActive]}
+              >
+                <Text style={[styles.tabChipText, isActive && styles.tabChipTextActive]}>
+                  {tab.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
-      {/* ── Tab Canali (pill chips) ── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabsScroll}
-        contentContainerStyle={styles.tabsRow}
-      >
-        {tabs.map((tab, i) => {
-          const isActive = selectedTab?.url === tab.url;
-          return (
-            <TouchableOpacity
-              key={i}
-              onPress={() => selectTab(tab)}
-              style={[styles.tabChip, isActive && styles.tabChipActive]}
-            >
-              <Text style={[styles.tabChipText, isActive && styles.tabChipTextActive]}>
-                {tab.name}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* ── Info banner ── */}
-      {schedule?.info.semester ? (
+      {/* ── Info banner (AI Alerts) ── */}
+      {schedule?.alerts && schedule.alerts.length > 0 ? (
+        <TouchableOpacity 
+          style={styles.infoBanner} 
+          onPress={() => schedule.alerts.length > 1 && setAlertsModalVisible(true)}
+          activeOpacity={schedule.alerts.length > 1 ? 0.7 : 1}
+        >
+          <Ionicons name="information-circle" size={20} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
+          <Text style={styles.infoBannerText} numberOfLines={schedule.alerts.length > 1 ? 1 : undefined}>
+            {schedule.alerts[0]}
+          </Text>
+          {schedule.alerts.length > 1 && (
+            <View style={styles.moreAlertsBadge}>
+              <Text style={styles.moreAlertsText}>+{schedule.alerts.length - 1}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      ) : schedule?.info.semester ? (
+        // Fallback se l'AI non trova avvisi
         <View style={styles.infoBanner}>
           <Ionicons name="information-circle" size={20} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
           <Text style={styles.infoBannerText}>
@@ -237,6 +240,34 @@ export default function ScheduleScreen() {
           ))}
         </ScrollView>
       )}
+
+      {/* ── Modal Avvisi (Alerts) ── */}
+      <Modal
+        visible={alertsModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setAlertsModalVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAlertsModalVisible(false)}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="notifications" size={24} color="#f59e0b" />
+              <Text style={styles.modalTitle}>Avvisi</Text>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              {schedule?.alerts?.map((alert, idx) => (
+                <View key={idx} style={styles.modalAlertItem}>
+                  <Text style={styles.modalAlertText}>{alert}</Text>
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setAlertsModalVisible(false)}>
+              <Text style={styles.modalCloseText}>Chiudi</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -266,30 +297,10 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '600', marginRight: 8 },
 
   /* Header */
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 14,
+  /* Top Tabs */
+  topTabsContainer: {
+    paddingTop: 16,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  logoCircle: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: SAPIENZA_RED,
-    justifyContent: 'center', alignItems: 'center',
-    marginRight: 10,
-  },
-  appName: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
-  appSubtitle: { color: '#8e8e93', fontSize: 12, maxWidth: 200 },
-  badge: {
-    backgroundColor: 'rgba(130,36,51,0.25)',
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
-  },
-  badgeText: { color: '#ef4444', fontSize: 11, fontWeight: '700' },
-
-  /* Tabs */
   tabsScroll: { maxHeight: 34, marginBottom: 10 },
   tabsRow: { paddingHorizontal: 16, alignItems: 'center' },
   tabChip: {
@@ -314,14 +325,25 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginBottom: 14,
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
   },
   infoBannerText: { color: '#d4d4d4', fontSize: 13, flex: 1, lineHeight: 18 },
+  moreAlertsBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  moreAlertsText: { color: '#f59e0b', fontSize: 11, fontWeight: 'bold' },
 
   /* Day selector */
   daySelectorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 16,
     marginBottom: 14,
   },
@@ -331,10 +353,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   daysRow: {
-    flex: 1,
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 4,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    gap: 12,
   },
   dayItem: { alignItems: 'center' },
   dayCircle: {
@@ -412,5 +434,61 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginLeft: 4,
+  },
+  
+  /* Modal */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#1c1c1e',
+    borderRadius: 20,
+    width: '100%',
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2c2c2e',
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginLeft: 10,
+  },
+  modalScroll: {
+    padding: 20,
+  },
+  modalAlertItem: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  modalAlertText: {
+    color: '#d4d4d4',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  modalCloseBtn: {
+    padding: 16,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#2c2c2e',
+  },
+  modalCloseText: {
+    color: '#3b82f6',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

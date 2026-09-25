@@ -34,8 +34,9 @@ export interface ScheduleData {
     year: string;
     academicYear: string;
     channel: string;
-    semester: string;
+    semester: string; // we'll keep this as fallback
   };
+  alerts: string[]; // <--- New alerts array
   classrooms: ClassroomInfo[];
   days: ClassEvent[][]; // 5 arrays, one per day (LUN-VEN)
 }
@@ -78,27 +79,48 @@ export async function fetchDegrees(): Promise<Degree[]> {
   }
 }
 
+import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, ParsedClass } from './aiParser';
+
+// ... (other interfaces)
+
 export async function fetchTabs(url: string): Promise<Tab[]> {
   try {
     const res = await axios.get(url);
     const data = res.data;
     const itemsRegex = /items\.push\(\{(.*?)\}\);/g;
     let match;
-    const tabs: Tab[] = [];
+    const rawTabs: { rawName: string; url: string }[] = [];
+    
     while ((match = itemsRegex.exec(data)) !== null) {
       const content = match[1];
       const nameMatch = content.match(/name:\s*"([^"]+)"/);
       const urlMatch = content.match(/pageUrl:\s*"([^"]+)"/);
       if (nameMatch && urlMatch) {
-        const rawName = nameMatch[1];
-        // Salta tab "Mappa Edifici" o simili
-        if (/mappa/i.test(rawName)) continue;
-        tabs.push({
-          name: shortenTabName(rawName),
+        rawTabs.push({
+          rawName: nameMatch[1],
           url: urlMatch[1].replace(/\\/g, ''),
         });
       }
     }
+    
+    if (rawTabs.length === 0) return [];
+
+    // Extract names array to pass to AI
+    const rawNames = rawTabs.map(t => t.rawName);
+    const parsedNames = await parseTabsWithAI(rawNames);
+    
+    const tabs: Tab[] = [];
+    for (let i = 0; i < rawTabs.length; i++) {
+      const newName = parsedNames[i] || rawTabs[i].rawName;
+      // Il parser AI restituisce "" per tab da ignorare (es. Mappe)
+      if (newName.trim() !== '') {
+        tabs.push({
+          name: newName,
+          url: rawTabs[i].url,
+        });
+      }
+    }
+    
     return tabs;
   } catch (error) {
     console.error('Error fetching tabs:', error);
@@ -106,46 +128,10 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
   }
 }
 
-/**
- * Abbrevia i nomi dei tab dal formato lungo del foglio Google
- * Es: "2026-27 I anno I sem Canale A-L" → "1° Anno (A-L)"
- *     "2026-27 II anno I sem" → "2° Anno"
- *     "III anno I sem" → "3° Anno"
- */
-function shortenTabName(raw: string): string {
-  // Rimuovi anno accademico (es. "2026-27 ")
-  let name = raw.replace(/\d{4}-\d{2,4}\s*/g, '').trim();
-  
-  // Estrai il numero dell'anno (I, II, III, IV, V o 1, 2, 3, 4, 5)
-  const romanMatch = name.match(/\b(I{1,3}V?|IV|V)\s*°?\s*anno/i);
-  const arabicMatch = name.match(/\b([1-5])\s*°?\s*anno/i);
-  
-  let yearNum = '';
-  if (romanMatch) {
-    const romanMap: Record<string, string> = { 'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5' };
-    yearNum = romanMap[romanMatch[1].toUpperCase()] || romanMatch[1];
-  } else if (arabicMatch) {
-    yearNum = arabicMatch[1];
-  }
-  
-  // Estrai il canale (A-L, M-Z, ecc.)
-  const channelMatch = name.match(/[Cc]anale\s+([A-Z]-[A-Z])/);
-  const channel = channelMatch ? ` (${channelMatch[1]})` : '';
-  
-  if (yearNum) {
-    return `${yearNum}° Anno${channel}`;
-  }
-  
-  // Fallback: abbrevia il semestre
-  return name
-    .replace(/\s*I\s*sem(estre)?/i, '')
-    .replace(/\s*II\s*sem(estre)?/i, '')
-    .trim() || raw;
-}
-
 export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
   const defaultData: ScheduleData = {
     info: { faculty: '', course: '', year: '', academicYear: '', channel: '', semester: '' },
+    alerts: [],
     classrooms: [],
     days: [[], [], [], [], []],
   };
@@ -177,6 +163,10 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     }
 
     const data = { ...defaultData };
+    const headerRows = rows.slice(0, 12); // preleviamo le prime 12 righe per le intestazioni
+    
+    // AI Alert extraction
+    data.alerts = await extractAlertsWithAI(headerRows);
 
     // Parsa le info dall'intestazione
     for (const row of rows.slice(0, 10)) {
