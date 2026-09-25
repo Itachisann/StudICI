@@ -287,15 +287,15 @@ const styles = StyleSheet.create({
   badgeText: { color: '#ef4444', fontSize: 11, fontWeight: '700' },
 
   /* Tabs */
-  tabsRow: { paddingHorizontal: 16, paddingBottom: 14 },
+  tabsRow: { paddingHorizontal: 16, paddingBottom: 12 },
   tabChip: {
     backgroundColor: '#1c1c1e',
-    paddingHorizontal: 16, paddingVertical: 8,
-    borderRadius: 20, marginRight: 10,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 16, marginRight: 8,
     borderWidth: 1, borderColor: '#2c2c2e',
   },
   tabChipActive: { backgroundColor: SAPIENZA_RED, borderColor: SAPIENZA_RED },
-  tabChipText: { color: '#8e8e93', fontWeight: '600', fontSize: 13 },
+  tabChipText: { color: '#8e8e93', fontWeight: '600', fontSize: 12 },
   tabChipTextActive: { color: '#fff' },
 
   /* Info Banner */
