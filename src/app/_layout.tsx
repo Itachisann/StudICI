@@ -4,20 +4,15 @@ import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 
+const SAPIENZA_RED = '#822433';
+
 export default function AppLayout() {
   return (
-    <>
+    <View style={styles.container}>
       <StatusBar style="light" />
       <Tabs
         screenOptions={{
-          headerTransparent: true,
-          headerBackground: () => (
-            <BlurView tint="dark" intensity={80} style={StyleSheet.absoluteFill} />
-          ),
-          headerTitleStyle: {
-            color: '#fff',
-            fontWeight: 'bold',
-          },
+          headerShown: false, // Rimuove la navbar superiore
           tabBarStyle: {
             position: 'absolute',
             bottom: 0,
@@ -28,34 +23,34 @@ export default function AppLayout() {
             borderTopWidth: 0,
           },
           tabBarBackground: () => (
-            <BlurView tint="dark" intensity={80} style={StyleSheet.absoluteFill} />
+            <BlurView tint="dark" intensity={90} style={StyleSheet.absoluteFill} />
           ),
-          tabBarActiveTintColor: '#0a84ff',
-          tabBarInactiveTintColor: '#8e8e93',
+          tabBarActiveTintColor: SAPIENZA_RED,
+          tabBarInactiveTintColor: '#666666',
         }}
       >
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Schedule',
+            title: 'Orario',
             tabBarIcon: ({ color }) => <Ionicons name="calendar" size={24} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="map"
-          options={{
-            title: 'Campus Map',
-            tabBarIcon: ({ color }) => <Ionicons name="map" size={24} color={color} />,
           }}
         />
         <Tabs.Screen
           name="settings"
           options={{
-            title: 'Profile',
-            tabBarIcon: ({ color }) => <Ionicons name="person" size={24} color={color} />,
+            title: 'Corsi',
+            tabBarIcon: ({ color }) => <Ionicons name="school" size={24} color={color} />,
           }}
         />
       </Tabs>
-    </>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000000', // Sfondo scuro e pulito
+  }
+});
