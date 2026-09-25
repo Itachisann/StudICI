@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -52,8 +55,17 @@ jobs:
           # Zip it into an IPA
           zip -r ${PROJECT_NAME}.ipa Payload
 
-      - name: Upload IPA Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: studici-ipa
-          path: '*.ipa'
+      - name: Publish to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PROJECT_NAME=$(basename -s .xcworkspace ios/*.xcworkspace)
+          
+          # Delete the old 'latest' release and tag if they exist
+          gh release delete latest --cleanup-tag -y || true
+          
+          # Create a new release and upload the IPA
+          gh release create latest ${PROJECT_NAME}.ipa \
+            --title "Latest Build" \
+            --notes "Build iOS (.ipa) generata in automatico." \
+            --latest
