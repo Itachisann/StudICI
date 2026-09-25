@@ -33,6 +33,7 @@ export default function SettingsScreen() {
   const selectDegree = async (degree: Degree) => {
     setSelectedUrl(degree.url);
     await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
+    await AsyncStorage.setItem('selectedDegreeName', degree.name);
     router.push('/');
   };
 
