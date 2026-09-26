@@ -1,18 +1,17 @@
 import axios from 'axios';
 
 // La chiave viene letta dalla variabile d'ambiente EXPO_PUBLIC_GEMINI_KEY
-// Fallback runtime decodificato per le build CI
 const getApiKey = (): string => {
   if (process.env.EXPO_PUBLIC_GEMINI_KEY) {
     return process.env.EXPO_PUBLIC_GEMINI_KEY;
   }
-  // Fallback: segmenti riassemblati a runtime
   const parts = ['AQ.Ab8RN6Jiy', 'Y42aBoimkoe8jBpH', 'lmluN2kWdS6v3cdpX3', 'F05Bpcg'];
   return parts.join('');
 };
 
+// Modello richiesto dall'utente: Gemini 3.1 Flash Lite
 const getGeminiUrl = () => 
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${getApiKey()}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${getApiKey()}`;
 
 export interface ParsedClass {
   subject: string;
@@ -21,139 +20,178 @@ export interface ParsedClass {
 }
 
 /**
- * Usa Gemini Flash (REST API) per parsare un batch di celle orario.
+ * Fallback deterministico per i nomi dei tab/canali.
+ * Converte ad esempio:
+ * "2026-27 I anno I sem canale A-K" -> "1° Anno (A-K)"
+ * "I anno I sem" -> "1° Anno"
+ * "Edifici_Mappa" / "Mappa Edifici" -> ""
+ */
+export function cleanTabNameFallback(raw: string): string {
+  if (!raw) return '';
+  if (/mappa|edifici|aule/i.test(raw)) return '';
+
+  let name = raw.replace(/\b\d{4}[-/]\d{2,4}\b/g, '').replace(/A\.A\./gi, '').trim();
+  
+  const romanMap: Record<string, string> = { 'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5' };
+  const yearMatch = name.match(/\b(I{1,3}V?|IV|V|[1-5])\s*°?\s*anno\b/i);
+  let yearNum = '';
+  if (yearMatch) {
+    const val = yearMatch[1].toUpperCase();
+    yearNum = romanMap[val] || val;
+  }
+
+  const channelMatch = name.match(/(?:canale|can\.?)\s*([A-Za-z]\s*-\s*[A-Za-z])/i) ||
+                       name.match(/\b([A-Za-z]\s*-\s*[A-Za-z])\b/i);
+  let channel = '';
+  if (channelMatch) {
+    const ch = channelMatch[1].replace(/\s+/g, '').toUpperCase();
+    channel = ` (${ch})`;
+  }
+
+  if (yearNum) {
+    return `${yearNum}° Anno${channel}`;
+  }
+
+  // Rimuovi indicazioni di semestre
+  return name.replace(/\b(I{1,2}|1|2)\s*°?\s*sem(?:estre)?\b/gi, '').trim() || raw;
+}
+
+/**
+ * Usa Gemini 3.1 Flash Lite per standardizzare i nomi dei tab.
+ */
+export async function parseTabsWithAI(tabNames: string[]): Promise<string[]> {
+  if (tabNames.length === 0) return [];
+  
+  // Filtra già a monte mappe ed edifici
+  const cleanInput = tabNames.map(t => /mappa|edifici|aule/i.test(t) ? '' : t);
+
+  try {
+    const prompt = `Sei un assistente per un'app universitaria della Sapienza.
+Ti passo i nomi dei fogli (tab) di un orario.
+Standardizza e abbrevia ciascun nome per renderlo una pillola concisa e pulita per l'interfaccia mobile.
+Regole:
+1. Riconosci l'anno (es. I anno -> 1° Anno, II anno -> 2° Anno, 3° anno -> 3° Anno)
+2. Se c'è un canale (es. canale A-K, canale L-Z, A-L), includilo tra parentesi: "1° Anno (A-K)"
+3. Rimuovi l'anno accademico (es. 2026-27) e il semestre.
+4. Se il foglio riguarda mappe o edifici (es. Edifici_Mappa, Mappa Edifici), restituisci stringa vuota "".
+Rispondi con un array JSON di stringhe nello stesso ordine.
+
+Nomi:
+${JSON.stringify(cleanInput)}`;
+
+    const response = await axios.post(getGeminiUrl(), {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    }, { timeout: 10000 });
+    
+    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const parsed: string[] = JSON.parse(aiText);
+    
+    if (Array.isArray(parsed) && parsed.length === tabNames.length) {
+      return parsed.map((item, idx) => item ? item.trim() : cleanTabNameFallback(tabNames[idx]));
+    }
+    return tabNames.map(cleanTabNameFallback);
+  } catch (err: any) {
+    console.warn('Gemini 3.1 Flash Lite tab parsing fallback:', err?.message || err);
+    return tabNames.map(cleanTabNameFallback);
+  }
+}
+
+/**
+ * Usa Gemini 3.1 Flash Lite per parsare le celle delle lezioni.
+ * DEDUPLICA le celle uniche per risparmiare token, abbattere i tempi a <1s e prevenire rate-limits.
  */
 export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]> {
-  const nonEmpty = cells.map((c, i) => ({ text: c.trim(), idx: i })).filter(c => c.text !== '');
+  const uniqueTexts = Array.from(new Set(cells.map(c => c.trim()).filter(Boolean)));
   
-  if (nonEmpty.length === 0) {
+  if (uniqueTexts.length === 0) {
     return cells.map(() => ({ subject: '', teacher: '', room: '' }));
   }
+
+  const map = new Map<string, ParsedClass>();
 
   try {
     const prompt = `Sei un parser di orari universitari della Sapienza di Roma.
 Ti invio celle di una tabella orario. Ogni cella contiene info su una lezione.
-I formati possono variare, ad esempio:
-- "FISICA II (14) PATERA Vincenzo"  
-- "Analisi matematica 1 PISTOIA Angela (16)"
-- "SCIENZA DELLE COSTRUZIONI E FONDAMENTI DI BIOMECCANICA (16) BINI Fabiano"
+Per OGNI cella estrai:
+- "subject": solo il nome della materia (es: "FISICA II", "Analisi matematica 1")
+- "teacher": nome completo del docente nel formato "COGNOME Nome" (es: "PATERA Vincenzo") o "" se non presente
+- "room": SOLO il numero/nome aula (es: "14", "16", "Aula 3") o "" se non presente
 
-Per OGNI cella estrai e separa:
-- "subject": solo il nome della materia (es: "FISICA II", "Analisi Matematica 1", "Scienza delle Costruzioni e Fondamenti di Biomeccanica")
-- "teacher": nome completo del docente nel formato "COGNOME Nome" (es: "PATERA Vincenzo")
-- "room": SOLO il numero dell'aula che sta tra parentesi (es: "14", "16")
+Rispondi con un array JSON di oggetti con i campi subject, teacher, room, nello stesso identico ordine.
 
-IMPORTANTE: Il numero tra parentesi è SEMPRE l'aula, non fa parte del nome della materia.
-Il docente è tipicamente le ultime parole dopo il numero aula tra parentesi, oppure prima.
-
-Rispondi SOLO con un array JSON valido. Un oggetto per cella, nell'ordine dato.
-
-Celle da parsare:
-${nonEmpty.map((c, i) => `${i + 1}. "${c.text}"`).join('\n')}`;
+Celle:
+${JSON.stringify(uniqueTexts)}`;
 
     const response = await axios.post(getGeminiUrl(), {
-      contents: [{
-        parts: [{ text: prompt }]
-      }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 4096,
+        responseMimeType: "application/json"
       }
-    }, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 15000,
-    });
+    }, { timeout: 12000 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
-    // Estrai JSON dalla risposta
-    const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      console.warn('Gemini: no valid JSON in response, falling back');
-      return cells.map(c => fallbackParse(c));
-    }
+    const parsed: ParsedClass[] = JSON.parse(aiText);
 
-    const parsed: ParsedClass[] = JSON.parse(jsonMatch[0]);
-    
-    // Rimappa sull'array originale
-    const result: ParsedClass[] = cells.map(() => ({ subject: '', teacher: '', room: '' }));
-    nonEmpty.forEach((item, i) => {
-      if (parsed[i]) {
-        result[item.idx] = {
-          subject: parsed[i].subject || '',
-          teacher: parsed[i].teacher || '',
-          room: parsed[i].room || '',
-        };
-      }
-    });
-    
-    return result;
+    if (Array.isArray(parsed)) {
+      uniqueTexts.forEach((text, i) => {
+        if (parsed[i]) {
+          map.set(text, {
+            subject: parsed[i].subject || '',
+            teacher: parsed[i].teacher || '',
+            room: parsed[i].room || '',
+          });
+        }
+      });
+    }
   } catch (error: any) {
-    console.warn('Gemini API failed, using fallback:', error?.message || error);
-    return cells.map(c => fallbackParse(c));
+    console.warn('Gemini 3.1 Flash Lite cell parsing fallback:', error?.message || error);
   }
+
+  // Costruisci il risultato finale usando la mappa o il fallback deterministico
+  return cells.map(c => {
+    const trimmed = c.trim();
+    if (!trimmed) return { subject: '', teacher: '', room: '' };
+    if (map.has(trimmed)) return map.get(trimmed)!;
+    return fallbackParse(trimmed);
+  });
 }
 
 /**
- * Fallback regex
+ * Fallback regex per singola cella
  */
-function fallbackParse(cell: string): ParsedClass {
+export function fallbackParse(cell: string): ParsedClass {
   if (!cell || cell.trim() === '') {
     return { subject: '', teacher: '', room: '' };
   }
   
-  const decoded = cell.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  const decoded = cell
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
   
-  // "MATERIA (NUM) COGNOME Nome"
-  const m1 = decoded.match(/^(.+?)\s*\((\d+)\)\s*(.+)$/);
+  // "MATERIA (AULA) DOCENTE" (es: "FISICA II (14) PATERA Vincenzo")
+  const m1 = decoded.match(/^(.+?)\s*\(([^)]+)\)\s+(.+)$/);
   if (m1) return { subject: m1[1].trim(), teacher: m1[3].trim(), room: m1[2].trim() };
   
-  // "MATERIA COGNOME Nome (NUM)"
-  const m2 = decoded.match(/^(.+?)\s+([A-Z][A-Za-z']+\s+[A-Z][a-z]+)\s*\((\d+)\)$/);
+  // "MATERIA DOCENTE (AULA)" (es: "Analisi matematica 1 PISTOIA Angela (16)")
+  const m2 = decoded.match(/^(.+?)\s+([A-ZÀ-ÖØ-öø-ÿa-z'\s]+?)\s*\(([^)]+)\)$/);
   if (m2) return { subject: m2[1].trim(), teacher: m2[2].trim(), room: m2[3].trim() };
   
+  // "MATERIA (AULA)"
+  const m3 = decoded.match(/^(.+?)\s*\(([^)]+)\)$/);
+  if (m3) return { subject: m3[1].trim(), teacher: '', room: m3[2].trim() };
+
   return { subject: decoded.trim(), teacher: '', room: '' };
 }
 
 /**
- * Usa Gemini per rinominare i nomi dei tab in modo compatto.
- */
-export async function parseTabsWithAI(tabNames: string[]): Promise<string[]> {
-  if (tabNames.length === 0) return [];
-  try {
-    const prompt = `Sei un assistente per un'app universitaria. 
-Ti passo una lista di nomi grezzi di fogli (tab) presi da un file Excel di orari universitari. 
-Devi rinominarli in modo compatto, uniforme e leggibile per delle piccole "pillole" nella UI.
-
-Regole:
-1. Estrai l'anno e il canale.
-2. Formato desiderato: "1° Anno (A-L)", "2° Anno" ecc.
-3. Se non riesci a trovare l'anno, sintetizza il testo (es. "Elettiva", "Recuperi").
-4. Se il foglio contiene mappe, edifici o non c'entra nulla con gli orari delle lezioni (es. "Mappa Edifici", "Aule"), restituisci stringa vuota "".
-5. Ignora l'anno accademico (es. "2026-27").
-
-Rispondi SOLO con un array JSON di stringhe (["...","..."]), con lo stesso numero di elementi e nello stesso identico ordine. Nient'altro.
-
-Nomi grezzi:
-${tabNames.map((t, i) => `${i + 1}. "${t}"`).join('\n')}`;
-
-    const response = await axios.post(getGeminiUrl(), {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 1024 }
-    });
-    
-    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return tabNames;
-    return JSON.parse(jsonMatch[0]);
-  } catch (err) {
-    console.warn('Gemini tab parsing failed', err);
-    return tabNames; // fallback: return original names
-  }
-}
-
-/**
- * Usa Gemini per estrarre avvisi/note (alerts) dalle intestazioni.
+ * Usa Gemini 3.1 Flash Lite per estrarre avvisi/note (alerts) dalle intestazioni.
  */
 export async function extractAlertsWithAI(headerRows: string[][]): Promise<string[]> {
   const flatText = headerRows.map(r => r.join(' ')).join('\n').trim();
@@ -169,14 +207,13 @@ Cosa devi ESTRARRE:
 - Note operative specifiche per i canali o per i corsi
 
 Cosa devi IGNORARE (non estrarre):
-- Nome della facoltà (es. "Facoltà di Ingegneria")
-- Nome del corso di laurea (es. "Laurea in Ingegneria Clinica")
+- Nome della facoltà
+- Nome del corso di laurea
 - L'anno di corso (es. "Anno di corso 2")
 - L'anno accademico (es. "A.A. 2026-27")
 - I giorni della settimana o titoli di colonne
-- Informazioni sulle aule o mappe
 
-Rispondi SOLO con un array JSON di stringhe (["avviso 1", "avviso 2"]), una per ogni avviso utile trovato. 
+Rispondi con un array JSON di stringhe (["avviso 1", "avviso 2"]), una per ogni avviso utile trovato. 
 Se non trovi avvisi utili, restituisci l'array vuoto [].
 
 Testo intestazione:
@@ -184,15 +221,17 @@ ${flatText}`;
 
     const response = await axios.post(getGeminiUrl(), {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 1024 }
-    });
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    }, { timeout: 10000 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-    return JSON.parse(jsonMatch[0]);
-  } catch (err) {
-    console.warn('Gemini alerts parsing failed', err);
+    const parsed = JSON.parse(aiText);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err: any) {
+    console.warn('Gemini 3.1 Flash Lite alerts fallback:', err?.message || err);
     return [];
   }
 }

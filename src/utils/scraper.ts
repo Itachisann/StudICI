@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, ParsedClass } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, ParsedClass } from './aiParser';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -132,7 +132,8 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
     
     const tabs: Tab[] = [];
     for (let i = 0; i < rawTabs.length; i++) {
-      const newName = parsedNames[i] || rawTabs[i].rawName;
+      const aiName = parsedNames[i];
+      const newName = (aiName && aiName.trim() !== '') ? aiName.trim() : cleanTabNameFallback(rawTabs[i].rawName);
       if (newName.trim() !== '') {
         tabs.push({ name: newName, url: rawTabs[i].url });
       }
@@ -160,6 +161,19 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
   try {
     const res = await axios.get(tabUrl);
     const html = res.data;
+
+    // Check Cache
+    const contentHash = hashCode(html);
+    const cacheKey = `scheduleCache_${tabUrl}`;
+    try {
+      const cachedStr = await AsyncStorage.getItem(cacheKey);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        if (cached.hash === contentHash && cached.data) {
+          return cached.data;
+        }
+      }
+    } catch (e) {}
     
     const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let trMatch;

@@ -24,48 +24,72 @@ export default function ScheduleScreen() {
   // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
-
+  const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [])
+    }, [degreeUrl])
   );
-  
-  // ... rest of loadData etc.
 
   const loadData = async () => {
-    setLoading(true);
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const storedName = await AsyncStorage.getItem('selectedDegreeName');
       if (storedName) setDegreeName(storedName);
       
-      if (storedUrl && storedUrl !== degreeUrl) {
+      if (!storedUrl) {
+        setDegreeUrl(null);
+        setLoading(false);
+        return;
+      }
+
+      if (storedUrl !== degreeUrl || tabs.length === 0) {
+        setLoading(true);
         setDegreeUrl(storedUrl);
         const fetchedTabs = await fetchTabs(storedUrl);
         setTabs(fetchedTabs);
+
         if (fetchedTabs.length > 0) {
-          setSelectedTab(fetchedTabs[0]);
-          const data = await fetchScheduleData(fetchedTabs[0].url);
-          setSchedule(data);
+          const firstTab = fetchedTabs[0];
+          setSelectedTab(firstTab);
+
+          // 1. Scarica subito il primo tab per mostrare immediatamente l'orario
+          const firstData = await fetchScheduleData(firstTab.url);
+          setSchedule(firstData);
+          setSchedulesMap({ [firstTab.url]: firstData });
+          setLoading(false);
+
+          // 2. Scarica TUTTI gli altri canali in background per salvare tutto in memoria/cache
+          for (let i = 1; i < fetchedTabs.length; i++) {
+            const currentTab = fetchedTabs[i];
+            fetchScheduleData(currentTab.url).then(tabData => {
+              setSchedulesMap(prev => ({ ...prev, [currentTab.url]: tabData }));
+            }).catch(e => console.warn('Background channel fetch error:', e));
+          }
+        } else {
+          setLoading(false);
         }
-      } else if (!storedUrl) {
-        setDegreeUrl(null);
       }
     } catch (e) {
       console.error(e);
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
-    setLoading(true);
-    const data = await fetchScheduleData(tab.url);
-    setSchedule(data);
-    setLoading(false);
+    if (schedulesMap[tab.url]) {
+      // Transizione istantanea senza caricamenti
+      setSchedule(schedulesMap[tab.url]);
+    } else {
+      setLoading(true);
+      const data = await fetchScheduleData(tab.url);
+      setSchedule(data);
+      setSchedulesMap(prev => ({ ...prev, [tab.url]: data }));
+      setLoading(false);
+    }
   };
 
   const openMapForRoom = (room: string) => {
@@ -188,7 +212,7 @@ export default function ScheduleScreen() {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={SAPIENZA_RED} />
-          <Text style={styles.loadingText}>Scarico orario e avvisi con IA...</Text>
+          <Text style={styles.loadingText}>Scarico orario e canali con Gemini...</Text>
         </View>
       ) : (
         <ScrollView
