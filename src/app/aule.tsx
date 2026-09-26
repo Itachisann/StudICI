@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchTabs, fetchScheduleData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
+import { fetchTabs, fetchScheduleData, Tab } from '../utils/scraper';
 import { resolveClassroom, ResolvedClassroom } from '../utils/classroomLocations';
 import { ClassroomModal } from '../components/ClassroomModal';
 
@@ -26,36 +26,7 @@ export default function AuleScreen() {
   const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [])
-  );
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
-      const storedName = await AsyncStorage.getItem('selectedDegreeName');
-      if (storedName) setDegreeName(storedName);
-
-      if (storedUrl) {
-        const fetchedTabs = await fetchTabs(storedUrl);
-        setTabs(fetchedTabs);
-
-        if (fetchedTabs.length > 0) {
-          const currentTab = selectedTab || fetchedTabs[0];
-          setSelectedTab(currentTab);
-          await loadRoomsForTab(currentTab);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    setLoading(false);
-  };
-
-  const loadRoomsForTab = async (tab: Tab) => {
+  const loadRoomsForTab = useCallback(async (tab: Tab) => {
     try {
       const data = await fetchScheduleData(tab.url);
       const roomMap = new Map<string, { resolved: ResolvedClassroom; subjects: Set<string> }>();
@@ -69,11 +40,12 @@ export default function AuleScreen() {
 
       // 1. Estrai da classrooms dichiarate (mappate da Gemini con edificio e indirizzo)
       data.classrooms.forEach(c => {
+        const fallbackRes = resolveClassroom(c.aulaName, contextHeader);
         const res: ResolvedClassroom = {
           displayName: c.aulaName,
-          buildingName: c.building || 'Edificio RM018 (Castro Laurenziano)',
-          buildingCode: c.building ? c.building.replace(/^Edificio\s+/i, '') : 'RM018',
-          address: c.address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+          buildingName: c.building || fallbackRes.buildingName,
+          buildingCode: c.building ? c.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
+          address: c.address || fallbackRes.address,
         };
         if (!roomMap.has(c.aulaName)) {
           roomMap.set(c.aulaName, { resolved: res, subjects: new Set() });
@@ -84,11 +56,12 @@ export default function AuleScreen() {
       data.days.forEach(day => {
         day.forEach(cls => {
           if (cls.room) {
+            const fallbackRes = resolveClassroom(cls.room, contextHeader);
             const res: ResolvedClassroom = {
               displayName: cls.room,
-              buildingName: cls.building || 'Edificio RM018 (Castro Laurenziano)',
-              buildingCode: cls.building ? cls.building.replace(/^Edificio\s+/i, '') : 'RM018',
-              address: cls.address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+              buildingName: cls.building || fallbackRes.buildingName,
+              buildingCode: cls.building ? cls.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
+              address: cls.address || fallbackRes.address,
             };
             if (!roomMap.has(cls.room)) {
               roomMap.set(cls.room, { resolved: res, subjects: new Set() });
@@ -110,7 +83,36 @@ export default function AuleScreen() {
     } catch (e) {
       console.error(e);
     }
-  };
+  }, []);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+      const storedName = await AsyncStorage.getItem('selectedDegreeName');
+      if (storedName) setDegreeName(storedName);
+
+      if (storedUrl) {
+        const fetchedTabs = await fetchTabs(storedUrl);
+        setTabs(fetchedTabs);
+
+        if (fetchedTabs.length > 0) {
+          const currentTab = selectedTab || fetchedTabs[0];
+          setSelectedTab(currentTab);
+          await loadRoomsForTab(currentTab);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setLoading(false);
+  }, [loadRoomsForTab, selectedTab]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onSelectTab = async (tab: Tab) => {
     setSelectedTab(tab);

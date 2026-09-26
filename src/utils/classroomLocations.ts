@@ -1,4 +1,4 @@
-import { Linking, Platform } from 'react-native';
+import { Linking } from 'react-native';
 
 export interface BuildingInfo {
   code: string;
@@ -9,8 +9,8 @@ export interface BuildingInfo {
 export const SAPIENZA_BUILDINGS: Record<string, BuildingInfo> = {
   RM002: { code: 'RM002', name: 'Edificio RM002', address: 'Via Antonio Scarpa 16, 00161 Roma' },
   RM004: { code: 'RM004', name: 'Edificio RM004', address: 'Via Antonio Scarpa 16, 00161 Roma' },
-  RM006: { code: 'RM006', name: 'Edificio RM006', address: 'Via Antonio Scarpa 12, 00161 Roma' },
-  RM014: { code: 'RM014', name: 'Edificio RM014', address: 'Via Antonio Scarpa 16, 00161 Roma' },
+  RM006: { code: 'RM006', name: 'Edificio RM006', address: 'Via Antonio Scarpa 14, 00161 Roma' },
+  RM014: { code: 'RM014', name: 'Edificio RM014', address: 'Via Antonio Scarpa 14, 00161 Roma' },
   RM018: { code: 'RM018', name: 'Edificio RM018 (Castro Laurenziano)', address: 'Via del Castro Laurenziano 7a, 00161 Roma' },
   RM025: { code: 'RM025', name: 'Edificio RM025 (Tiburtina)', address: 'Via Tiburtina 205, 00185 Roma' },
   RM031: { code: 'RM031', name: 'Edificio RM031 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
@@ -52,18 +52,25 @@ export function resolveClassroom(roomText: string, contextText: string = ''): Re
     aula = cleanRoom.replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
   }
 
-  // Normalizza nome aula
-  const displayName = /^\d+$/.test(aula) ? `Aula ${aula}` : (aula.toLowerCase().startsWith('aula') ? aula : `Aula ${aula}`);
-
-  // 2. Se non presente nella cella, cerca se il corso si tiene in un edificio specifico menzionato nel contesto
+  // 2. Se non presente nella cella, cerca se il contesto contiene l'aula e un codice RM adiacente
   if (!buildingCode && contextText) {
-    const singleRm = contextText.match(/edificio\s+(RM\d{3})/i);
-    if (singleRm) {
-      buildingCode = singleRm[1].toUpperCase();
+    const escaped = cleanRoom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const aulaRegex = new RegExp(`(?:AULA\\s+)?(?:${escaped}\\b|\\b${escaped}\\s+e\\s+\\d+|\\d+\\s+e\\s+${escaped}\\b)[^\\n|]*?[|\\s]+(RM\\d{3})`, 'i');
+    const match = contextText.match(aulaRegex);
+    if (match) {
+      buildingCode = match[1].toUpperCase();
+    } else {
+      const singleRm = contextText.match(/edificio\s+(RM\d{3})/i);
+      if (singleRm) {
+        buildingCode = singleRm[1].toUpperCase();
+      }
     }
   }
 
-  // 3. Risolvi da SAPIENZA_BUILDINGS
+  // Normalizza nome aula
+  const displayName = /^\d+$/.test(aula) ? `Aula ${aula}` : (aula.toLowerCase().startsWith('aula') ? aula : `Aula ${aula}`);
+
+  // 3. Risolvi da SAPIENZA_BUILDINGS se trovato buildingCode
   if (buildingCode && SAPIENZA_BUILDINGS[buildingCode]) {
     const b = SAPIENZA_BUILDINGS[buildingCode];
     return {
@@ -74,7 +81,27 @@ export function resolveClassroom(roomText: string, contextText: string = ''): Re
     };
   }
 
-  // 4. Default per le aule ICI (Castro Laurenziano / Scarpa)
+  // 4. Se aula è 15 o 16 (default ICI: RM006 Scarpa 14)
+  if (cleanRoom === '15' || cleanRoom === '16' || cleanRoom.includes('15') || cleanRoom.includes('16')) {
+    return {
+      displayName: displayName,
+      buildingName: 'Edificio RM006',
+      buildingCode: 'RM006',
+      address: 'Via Antonio Scarpa 14, 00161 Roma',
+    };
+  }
+
+  // 5. Se aula è 6 (default ICI: RM018 Castro Laurenziano 7a)
+  if (cleanRoom === '6') {
+    return {
+      displayName: 'Aula 6',
+      buildingName: 'Edificio RM018 (Castro Laurenziano)',
+      buildingCode: 'RM018',
+      address: 'Via del Castro Laurenziano 7a, 00161 Roma',
+    };
+  }
+
+  // 6. Default per le aule ICI (Castro Laurenziano)
   return {
     displayName: displayName || cleanRoom || 'Aula',
     buildingName: buildingCode ? `Edificio ${buildingCode}` : 'Edificio RM018 (Castro Laurenziano)',

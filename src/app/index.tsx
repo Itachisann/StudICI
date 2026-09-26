@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Linking, Modal
+  TouchableOpacity, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -22,7 +22,6 @@ export default function ScheduleScreen() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
-  const [degreeName, setDegreeName] = useState<string>('');
   // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
@@ -31,18 +30,10 @@ export default function ScheduleScreen() {
   const [selectedRoomModal, setSelectedRoomModal] = useState<ResolvedClassroom | null>(null);
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>([]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [degreeUrl])
-  );
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
-      const storedName = await AsyncStorage.getItem('selectedDegreeName');
       const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
-      if (storedName) setDegreeName(storedName);
       
       if (!storedUrl) {
         setDegreeUrl(null);
@@ -69,7 +60,7 @@ export default function ScheduleScreen() {
                 setLoading(false);
               }
             }
-          } catch (e) {}
+          } catch {}
         } else {
           setLoading(true);
         }
@@ -124,7 +115,13 @@ export default function ScheduleScreen() {
       console.error(e);
       setLoading(false);
     }
-  };
+  }, [degreeUrl, schedulesMap, selectedTab, tabs]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);

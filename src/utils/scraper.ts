@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, mapClassroomsWithAI, ParsedClass } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, mapClassroomsWithAI, ParsedClass, MappedClassroom } from './aiParser';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -107,12 +107,13 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
         const cached = JSON.parse(cachedStr);
         if (cached.hash === contentHash && cached.tabs) return cached.tabs;
       }
-    } catch (e) {}
+    } catch {}
 
     const itemsRegex = /items\.push\(\{(.*?)\}\);/g;
     let match;
     const rawTabs: { rawName: string; url: string }[] = [];
     
+    let mapTabUrl: string | null = null;
     while ((match = itemsRegex.exec(data)) !== null) {
       const content = match[1];
       const nameMatch = content.match(/name:\s*"([^"]+)"/);
@@ -121,12 +122,9 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
         const rawName = nameMatch[1];
         const pageUrl = urlMatch[1].replace(/\\/g, '');
 
-        // Se è la mappa edifici, estrai il testo delle vie e salvalo in cache per il corso
+        // Se è la mappa edifici, memorizza l'URL per scaricarlo
         if (/mappa|edifici/i.test(rawName)) {
-          axios.get(pageUrl).then(mapRes => {
-            const cleanText = mapRes.data.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-            AsyncStorage.setItem(`courseMapText_${url}`, cleanText).catch(() => {});
-          }).catch(() => {});
+          mapTabUrl = pageUrl;
           continue;
         }
 
@@ -136,6 +134,21 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
           url: pageUrl,
         });
       }
+    }
+
+    if (mapTabUrl) {
+      try {
+        const mapRes = await axios.get(mapTabUrl, { timeout: 6000 });
+        const cleanText = mapRes.data
+          .replace(/<\/tr>|<\/p>|<br\s*\/?>/gi, '\n')
+          .replace(/<\/td>/gi, ' - ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[ \t]+/g, ' ')
+          .trim();
+        await AsyncStorage.setItem(`courseMapText_${url}`, cleanText);
+        const baseSheetUrl = url.split('/sheet')[0];
+        await AsyncStorage.setItem(`courseMapText_${baseSheetUrl}`, cleanText);
+      } catch {}
     }
     
     if (rawTabs.length === 0) return [];
@@ -154,7 +167,7 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentHash, tabs }));
-    } catch (e) {}
+    } catch {}
 
     return tabs;
   } catch (error) {
@@ -186,7 +199,7 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
           return cached.data;
         }
       }
-    } catch (e) {}
+    } catch {}
     
     const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let trMatch;
@@ -211,35 +224,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     }
 
     const data = { ...defaultData };
-    const headerRows = rows.slice(0, 12); // preleviamo le prime 12 righe per le intestazioni
-    
-    // AI Alert extraction
-    data.alerts = await extractAlertsWithAI(headerRows);
 
-    // Parsa le info dall'intestazione
-    for (const row of rows.slice(0, 10)) {
-      const joined = row.join(' ').toLowerCase();
-      if (joined.includes('a.a.')) {
-        const aaMatch = row.join(' ').match(/\d{4}-\d{2,4}/);
-        if (aaMatch) data.info.academicYear = aaMatch[0];
-      }
-      if (joined.includes('semestre')) {
-        data.info.semester = row.slice(1).join(' ').trim();
-      }
-    }
-
-    // Parsa le aule
-    for (const row of rows.slice(0, 10)) {
-      if (row[1] && /^AULA\s+/i.test(row[1])) {
-        data.classrooms.push({
-          aulaName: row[1].trim(),
-          building: row[2] || '',
-          address: row[3] || '',
-        });
-      }
-    }
-
-    // Trova la riga con i giorni
+    // Trova la riga con i giorni (Lunedì, Martedì, ecc.)
     let dayRowIndex = -1;
     for (let i = 0; i < rows.length; i++) {
       const joined = rows[i].join(' ').toLowerCase();
@@ -249,6 +235,24 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       }
     }
     if (dayRowIndex === -1) return data;
+
+    // Tutte le righe precedenti alla riga dei giorni costituiscono l'intestazione
+    const headerRows = dayRowIndex > 0 ? rows.slice(0, dayRowIndex) : rows.slice(0, 15);
+    
+    // AI Alert extraction
+    data.alerts = await extractAlertsWithAI(headerRows);
+
+    // Parsa le info dall'intestazione
+    for (const row of headerRows) {
+      const joined = row.join(' ').toLowerCase();
+      if (joined.includes('a.a.')) {
+        const aaMatch = row.join(' ').match(/\d{4}-\d{2,4}/);
+        if (aaMatch) data.info.academicYear = aaMatch[0];
+      }
+      if (joined.includes('semestre')) {
+        data.info.semester = row.slice(1).join(' ').trim();
+      }
+    }
 
     // Raccogli tutti gli slot orari
     const timeSlots: { time: string; cells: string[] }[] = [];
@@ -277,25 +281,37 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     // Parsa con AI (o fallback regex)
     const parsed: ParsedClass[] = await parseScheduleCells(allCells);
 
-    // Mappa con Gemini le aule al loro rispettivo edificio e indirizzo usando il tab Mappa Edifici
+    // Mappa con Gemini le aule al loro rispettivo edificio e indirizzo usando le celle adiacenti dell'intestazione e il tab Mappa Edifici
     const uniqueRooms = Array.from(new Set(parsed.map(p => p.room).filter(Boolean)));
     let mapText = '';
     try {
       const baseSheetUrl = tabUrl.split('/sheet')[0];
       mapText = (await AsyncStorage.getItem(`courseMapText_${baseSheetUrl}`)) || '';
-    } catch (e) {}
+      if (!mapText) {
+        const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+        if (storedUrl) {
+          mapText = (await AsyncStorage.getItem(`courseMapText_${storedUrl}`)) || '';
+        }
+      }
+    } catch {}
 
     if (!mapText) {
       mapText = headerRows.map(r => r.join(' ')).join('\n');
     }
 
-    const mappedRooms = await mapClassroomsWithAI(uniqueRooms, mapText);
+    const mappedRooms = await mapClassroomsWithAI(headerRows, mapText, uniqueRooms);
 
-    data.classrooms = Object.values(mappedRooms).map(m => ({
-      aulaName: m.displayName,
-      building: m.building,
-      address: m.address,
-    }));
+    const uniqueClassroomsMap = new Map<string, ClassroomInfo>();
+    Object.values(mappedRooms).forEach(m => {
+      if (!uniqueClassroomsMap.has(m.displayName)) {
+        uniqueClassroomsMap.set(m.displayName, {
+          aulaName: m.displayName,
+          building: m.building,
+          address: m.address,
+        });
+      }
+    });
+    data.classrooms = Array.from(uniqueClassroomsMap.values());
 
     // Ricostruisci gli eventi per giorno, accorpando slot adiacenti
     for (let day = 0; day < 5; day++) {
@@ -308,7 +324,15 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
         const slot = timeSlots[slotIdx];
 
         if (p && p.subject) {
-          const mInfo = mappedRooms[p.room];
+          const roomClean = p.room ? p.room.replace(/^aula\s+/i, '').toLowerCase().trim() : '';
+          let mInfo: MappedClassroom | undefined;
+          if (day === 0) {
+            // Lunedì
+            mInfo = mappedRooms[`${roomClean} (lunedi)`] || mappedRooms[`${roomClean} (lunedì)`];
+          }
+          if (!mInfo) {
+            mInfo = mappedRooms[roomClean] || mappedRooms[p.room.toLowerCase().trim()] || mappedRooms[p.room];
+          }
           const roomLabel = mInfo ? mInfo.displayName : (p.room ? `Aula ${p.room}` : '');
           
           if (
@@ -346,7 +370,7 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentHash, data }));
-    } catch (e) {}
+    } catch {}
 
     return data;
   } catch (error) {

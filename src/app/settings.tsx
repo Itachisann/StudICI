@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchDegrees, fetchTabs, Degree, Tab } from '../utils/scraper';
-import { useFocusEffect, router } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 
@@ -22,13 +22,7 @@ export default function ProfiloScreen() {
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadProfileData();
-    }, [])
-  );
-
-  const loadProfileData = async () => {
+  const loadProfileData = useCallback(async () => {
     setLoading(true);
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
@@ -44,15 +38,19 @@ export default function ProfiloScreen() {
         setAvailableTabs(tabs);
       }
 
-      if (degrees.length === 0) {
-        const degList = await fetchDegrees();
-        setDegrees(degList);
-      }
+      const degList = await fetchDegrees();
+      setDegrees(degList);
     } catch (e) {
       console.error(e);
     }
     setLoading(false);
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfileData();
+    }, [loadProfileData])
+  );
 
   const selectDegree = async (degree: Degree) => {
     setDegreeUrl(degree.url);
@@ -78,9 +76,10 @@ export default function ProfiloScreen() {
   const clearCacheAndReload = async () => {
     try {
       const allKeys = await AsyncStorage.getAllKeys();
-      const cacheKeys = allKeys.filter(k => k.startsWith('scheduleCache_') || k.startsWith('tabsCache_'));
+      const keysToKeep = ['selectedDegreeUrl', 'selectedDegreeName', 'defaultTabUrl'];
+      const cacheKeys = allKeys.filter(k => !keysToKeep.includes(k));
       await AsyncStorage.multiRemove(cacheKeys);
-      Alert.alert('Cache Svuotata', 'I dati dell\'orario verranno ricaricati aggiornati dal sito Sapienza.');
+      Alert.alert('Cache Svuotata', 'I dati dell\'orario e le aule verranno ricaricati aggiornati dal sito Sapienza.');
     } catch (e) {
       console.error(e);
     }
@@ -122,7 +121,7 @@ export default function ProfiloScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>CANALE / ANNO PREDEFINITO</Text>
           <Text style={styles.sectionDescription}>
-            Il canale o anno con cui l'app si aprirà in automatico.
+            {"Il canale o anno con cui l'app si aprirà in automatico."}
           </Text>
           <TouchableOpacity
             style={styles.card}
@@ -166,7 +165,7 @@ export default function ProfiloScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Svuota Cache e Ricarica</Text>
-              <Text style={styles.cardSubtitle}>Scarica di nuovo l'orario se i docenti hanno fatto modifiche</Text>
+              <Text style={styles.cardSubtitle}>{"Scarica di nuovo l'orario se i docenti hanno fatto modifiche"}</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -227,7 +226,7 @@ export default function ProfiloScreen() {
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setChannelModalVisible(false)}>
           <View style={styles.channelDialog} onStartShouldSetResponder={() => true}>
             <Text style={styles.channelDialogTitle}>Seleziona Canale / Anno</Text>
-            <Text style={styles.channelDialogSubtitle}>Scegli quale orario visualizzare all'apertura</Text>
+            <Text style={styles.channelDialogSubtitle}>{"Scegli quale orario visualizzare all'apertura"}</Text>
             <ScrollView style={{ maxHeight: 300, marginVertical: 12 }}>
               {availableTabs.map((t, idx) => {
                 const isSelected = defaultTabUrl === t.url || (!defaultTabUrl && idx === 0);
