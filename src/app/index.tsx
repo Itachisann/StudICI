@@ -185,7 +185,10 @@ export default function ScheduleScreen() {
 
       {/* ── Classes List ── */}
       {loading ? (
-        <ActivityIndicator size="large" color={SAPIENZA_RED} style={{ marginTop: 60 }} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={SAPIENZA_RED} />
+          <Text style={styles.loadingText}>Scarico orario e avvisi con IA...</Text>
+        </View>
       ) : (
         <ScrollView
           style={styles.classList}
@@ -360,10 +363,14 @@ const styles = StyleSheet.create({
   },
   dayItem: { alignItems: 'center' },
   dayCircle: {
-    width: 42, height: 42, borderRadius: 21,
+    width: 44, height: 44, borderRadius: 14, // squircle instead of circle
     justifyContent: 'center', alignItems: 'center',
   },
   dayCircleActive: { backgroundColor: SAPIENZA_RED },
+
+  /* Loading State */
+  loadingContainer: { alignItems: 'center', marginTop: 60 },
+  loadingText: { color: '#8e8e93', marginTop: 16, fontSize: 14 },
   dayText: { color: '#8e8e93', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
   dayTextActive: { color: '#fff' },
   dayDot: {

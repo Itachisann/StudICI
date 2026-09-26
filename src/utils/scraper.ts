@@ -1,5 +1,15 @@
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, ParsedClass } from './aiParser';
+
+// Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
+function hashCode(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 33) ^ str.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
 
 export interface Degree {
   name: string;
@@ -85,6 +95,18 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
   try {
     const res = await axios.get(url);
     const data = res.data;
+    
+    // Check Cache
+    const contentHash = hashCode(data);
+    const cacheKey = `tabsCache_${url}`;
+    try {
+      const cachedStr = await AsyncStorage.getItem(cacheKey);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        if (cached.hash === contentHash && cached.tabs) return cached.tabs;
+      }
+    } catch (e) {}
+
     const itemsRegex = /items\.push\(\{(.*?)\}\);/g;
     let match;
     const rawTabs: { rawName: string; url: string }[] = [];
@@ -94,6 +116,8 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
       const nameMatch = content.match(/name:\s*"([^"]+)"/);
       const urlMatch = content.match(/pageUrl:\s*"([^"]+)"/);
       if (nameMatch && urlMatch) {
+        // Ignora "Mappa" a monte per sicurezza
+        if (/mappa|aule|edifici/i.test(nameMatch[1])) continue;
         rawTabs.push({
           rawName: nameMatch[1],
           url: urlMatch[1].replace(/\\/g, ''),
@@ -103,22 +127,21 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
     
     if (rawTabs.length === 0) return [];
 
-    // Extract names array to pass to AI
     const rawNames = rawTabs.map(t => t.rawName);
     const parsedNames = await parseTabsWithAI(rawNames);
     
     const tabs: Tab[] = [];
     for (let i = 0; i < rawTabs.length; i++) {
       const newName = parsedNames[i] || rawTabs[i].rawName;
-      // Il parser AI restituisce "" per tab da ignorare (es. Mappe)
       if (newName.trim() !== '') {
-        tabs.push({
-          name: newName,
-          url: rawTabs[i].url,
-        });
+        tabs.push({ name: newName, url: rawTabs[i].url });
       }
     }
     
+    try {
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentHash, tabs }));
+    } catch (e) {}
+
     return tabs;
   } catch (error) {
     console.error('Error fetching tabs:', error);
@@ -270,6 +293,10 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       if (currentEvent) events.push(currentEvent);
       data.days[day] = events;
     }
+    
+    try {
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentHash, data }));
+    } catch (e) {}
 
     return data;
   } catch (error) {
