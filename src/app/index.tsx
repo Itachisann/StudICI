@@ -6,6 +6,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchTabs, fetchScheduleData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
+import { resolveClassroom, ResolvedClassroom } from '../utils/classroomLocations';
+import { ClassroomModal } from '../components/ClassroomModal';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 
@@ -26,6 +28,8 @@ export default function ScheduleScreen() {
   const [selectedDay, setSelectedDay] = useState(todayIdx);
   const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
+  const [selectedRoomModal, setSelectedRoomModal] = useState<ResolvedClassroom | null>(null);
+  const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -37,6 +41,7 @@ export default function ScheduleScreen() {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const storedName = await AsyncStorage.getItem('selectedDegreeName');
+      const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
       if (storedName) setDegreeName(storedName);
       
       if (!storedUrl) {
@@ -45,31 +50,74 @@ export default function ScheduleScreen() {
         return;
       }
 
+      // Se il corso è cambiato o è il primo avvio
       if (storedUrl !== degreeUrl || tabs.length === 0) {
-        setLoading(true);
         setDegreeUrl(storedUrl);
+
+        // 1. Controlla se abbiamo la cache locale persistita per questo corso
+        const storedCourseData = await AsyncStorage.getItem(`allSchedules_${storedUrl}`);
+        if (storedCourseData) {
+          try {
+            const parsed = JSON.parse(storedCourseData);
+            if (parsed.tabs && parsed.schedules) {
+              setTabs(parsed.tabs);
+              setSchedulesMap(parsed.schedules);
+              const target = parsed.tabs.find((t: Tab) => t.url === storedDefaultTab) || parsed.tabs[0];
+              setSelectedTab(target);
+              if (parsed.schedules[target.url]) {
+                setSchedule(parsed.schedules[target.url]);
+                setLoading(false);
+              }
+            }
+          } catch (e) {}
+        } else {
+          setLoading(true);
+        }
+
         const fetchedTabs = await fetchTabs(storedUrl);
         setTabs(fetchedTabs);
 
         if (fetchedTabs.length > 0) {
-          const firstTab = fetchedTabs[0];
-          setSelectedTab(firstTab);
+          const targetTab = fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
+          setSelectedTab(targetTab);
 
-          // 1. Scarica subito il primo tab per mostrare immediatamente l'orario
-          const firstData = await fetchScheduleData(firstTab.url);
+          const firstData = await fetchScheduleData(targetTab.url);
           setSchedule(firstData);
-          setSchedulesMap({ [firstTab.url]: firstData });
           setLoading(false);
 
-          // 2. Scarica TUTTI gli altri canali in background per salvare tutto in memoria/cache
-          for (let i = 1; i < fetchedTabs.length; i++) {
+          setSchedulesMap(prev => {
+            const updated = { ...prev, [targetTab.url]: firstData };
+            AsyncStorage.setItem(`allSchedules_${storedUrl}`, JSON.stringify({
+              tabs: fetchedTabs,
+              schedules: updated
+            })).catch(() => {});
+            return updated;
+          });
+
+          // Scarica in background gli altri canali e salvali
+          for (let i = 0; i < fetchedTabs.length; i++) {
             const currentTab = fetchedTabs[i];
-            fetchScheduleData(currentTab.url).then(tabData => {
-              setSchedulesMap(prev => ({ ...prev, [currentTab.url]: tabData }));
-            }).catch(e => console.warn('Background channel fetch error:', e));
+            if (currentTab.url !== targetTab.url) {
+              fetchScheduleData(currentTab.url).then(tabData => {
+                setSchedulesMap(prev => {
+                  const updated = { ...prev, [currentTab.url]: tabData };
+                  AsyncStorage.setItem(`allSchedules_${storedUrl}`, JSON.stringify({
+                    tabs: fetchedTabs,
+                    schedules: updated
+                  })).catch(() => {});
+                  return updated;
+                });
+              }).catch(() => {});
+            }
           }
         } else {
           setLoading(false);
+        }
+      } else if (storedDefaultTab && selectedTab?.url !== storedDefaultTab) {
+        const match = tabs.find(t => t.url === storedDefaultTab);
+        if (match && schedulesMap[match.url]) {
+          setSelectedTab(match);
+          setSchedule(schedulesMap[match.url]);
         }
       }
     } catch (e) {
@@ -81,7 +129,7 @@ export default function ScheduleScreen() {
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
     if (schedulesMap[tab.url]) {
-      // Transizione istantanea senza caricamenti
+      // Istantaneo da memoria: zero caricamento e zero rete!
       setSchedule(schedulesMap[tab.url]);
     } else {
       setLoading(true);
@@ -92,10 +140,17 @@ export default function ScheduleScreen() {
     }
   };
 
-  const openMapForRoom = (room: string) => {
+  const handleRoomClick = (room: string, subject: string) => {
     if (!room) return;
-    const query = encodeURIComponent(`Sapienza Università di Roma ${room}`);
-    Linking.openURL(`http://maps.apple.com/?q=${query}`).catch(() => {});
+    const contextHeader = [
+      schedule?.info.faculty,
+      schedule?.info.course,
+      schedule?.info.semester,
+      ...(schedule?.alerts || [])
+    ].join(' ');
+    const res = resolveClassroom(room, contextHeader);
+    setSelectedRoomModal(res);
+    setSelectedRoomSubjects(subject ? [subject] : []);
   };
 
   const todayClasses = schedule?.days[selectedDay] || [];
@@ -257,7 +312,7 @@ export default function ScheduleScreen() {
                 {cls.room ? (
                   <TouchableOpacity
                     style={styles.roomBadge}
-                    onPress={() => openMapForRoom(cls.room)}
+                    onPress={() => handleRoomClick(cls.room, cls.subject)}
                   >
                     <Ionicons name="location" size={13} color="#ef4444" />
                     <Text style={styles.roomBadgeText}>{cls.room}</Text>
@@ -295,6 +350,14 @@ export default function ScheduleScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Modal Mappe per l'aula */}
+      <ClassroomModal
+        visible={!!selectedRoomModal}
+        classroom={selectedRoomModal}
+        subjects={selectedRoomSubjects}
+        onClose={() => setSelectedRoomModal(null)}
+      />
 
     </SafeAreaView>
   );

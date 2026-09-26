@@ -31,10 +31,17 @@ export default function AppLayout() {
             }}
           />
           <NativeTabs.Screen
+            name="aule"
+            options={{
+              title: 'Aule',
+              tabBarIcon: () => ({ sfSymbol: 'map' }),
+            }}
+          />
+          <NativeTabs.Screen
             name="settings"
             options={{
-              title: 'Corsi',
-              tabBarIcon: () => ({ sfSymbol: 'graduationcap' }),
+              title: 'Profilo',
+              tabBarIcon: () => ({ sfSymbol: 'person.crop.circle' }),
             }}
           />
         </NativeTabs>
@@ -75,11 +82,20 @@ export default function AppLayout() {
           }}
         />
         <ExpoTabs.Screen
+          name="aule"
+          options={{
+            title: 'Aule',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="map-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <ExpoTabs.Screen
           name="settings"
           options={{
-            title: 'Corsi',
+            title: 'Profilo',
             tabBarIcon: ({ color, size }) => (
-              <Ionicons name="school-outline" size={size} color={color} />
+              <Ionicons name="person-circle-outline" size={size} color={color} />
             ),
           }}
         />
