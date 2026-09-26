@@ -1,10 +1,11 @@
 import { Tabs } from 'expo-router';
 import { BlurView } from 'expo-blur';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 
-const SAPIENZA_RED = '#822433';
+const CORAL = '#FF6B6B';
+const INACTIVE_COLOR = 'rgba(255, 255, 255, 0.6)';
 
 export default function AppLayout() {
   return (
@@ -13,46 +14,77 @@ export default function AppLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarShowLabel: false, // Nascondiamo la default label perché è disegnata custom
-          tabBarStyle: {
-            position: 'absolute',
-            bottom: 20, // Margin dal fondo (effetto floating)
-            left: 20,
-            right: 20,
-            height: 64,
-            elevation: 0,
-            backgroundColor: 'transparent',
-            borderTopWidth: 0,
-            borderRadius: 32,
-            overflow: 'hidden', // per non far sbordare il BlurView
-          },
+          tabBarActiveTintColor: CORAL,
+          tabBarInactiveTintColor: INACTIVE_COLOR,
+          tabBarShowLabel: true,
+          tabBarLabelStyle: styles.tabBarLabel,
+          tabBarItemStyle: styles.tabBarItem,
+          tabBarStyle: styles.tabBar,
           tabBarBackground: () => (
-            <BlurView tint="dark" intensity={90} style={StyleSheet.absoluteFill} />
+            <BlurView tint="dark" intensity={80} style={StyleSheet.absoluteFill} />
           ),
-          tabBarActiveTintColor: '#ffffff',
-          tabBarInactiveTintColor: '#8e8e93',
         }}
       >
+        {/* 1. Percorso */}
         <Tabs.Screen
-          name="index"
+          name="percorso"
           options={{
-            title: 'Orario',
+            title: 'Percorso',
             tabBarIcon: ({ color, focused }) => (
-              <View style={[styles.tabItem, focused && styles.tabItemActive]}>
-                <Ionicons name="calendar" size={22} color={color} />
-                <Text style={[styles.tabLabel, { color }]}>Orario</Text>
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons name={focused ? 'map' : 'map-outline'} size={22} color={color} />
               </View>
             ),
           }}
         />
+
+        {/* 2. Dashboard (Orario & Corsi) */}
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Dashboard',
+            tabBarIcon: ({ color, focused }) => (
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons name={focused ? 'school' : 'school-outline'} size={22} color={color} />
+              </View>
+            ),
+          }}
+        />
+
+        {/* 3. Libretto */}
+        <Tabs.Screen
+          name="libretto"
+          options={{
+            title: 'Libretto',
+            tabBarIcon: ({ color, focused }) => (
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons name={focused ? 'document-text' : 'document-text-outline'} size={22} color={color} />
+              </View>
+            ),
+          }}
+        />
+
+        {/* 4. Strumenti IA */}
+        <Tabs.Screen
+          name="ia"
+          options={{
+            title: 'Strumenti IA',
+            tabBarIcon: ({ color, focused }) => (
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons name={focused ? 'sparkles' : 'sparkles-outline'} size={22} color={color} />
+              </View>
+            ),
+          }}
+        />
+
+        {/* 5. Impostazioni */}
         <Tabs.Screen
           name="settings"
           options={{
-            title: 'Corsi',
+            title: 'Impostazioni',
             tabBarIcon: ({ color, focused }) => (
-              <View style={[styles.tabItem, focused && styles.tabItemActive]}>
-                <Ionicons name="school" size={22} color={color} />
-                <Text style={[styles.tabLabel, { color }]}>Corsi</Text>
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons name={focused ? 'settings' : 'settings-outline'} size={22} color={color} />
               </View>
             ),
           }}
@@ -67,21 +99,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#111111',
   },
-  tabItem: {
-    flexDirection: 'column',
-    alignItems: 'center',
+  tabBar: {
+    position: 'absolute',
+    bottom: 25,
+    left: 20,
+    right: 20,
+    height: 75,
+    borderRadius: 40,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
+    borderWidth: 0,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  tabBarItem: {
+    height: 75,
     justifyContent: 'center',
-    height: 52,
-    width: 90,
-    borderRadius: 26,
-    marginTop: 24, // Compensa il padding standard
+    alignItems: 'center',
+    paddingVertical: 10,
   },
-  tabItemActive: {
-    backgroundColor: 'rgba(130,36,51,0.85)', // Sapienza red translucido
-  },
-  tabLabel: {
+  tabBarLabel: {
     fontSize: 10,
-    fontWeight: '600',
+    fontWeight: 'bold',
+    textAlign: 'center',
     marginTop: 2,
-  }
+  },
+  iconContainer: {
+    width: 44,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconContainerActive: {
+    backgroundColor: 'rgba(255, 107, 107, 0.2)', // Effetto bottone acceso corallo
+  },
 });
