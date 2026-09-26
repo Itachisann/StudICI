@@ -74,12 +74,12 @@ export function resolveClassroom(roomText: string, contextText: string = ''): Re
     };
   }
 
-  // 4. Default: Sapienza Roma Città Universitaria
+  // 4. Default per le aule ICI (Castro Laurenziano / Scarpa)
   return {
-    displayName: displayName || cleanRoom || 'Aula Sapienza',
-    buildingName: buildingCode ? `Edificio ${buildingCode}` : 'Sapienza Università di Roma',
-    buildingCode: buildingCode || '',
-    address: 'Piazzale Aldo Moro 5, 00185 Roma',
+    displayName: displayName || cleanRoom || 'Aula',
+    buildingName: buildingCode ? `Edificio ${buildingCode}` : 'Edificio RM018 (Castro Laurenziano)',
+    buildingCode: buildingCode || 'RM018',
+    address: 'Via del Castro Laurenziano 7a, 00161 Roma',
   };
 }
 

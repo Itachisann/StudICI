@@ -67,24 +67,34 @@ export default function AuleScreen() {
         ...(data.alerts || [])
       ].join(' ');
 
-      // Estrai da classrooms dichiarate
+      // 1. Estrai da classrooms dichiarate (mappate da Gemini con edificio e indirizzo)
       data.classrooms.forEach(c => {
-        const res = resolveClassroom(c.aulaName, contextHeader);
-        if (!roomMap.has(res.displayName)) {
-          roomMap.set(res.displayName, { resolved: res, subjects: new Set() });
+        const res: ResolvedClassroom = {
+          displayName: c.aulaName,
+          buildingName: c.building || 'Edificio RM018 (Castro Laurenziano)',
+          buildingCode: c.building ? c.building.replace(/^Edificio\s+/i, '') : 'RM018',
+          address: c.address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+        };
+        if (!roomMap.has(c.aulaName)) {
+          roomMap.set(c.aulaName, { resolved: res, subjects: new Set() });
         }
       });
 
-      // Estrai da tutte le lezioni dei 5 giorni
+      // 2. Estrai da tutte le lezioni dei 5 giorni
       data.days.forEach(day => {
         day.forEach(cls => {
           if (cls.room) {
-            const res = resolveClassroom(cls.room, contextHeader);
-            if (!roomMap.has(res.displayName)) {
-              roomMap.set(res.displayName, { resolved: res, subjects: new Set() });
+            const res: ResolvedClassroom = {
+              displayName: cls.room,
+              buildingName: cls.building || 'Edificio RM018 (Castro Laurenziano)',
+              buildingCode: cls.building ? cls.building.replace(/^Edificio\s+/i, '') : 'RM018',
+              address: cls.address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+            };
+            if (!roomMap.has(cls.room)) {
+              roomMap.set(cls.room, { resolved: res, subjects: new Set() });
             }
             if (cls.subject) {
-              roomMap.get(res.displayName)!.subjects.add(cls.subject);
+              roomMap.get(cls.room)!.subjects.add(cls.subject);
             }
           }
         });

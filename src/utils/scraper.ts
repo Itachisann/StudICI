@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, ParsedClass } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, mapClassroomsWithAI, ParsedClass } from './aiParser';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -32,6 +32,8 @@ export interface ClassEvent {
   subject: string;
   teacher: string;
   room: string;
+  building?: string;
+  address?: string;
   startTime: string;
   endTime: string;
   duration: number;
@@ -116,11 +118,22 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
       const nameMatch = content.match(/name:\s*"([^"]+)"/);
       const urlMatch = content.match(/pageUrl:\s*"([^"]+)"/);
       if (nameMatch && urlMatch) {
-        // Ignora "Mappa" a monte per sicurezza
-        if (/mappa|aule|edifici/i.test(nameMatch[1])) continue;
+        const rawName = nameMatch[1];
+        const pageUrl = urlMatch[1].replace(/\\/g, '');
+
+        // Se è la mappa edifici, estrai il testo delle vie e salvalo in cache per il corso
+        if (/mappa|edifici/i.test(rawName)) {
+          axios.get(pageUrl).then(mapRes => {
+            const cleanText = mapRes.data.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            AsyncStorage.setItem(`courseMapText_${url}`, cleanText).catch(() => {});
+          }).catch(() => {});
+          continue;
+        }
+
+        if (/aule/i.test(rawName)) continue;
         rawTabs.push({
-          rawName: nameMatch[1],
-          url: urlMatch[1].replace(/\\/g, ''),
+          rawName: rawName,
+          url: pageUrl,
         });
       }
     }
@@ -264,6 +277,26 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     // Parsa con AI (o fallback regex)
     const parsed: ParsedClass[] = await parseScheduleCells(allCells);
 
+    // Mappa con Gemini le aule al loro rispettivo edificio e indirizzo usando il tab Mappa Edifici
+    const uniqueRooms = Array.from(new Set(parsed.map(p => p.room).filter(Boolean)));
+    let mapText = '';
+    try {
+      const baseSheetUrl = tabUrl.split('/sheet')[0];
+      mapText = (await AsyncStorage.getItem(`courseMapText_${baseSheetUrl}`)) || '';
+    } catch (e) {}
+
+    if (!mapText) {
+      mapText = headerRows.map(r => r.join(' ')).join('\n');
+    }
+
+    const mappedRooms = await mapClassroomsWithAI(uniqueRooms, mapText);
+
+    data.classrooms = Object.values(mappedRooms).map(m => ({
+      aulaName: m.displayName,
+      building: m.building,
+      address: m.address,
+    }));
+
     // Ricostruisci gli eventi per giorno, accorpando slot adiacenti
     for (let day = 0; day < 5; day++) {
       const events: ClassEvent[] = [];
@@ -275,7 +308,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
         const slot = timeSlots[slotIdx];
 
         if (p && p.subject) {
-          const roomLabel = p.room ? `Aula ${p.room}` : '';
+          const mInfo = mappedRooms[p.room];
+          const roomLabel = mInfo ? mInfo.displayName : (p.room ? `Aula ${p.room}` : '');
           
           if (
             currentEvent &&
@@ -292,6 +326,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
               subject: p.subject,
               teacher: p.teacher,
               room: roomLabel,
+              building: mInfo?.building || '',
+              address: mInfo?.address || '',
               startTime: times[0] || slot.time,
               endTime: times[1] || '',
               duration: 1,

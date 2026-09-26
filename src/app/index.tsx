@@ -140,17 +140,27 @@ export default function ScheduleScreen() {
     }
   };
 
-  const handleRoomClick = (room: string, subject: string) => {
-    if (!room) return;
+  const handleRoomClick = (cls: ClassEvent) => {
+    if (!cls.room) return;
+    if (cls.building && cls.address) {
+      setSelectedRoomModal({
+        displayName: cls.room,
+        buildingName: cls.building,
+        buildingCode: cls.building.replace(/^Edificio\s+/i, ''),
+        address: cls.address,
+      });
+      setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
+      return;
+    }
     const contextHeader = [
       schedule?.info.faculty,
       schedule?.info.course,
       schedule?.info.semester,
       ...(schedule?.alerts || [])
     ].join(' ');
-    const res = resolveClassroom(room, contextHeader);
+    const res = resolveClassroom(cls.room, contextHeader);
     setSelectedRoomModal(res);
-    setSelectedRoomSubjects(subject ? [subject] : []);
+    setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
   };
 
   const todayClasses = schedule?.days[selectedDay] || [];
@@ -312,7 +322,7 @@ export default function ScheduleScreen() {
                 {cls.room ? (
                   <TouchableOpacity
                     style={styles.roomBadge}
-                    onPress={() => handleRoomClick(cls.room, cls.subject)}
+                    onPress={() => handleRoomClick(cls)}
                   >
                     <Ionicons name="location" size={13} color="#ef4444" />
                     <Text style={styles.roomBadgeText}>{cls.room}</Text>

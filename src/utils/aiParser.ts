@@ -1,4 +1,5 @@
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // La chiave viene letta dalla variabile d'ambiente EXPO_PUBLIC_GEMINI_KEY
 const getApiKey = (): string => {
@@ -235,3 +236,89 @@ ${flatText}`;
     return [];
   }
 }
+
+export interface MappedClassroom {
+  raw: string;
+  displayName: string;
+  building: string;
+  address: string;
+}
+
+function hashString(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 33) ^ str.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+/**
+ * Mappa le aule al loro edificio e indirizzo stradale basandosi sul foglio Mappa Edifici.
+ * Applica Gemini 3.1 Flash Lite e cache AsyncStorage.
+ */
+export async function mapClassroomsWithAI(
+  classrooms: string[],
+  mapTabText: string
+): Promise<Record<string, MappedClassroom>> {
+  const uniqueRooms = Array.from(new Set(classrooms.map(c => c.trim()).filter(Boolean)));
+  if (uniqueRooms.length === 0) return {};
+
+  const hashKey = `classroomMap_${hashString(uniqueRooms.sort().join('|') + (mapTabText || ''))}`;
+  try {
+    const cached = await AsyncStorage.getItem(hashKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (e) {}
+
+  const result: Record<string, MappedClassroom> = {};
+
+  try {
+    const prompt = `Sei un assistente per gli studenti della facoltà di Ingegneria della Sapienza di Roma.
+Ti fornisco il testo estratto dal tab "Mappa Edifici" del foglio orari universitario:
+---
+${mapTabText || 'edificio RM002 - via Scarpa 16\nedificio RM018 - via del Castro Laurenziano 7a\nedifici da RM031 a RM039 - via Eudossiana 18\nedificio RM041 - via delle Sette Sale 29\nedificio RM025 - via Tiburtina 205'}
+---
+
+Ed ecco le aule presenti nell'orario delle lezioni:
+${JSON.stringify(uniqueRooms)}
+
+Il tuo compito è mappare ciascuna aula al suo edificio e indirizzo/via esatto leggendo il testo fornito.
+Regole per la Sapienza:
+- Le aule senza sigla esplicita (es. aula 6, aula 14, aula 16, aula 7) nei corsi ICI appartengono all'edificio RM018 (via del Castro Laurenziano 7a, 00161 Roma) o RM002/RM014 (via Scarpa 16).
+- Se l'aula specifica un codice RM (es. RM031 aula 21, RM038 aula 38), l'edificio è quello indicato e l'indirizzo corrisponde a quello della lista (es. via Eudossiana 18, 00184 Roma).
+- Se l'aula è aula 41 o simile, corrisponde a RM041 (via delle Sette Sale 29, 00184 Roma).
+
+Rispondi con un array JSON di oggetti con i campi esatti:
+- "raw": il testo originale dell'aula passato in input
+- "displayName": nome pulito dell'aula (es: "Aula 16", "Aula 21", "Aula 6")
+- "building": codice e nome dell'edificio (es: "Edificio RM018", "Edificio RM031")
+- "address": indirizzo stradale completo con CAP e città Roma (es: "Via del Castro Laurenziano 7a, 00161 Roma", "Via Eudossiana 18, 00184 Roma")`;
+
+    const response = await axios.post(getGeminiUrl(), {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    }, { timeout: 12000 });
+
+    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const parsed: MappedClassroom[] = JSON.parse(aiText);
+
+    if (Array.isArray(parsed)) {
+      parsed.forEach(item => {
+        if (item.raw) {
+          result[item.raw] = item;
+        }
+      });
+      await AsyncStorage.setItem(hashKey, JSON.stringify(result));
+      return result;
+    }
+  } catch (err: any) {
+    console.warn('Gemini classroom mapping fallback:', err?.message || err);
+  }
+
+  return result;
+}
+
