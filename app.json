@@ -7,7 +7,8 @@
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
-    "ios": { "bundleIdentifier": "com.vitor.studici",
+    "ios": {
+      "bundleIdentifier": "com.vitor.studici",
       "icon": "./assets/expo.icon"
     },
     "android": {
@@ -24,7 +25,13 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router", ["expo-calendar", { "calendarPermission": "L'app ha bisogno di accedere al calendario per sincronizzare l'orario delle lezioni." }],
+      "expo-router",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "L'app ha bisogno di accedere al calendario per sincronizzare l'orario delle lezioni."
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -32,7 +39,8 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      "react-native-bottom-tabs"
     ],
     "experiments": {
       "typedRoutes": true,

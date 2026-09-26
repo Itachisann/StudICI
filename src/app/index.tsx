@@ -217,7 +217,7 @@ export default function ScheduleScreen() {
       ) : (
         <ScrollView
           style={styles.classList}
-          contentContainerStyle={{ paddingBottom: 130 }}
+          contentContainerStyle={{ paddingBottom: 120 }}
         >
           {todayClasses.length === 0 && (
             <View style={styles.emptyDay}>
