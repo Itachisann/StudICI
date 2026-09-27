@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchTabs, fetchScheduleData, Tab } from '../utils/scraper';
-import { resolveClassroom, ResolvedClassroom } from '../utils/classroomLocations';
+import { resolveClassroom, ResolvedClassroom, SAPIENZA_BUILDINGS } from '../utils/classroomLocations';
 import { ClassroomModal } from '../components/ClassroomModal';
 
 const SAPIENZA_RED = '#822433';
@@ -38,14 +38,26 @@ export default function AuleScreen() {
         ...(data.alerts || [])
       ].join(' ');
 
+      /** Ricava le coordinate dal codice edificio (es. "Edificio RM018") */
+      const coordsFromBuilding = (bName: string) => {
+        const rm = bName?.match(/(RM\d{3})/i);
+        if (rm) {
+          const b = SAPIENZA_BUILDINGS[rm[1].toUpperCase()];
+          if (b) return { lat: b.lat, lon: b.lon };
+        }
+        return {};
+      };
+
       // 1. Estrai da classrooms dichiarate (mappate da Gemini con edificio e indirizzo)
       data.classrooms.forEach(c => {
         const fallbackRes = resolveClassroom(c.aulaName, contextHeader);
+        const bName = c.building || fallbackRes.buildingName;
         const res: ResolvedClassroom = {
           displayName: c.aulaName,
-          buildingName: c.building || fallbackRes.buildingName,
+          buildingName: bName,
           buildingCode: c.building ? c.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
           address: c.address || fallbackRes.address,
+          ...coordsFromBuilding(bName),
         };
         if (!roomMap.has(c.aulaName)) {
           roomMap.set(c.aulaName, { resolved: res, subjects: new Set() });
@@ -57,11 +69,13 @@ export default function AuleScreen() {
         day.forEach(cls => {
           if (cls.room) {
             const fallbackRes = resolveClassroom(cls.room, contextHeader);
+            const bName = cls.building || fallbackRes.buildingName;
             const res: ResolvedClassroom = {
               displayName: cls.room,
-              buildingName: cls.building || fallbackRes.buildingName,
+              buildingName: bName,
               buildingCode: cls.building ? cls.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
               address: cls.address || fallbackRes.address,
+              ...coordsFromBuilding(bName),
             };
             if (!roomMap.has(cls.room)) {
               roomMap.set(cls.room, { resolved: res, subjects: new Set() });
@@ -84,6 +98,7 @@ export default function AuleScreen() {
       console.error(e);
     }
   }, []);
+
 
   const loadData = useCallback(async () => {
     setLoading(true);

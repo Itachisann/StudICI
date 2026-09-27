@@ -287,6 +287,8 @@ export interface MappedClassroom {
   building: string;
   address: string;
   dayNote?: string;
+  lat?: number;
+  lon?: number;
 }
 
 function hashString(str: string): string {
@@ -391,6 +393,11 @@ export function extractClassroomsFromHeaderRows(
           ? (buildingAddresses[buildingCode]?.buildingName || `Edificio ${buildingCode}`)
           : 'Edificio Sapienza';
 
+        // Coordinate GPS dall'edificio (per Apple Maps / Google Maps precisi)
+        const coords = buildingCode ? SAPIENZA_BUILDINGS[buildingCode] : null;
+        const lat = coords?.lat;
+        const lon = coords?.lon;
+
         const cleanAula = aulaRaw.replace(/^aula\s+/i, '').trim();
 
         // Caso aule multiple (es: "15 e 16")
@@ -403,12 +410,16 @@ export function extractClassroomsFromHeaderRows(
             displayName: `Aula ${r1}`,
             building: buildingName,
             address: address || 'Via Antonio Scarpa 14, 00161 Roma',
+            lat,
+            lon,
           };
           const item2: MappedClassroom = {
             key: r2,
             displayName: `Aula ${r2}`,
             building: buildingName,
             address: address || 'Via Antonio Scarpa 14, 00161 Roma',
+            lat,
+            lon,
           };
           result[r1.toLowerCase()] = item1;
           result[`aula ${r1.toLowerCase()}`] = item1;
@@ -430,6 +441,8 @@ export function extractClassroomsFromHeaderRows(
             building: buildingName,
             address: address || 'Via Tiburtina 205, 00185 Roma',
             dayNote: dNote,
+            lat,
+            lon,
           };
           result[`${r} (${dNote})`] = item;
           result[`aula ${r} (${dNote})`] = item;
@@ -455,6 +468,8 @@ export function extractClassroomsFromHeaderRows(
           displayName: dispName,
           building: buildingName,
           address: address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+          lat,
+          lon,
         };
         result[cleanAula.toLowerCase()] = item;
         result[`aula ${cleanAula.toLowerCase()}`] = item;
@@ -471,6 +486,7 @@ export function extractClassroomsFromHeaderRows(
 
   return result;
 }
+
 
 /**
  * Mappa le aule al loro edificio e indirizzo stradale basandosi sulla tabella

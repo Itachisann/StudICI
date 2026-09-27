@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchTabs, fetchScheduleData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
-import { resolveClassroom, ResolvedClassroom } from '../utils/classroomLocations';
+import { resolveClassroom, ResolvedClassroom, SAPIENZA_BUILDINGS } from '../utils/classroomLocations';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
@@ -139,12 +139,22 @@ export default function ScheduleScreen() {
 
   const handleRoomClick = (cls: ClassEvent) => {
     if (!cls.room) return;
+    /** Ricava coordinate dal codice edificio (es. "Edificio RM018") */
+    const coordsFromBuilding = (bName?: string) => {
+      const rm = bName?.match(/(RM\d{3})/i);
+      if (rm) {
+        const b = SAPIENZA_BUILDINGS[rm[1].toUpperCase()];
+        if (b) return { lat: b.lat, lon: b.lon };
+      }
+      return {};
+    };
     if (cls.building && cls.address) {
       setSelectedRoomModal({
         displayName: cls.room,
         buildingName: cls.building,
         buildingCode: cls.building.replace(/^Edificio\s+/i, ''),
         address: cls.address,
+        ...coordsFromBuilding(cls.building),
       });
       setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
       return;
@@ -159,6 +169,7 @@ export default function ScheduleScreen() {
     setSelectedRoomModal(res);
     setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
   };
+
 
   const todayClasses = schedule?.days[selectedDay] || [];
 
