@@ -6,8 +6,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchDegrees, fetchAllCourseData, Degree } from '../utils/scraper';
+import { fetchDegrees, fetchAllCourseData, Degree, Tab } from '../utils/scraper';
 import { CourseDownloadView } from './CourseDownloadView';
+import { DefaultTabPicker } from './DefaultTabPicker';
 
 const SAPIENZA_RED = '#822433';
 
@@ -22,6 +23,11 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
   const [downloading, setDownloading] = useState(false);
   const [progressText, setProgressText] = useState('');
   const [currentDegreeName, setCurrentDegreeName] = useState('');
+
+  // Step 2: Selezione Anno e Canale
+  const [step, setStep] = useState<'select_course' | 'select_channel'>('select_course');
+  const [downloadedTabs, setDownloadedTabs] = useState<Tab[]>([]);
+  const [pendingDegree, setPendingDegree] = useState<Degree | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -39,32 +45,54 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
 
   const handleSelectDegree = async (degree: Degree) => {
     setCurrentDegreeName(degree.name);
+    setPendingDegree(degree);
     setDownloading(true);
     setProgressText('Preparazione e analisi canali...');
 
     try {
-      // 1. Scarica TUTTO in un'unica botta PRIMA di salvare la preferenza in AsyncStorage.
-      // In questo modo il layout globale NON unmounta la schermata e l'utente rimane
-      // sulla schermata di caricamento fino al completamento al 100%.
-      await fetchAllCourseData(degree.url, true, (stepMsg) => {
+      // 1. Scarica TUTTO in un'unica botta con avanzamento in tempo reale
+      const { tabs } = await fetchAllCourseData(degree.url, true, (stepMsg) => {
         setProgressText(stepMsg);
       });
 
-      // 2. Solo al termine completo del download salviamo il corso scelto
-      await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
-      await AsyncStorage.setItem('selectedDegreeName', degree.name);
-      await AsyncStorage.removeItem('defaultTabUrl');
-
-      // 3. Notifica il layout per passare agli orari
-      onComplete();
+      // 2. Se il corso presenta più canali/anni, permetti allo studente di scegliere il suo predefinito
+      if (tabs && tabs.length > 1) {
+        setDownloadedTabs(tabs);
+        setDownloading(false);
+        setStep('select_channel');
+      } else {
+        // Corso a canale unico: salva direttamente
+        await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
+        await AsyncStorage.setItem('selectedDegreeName', degree.name);
+        if (tabs && tabs.length === 1) {
+          await AsyncStorage.setItem('defaultTabUrl', tabs[0].url);
+        } else {
+          await AsyncStorage.removeItem('defaultTabUrl');
+        }
+        onComplete();
+      }
     } catch (err) {
       console.error('Errore durante download iniziale:', err);
       setDownloading(false);
+      setStep('select_course');
       Alert.alert(
         'Errore di Connessione',
         'Impossibile scaricare i dati del corso dal sito Sapienza. Controlla la tua connessione e riprova.',
         [{ text: 'OK' }]
       );
+    }
+  };
+
+  const handleConfirmDefaultTab = async (chosenTab: Tab) => {
+    if (!pendingDegree) return;
+    try {
+      await AsyncStorage.setItem('selectedDegreeUrl', pendingDegree.url);
+      await AsyncStorage.setItem('selectedDegreeName', pendingDegree.name);
+      await AsyncStorage.setItem('defaultTabUrl', chosenTab.url);
+      onComplete();
+    } catch (e) {
+      console.error(e);
+      onComplete();
     }
   };
 
@@ -81,6 +109,22 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
         progressText={progressText}
         title="Configurazione in corso"
       />
+    );
+  }
+
+  // Schermata Step 2: Selezione Anno e Canale
+  if (step === 'select_channel' && pendingDegree) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <DefaultTabPicker
+          tabs={downloadedTabs}
+          degreeName={pendingDegree.name}
+          title="Personalizza il tuo Orario"
+          subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico all'avvio."
+          confirmButtonText="Inizia con questo Orario"
+          onConfirm={handleConfirmDefaultTab}
+        />
+      </SafeAreaView>
     );
   }
 

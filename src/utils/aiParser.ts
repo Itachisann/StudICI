@@ -382,6 +382,13 @@ export async function parseHeaderWithGemini(
     return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
   }
 
+  // FAST-PATH LOCALE ISTANTANEO (0ms):
+  // Se il parser deterministico locale ha già estratto con successo sia il semestre che le aule,
+  // restituiamo i dati locali all'istante senza alcuna attesa di rete, timeout o errore 503 di Google!
+  if (fallbackSemester && Object.keys(fallbackRooms).length > 0) {
+    return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
+  }
+
   // CHIAVE DI CACHE NORMALIZZATA CONDIVISA TRA TUTTI I CANALI DELLO STESSO CORSO:
   // Rimuoviamo le diciture specifiche del singolo canale (es: "CANALE A-K", "I ANNO")
   // così il primo canale effettua la chiamata AI e TUTTI gli altri canali dello stesso corso
@@ -468,7 +475,7 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 4500 });
+    }, { timeout: 3500 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(aiText);

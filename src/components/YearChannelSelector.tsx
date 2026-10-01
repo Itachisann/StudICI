@@ -47,10 +47,13 @@ export function parseTabHierarchy(tabs: Tab[]): ParsedTabInfo[] {
     }
 
     // 2. Estrazione Canale / Suddivisione
+    const withoutAcademicYear = raw.replace(/\b\d{4}[-/]\d{2,4}\b/g, '').replace(/A\.A\./gi, '').trim();
+
+    // 2. Estrazione Canale / Suddivisione
     let channel = '';
 
     // Controlla parentesi: es. "(A-L)", "(Canale 1)", "(M-Z)"
-    const parenMatch = raw.match(/\(([^)]+)\)/);
+    const parenMatch = withoutAcademicYear.match(/\(([^)]+)\)/);
     if (parenMatch) {
       const inside = parenMatch[1].trim();
       if (/^[a-z0-9\s-]+$/i.test(inside)) {
@@ -59,14 +62,14 @@ export function parseTabHierarchy(tabs: Tab[]): ParsedTabInfo[] {
         channel = inside;
       }
     } else {
-      // Controlla dopo trattino o "canale"
-      const canalMatch = raw.match(/canale\s*([a-zA-Z0-9\-_]+)/i);
+      // Controlla "canale X" o "canale A-K"
+      const canalMatch = withoutAcademicYear.match(/canale\s*([a-zA-Z0-9\-_]+(?:\s*-\s*[a-zA-Z0-9\-_]+)?)/i);
       if (canalMatch) {
-        channel = `Canale ${canalMatch[1]}`;
+        channel = `Canale ${canalMatch[1].replace(/\s+/g, '')}`;
       } else {
-        const dashParts = raw.split(/[-:]/);
-        if (dashParts.length > 1) {
-          channel = dashParts[1].trim();
+        const canalRangeMatch = withoutAcademicYear.match(/\b([A-Za-z]\s*-\s*[A-Za-z])\b/i);
+        if (canalRangeMatch) {
+          channel = `Canale ${canalRangeMatch[1].replace(/\s+/g, '').toUpperCase()}`;
         }
       }
     }

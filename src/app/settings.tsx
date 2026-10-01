@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Modal, Alert
@@ -10,6 +10,8 @@ import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { CourseDownloadView } from '../components/CourseDownloadView';
+import { DefaultTabPicker } from '../components/DefaultTabPicker';
+import { parseTabHierarchy } from '../components/YearChannelSelector';
 
 const SAPIENZA_RED = '#822433';
 
@@ -67,21 +69,29 @@ export default function ProfiloScreen() {
         setDownloadProgressText(stepMsg);
       });
 
-      // 2. Solo al 100% completato salviamo in AsyncStorage
+      // 2. Salviamo il corso e impostiamo il tab predefinito
       await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
       await AsyncStorage.setItem('selectedDegreeName', degree.name);
-      await AsyncStorage.removeItem('defaultTabUrl');
+      
+      const firstTab = tabs && tabs[0] ? tabs[0].url : null;
+      if (firstTab) {
+        await AsyncStorage.setItem('defaultTabUrl', firstTab);
+      } else {
+        await AsyncStorage.removeItem('defaultTabUrl');
+      }
 
       setDegreeUrl(degree.url);
       setDegreeName(degree.name);
-      setDefaultTabUrl(null);
+      setDefaultTabUrl(firstTab);
       setAvailableTabs(tabs);
+      setDownloadingCourse(null);
 
-      // 3. Breve ritardo visivo per completamento, poi switcha direttamente agli orari
-      setTimeout(() => {
-        setDownloadingCourse(null);
+      // 3. Se ci sono più canali, apri subito la scelta di anno e canale per il nuovo corso
+      if (tabs && tabs.length > 1) {
+        setChannelModalVisible(true);
+      } else {
         router.replace('/');
-      }, 300);
+      }
     } catch (err) {
       console.error('Errore durante download nuovo corso:', err);
       setDownloadingCourse(null);
@@ -153,6 +163,12 @@ export default function ProfiloScreen() {
     await WebBrowser.openBrowserAsync('https://ici.web.uniroma1.it/node/388');
   };
 
+  const parsedAvailable = useMemo(() => parseTabHierarchy(availableTabs), [availableTabs]);
+  const defaultTabInfo = useMemo(() => {
+    if (!defaultTabUrl) return parsedAvailable[0] || null;
+    return parsedAvailable.find(p => p.tab.url === defaultTabUrl) || parsedAvailable[0] || null;
+  }, [defaultTabUrl, parsedAvailable]);
+
   const defaultTabObj = availableTabs.find(t => t.url === defaultTabUrl) || (availableTabs[0] || null);
 
   return (
@@ -197,9 +213,13 @@ export default function ProfiloScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>
-                {defaultTabObj ? defaultTabObj.name : 'Seleziona canale predefinito'}
+                {defaultTabInfo
+                  ? `${defaultTabInfo.year}${defaultTabInfo.channel ? ` · ${defaultTabInfo.channel}` : ''}`
+                  : (defaultTabObj ? defaultTabObj.name : 'Seleziona canale predefinito')}
               </Text>
-              <Text style={styles.cardSubtitle}>Tocca per modificare</Text>
+              <Text style={styles.cardSubtitle}>
+                {defaultTabInfo ? `Foglio: ${defaultTabInfo.tab.name}` : 'Tocca per modificare'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#8e8e93" />
           </TouchableOpacity>
@@ -290,39 +310,32 @@ export default function ProfiloScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal Cambio Canale Predefinito */}
+      {/* Modal Cambio Canale / Anno Predefinito */}
       <Modal
         visible={channelModalVisible}
-        animationType="fade"
-        transparent={true}
+        animationType="slide"
+        presentationStyle="pageSheet"
         onRequestClose={() => setChannelModalVisible(false)}
       >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setChannelModalVisible(false)}>
-          <View style={styles.channelDialog} onStartShouldSetResponder={() => true}>
-            <Text style={styles.channelDialogTitle}>Seleziona Canale / Anno</Text>
-            <Text style={styles.channelDialogSubtitle}>{"Scegli quale orario visualizzare all'apertura"}</Text>
-            <ScrollView style={{ maxHeight: 300, marginVertical: 12 }}>
-              {availableTabs.map((t, idx) => {
-                const isSelected = defaultTabUrl === t.url || (!defaultTabUrl && idx === 0);
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[styles.channelItem, isSelected && styles.channelItemSelected]}
-                    onPress={() => selectDefaultTab(t)}
-                  >
-                    <Text style={[styles.channelItemText, isSelected && { color: SAPIENZA_RED, fontWeight: 'bold' }]}>
-                      {t.name}
-                    </Text>
-                    {isSelected && <Ionicons name="checkmark" size={20} color={SAPIENZA_RED} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <TouchableOpacity style={styles.dialogCloseButton} onPress={() => setChannelModalVisible(false)}>
-              <Text style={styles.dialogCloseText}>Chiudi</Text>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#111111' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 20, paddingTop: 16 }}>
+            <TouchableOpacity onPress={() => setChannelModalVisible(false)}>
+              <Text style={{ color: '#8e8e93', fontSize: 16, fontWeight: '600' }}>Chiudi</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+          <DefaultTabPicker
+            tabs={availableTabs}
+            initialTabUrl={defaultTabUrl}
+            degreeName={degreeName}
+            title="Anno e Canale Predefinito"
+            subtitle="Scegli quale orario visualizzare in automatico all'apertura dell'app."
+            confirmButtonText="Salva come Predefinito"
+            onConfirm={async (tab) => {
+              await selectDefaultTab(tab);
+            }}
+            onCancel={() => setChannelModalVisible(false)}
+          />
+        </SafeAreaView>
       </Modal>
 
       {/* Modal Schermata Download Unificato (uguale all'onboarding iniziale) */}
