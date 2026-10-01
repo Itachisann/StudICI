@@ -44,6 +44,8 @@ export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupC
       try {
         const result = await checkCourseUpdates(degreeUrl);
 
+        if (finishedRef.current) return;
+
         if (result.hasChanges) {
           clearTimeout(checkTimeout); // Rimuovi il timeout breve durante il download
           setStatus('updating');

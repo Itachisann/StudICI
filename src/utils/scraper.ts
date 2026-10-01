@@ -539,8 +539,9 @@ export async function fetchAllCourseData(
   }
 
   // Calcola e memorizza il fingerprint complessivo dei canali
+  // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
   const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_${t.url}`)));
-  const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || ''}`).join('|');
+  const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
   try {
@@ -575,10 +576,10 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       return { hasChanges: true, reason: 'Dati locali incompleti' };
     }
 
-    // 1. Scarica in parallelo i soli tab del corso con timeout ridotto (3.5s) per ingresso fulmineo
+    // 1. Scarica in parallelo i soli tab del corso con timeout ridotto (3.0s) per ingresso fulmineo
     const tabFetches = await Promise.all(
       parsed.tabs.map((t: Tab) =>
-        axios.get(t.url, { timeout: 3500 }).then(r => ({ url: t.url, html: r.data })).catch(() => null)
+        axios.get(t.url, { timeout: 3000 }).then(r => ({ url: t.url, html: r.data })).catch(() => null)
       )
     );
 
@@ -593,22 +594,33 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       currentFps[item.url] = extractSheetContentFingerprint(item.html);
     }
 
-    const combinedFp = parsed.tabs.map((t: Tab) => `${t.url}:${currentFps[t.url] || ''}`).join('|');
-    const storedFp = parsed.fingerprint || (await AsyncStorage.getItem(`courseFingerprint_${degreeUrl}`));
+    // 2. Controllo canale per canale:
+    // C'è una modifica reale SOLO SE un tab scaricato con successo ha un'impronta diversa
+    // da quella memorizzata. Se un tab è andato in timeout, non generiamo falsi allarmi.
+    let hasRealChanges = false;
+    let changeReason = '';
 
-    if (!storedFp) {
-      // Allineamento iniziale automatico dell'impronta: salva e non riscaricare inutilmente
-      parsed.fingerprint = combinedFp;
-      await AsyncStorage.setItem(cacheKey, JSON.stringify(parsed));
-      await AsyncStorage.setItem(`courseFingerprint_${degreeUrl}`, combinedFp);
-      for (const [url, fp] of Object.entries(currentFps)) {
-        await AsyncStorage.setItem(`tabFingerprint_${url}`, fp);
+    for (const tab of parsed.tabs) {
+      const liveFp = currentFps[tab.url];
+      if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
+
+      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_${tab.url}`);
+
+      // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
+      if (!storedTabFp) {
+        await AsyncStorage.setItem(`tabFingerprint_${tab.url}`, liveFp);
+        continue;
       }
-      return { hasChanges: false };
+
+      if (liveFp !== storedTabFp) {
+        hasRealChanges = true;
+        changeReason = `Rilevate modifiche per ${tab.name}`;
+        break;
+      }
     }
 
-    if (storedFp !== combinedFp) {
-      return { hasChanges: true, reason: 'Rilevate modifiche all\'orario o agli avvisi' };
+    if (hasRealChanges) {
+      return { hasChanges: true, reason: changeReason || 'Rilevate modifiche all\'orario o agli avvisi' };
     }
 
     // Nessuna modifica rilevata: orari identici
@@ -618,4 +630,5 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
     return { hasChanges: false };
   }
 }
+
 
