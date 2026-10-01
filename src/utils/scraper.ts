@@ -270,8 +270,8 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
     // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
     const contentFingerprint = extractSheetContentFingerprint(html);
-    const cacheKey = `scheduleCache_${tabUrl}`;
-    const fpKey = `tabFingerprint_${tabUrl}`;
+    const cacheKey = `scheduleCache_v5_${tabUrl}`;
+    const fpKey = `tabFingerprint_v5_${tabUrl}`;
     if (!forceRefresh) {
       try {
         const cachedStr = await AsyncStorage.getItem(cacheKey);
@@ -304,8 +304,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
     const data = { ...defaultData };
 
-    // Trova la vera riga con l'intestazione dei giorni della settimana (Lunedì, Martedì, ecc.)
-    // Deve contenere almeno due giorni feriali per evitare falsi positivi con aule come "AULA 15 (lunedi)"
+    // 1. Rileva se il layout è STANDARD (giorni sulle colonne)
     let dayRowIndex = -1;
     for (let i = 0; i < rows.length; i++) {
       const joined = rows[i].join(' ').toLowerCase();
@@ -317,10 +316,91 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
         break;
       }
     }
-    if (dayRowIndex === -1) return data;
 
-    // Tutte le righe precedenti alla riga dei giorni costituiscono l'intestazione
-    const headerRows = dayRowIndex > 0 ? rows.slice(0, dayRowIndex) : rows.slice(0, 15);
+    let headerRows: string[][] = [];
+    const timeSlots: { time: string; cells: string[] }[] = [];
+
+    if (dayRowIndex !== -1) {
+      // Layout STANDARD: righe successive contengono l'orario in colonna 0 e le celle dei giorni nelle colonne 1..5
+      headerRows = dayRowIndex > 0 ? rows.slice(0, dayRowIndex) : rows.slice(0, 15);
+      for (let i = dayRowIndex + 1; i < rows.length; i++) {
+        const row = rows[i];
+        const time = row[0] || '';
+        if (!time.match(/\d{1,2}:\d{2}/)) continue;
+        timeSlots.push({
+          time,
+          cells: [row[1] || '', row[2] || '', row[3] || '', row[4] || '', row[5] || ''],
+        });
+      }
+    } else {
+      // 2. Rileva se il layout è TRASPOSTO (giorni sulle righe, es. 3° Anno Clinica)
+      const daysOfWeek = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì'];
+      const dayRowMap: Record<number, number> = {};
+      for (let i = 0; i < rows.length; i++) {
+        const firstCol = (rows[i][0] || '').toLowerCase();
+        for (let d = 0; d < daysOfWeek.length; d++) {
+          const dayName = daysOfWeek[d];
+          if (firstCol.includes(dayName) || firstCol.startsWith(dayName.slice(0, 3))) {
+            dayRowMap[d] = i;
+          }
+        }
+      }
+
+      const detectedDays = Object.keys(dayRowMap).length;
+      if (detectedDays >= 3) {
+        const firstDayRow = Math.min(...Object.values(dayRowMap));
+        let timeRowIdx = -1;
+        for (let i = 0; i < firstDayRow; i++) {
+          const times = rows[i].filter(c => /\d{1,2}:\d{2}/.test(c));
+          if (times.length >= 3) {
+            timeRowIdx = i;
+            break;
+          }
+        }
+
+        if (timeRowIdx !== -1) {
+          const timeRow = rows[timeRowIdx];
+          headerRows = rows.slice(0, timeRowIdx);
+
+          const normalizeSlotTime = (raw: string) => {
+            const isPM = /PM/i.test(raw);
+            const isAM = /AM/i.test(raw);
+            const clean = raw.replace(/\s*[AP]M\b/gi, '').replace(/\s+/g, '');
+            const parts = clean.split('-');
+            if (parts.length !== 2) return raw;
+            let startH = Number(parts[0].split(':')[0]);
+            let endH = Number(parts[1].split(':')[0]);
+            const startM = parts[0].split(':')[1] || '00';
+            const endM = parts[1].split(':')[1] || '00';
+            if (isPM) {
+              if (startH < 12) startH += 12;
+              if (endH < 12) endH += 12;
+            } else if (isAM) {
+              if (startH === 12) startH = 0;
+            }
+            return String(startH).padStart(2, '0') + ':' + startM + '-' + String(endH).padStart(2, '0') + ':' + endM;
+          };
+
+          for (let col = 1; col < timeRow.length; col++) {
+            const rawTime = timeRow[col];
+            if (/\d{1,2}:\d{2}/.test(rawTime)) {
+              const cleanTime = normalizeSlotTime(rawTime);
+              const dayCells = [0, 1, 2, 3, 4].map(d => {
+                const rIdx = dayRowMap[d];
+                if (rIdx === undefined) return '';
+                return rows[rIdx]?.[col] || '';
+              });
+              timeSlots.push({
+                time: cleanTime,
+                cells: dayCells,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (timeSlots.length === 0) return data;
 
     // Parsa le info di base dall'intestazione
     for (const row of headerRows) {
@@ -332,18 +412,6 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
       if (joined.includes('semestre')) {
         data.info.semester = row.filter(Boolean).join(' · ').trim();
       }
-    }
-
-    // Raccogli tutti gli slot orari
-    const timeSlots: { time: string; cells: string[] }[] = [];
-    for (let i = dayRowIndex + 1; i < rows.length; i++) {
-      const row = rows[i];
-      const time = row[0] || '';
-      if (!time.match(/\d{1,2}:\d{2}/)) continue;
-      timeSlots.push({
-        time,
-        cells: [row[1] || '', row[2] || '', row[3] || '', row[4] || '', row[5] || ''],
-      });
     }
 
     // Raccogli tutte le celle non vuote per inviarle all'AI in batch
@@ -486,7 +554,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentFingerprint, data }));
-      await AsyncStorage.setItem(`tabFingerprint_${tabUrl}`, contentFingerprint);
+      await AsyncStorage.setItem(`tabFingerprint_v5_${tabUrl}`, contentFingerprint);
     } catch {}
 
     return data;
@@ -505,7 +573,7 @@ export async function fetchAllCourseData(
   forceRefresh = false,
   onProgress?: (step: string, current: number, total: number) => void
 ): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
-  const cacheKey = `allSchedules_${degreeUrl}`;
+  const cacheKey = `allSchedules_v5_${degreeUrl}`;
 
   // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
   if (!forceRefresh) {
@@ -544,13 +612,13 @@ export async function fetchAllCourseData(
 
   // Calcola e memorizza il fingerprint complessivo dei canali
   // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
-  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_${t.url}`)));
+  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v5_${t.url}`)));
   const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
   try {
     await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
-    await AsyncStorage.setItem(`courseFingerprint_${degreeUrl}`, combinedFingerprint);
+    await AsyncStorage.setItem(`courseFingerprint_v5_${degreeUrl}`, combinedFingerprint);
     await AsyncStorage.setItem(`lastCheckTime_${degreeUrl}`, Date.now().toString());
   } catch {}
 
@@ -569,7 +637,7 @@ export interface UpdateCheckResult {
  */
 export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
   try {
-    const cacheKey = `allSchedules_${degreeUrl}`;
+    const cacheKey = `allSchedules_v5_${degreeUrl}`;
     const stored = await AsyncStorage.getItem(cacheKey);
     if (!stored) {
       return { hasChanges: true, reason: 'Nessun dato locale trovato' };
@@ -608,11 +676,11 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       const liveFp = currentFps[tab.url];
       if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
 
-      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_${tab.url}`);
+      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v5_${tab.url}`);
 
       // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
       if (!storedTabFp) {
-        await AsyncStorage.setItem(`tabFingerprint_${tab.url}`, liveFp);
+        await AsyncStorage.setItem(`tabFingerprint_v5_${tab.url}`, liveFp);
         continue;
       }
 

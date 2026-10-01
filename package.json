@@ -1,7 +1,7 @@
 {
   "name": "studici",
   "main": "expo-router/entry",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "dependencies": {
     "@bottom-tabs/react-navigation": "^1.4.0",
     "@expo/ui": "~57.0.20",

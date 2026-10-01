@@ -144,91 +144,82 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
     return cells.map(() => ({ subject: '', teacher: '', room: '' }));
   }
 
-  // 1. Risolvi subito con fallback regex deterministico ad alta precisione
   const map = new Map<string, ParsedClass>();
-  const needsAi: string[] = [];
+  const toFetch: string[] = [];
 
+  // 1. Controlla la cache per ogni cella unica
   for (const text of uniqueTexts) {
-    const fb = fallbackParse(text);
-    // Se ha estratto sia la materia che l'aula (oppure il docente formattato), è già perfetto al 100%
-    if (fb.subject && (fb.room || fb.teacher)) {
-      map.set(text, fb);
-    } else {
-      needsAi.push(text);
+    const hashKey = `cell_gemini_v6_${hashString(text)}`;
+    try {
+      const cached = await AsyncStorage.getItem(hashKey);
+      if (cached) {
+        map.set(text, cleanParsedClass(JSON.parse(cached)));
+      } else {
+        toFetch.push(text);
+      }
+    } catch {
+      toFetch.push(text);
     }
   }
 
-  // Se tutte le celle sono già risolte con precisione assoluta, zero chiamate di rete!
-  if (needsAi.length === 0) {
-    return cells.map(c => {
-      const trimmed = c.trim();
-      if (!trimmed) return { subject: '', teacher: '', room: '' };
-      return map.get(trimmed) || fallbackParse(trimmed);
-    });
-  }
+  // 2. Se ci sono celle non in cache, lascia che sia Gemini a decodificarle direttamente
+  if (toFetch.length > 0) {
+    try {
+      const prompt = `Sei un parser esperto di orari universitari della Facoltà di Ingegneria (Sapienza Università di Roma).
+Ti fornisco un elenco di celle di una tabella orario. Possono essere in vari formati, orizzontali o verticali, con note, trattini o sigle (es. "Analisi matematica 1 PISTOIA Angela (16)", "Laboratorio di matematica PISTOIA Angela (16)", "ELETTRONICA (RM032 aula 33) CAPUTO DOMENICO ----", "SEGNALI DETERMINISTICI E STOCASTICI ED ELABORAZIONE DATI E SEGNALI BIOMEDICI I (RM031 aula 1) PIAZZO LORENZO").
 
-  // 2. Per le poche celle complesse rimanenti, controlla la cache
-  const hashKey = `cells_ai_v5_${hashString(needsAi.join('|'))}`;
-  try {
-    const cached = await AsyncStorage.getItem(hashKey);
-    if (cached) {
-      const cachedEntries: [string, ParsedClass][] = JSON.parse(cached);
-      cachedEntries.forEach(([k, v]) => map.set(k, cleanParsedClass(v)));
-      return cells.map(c => {
-        const trimmed = c.trim();
-        if (!trimmed) return { subject: '', teacher: '', room: '' };
-        return map.get(trimmed) || fallbackParse(trimmed);
-      });
-    }
-  } catch {}
+Per CIASCUNA cella estrai con precisione:
+- "subject": SOLO ed esclusivamente il nome completo della materia/insegnamento, senza aula, senza docenti, senza trattini o note. Se il titolo è composto da più parole (es. "Laboratorio di matematica", "Laboratorio di Calcolo Numerico", "Segnali deterministici e stocastici ed elaborazione dati e segnali biomedici I"), estrai il titolo intero.
+- "teacher": nome e cognome del docente (es: "PISTOIA Angela", "CAPUTO Domenico", "D'ORAZIO Annunziata") oppure "" se non presente.
+- "room": SOLO l'indicazione dell'aula (es: "16", "aula 33", "RM032 aula 33", "aula 1") oppure "" se non presente.
 
-  try {
-    const prompt = `Sei un parser di orari universitari della Sapienza di Roma.
-Ti invio celle complesse di una tabella orario.
-Per OGNI cella estrai:
-- "subject": solo il nome della materia (es: "FISICA II", "Analisi matematica 1", "Laboratorio di matematica")
-- "teacher": nome completo del docente nel formato "COGNOME Nome" o "" se non presente
-- "room": SOLO il numero/nome aula (es: "14", "16", "Aula 3") o "" se non presente
-
-Rispondi con un array JSON di oggetti con i campi subject, teacher, room, nello stesso identico ordine.
+Rispondi rigorosamente con un array JSON di oggetti con i campi "subject", "teacher", "room", nello stesso identico ordine.
 
 Celle:
-${JSON.stringify(needsAi)}`;
+${JSON.stringify(toFetch)}`;
 
-    const response = await axios.post(getGeminiUrl(), {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json"
-      }
-    }, { timeout: 7000 });
-
-    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const parsed: ParsedClass[] = JSON.parse(aiText);
-
-    if (Array.isArray(parsed)) {
-      needsAi.forEach((text, i) => {
-        if (parsed[i]) {
-          map.set(text, cleanParsedClass({
-            subject: (parsed[i].subject || '').trim().toUpperCase(),
-            teacher: parsed[i].teacher || '',
-            room: parsed[i].room || '',
-          }));
+      const response = await axios.post(getGeminiUrl(), {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json"
         }
-      });
-      try {
-        await AsyncStorage.setItem(hashKey, JSON.stringify(Array.from(map.entries())));
-      } catch {}
-    }
-  } catch (error: any) {
-    if (error?.response?.status === 429) {
-      console.log('Gemini: Rate-limit (429) celle, attivo fallback deterministico istantaneo');
-    } else {
-      console.log('Gemini cell parsing fallback:', error?.message || error);
+      }, { timeout: 8500 });
+
+      const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const parsed: ParsedClass[] = JSON.parse(aiText);
+
+      if (Array.isArray(parsed)) {
+        for (let i = 0; i < toFetch.length; i++) {
+          const rawText = toFetch[i];
+          if (parsed[i]) {
+            const item = cleanParsedClass({
+              subject: (parsed[i].subject || '').trim().toUpperCase(),
+              teacher: (parsed[i].teacher || '').trim(),
+              room: (parsed[i].room || '').trim(),
+            });
+            map.set(rawText, item);
+            AsyncStorage.setItem(`cell_gemini_v6_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
+          }
+        }
+      }
+    } catch (error: any) {
+      if (error?.response?.status === 429) {
+        console.log('Gemini: Rate-limit (429) celle, attivo fallback deterministico locale');
+      } else {
+        console.log('Gemini cell parsing fallback:', error?.message || error);
+      }
+      // Se Gemini non risponde (offline/rate-limit), usa fallbackParse per le celle mancanti
+      for (const text of toFetch) {
+        if (!map.has(text)) {
+          const item = fallbackParse(text);
+          map.set(text, item);
+        }
+      }
     }
   }
 
-  // Costruisci il risultato finale usando la mappa o il fallback deterministico
+  // Costruisci il risultato finale usando la mappa o il fallback
   return cells.map(c => {
     const trimmed = c.trim();
     if (!trimmed) return { subject: '', teacher: '', room: '' };
