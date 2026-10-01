@@ -113,7 +113,7 @@ export default function ScheduleScreen() {
         buildingCode: bCode,
         address: formatSapienzaAddress(cls.address, bCode),
       });
-      setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
+      setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
       return;
     }
     const contextHeader = [
@@ -124,7 +124,7 @@ export default function ScheduleScreen() {
     ].join(' ');
     const res = resolveClassroom(cls.room, contextHeader);
     setSelectedRoomModal(res);
-    setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
+    setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
   };
 
   const todayClasses = schedule?.days[selectedDay] || [];
@@ -245,7 +245,7 @@ export default function ScheduleScreen() {
               <View style={styles.cardBody}>
                 {/* Subject */}
                 <Text style={styles.subjectText} numberOfLines={2}>
-                  {cls.subject}
+                  {cls.subject?.toUpperCase()}
                 </Text>
 
                 {/* Time */}
@@ -482,10 +482,17 @@ const styles = StyleSheet.create({
   classList: { flex: 1, paddingHorizontal: 16 },
   classCard: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 16,
+    borderRadius: 18,
     marginBottom: 14,
     flexDirection: 'row',
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 3,
   },
   accentBar: {
     width: 4,

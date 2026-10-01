@@ -60,12 +60,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PROJECT_NAME=$(basename -s .xcworkspace ios/*.xcworkspace)
+          VERSION=$(node -p "require('./app.json').expo.version")
           
           # Delete the old 'latest' release and tag if they exist
           gh release delete latest --cleanup-tag -y || true
           
           # Create a new release and upload the IPA
           gh release create latest ${PROJECT_NAME}.ipa \
-            --title "Latest Build" \
-            --notes "Build iOS (.ipa) generata in automatico." \
+            --title "StudICI v${VERSION}" \
+            --notes "Build iOS (.ipa) v${VERSION} generata in automatico." \
             --latest

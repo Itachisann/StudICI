@@ -78,7 +78,7 @@ function extractRoomEntries(data: ScheduleData): RoomEntry[] {
           }
         }
         if (cls.subject) {
-          roomMap.get(canon)!.subjects.add(cls.subject);
+          roomMap.get(canon)!.subjects.add(cls.subject.toUpperCase());
         }
       }
     });

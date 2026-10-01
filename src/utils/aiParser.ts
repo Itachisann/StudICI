@@ -210,7 +210,7 @@ ${JSON.stringify(needsAi)}`;
       needsAi.forEach((text, i) => {
         if (parsed[i]) {
           map.set(text, {
-            subject: parsed[i].subject || '',
+            subject: (parsed[i].subject || '').trim().toUpperCase(),
             teacher: parsed[i].teacher || '',
             room: parsed[i].room || '',
           });
@@ -256,7 +256,7 @@ export function fallbackParse(cell: string): ParsedClass {
     let teacher = m1[3].trim();
     teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
     teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-    return { subject: m1[1].trim(), teacher, room: m1[2].trim() };
+    return { subject: m1[1].trim().toUpperCase(), teacher, room: m1[2].trim() };
   }
   
   // "MATERIA DOCENTE (AULA)" (es: "Analisi matematica 1 PISTOIA Angela (16)")
@@ -265,14 +265,14 @@ export function fallbackParse(cell: string): ParsedClass {
     let teacher = m2[2].trim();
     teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
     teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-    return { subject: m2[1].trim(), teacher, room: m2[3].trim() };
+    return { subject: m2[1].trim().toUpperCase(), teacher, room: m2[3].trim() };
   }
   
   // "MATERIA (AULA)"
   const m3 = decoded.match(/^(.+?)\s*\(([^)]+)\)$/);
-  if (m3) return { subject: m3[1].trim(), teacher: '', room: m3[2].trim() };
+  if (m3) return { subject: m3[1].trim().toUpperCase(), teacher: '', room: m3[2].trim() };
 
-  return { subject: decoded.trim(), teacher: '', room: '' };
+  return { subject: decoded.trim().toUpperCase(), teacher: '', room: '' };
 }
 
 export function isAnnouncement(text: string): boolean {

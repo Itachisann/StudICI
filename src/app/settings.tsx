@@ -9,6 +9,7 @@ import { fetchDegrees, fetchTabs, fetchAllCourseData, Degree, Tab } from '../uti
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { CourseDownloadView } from '../components/CourseDownloadView';
 import { DefaultTabPicker } from '../components/DefaultTabPicker';
 import { parseTabHierarchy } from '../components/YearChannelSelector';
@@ -183,15 +184,15 @@ export default function ProfiloScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>CORSO DI LAUREA</Text>
           <View style={styles.card}>
-            <View style={styles.cardIconCircle}>
-              <Ionicons name="school" size={24} color={SAPIENZA_RED} />
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(130, 36, 51, 0.18)' }]}>
+              <Ionicons name="school" size={22} color="#e57373" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>{degreeName || 'Nessun corso selezionato'}</Text>
               <Text style={styles.cardSubtitle}>Facoltà ICI · Sapienza Roma</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.actionButton} onPress={() => setCourseModalVisible(true)}>
+          <TouchableOpacity style={styles.actionButton} activeOpacity={0.85} onPress={() => setCourseModalVisible(true)}>
             <Ionicons name="swap-horizontal" size={18} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.actionButtonText}>Cambia Corso di Laurea</Text>
           </TouchableOpacity>
@@ -208,8 +209,8 @@ export default function ProfiloScreen() {
             activeOpacity={0.8}
             onPress={() => setChannelModalVisible(true)}
           >
-            <View style={styles.cardIconCircle}>
-              <Ionicons name="funnel" size={22} color="#f59e0b" />
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(245, 158, 11, 0.18)' }]}>
+              <Ionicons name="funnel" size={20} color="#fbbf24" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>
@@ -229,8 +230,8 @@ export default function ProfiloScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>FONTE DATI UFFICIALE</Text>
           <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={openSourceWebsite}>
-            <View style={styles.cardIconCircle}>
-              <Ionicons name="globe-outline" size={22} color="#3b82f6" />
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(59, 130, 246, 0.18)' }]}>
+              <Ionicons name="globe-outline" size={20} color="#60a5fa" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Sito Ufficiale ICI Sapienza</Text>
@@ -243,9 +244,9 @@ export default function ProfiloScreen() {
         {/* Gestione Cache & Reset */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>SISTEMA</Text>
-          <TouchableOpacity style={[styles.card, { marginBottom: 10 }]} activeOpacity={0.8} onPress={clearCacheAndReload}>
-            <View style={styles.cardIconCircle}>
-              <Ionicons name="refresh" size={22} color="#10b981" />
+          <TouchableOpacity style={[styles.card, { marginBottom: 12 }]} activeOpacity={0.8} onPress={clearCacheAndReload}>
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.18)' }]}>
+              <Ionicons name="refresh" size={20} color="#34d399" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Svuota Cache</Text>
@@ -254,8 +255,8 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={resetApp}>
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
-              <Ionicons name="trash" size={22} color="#ef4444" />
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.18)' }]}>
+              <Ionicons name="trash" size={20} color="#f87171" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Reset Totale App</Text>
@@ -266,7 +267,9 @@ export default function ProfiloScreen() {
 
         {/* Info App */}
         <View style={styles.footer}>
-          <Text style={styles.footerText}>StudICI · Versione 1.0.0</Text>
+          <Text style={styles.footerText}>
+            {`StudICI · Versione ${Constants.expoConfig?.version || '1.0.1'}`}
+          </Text>
           <Text style={styles.footerSubText}>Sapienza Università di Roma</Text>
         </View>
       </ScrollView>
@@ -399,16 +402,23 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 3,
   },
   cardIconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#2c2c2e',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
@@ -426,11 +436,16 @@ const styles = StyleSheet.create({
   actionButton: {
     flexDirection: 'row',
     backgroundColor: SAPIENZA_RED,
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 14,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 4,
   },
   actionButtonText: {
     color: '#ffffff',

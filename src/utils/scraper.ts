@@ -447,9 +447,10 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
           const roomLabel = mInfo ? normalizeDisplayName(mInfo.displayName) : (p.room ? normalizeDisplayName(p.room) : '');
           
+          const cleanSubject = (p.subject || '').toUpperCase().trim();
           if (
             currentEvent &&
-            currentEvent.subject === p.subject &&
+            currentEvent.subject === cleanSubject &&
             currentEvent.teacher === p.teacher
           ) {
             // Estendi la durata
@@ -459,7 +460,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
             if (currentEvent) events.push(currentEvent);
             const times = slot.time.split('-');
             currentEvent = {
-              subject: p.subject,
+              subject: cleanSubject,
               teacher: p.teacher,
               room: roomLabel,
               building: finalBuilding,

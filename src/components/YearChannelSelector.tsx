@@ -204,40 +204,50 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 8,
+    marginBottom: 10,
   },
   yearScroll: {
-    maxHeight: 34,
-    marginBottom: 6,
+    maxHeight: 46,
+    marginBottom: 8,
   },
   channelScroll: {
-    maxHeight: 34,
-    marginBottom: 4,
+    maxHeight: 46,
+    marginBottom: 6,
   },
   rowContainer: {
     paddingHorizontal: 16,
     alignItems: 'center',
   },
-  // Stile Omogeneo Pill (sia Anni che Canali)
+  // Stile Pill Fluttuante Moderno iOS (sia Anni che Canali)
   chip: {
-    backgroundColor: '#242426',
-    paddingHorizontal: 14,
-    height: 28,
-    borderRadius: 14,
-    marginRight: 8,
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 20,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10,
     borderWidth: 1,
-    borderColor: '#333336',
+    borderColor: 'rgba(255, 255, 255, 0.09)',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
   },
   chipActive: {
-    backgroundColor: 'rgba(130, 36, 51, 0.45)',
+    backgroundColor: SAPIENZA_RED,
     borderColor: SAPIENZA_RED,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    elevation: 5,
   },
   chipText: {
     color: '#a1a1aa',
     fontWeight: '600',
-    fontSize: 12,
+    fontSize: 13.5,
   },
   chipTextActive: {
     color: '#ffffff',
