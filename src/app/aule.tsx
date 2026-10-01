@@ -1,14 +1,16 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
+  RefreshControl
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchTabs, fetchScheduleData, Tab } from '../utils/scraper';
-import { resolveClassroom, ResolvedClassroom, SAPIENZA_BUILDINGS } from '../utils/classroomLocations';
+import { fetchAllCourseData, Tab, ScheduleData } from '../utils/scraper';
+import { resolveClassroom, ResolvedClassroom, getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from '../utils/classroomLocations';
 import { ClassroomModal } from '../components/ClassroomModal';
+import { YearChannelSelector } from '../components/YearChannelSelector';
 
 const SAPIENZA_RED = '#822433';
 
@@ -18,123 +20,158 @@ interface RoomEntry {
   subjects: string[];
 }
 
+function extractRoomEntries(data: ScheduleData): RoomEntry[] {
+  const roomMap = new Map<string, { resolved: ResolvedClassroom; subjects: Set<string> }>();
+
+  const contextHeader = [
+    data.info?.faculty || '',
+    data.info?.course || '',
+    data.info?.semester || '',
+    ...(data.alerts || [])
+  ].join(' ');
+
+  // 1. Estrai da classrooms dichiarate (mappate da Gemini con edificio e indirizzo)
+  (data.classrooms || []).forEach(c => {
+    const canon = getCanonicalRoomKey(c.aulaName);
+    const dispName = normalizeDisplayName(c.aulaName);
+    if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
+    const fallbackRes = resolveClassroom(c.aulaName, contextHeader);
+    const bCode = (c.building || fallbackRes.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+    const finalAddress = formatSapienzaAddress(c.address || fallbackRes.address, bCode);
+    const res: ResolvedClassroom = {
+      displayName: dispName,
+      buildingName: c.building || fallbackRes.buildingName,
+      buildingCode: bCode ? `RM${bCode}` : fallbackRes.buildingCode,
+      address: finalAddress,
+    };
+    if (!roomMap.has(canon)) {
+      roomMap.set(canon, { resolved: res, subjects: new Set() });
+    }
+  });
+
+  // 2. Estrai da tutte le lezioni dei 5 giorni
+  (data.days || []).forEach(day => {
+    day.forEach(cls => {
+      if (cls.room) {
+        const canon = getCanonicalRoomKey(cls.room);
+        const dispName = normalizeDisplayName(cls.room);
+        if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
+        const fallbackRes = resolveClassroom(cls.room, contextHeader);
+        const bCode = (cls.building || fallbackRes.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        const finalAddress = formatSapienzaAddress(cls.address || fallbackRes.address, bCode);
+        const res: ResolvedClassroom = {
+          displayName: dispName,
+          buildingName: cls.building || fallbackRes.buildingName,
+          buildingCode: bCode ? `RM${bCode}` : fallbackRes.buildingCode,
+          address: finalAddress,
+        };
+        if (!roomMap.has(canon)) {
+          roomMap.set(canon, { resolved: res, subjects: new Set() });
+        } else {
+          // Arricchisci building e address se più specifici
+          const existing = roomMap.get(canon)!;
+          if (cls.building && (!existing.resolved.buildingName || existing.resolved.buildingName === 'Edificio Sapienza')) {
+            existing.resolved.buildingName = cls.building;
+          }
+          if (finalAddress && (!existing.resolved.address || (existing.resolved.address.includes('00161') && finalAddress.includes('00185')))) {
+            existing.resolved.address = finalAddress;
+          }
+        }
+        if (cls.subject) {
+          roomMap.get(canon)!.subjects.add(cls.subject);
+        }
+      }
+    });
+  });
+
+  return Array.from(roomMap.values()).map(item => ({
+    rawRoom: item.resolved.displayName,
+    resolved: item.resolved,
+    subjects: Array.from(item.subjects),
+  }));
+}
+
 export default function AuleScreen() {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
+  const [degreeName, setDegreeName] = useState<string>('');
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
-  const [degreeName, setDegreeName] = useState<string>('');
+  const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
   const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
 
-  const loadRoomsForTab = useCallback(async (tab: Tab) => {
-    try {
-      const data = await fetchScheduleData(tab.url);
-      const roomMap = new Map<string, { resolved: ResolvedClassroom; subjects: Set<string> }>();
-
-      const contextHeader = [
-        data.info.faculty,
-        data.info.course,
-        data.info.semester,
-        ...(data.alerts || [])
-      ].join(' ');
-
-      /** Ricava le coordinate dal codice edificio (es. "Edificio RM018") */
-      const coordsFromBuilding = (bName: string) => {
-        const rm = bName?.match(/(RM\d{3})/i);
-        if (rm) {
-          const b = SAPIENZA_BUILDINGS[rm[1].toUpperCase()];
-          if (b) return { lat: b.lat, lon: b.lon };
-        }
-        return {};
-      };
-
-      // 1. Estrai da classrooms dichiarate (mappate da Gemini con edificio e indirizzo)
-      data.classrooms.forEach(c => {
-        const fallbackRes = resolveClassroom(c.aulaName, contextHeader);
-        const bName = c.building || fallbackRes.buildingName;
-        const res: ResolvedClassroom = {
-          displayName: c.aulaName,
-          buildingName: bName,
-          buildingCode: c.building ? c.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
-          address: c.address || fallbackRes.address,
-          ...coordsFromBuilding(bName),
-        };
-        if (!roomMap.has(c.aulaName)) {
-          roomMap.set(c.aulaName, { resolved: res, subjects: new Set() });
-        }
-      });
-
-      // 2. Estrai da tutte le lezioni dei 5 giorni
-      data.days.forEach(day => {
-        day.forEach(cls => {
-          if (cls.room) {
-            const fallbackRes = resolveClassroom(cls.room, contextHeader);
-            const bName = cls.building || fallbackRes.buildingName;
-            const res: ResolvedClassroom = {
-              displayName: cls.room,
-              buildingName: bName,
-              buildingCode: cls.building ? cls.building.replace(/^Edificio\s+/i, '') : fallbackRes.buildingCode,
-              address: cls.address || fallbackRes.address,
-              ...coordsFromBuilding(bName),
-            };
-            if (!roomMap.has(cls.room)) {
-              roomMap.set(cls.room, { resolved: res, subjects: new Set() });
-            }
-            if (cls.subject) {
-              roomMap.get(cls.room)!.subjects.add(cls.subject);
-            }
-          }
-        });
-      });
-
-      const entries: RoomEntry[] = Array.from(roomMap.entries()).map(([name, item]) => ({
-        rawRoom: name,
-        resolved: item.resolved,
-        subjects: Array.from(item.subjects),
-      }));
-
-      setRoomEntries(entries);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (force = false) => {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const storedName = await AsyncStorage.getItem('selectedDegreeName');
+      const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
+
+      if (!storedUrl) {
+        setDegreeUrl(null);
+        setLoading(false);
+        return;
+      }
+
+      if (degreeUrl && storedUrl !== degreeUrl) {
+        setTabs([]);
+        setSelectedTab(null);
+        setSchedulesMap({});
+        setRoomEntries([]);
+      }
+
+      setDegreeUrl(storedUrl);
       if (storedName) setDegreeName(storedName);
 
-      if (storedUrl) {
-        const fetchedTabs = await fetchTabs(storedUrl);
-        setTabs(fetchedTabs);
+      if (tabs.length === 0 || force || (degreeUrl && storedUrl !== degreeUrl)) {
+        setLoading(true);
+      }
 
-        if (fetchedTabs.length > 0) {
-          const currentTab = selectedTab || fetchedTabs[0];
-          setSelectedTab(currentTab);
-          await loadRoomsForTab(currentTab);
+      // Usa la cache condivisa di tutti i canali scaricati in un'unica botta
+      const { tabs: fetchedTabs, schedules } = await fetchAllCourseData(storedUrl, force);
+
+      if (fetchedTabs.length > 0) {
+        setTabs(fetchedTabs);
+        setSchedulesMap(schedules);
+
+        const currentActive = selectedTab && fetchedTabs.find(t => t.url === selectedTab.url);
+        const target = currentActive || fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
+
+        setSelectedTab(target);
+        if (schedules[target.url]) {
+          setRoomEntries(extractRoomEntries(schedules[target.url]));
         }
       }
+      setLoading(false);
     } catch (e) {
       console.error(e);
+      setLoading(false);
     }
-    setLoading(false);
-  }, [loadRoomsForTab, selectedTab]);
+  }, [degreeUrl, selectedTab, tabs.length]);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      loadData(false);
     }, [loadData])
   );
 
-  const onSelectTab = async (tab: Tab) => {
+  const onRefresh = useCallback(async () => {
+    if (!degreeUrl) return;
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [degreeUrl, loadData]);
+
+  // Cambio canale: 100% istantaneo in locale, zero download, zero rete!
+  const onSelectTab = (tab: Tab) => {
     setSelectedTab(tab);
-    setLoading(true);
-    await loadRoomsForTab(tab);
-    setLoading(false);
+    if (schedulesMap[tab.url]) {
+      setRoomEntries(extractRoomEntries(schedulesMap[tab.url]));
+    }
   };
+
+  const currentSemester = (selectedTab && schedulesMap[selectedTab.url]?.info?.semester) || '';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -143,30 +180,27 @@ export default function AuleScreen() {
         <Text style={styles.subtitle}>{degreeName || 'Sapienza Università di Roma'}</Text>
       </View>
 
-      {/* Pill canali */}
-      {tabs.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.tabsScroll}
-          contentContainerStyle={styles.tabsRow}
-        >
-          {tabs.map((tab, i) => {
-            const isActive = selectedTab?.url === tab.url;
-            return (
-              <TouchableOpacity
-                key={i}
-                onPress={() => onSelectTab(tab)}
-                style={[styles.tabChip, isActive && styles.tabChipActive]}
-              >
-                <Text style={[styles.tabChipText, isActive && styles.tabChipTextActive]}>
-                  {tab.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      )}
+      {/* ── Selezione Gerarchica Anni e Canali (2 Righe di Pill) ── */}
+      <YearChannelSelector
+        tabs={tabs}
+        selectedTab={selectedTab}
+        onSelectTab={onSelectTab}
+      />
+
+      {/* ── Periodo Didattico / Semestre ── */}
+      {currentSemester ? (
+        <View style={styles.semesterCard}>
+          <View style={styles.semesterIconBox}>
+            <Ionicons name="calendar" size={16} color="#ffffff" />
+          </View>
+          <View style={styles.semesterContent}>
+            <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+            <Text style={styles.semesterValue} numberOfLines={2}>
+              {currentSemester}
+            </Text>
+          </View>
+        </View>
+      ) : null}
 
       {loading ? (
         <View style={styles.centerContainer}>
@@ -174,7 +208,18 @@ export default function AuleScreen() {
           <Text style={styles.loadingText}>Carico le aule...</Text>
         </View>
       ) : (
-        <ScrollView style={styles.list} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView
+          style={styles.list}
+          contentContainerStyle={{ paddingBottom: 120 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={SAPIENZA_RED}
+              colors={[SAPIENZA_RED]}
+            />
+          }
+        >
           {roomEntries.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="business-outline" size={48} color="#3a3a3c" />
@@ -257,35 +302,43 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 2,
   },
-  tabsScroll: {
-    maxHeight: 36,
-    marginBottom: 12,
-  },
-  tabsRow: {
-    paddingHorizontal: 16,
+  semesterCard: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  tabChip: {
     backgroundColor: '#1c1c1e',
-    paddingHorizontal: 14,
-    height: 30,
-    borderRadius: 15,
-    marginRight: 8,
+    marginHorizontal: 16,
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#2c2c2e',
-    justifyContent: 'center',
+    borderColor: 'rgba(130, 36, 51, 0.4)',
   },
-  tabChipActive: {
+  semesterIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: SAPIENZA_RED,
-    borderColor: SAPIENZA_RED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
   },
-  tabChipText: {
-    color: '#8e8e93',
+  semesterContent: {
+    flex: 1,
+  },
+  semesterTitle: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#e05666',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  semesterValue: {
+    fontSize: 12.5,
     fontWeight: '600',
-    fontSize: 12,
-  },
-  tabChipTextActive: {
     color: '#ffffff',
+    lineHeight: 16,
   },
   list: {
     flex: 1,

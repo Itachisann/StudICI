@@ -1,6 +1,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, extractAlertsWithAI, cleanTabNameFallback, mapClassroomsWithAI, ParsedClass, MappedClassroom } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, ParsedClass, MappedClassroom, extractDeterministicSemester } from './aiParser';
+import { getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from './classroomLocations';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -9,6 +10,80 @@ function hashCode(str: string): string {
     hash = (hash * 33) ^ str.charCodeAt(i);
   }
   return (hash >>> 0).toString(16);
+}
+
+/**
+ * Estrae una mappa delle classi CSS con i rispettivi colori di sfondo.
+ * Necessario per individuare e rimuovere il testo "trucco" invisibile
+ * (es. "geo e geo e geo", "mat e") che i docenti colorano dello stesso colore di sfondo.
+ */
+export function extractClassBgColors(html: string): Record<string, string> {
+  const classBgColors: Record<string, string> = {};
+  const cssRegex = /\.([a-zA-Z0-9_-]+)\s*\{[^}]*background-color:\s*(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|[a-zA-Z]+)/gi;
+  let cssMatch;
+  while ((cssMatch = cssRegex.exec(html)) !== null) {
+    classBgColors[cssMatch[1]] = cssMatch[2].toLowerCase().trim();
+  }
+  return classBgColors;
+}
+
+/**
+ * Pulisce il contenuto di una cella <td> rimuovendo:
+ * 1. Testo invisibile (span il cui colore combacia con il background della cella o è transparent)
+ * 2. Tag HTML e codici speciali
+ */
+export function cleanTdCellHtml(tdTag: string, innerHtml: string, classBgColors: Record<string, string> = {}): string {
+  const classMatch = tdTag.match(/class="([^"]+)"/i);
+  const cls = classMatch ? classMatch[1] : '';
+  const inlineBg = tdTag.match(/background-color:\s*(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|[a-zA-Z]+)/i);
+  const bg = (inlineBg ? inlineBg[1] : classBgColors[cls] || '#ffffff').toLowerCase().trim();
+
+  // Rimuovi qualsiasi span il cui colore del testo combaci con il colore di sfondo della cella
+  const cleaned = innerHtml.replace(/<span[^>]*style="[^"]*color:\s*([^;"]+)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi, (_match, color, content) => {
+    const c = color.toLowerCase().trim();
+    if (c === bg || c === 'transparent') {
+      return ''; // Testo invisibile scartato
+    }
+    return content;
+  });
+
+  return cleaned
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Estrae un'impronta digitale (fingerprint) deterministica del foglio.
+ * Rimuove i nonce e gli script dinamici generati a ogni richiesta da Google Sheets
+ * ed estrae il testo effettivo di tutte le celle (intestazione, avvisi, aule, lezioni),
+ * escludendo i testi invisibili di padding.
+ */
+export function extractSheetContentFingerprint(html: string): string {
+  if (!html) return '';
+  const clean = html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/nonce="[^"]*"/gi, '');
+
+  const classBgColors = extractClassBgColors(clean);
+  const rows: string[] = [];
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trMatch;
+  while ((trMatch = trRegex.exec(clean)) !== null) {
+    const tdRegex = /(<td[^>]*>)([\s\S]*?)<\/td>/gi;
+    let tdMatch;
+    const row: string[] = [];
+    while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
+      row.push(cleanTdCellHtml(tdMatch[1], tdMatch[2], classBgColors));
+    }
+    if (row.some(Boolean)) {
+      rows.push(row.join('|'));
+    }
+  }
+  return hashCode(rows.join('\n'));
 }
 
 export interface Degree {
@@ -93,7 +168,7 @@ export async function fetchDegrees(): Promise<Degree[]> {
 
 
 
-export async function fetchTabs(url: string): Promise<Tab[]> {
+export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[]> {
   try {
     const res = await axios.get(url);
     const data = res.data;
@@ -101,13 +176,15 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
     // Check Cache
     const contentHash = hashCode(data);
     const cacheKey = `tabsCache_${url}`;
-    try {
-      const cachedStr = await AsyncStorage.getItem(cacheKey);
-      if (cachedStr) {
-        const cached = JSON.parse(cachedStr);
-        if (cached.hash === contentHash && cached.tabs) return cached.tabs;
-      }
-    } catch {}
+    if (!forceRefresh) {
+      try {
+        const cachedStr = await AsyncStorage.getItem(cacheKey);
+        if (cachedStr) {
+          const cached = JSON.parse(cachedStr);
+          if (cached.hash === contentHash && cached.tabs) return cached.tabs;
+        }
+      } catch {}
+    }
 
     const itemsRegex = /items\.push\(\{(.*?)\}\);/g;
     let match;
@@ -176,7 +253,7 @@ export async function fetchTabs(url: string): Promise<Tab[]> {
   }
 }
 
-export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
+export async function fetchScheduleData(tabUrl: string, forceRefresh = false): Promise<ScheduleData> {
   const defaultData: ScheduleData = {
     info: { faculty: '', course: '', year: '', academicYear: '', channel: '', semester: '' },
     alerts: [],
@@ -188,36 +265,35 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     const res = await axios.get(tabUrl);
     const html = res.data;
 
-    // Check Cache
-    const contentHash = hashCode(html);
+    // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
+    const contentFingerprint = extractSheetContentFingerprint(html);
     const cacheKey = `scheduleCache_${tabUrl}`;
-    try {
-      const cachedStr = await AsyncStorage.getItem(cacheKey);
-      if (cachedStr) {
-        const cached = JSON.parse(cachedStr);
-        if (cached.hash === contentHash && cached.data) {
-          return cached.data;
+    const fpKey = `tabFingerprint_${tabUrl}`;
+    if (!forceRefresh) {
+      try {
+        const cachedStr = await AsyncStorage.getItem(cacheKey);
+        const storedFp = await AsyncStorage.getItem(fpKey);
+        if (cachedStr && storedFp === contentFingerprint) {
+          const cached = JSON.parse(cachedStr);
+          if (cached.data) {
+            return cached.data;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     
     const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let trMatch;
     const rows: string[][] = [];
     
+    const classBgColors = extractClassBgColors(html);
     while ((trMatch = trRegex.exec(html)) !== null) {
       const trContent = trMatch[1];
       const row: string[] = [];
-      const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      const tdRegex = /(<td[^>]*>)([\s\S]*?)<\/td>/gi;
       let tdMatch;
       while ((tdMatch = tdRegex.exec(trContent)) !== null) {
-        const text = tdMatch[1]
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&#39;/g, "'")
-          .replace(/&amp;/g, '&')
-          .replace(/\s+/g, ' ')
-          .trim();
+        const text = cleanTdCellHtml(tdMatch[1], tdMatch[2], classBgColors);
         row.push(text);
       }
       if (row.length > 0) rows.push(row);
@@ -225,11 +301,15 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
 
     const data = { ...defaultData };
 
-    // Trova la riga con i giorni (Lunedì, Martedì, ecc.)
+    // Trova la vera riga con l'intestazione dei giorni della settimana (Lunedì, Martedì, ecc.)
+    // Deve contenere almeno due giorni feriali per evitare falsi positivi con aule come "AULA 15 (lunedi)"
     let dayRowIndex = -1;
     for (let i = 0; i < rows.length; i++) {
       const joined = rows[i].join(' ').toLowerCase();
-      if (joined.includes('lunedì') || joined.includes('lunedi')) {
+      const hasLun = joined.includes('lunedì') || joined.includes('lunedi');
+      const hasMar = joined.includes('martedì') || joined.includes('martedi');
+      const hasMer = joined.includes('mercoledì') || joined.includes('mercoledi');
+      if (hasLun && (hasMar || hasMer)) {
         dayRowIndex = i;
         break;
       }
@@ -238,11 +318,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
 
     // Tutte le righe precedenti alla riga dei giorni costituiscono l'intestazione
     const headerRows = dayRowIndex > 0 ? rows.slice(0, dayRowIndex) : rows.slice(0, 15);
-    
-    // AI Alert extraction
-    data.alerts = await extractAlertsWithAI(headerRows);
 
-    // Parsa le info dall'intestazione
+    // Parsa le info di base dall'intestazione
     for (const row of headerRows) {
       const joined = row.join(' ').toLowerCase();
       if (joined.includes('a.a.')) {
@@ -250,7 +327,7 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
         if (aaMatch) data.info.academicYear = aaMatch[0];
       }
       if (joined.includes('semestre')) {
-        data.info.semester = row.slice(1).join(' ').trim();
+        data.info.semester = row.filter(Boolean).join(' · ').trim();
       }
     }
 
@@ -278,10 +355,10 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       }
     }
 
-    // Parsa con AI (o fallback regex)
+    // Parsa con AI le celle delle lezioni
     const parsed: ParsedClass[] = await parseScheduleCells(allCells);
 
-    // Mappa con Gemini le aule al loro rispettivo edificio e indirizzo usando le celle adiacenti dell'intestazione e il tab Mappa Edifici
+    // Mappa Mappa Edifici
     const uniqueRooms = Array.from(new Set(parsed.map(p => p.room).filter(Boolean)));
     let mapText = '';
     try {
@@ -299,15 +376,21 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
       mapText = headerRows.map(r => r.join(' ')).join('\n');
     }
 
-    const mappedRooms = await mapClassroomsWithAI(headerRows, mapText, uniqueRooms);
+    // UNIFICATO: Gemini analizza l'intera intestazione estraendo SIA il semestre SIA gli avvisi formattati SIA le aule reali
+    const headerResult = await parseHeaderWithGemini(headerRows, mapText, uniqueRooms);
+    data.info.semester = headerResult.semester || extractDeterministicSemester(headerRows) || data.info.semester;
+    data.alerts = headerResult.alerts;
+    const mappedRooms = headerResult.mappedRooms;
 
     const uniqueClassroomsMap = new Map<string, ClassroomInfo>();
     Object.values(mappedRooms).forEach(m => {
-      if (!uniqueClassroomsMap.has(m.displayName)) {
-        uniqueClassroomsMap.set(m.displayName, {
-          aulaName: m.displayName,
+      const canon = getCanonicalRoomKey(m.displayName || m.key);
+      if (!uniqueClassroomsMap.has(canon)) {
+        const bCode = (m.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        uniqueClassroomsMap.set(canon, {
+          aulaName: normalizeDisplayName(m.displayName || m.key),
           building: m.building,
-          address: m.address,
+          address: formatSapienzaAddress(m.address, bCode),
         });
       }
     });
@@ -326,14 +409,43 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
         if (p && p.subject) {
           const roomClean = p.room ? p.room.replace(/^aula\s+/i, '').toLowerCase().trim() : '';
           let mInfo: MappedClassroom | undefined;
-          if (day === 0) {
-            // Lunedì
-            mInfo = mappedRooms[`${roomClean} (lunedi)`] || mappedRooms[`${roomClean} (lunedì)`];
+          
+          const dayNames = ['lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi'];
+          const currentDayStr = dayNames[day];
+          
+          // Cerca chiavi che includono il numero dell'aula (come parola esatta) E il giorno corrente
+          const specificDayKey = Object.keys(mappedRooms).find(k => {
+             const canonK = getCanonicalRoomKey(k);
+             const hasRoom = new RegExp(`\\b${roomClean}\\b`, 'i').test(canonK);
+             const hasDay = canonK.includes(currentDayStr);
+             return hasRoom && hasDay;
+          });
+
+          if (specificDayKey) {
+            mInfo = mappedRooms[specificDayKey];
+          } else {
+            const canonRoom = getCanonicalRoomKey(p.room);
+            mInfo = mappedRooms[canonRoom] || mappedRooms[`aula ${canonRoom}`] || mappedRooms[roomClean] || mappedRooms[p.room];
           }
-          if (!mInfo) {
-            mInfo = mappedRooms[roomClean] || mappedRooms[p.room.toLowerCase().trim()] || mappedRooms[p.room];
+
+          // Se la cella originale del foglio orario contiene un indirizzo esplicito (es. "Via Tiburtina 205"), diamogli priorità assoluta!
+          const rawCellText = timeSlots[slotIdx]?.cells[day] || '';
+          let finalBuilding = mInfo?.building || '';
+          let finalAddress = mInfo?.address || '';
+
+          if (/tiburtina/i.test(rawCellText)) {
+            finalBuilding = 'Edificio RM025';
+            finalAddress = 'Via Tiburtina 205, 00185 Roma';
+          } else if (/scarpa/i.test(rawCellText)) {
+            finalBuilding = 'Edificio RM006';
+            finalAddress = 'Via Antonio Scarpa 14, 00161 Roma';
           }
-          const roomLabel = mInfo ? mInfo.displayName : (p.room ? `Aula ${p.room}` : '');
+
+          if (finalAddress) {
+            finalAddress = formatSapienzaAddress(finalAddress, (finalBuilding.match(/RM\d{3}/i)?.[1]));
+          }
+
+          const roomLabel = mInfo ? normalizeDisplayName(mInfo.displayName) : (p.room ? normalizeDisplayName(p.room) : '');
           
           if (
             currentEvent &&
@@ -350,8 +462,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
               subject: p.subject,
               teacher: p.teacher,
               room: roomLabel,
-              building: mInfo?.building || '',
-              address: mInfo?.address || '',
+              building: finalBuilding,
+              address: finalAddress,
               startTime: times[0] || slot.time,
               endTime: times[1] || '',
               duration: 1,
@@ -369,7 +481,8 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     }
     
     try {
-      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentHash, data }));
+      await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentFingerprint, data }));
+      await AsyncStorage.setItem(`tabFingerprint_${tabUrl}`, contentFingerprint);
     } catch {}
 
     return data;
@@ -378,3 +491,131 @@ export async function fetchScheduleData(tabUrl: string): Promise<ScheduleData> {
     return defaultData;
   }
 }
+
+/**
+ * Scarica TUTTI i canali, orari e aule di un corso di laurea in una sola operazione ("in un'unica botta").
+ * Memorizza tutto in un'unica cache locale in modo che Orario e Aule non debbano mai più fare richieste di rete.
+ */
+export async function fetchAllCourseData(
+  degreeUrl: string,
+  forceRefresh = false,
+  onProgress?: (step: string, current: number, total: number) => void
+): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
+  const cacheKey = `allSchedules_${degreeUrl}`;
+
+  // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
+  if (!forceRefresh) {
+    try {
+      const stored = await AsyncStorage.getItem(cacheKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.tabs && parsed.schedules && parsed.tabs.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {}
+  }
+
+  onProgress?.('Caricamento canali disponibili...', 0, 1);
+  const tabs = await fetchTabs(degreeUrl, forceRefresh);
+  if (tabs.length === 0) {
+    return { tabs: [], schedules: {} };
+  }
+
+  const schedules: Record<string, ScheduleData> = {};
+  for (let i = 0; i < tabs.length; i++) {
+    const tab = tabs[i];
+    onProgress?.(`Download ${i + 1}/${tabs.length}: ${tab.name}`, i + 1, tabs.length);
+    try {
+      const data = await fetchScheduleData(tab.url, forceRefresh);
+      schedules[tab.url] = data;
+    } catch (e) {
+      console.warn(`Errore caricamento ${tab.name}:`, e);
+    }
+    // Breve pausa di 400ms per consentire l'animazione e l'aggiornamento dell'interfaccia grafica
+    if (i < tabs.length - 1) {
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+
+  // Calcola e memorizza il fingerprint complessivo dei canali
+  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_${t.url}`)));
+  const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || ''}`).join('|');
+
+  const result = { tabs, schedules, fingerprint: combinedFingerprint };
+  try {
+    await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
+    await AsyncStorage.setItem(`courseFingerprint_${degreeUrl}`, combinedFingerprint);
+    await AsyncStorage.setItem(`lastCheckTime_${degreeUrl}`, Date.now().toString());
+  } catch {}
+
+  return result;
+}
+
+export interface UpdateCheckResult {
+  hasChanges: boolean;
+  reason?: string;
+}
+
+/**
+ * Controlla all'avvio se il Google Sheet ufficiale ha subito modifiche
+ * (es. variazione orario, spostamento aula, o nuovo avviso in bacheca).
+ * Scarica in parallelo i tab noti e ne confronta l'impronta deterministica (~400ms).
+ */
+export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
+  try {
+    const cacheKey = `allSchedules_${degreeUrl}`;
+    const stored = await AsyncStorage.getItem(cacheKey);
+    if (!stored) {
+      return { hasChanges: true, reason: 'Nessun dato locale trovato' };
+    }
+
+    const parsed = JSON.parse(stored);
+    if (!parsed.tabs || parsed.tabs.length === 0 || !parsed.schedules) {
+      return { hasChanges: true, reason: 'Dati locali incompleti' };
+    }
+
+    // 1. Scarica in parallelo i soli tab del corso con timeout ridotto (3.5s) per ingresso fulmineo
+    const tabFetches = await Promise.all(
+      parsed.tabs.map((t: Tab) =>
+        axios.get(t.url, { timeout: 3500 }).then(r => ({ url: t.url, html: r.data })).catch(() => null)
+      )
+    );
+
+    const validFetches = tabFetches.filter(Boolean);
+    if (validFetches.length === 0) {
+      return { hasChanges: false }; // Offline o timeout: entra subito con i dati locali
+    }
+
+    const currentFps: Record<string, string> = {};
+    for (const item of validFetches) {
+      if (!item) continue;
+      currentFps[item.url] = extractSheetContentFingerprint(item.html);
+    }
+
+    const combinedFp = parsed.tabs.map((t: Tab) => `${t.url}:${currentFps[t.url] || ''}`).join('|');
+    const storedFp = parsed.fingerprint || (await AsyncStorage.getItem(`courseFingerprint_${degreeUrl}`));
+
+    if (!storedFp) {
+      // Allineamento iniziale automatico dell'impronta: salva e non riscaricare inutilmente
+      parsed.fingerprint = combinedFp;
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(parsed));
+      await AsyncStorage.setItem(`courseFingerprint_${degreeUrl}`, combinedFp);
+      for (const [url, fp] of Object.entries(currentFps)) {
+        await AsyncStorage.setItem(`tabFingerprint_${url}`, fp);
+      }
+      return { hasChanges: false };
+    }
+
+    if (storedFp !== combinedFp) {
+      return { hasChanges: true, reason: 'Rilevate modifiche all\'orario o agli avvisi' };
+    }
+
+    // Nessuna modifica rilevata: orari identici
+    return { hasChanges: false };
+  } catch (e) {
+    console.warn('Verifica aggiornamenti saltata:', e);
+    return { hasChanges: false };
+  }
+}
+

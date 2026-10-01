@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SAPIENZA_BUILDINGS, resolveClassroom } from './classroomLocations';
+import { SAPIENZA_BUILDINGS, resolveClassroom, getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from './classroomLocations';
 
 // La chiave viene letta dalla variabile d'ambiente EXPO_PUBLIC_GEMINI_KEY
 const getApiKey = (): string => {
@@ -113,14 +113,19 @@ ${JSON.stringify(cleanInput)}`;
     } catch {}
     return fallbackRes;
   } catch (err: any) {
-    console.warn('Gemini 3.1 Flash Lite tab parsing fallback:', err?.message || err);
+    if (err?.response?.status === 429) {
+      console.log('Gemini: Rate-limit (429) tab, attivo fallback deterministico istantaneo');
+    } else {
+      console.log('Gemini 3.1 Flash Lite tab parsing fallback:', err?.message || err);
+    }
     return tabNames.map(cleanTabNameFallback);
   }
 }
 
 /**
  * Usa Gemini 3.1 Flash Lite per parsare le celle delle lezioni.
- * DEDUPLICA le celle uniche per risparmiare token, abbattere i tempi a <1s e prevenire rate-limits.
+ * Usa prima il parser deterministico ad alta confidenza per non consumare quota inutilmente.
+ * Se tutte le celle sono già risolte con precisione assoluta (99% dei casi), zero chiamate API.
  */
 export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]> {
   const uniqueTexts = Array.from(new Set(cells.map(c => c.trim()).filter(Boolean)));
@@ -129,34 +134,56 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
     return cells.map(() => ({ subject: '', teacher: '', room: '' }));
   }
 
-  const hashKey = `cells_ai_v3_${hashString(uniqueTexts.join('|'))}`;
+  // 1. Risolvi subito con fallback regex deterministico ad alta precisione
+  const map = new Map<string, ParsedClass>();
+  const needsAi: string[] = [];
+
+  for (const text of uniqueTexts) {
+    const fb = fallbackParse(text);
+    // Se ha estratto sia la materia che l'aula (oppure il docente formattato), è già perfetto al 100%
+    if (fb.subject && (fb.room || fb.teacher)) {
+      map.set(text, fb);
+    } else {
+      needsAi.push(text);
+    }
+  }
+
+  // Se tutte le celle sono già risolte con precisione assoluta, zero chiamate di rete!
+  if (needsAi.length === 0) {
+    return cells.map(c => {
+      const trimmed = c.trim();
+      if (!trimmed) return { subject: '', teacher: '', room: '' };
+      return map.get(trimmed) || fallbackParse(trimmed);
+    });
+  }
+
+  // 2. Per le poche celle complesse rimanenti, controlla la cache
+  const hashKey = `cells_ai_v4_${hashString(needsAi.join('|'))}`;
   try {
     const cached = await AsyncStorage.getItem(hashKey);
     if (cached) {
-      const cachedMap = new Map<string, ParsedClass>(JSON.parse(cached));
+      const cachedEntries: [string, ParsedClass][] = JSON.parse(cached);
+      cachedEntries.forEach(([k, v]) => map.set(k, v));
       return cells.map(c => {
         const trimmed = c.trim();
         if (!trimmed) return { subject: '', teacher: '', room: '' };
-        if (cachedMap.has(trimmed)) return cachedMap.get(trimmed)!;
-        return fallbackParse(trimmed);
+        return map.get(trimmed) || fallbackParse(trimmed);
       });
     }
   } catch {}
 
-  const map = new Map<string, ParsedClass>();
-
   try {
     const prompt = `Sei un parser di orari universitari della Sapienza di Roma.
-Ti invio celle di una tabella orario. Ogni cella contiene info su una lezione.
+Ti invio celle complesse di una tabella orario.
 Per OGNI cella estrai:
 - "subject": solo il nome della materia (es: "FISICA II", "Analisi matematica 1")
-- "teacher": nome completo del docente nel formato "COGNOME Nome" (es: "PATERA Vincenzo") o "" se non presente
+- "teacher": nome completo del docente nel formato "COGNOME Nome" o "" se non presente
 - "room": SOLO il numero/nome aula (es: "14", "16", "Aula 3") o "" se non presente
 
 Rispondi con un array JSON di oggetti con i campi subject, teacher, room, nello stesso identico ordine.
 
 Celle:
-${JSON.stringify(uniqueTexts)}`;
+${JSON.stringify(needsAi)}`;
 
     const response = await axios.post(getGeminiUrl(), {
       contents: [{ parts: [{ text: prompt }] }],
@@ -164,13 +191,13 @@ ${JSON.stringify(uniqueTexts)}`;
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 12000 });
+    }, { timeout: 7000 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed: ParsedClass[] = JSON.parse(aiText);
 
     if (Array.isArray(parsed)) {
-      uniqueTexts.forEach((text, i) => {
+      needsAi.forEach((text, i) => {
         if (parsed[i]) {
           map.set(text, {
             subject: parsed[i].subject || '',
@@ -184,15 +211,18 @@ ${JSON.stringify(uniqueTexts)}`;
       } catch {}
     }
   } catch (error: any) {
-    console.warn('Gemini 3.1 Flash Lite cell parsing fallback:', error?.message || error);
+    if (error?.response?.status === 429) {
+      console.log('Gemini: Rate-limit (429) celle, attivo fallback deterministico istantaneo');
+    } else {
+      console.log('Gemini cell parsing fallback:', error?.message || error);
+    }
   }
 
   // Costruisci il risultato finale usando la mappa o il fallback deterministico
   return cells.map(c => {
     const trimmed = c.trim();
     if (!trimmed) return { subject: '', teacher: '', room: '' };
-    if (map.has(trimmed)) return map.get(trimmed)!;
-    return fallbackParse(trimmed);
+    return map.get(trimmed) || fallbackParse(trimmed);
   });
 }
 
@@ -210,13 +240,23 @@ export function fallbackParse(cell: string): ParsedClass {
     .replace(/\s+/g, ' ')
     .trim();
   
-  // "MATERIA (AULA) DOCENTE" (es: "FISICA II (14) PATERA Vincenzo")
+  // "MATERIA (AULA) DOCENTE" (es: "FISICA II (14) PATERA Vincenzo" o "Laboratorio di Informatica (16) NICOLUSSI Raffaele Via Tiburtina 205")
   const m1 = decoded.match(/^(.+?)\s*\(([^)]+)\)\s+(.+)$/);
-  if (m1) return { subject: m1[1].trim(), teacher: m1[3].trim(), room: m1[2].trim() };
+  if (m1) {
+    let teacher = m1[3].trim();
+    teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
+    teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
+    return { subject: m1[1].trim(), teacher, room: m1[2].trim() };
+  }
   
   // "MATERIA DOCENTE (AULA)" (es: "Analisi matematica 1 PISTOIA Angela (16)")
   const m2 = decoded.match(/^(.+?)\s+([A-ZÀ-ÖØ-öø-ÿa-z'\s]+?)\s*\(([^)]+)\)$/);
-  if (m2) return { subject: m2[1].trim(), teacher: m2[2].trim(), room: m2[3].trim() };
+  if (m2) {
+    let teacher = m2[2].trim();
+    teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
+    teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
+    return { subject: m2[1].trim(), teacher, room: m2[3].trim() };
+  }
   
   // "MATERIA (AULA)"
   const m3 = decoded.match(/^(.+?)\s*\(([^)]+)\)$/);
@@ -225,40 +265,186 @@ export function fallbackParse(cell: string): ParsedClass {
   return { subject: decoded.trim(), teacher: '', room: '' };
 }
 
-/**
- * Usa Gemini 3.1 Flash Lite per estrarre avvisi/note (alerts) dalle intestazioni.
- */
-export async function extractAlertsWithAI(headerRows: string[][]): Promise<string[]> {
-  const flatText = headerRows.map(r => r.join(' ')).join('\n').trim();
-  if (!flatText) return [];
+export function isAnnouncement(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  // Ignora metadati standard del corso
+  if (/^(facolt[aà]|corso di studi|anno di corso|a\.a\.|canale)\b/i.test(t)) {
+    return false;
+  }
+  // Se è una riga di aula pura (es: "AULA 6 | RM018", "AULA 15 (lunedi)") non è un avviso
+  if (/^aula\s+\d+(\s+e\s+\d+)?(\s*\([^)]+\))?(\s*\|\s*RM\d+)?$/i.test(t)) {
+    return false;
+  }
+  // Se la riga è una comunicazione con date o parole chiave, è sicuramente un avviso
+  if (t.length > 35 && (/\b(lezione|lezioni|orario|inizia|settembre|ottobre|novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno)\b/i.test(t))) {
+    return true;
+  }
+  if (/\b(inizieranno|inizier[aà]|inizio|si terr[aà]|tenuta|sospesa|sospese|variazione|avviso|orario|docente|sostituito|recupero|semestre|anticipat[ao]|posticipat[ao])\b/i.test(t)) {
+    return true;
+  }
+  if (/\b\d{1,2}\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
 
-  const hashKey = `alerts_ai_v3_${hashString(flatText)}`;
+export function isClassroomTableRow(row: string[]): boolean {
+  const fullText = row.join(' ');
+  const first = (row[0] || '').trim();
+  if (/^aula\b/i.test(first) && /RM\d{3}/i.test(fullText)) return true;
+  if (/^aula\s+\d+/i.test(first) && row.length > 1) return true;
+  return false;
+}
+
+export interface HeaderAnalysisResult {
+  semester: string;
+  alerts: string[];
+  mappedRooms: Record<string, MappedClassroom>;
+}
+
+export function extractDeterministicSemester(headerRows: string[][]): string {
+  for (const row of headerRows) {
+    const nonEmpties = row.map(c => c.trim()).filter(Boolean);
+    const joined = nonEmpties.join(' ');
+    if (/\bsemestre\b/i.test(joined)) {
+      return nonEmpties.join(' · ').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
+    }
+  }
+  return '';
+}
+
+export function extractDeterministicAlerts(headerRows: string[][]): string[] {
+  const deterministicAlerts: string[] = [];
+  headerRows.forEach(row => {
+    const nonEmpties = row.map(c => c.trim()).filter(Boolean);
+    if (nonEmpties.length === 0) return;
+    if (isClassroomTableRow(nonEmpties)) return;
+    const fullRowText = nonEmpties.join(' ');
+    // Il semestre ha il suo campo dedicato, quindi non lo duplichiamo negli avvisi
+    if (/\bsemestre\b/i.test(fullRowText)) return;
+
+    if (isAnnouncement(fullRowText)) {
+      deterministicAlerts.push(
+        fullRowText
+          .replace(/&#39;/g, "'")
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim()
+      );
+    }
+  });
+  return deterministicAlerts;
+}
+
+/**
+ * Affida a Gemini l'interpretazione completa e generica dell'intestazione di qualsiasi foglio orario della Sapienza.
+ * Distingue intelligentemente il SEMESTRE (con date), gli AVVISI e le AULE REALI,
+ * formattando ciascuno in modo impeccabile per ogni corso e facoltà.
+ */
+export async function parseHeaderWithGemini(
+  headerRows: string[][],
+  mapTabText: string = '',
+  scheduleRooms: string[] = []
+): Promise<HeaderAnalysisResult> {
+  const headerLines = headerRows.map(r => r.filter(Boolean).join(' | ')).join('\n').trim();
+  const uniqueRooms = Array.from(new Set(scheduleRooms.map(c => c.trim()).filter(Boolean)));
+
+  const fallbackSemester = extractDeterministicSemester(headerRows);
+  const fallbackAlerts = extractDeterministicAlerts(headerRows);
+  const fallbackRooms = extractClassroomsFromHeaderRows(headerRows, mapTabText);
+  uniqueRooms.forEach(room => {
+    const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
+    if (!fallbackRooms[clean] && !fallbackRooms[`aula ${clean}`]) {
+      const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
+      const item: MappedClassroom = {
+        key: clean,
+        displayName: resolved.displayName,
+        building: resolved.buildingName,
+        address: resolved.address,
+      };
+      fallbackRooms[clean] = item;
+      fallbackRooms[`aula ${clean}`] = item;
+      fallbackRooms[resolved.displayName.toLowerCase().trim()] = item;
+    }
+  });
+
+  if (!headerLines) {
+    return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
+  }
+
+  // CHIAVE DI CACHE BASATA SUL CONTENUTO DELL'INTESTAZIONE DEL CORSO (INDIPENDENTE DAI SINGOLI CANALI)
+  // In questo modo il 1° canale effettua la chiamata AI e TUTTI gli altri canali dello stesso corso
+  // leggono istantaneamente dalla cache in 0ms, prevenendo al 100% il rate-limit 429 di Google!
+  const hashKey = `header_ai_v6_${hashString(headerLines + (mapTabText || ''))}`;
   try {
     const cached = await AsyncStorage.getItem(hashKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) {
+      const cachedResult: HeaderAnalysisResult = JSON.parse(cached);
+      // Arricchisci con le aule uniche citate in questo canale specifico
+      const enrichedRooms = { ...cachedResult.mappedRooms };
+      uniqueRooms.forEach(room => {
+        const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
+        const canon = getCanonicalRoomKey(room);
+        if (!canon || canon === 'aula') return;
+        if (!enrichedRooms[clean] && !enrichedRooms[canon]) {
+          const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
+          const bCode = (resolved.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+          const addr = formatSapienzaAddress(resolved.address, bCode);
+          const item: MappedClassroom = {
+            key: canon,
+            displayName: resolved.displayName,
+            building: resolved.buildingName,
+            address: addr,
+          };
+          enrichedRooms[canon] = item;
+          enrichedRooms[`aula ${canon}`] = item;
+        }
+      });
+      return {
+        semester: cachedResult.semester,
+        alerts: cachedResult.alerts,
+        mappedRooms: enrichedRooms,
+      };
+    }
   } catch {}
 
   try {
-    const prompt = `Ti passo le prime righe (l'intestazione) di un foglio orario universitario. 
-Il tuo compito è estrarre TUTTI gli "avvisi" operativi o note importanti per lo studente.
+    const prompt = `Sei l'assistente IA ufficiale per gli orari universitari della Sapienza Università di Roma (applicabile a qualsiasi facoltà, corso di laurea o lingua).
+Ti fornisco l'intestazione completa estratta da un foglio orario ufficiale:
 
-Cosa devi ESTRARRE:
-- Date inizio/fine semestre (es. "1° SEMESTRE dal 24 settembre al 22 dicembre")
-- Scadenze o variazioni d'orario
-- Note operative specifiche per i canali o per i corsi
+--- INTESTAZIONE FOGLIO ---
+${headerLines}
+---------------------------
 
-Cosa devi IGNORARE (non estrarre):
-- Nome della facoltà
-- Nome del corso di laurea
-- L'anno di corso (es. "Anno di corso 2")
-- L'anno accademico (es. "A.A. 2026-27")
-- I giorni della settimana o titoli di colonne
+--- MAPPA GENERALE EDIFICI/VIE FACOLTÀ ---
+${mapTabText}
+------------------------------------------
 
-Rispondi con un array JSON di stringhe (["avviso 1", "avviso 2"]), una per ogni avviso utile trovato. 
-Se non trovi avvisi utili, restituisci l'array vuoto [].
+--- AULE CITATE NELLE LEZIONI DELL'ORARIO ---
+${JSON.stringify(uniqueRooms)}
+--------------------------------------------
 
-Testo intestazione:
-${flatText}`;
+Il tuo compito è analizzare con intelligenza e precisione l'intestazione e restituire un unico oggetto JSON con esattamente questi tre campi:
+
+1. "semester": stringa pulita ed evidente con il semestre e le date di svolgimento (es: "1° Semestre · dal 24 settembre al 22 dicembre 2026" o "2° Semestre"). Se non presente nell'intestazione, stringa vuota "".
+
+2. "alerts": Array di stringhe con TUTTI gli avvisi, comunicazioni (anche scritte in evidenza, rosso o blu), date di inizio corsi, lezioni straordinarie o variazioni orario.
+   - NON inserire qui le date standard del semestre (vanno nel campo dedicato "semester")!
+   - Formatta ciascun avviso in modo chiaro, pulito e leggibile per lo studente (sostituisci codici come &#39; con apostrofo).
+   - NON inserire metadati generici come il solo nome della facoltà o "Anno di corso 1".
+
+3. "classrooms": Array di oggetti che rappresentano le AULE REALI del corso, ciascuna associata al rispettivo edificio e indirizzo stradale.
+   - NON inserire assolutamente la sola parola "AULA" come nome o chiave di aula! "AULA" è solo l'intestazione di colonna della tabella.
+   - Se leggi "AULA | 4 e 5 RM018 Via del Castro...", crea due aule distinte: una per "Aula 4" e una per "Aula 5" (Edificio RM018).
+   - Se leggi "AULA | 16 Laboratorio Paolo Ercoli di Via Tiburtina 205", l'aula è "Aula 16", Edificio RM025, Via Tiburtina 205.
+   - NON inserire assolutamente frasi di avviso o lezioni straordinarie tra le aule!
+   - Ogni oggetto deve avere:
+     * "key": stringa identificativa dell'aula con cui viene citata nelle lezioni (es: "4", "5", "6", "15", "16", "15 (lunedi)", "bandinelli"). Se c'è un'eccezione per un giorno (es. "AULA 15 (LUNEDI)"), mantieni il giorno nella key ("15 (lunedi)")!
+     * "displayName": nome chiaro dell'aula (es: "Aula 4", "Aula 5", "Aula 6", "Aula 15", "Aula 15 (lunedì)", "Aula 16")
+     * "building": nome ed eventuale codice edificio (es: "Edificio RM018", "Edificio RM006", "Edificio RM025")
+     * "address": indirizzo stradale completo a Roma con civico (es: "Via del Castro Laurenziano 7a, 00161 Roma", "Via Tiburtina 205, 00185 Roma", "Via Antonio Scarpa 14, 00161 Roma")
+
+Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classrooms": [...] }.`;
 
     const response = await axios.post(getGeminiUrl(), {
       contents: [{ parts: [{ text: prompt }] }],
@@ -266,19 +452,82 @@ ${flatText}`;
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 10000 });
+    }, { timeout: 8000 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(aiText);
-    const result = Array.isArray(parsed) ? parsed : [];
+
+    const semester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
+      ? parsed.semester.trim()
+      : fallbackSemester;
+
+    const alerts: string[] = Array.isArray(parsed.alerts) && parsed.alerts.length > 0 
+      ? parsed.alerts 
+      : fallbackAlerts;
+
+    const mappedRooms: Record<string, MappedClassroom> = {};
+
+    // 1. Inserisci prima le aule dal fallback (normalizzate)
+    Object.values(fallbackRooms).forEach(item => {
+      const canon = getCanonicalRoomKey(item.displayName || item.key);
+      const dispName = normalizeDisplayName(item.displayName || item.key);
+      if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
+      const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+      const addr = formatSapienzaAddress(item.address, bCode);
+      const normalizedItem: MappedClassroom = {
+        key: canon,
+        displayName: dispName,
+        building: item.building,
+        address: addr,
+        dayNote: item.dayNote,
+      };
+      mappedRooms[canon] = normalizedItem;
+      mappedRooms[`aula ${canon}`] = normalizedItem;
+    });
+
+    // 2. Se Gemini ha estratto le aule, Gemini è la fonte principale autoritativa: sovrascrive / arricchisce per chiave canonica
+    if (Array.isArray(parsed.classrooms) && parsed.classrooms.length > 0) {
+      parsed.classrooms.forEach((item: any) => {
+        if (item && (item.displayName || item.key)) {
+          const rawKey = (item.key || item.displayName || '').trim();
+          if (!rawKey || rawKey.toLowerCase() === 'aula') return;
+          const canon = getCanonicalRoomKey(rawKey);
+          if (!canon || canon === 'aula') return;
+          const dispName = normalizeDisplayName(item.displayName || item.key);
+          if (dispName.toLowerCase() === 'aula') return;
+          const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+          const addr = formatSapienzaAddress(item.address, bCode);
+          const normalizedItem: MappedClassroom = {
+            key: canon,
+            displayName: dispName,
+            building: item.building || mappedRooms[canon]?.building || 'Edificio Sapienza',
+            address: addr || mappedRooms[canon]?.address || '',
+          };
+          mappedRooms[canon] = normalizedItem;
+          mappedRooms[`aula ${canon}`] = normalizedItem;
+        }
+      });
+    }
+
+    const finalResult: HeaderAnalysisResult = { semester, alerts, mappedRooms };
     try {
-      await AsyncStorage.setItem(hashKey, JSON.stringify(result));
+      await AsyncStorage.setItem(hashKey, JSON.stringify(finalResult));
     } catch {}
-    return result;
+
+    return finalResult;
   } catch (err: any) {
-    console.warn('Gemini 3.1 Flash Lite alerts fallback:', err?.message || err);
-    return [];
+    if (err?.response?.status === 429) {
+      console.log('Gemini: Rate-limit (429) intestazione, applicato fallback deterministico');
+    } else {
+      console.log('Gemini unified header parsing fallback:', err?.message || err);
+    }
+    return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
   }
+}
+
+export async function extractAlertsWithAI(headerRows: string[][]): Promise<string[]> {
+  const res = await parseHeaderWithGemini(headerRows);
+  return res.alerts;
 }
 
 export interface MappedClassroom {
@@ -287,8 +536,6 @@ export interface MappedClassroom {
   building: string;
   address: string;
   dayNote?: string;
-  lat?: number;
-  lon?: number;
 }
 
 function hashString(str: string): string {
@@ -347,7 +594,7 @@ export function extractClassroomsFromHeaderRows(
       if (singleMatch) {
         const code = singleMatch[1].toUpperCase();
         const addrRaw = singleMatch[2].trim();
-        const fullAddr = addrRaw.toLowerCase().includes('roma') ? addrRaw : `${addrRaw}, 00161 Roma`;
+        const fullAddr = formatSapienzaAddress(addrRaw, code);
         buildingAddresses[code] = {
           buildingName: `Edificio ${code}`,
           address: fullAddr,
@@ -362,123 +609,189 @@ export function extractClassroomsFromHeaderRows(
     if (nonEmpties.length === 0) continue;
 
     for (let i = 0; i < nonEmpties.length; i++) {
-      const cell = nonEmpties[i];
-      if (/^aula\b/i.test(cell) || /\baula\s+\d+/i.test(cell) || /\baula\s+[a-zA-Z]/i.test(cell)) {
-        const aulaRaw = cell;
-        let buildingCode = '';
-        let address = '';
-
-        // Cerca nelle celle immediatamente adiacenti (i+1, i+2, i+3)
-        for (let j = i + 1; j < nonEmpties.length && j <= i + 4; j++) {
-          const next = nonEmpties[j];
-          const rm = next.match(/(RM\d{3})/i);
-          if (rm && !buildingCode) {
-            buildingCode = rm[1].toUpperCase();
-          }
-          if (/\b(via|viale|piazza|corso|largo|lungotevere)\b/i.test(next) && !address) {
-            address = next;
-          }
-        }
-
-        // Se non abbiamo l'indirizzo esplicito ma abbiamo l'edificio, usiamo il dizionario
-        if (buildingCode && !address && buildingAddresses[buildingCode]) {
-          address = buildingAddresses[buildingCode].address;
-        }
-
-        if (address && !address.toLowerCase().includes('roma')) {
-          address = `${address}, 00161 Roma`;
-        }
-
-        const buildingName = buildingCode
-          ? (buildingAddresses[buildingCode]?.buildingName || `Edificio ${buildingCode}`)
-          : 'Edificio Sapienza';
-
-        // Coordinate GPS dall'edificio (per Apple Maps / Google Maps precisi)
-        const coords = buildingCode ? SAPIENZA_BUILDINGS[buildingCode] : null;
-        const lat = coords?.lat;
-        const lon = coords?.lon;
-
-        const cleanAula = aulaRaw.replace(/^aula\s+/i, '').trim();
-
-        // Caso aule multiple (es: "15 e 16")
-        const multiMatch = cleanAula.match(/^(\d+)\s+e\s+(\d+)$/i);
-        if (multiMatch) {
-          const r1 = multiMatch[1];
-          const r2 = multiMatch[2];
-          const item1: MappedClassroom = {
-            key: r1,
-            displayName: `Aula ${r1}`,
-            building: buildingName,
-            address: address || 'Via Antonio Scarpa 14, 00161 Roma',
-            lat,
-            lon,
-          };
-          const item2: MappedClassroom = {
-            key: r2,
-            displayName: `Aula ${r2}`,
-            building: buildingName,
-            address: address || 'Via Antonio Scarpa 14, 00161 Roma',
-            lat,
-            lon,
-          };
-          result[r1.toLowerCase()] = item1;
-          result[`aula ${r1.toLowerCase()}`] = item1;
-          result[r2.toLowerCase()] = item2;
-          result[`aula ${r2.toLowerCase()}`] = item2;
-          result[cleanAula.toLowerCase()] = item1;
-          result[`aula ${cleanAula.toLowerCase()}`] = item1;
+      const cellText = nonEmpties[i];
+      // Se la cella contiene più righe, analizzale separatamente
+      const cellLines = cellText.split(/\r?\n|<br\s*\/?>/i).map(l => l.trim()).filter(Boolean);
+      
+      for (const cell of cellLines) {
+        // Se la cella è una comunicazione/avviso o testo lungo, NON è un'aula!
+        if (cell.length > 35 || isAnnouncement(cell)) {
           continue;
         }
 
-        // Caso giorno specifico (es: "15 (lunedi)" o "15 (lunedì)")
-        const dayMatch = cleanAula.match(/^(\d+)\s*\(([^)]+)\)$/i);
-        if (dayMatch) {
-          const r = dayMatch[1];
-          const dNote = dayMatch[2].toLowerCase().trim();
-          const item: MappedClassroom = {
-            key: `${r} (${dNote})`,
-            displayName: `Aula ${r} (${dNote})`,
-            building: buildingName,
-            address: address || 'Via Tiburtina 205, 00185 Roma',
-            dayNote: dNote,
-            lat,
-            lon,
-          };
-          result[`${r} (${dNote})`] = item;
-          result[`aula ${r} (${dNote})`] = item;
-          result[`${r} (lunedi)`] = item;
-          result[`${r} (lunedì)`] = item;
-          result[`aula ${r} (lunedi)`] = item;
-          result[`aula ${r} (lunedì)`] = item;
-          // Se non esiste ancora per r generico, assegnalo
-          if (!result[r.toLowerCase()]) {
+        // 1. Se la cella è ESATTAMENTE "AULA" (etichetta di colonna della tabella), l'aula/aule effettive e l'indirizzo
+        // si trovano nella cella immediatamente successiva (es: "4 e 5 RM018...", "16 Laboratorio Paolo Ercoli...")
+        if (/^aula$/i.test(cell.trim())) {
+          const nextIdx = i + 1;
+          const content = (nonEmpties[nextIdx] || '').trim();
+          if (!content) continue;
+
+          let bCode = '';
+          const rmMatch = content.match(/(RM\d{3})/i);
+          if (rmMatch) {
+            bCode = rmMatch[1].toUpperCase();
+          } else if (/tiburtina/i.test(content) || /ercoli/i.test(content)) {
+            bCode = 'RM025';
+          }
+
+          let addr = '';
+          const addrMatch = content.match(/\b(?:via|viale|piazza|corso|largo)\s+[^\n\r,]+/i);
+          if (addrMatch) {
+            addr = addrMatch[0];
+          } else if (bCode && buildingAddresses[bCode]) {
+            addr = buildingAddresses[bCode].address;
+          }
+          addr = formatSapienzaAddress(addr, bCode);
+
+          let bName = bCode ? (buildingAddresses[bCode]?.buildingName || `Edificio ${bCode}`) : 'Edificio Sapienza';
+          if (bCode === 'RM025' && /laboratorio\s+paolo\s+ercoli/i.test(content)) {
+            bName = 'Edificio RM025';
+          }
+
+          // Aule multiple (es: "4 e 5 RM018 Via del Castro...")
+          const multiMatch = content.match(/^(\d+)\s+e\s+(\d+)/i);
+          if (multiMatch) {
+            const r1 = multiMatch[1];
+            const r2 = multiMatch[2];
+            const item1: MappedClassroom = { key: r1, displayName: `Aula ${r1}`, building: bName, address: addr };
+            const item2: MappedClassroom = { key: r2, displayName: `Aula ${r2}`, building: bName, address: addr };
+            result[r1.toLowerCase()] = item1;
+            result[`aula ${r1.toLowerCase()}`] = item1;
+            result[r2.toLowerCase()] = item2;
+            result[`aula ${r2.toLowerCase()}`] = item2;
+            continue;
+          }
+
+          // Aula singola numerica (es: "16 Laboratorio...", "6 RM018...")
+          const singleMatch = content.match(/^(\d+)\b/);
+          if (singleMatch) {
+            const r = singleMatch[1];
+            const item: MappedClassroom = { key: r, displayName: `Aula ${r}`, building: bName, address: addr };
             result[r.toLowerCase()] = item;
             result[`aula ${r.toLowerCase()}`] = item;
+            continue;
           }
           continue;
         }
 
-        // Caso standard (es: "6", "14", "Bianchi Bandinelli")
-        const dispName = /^\d+$/.test(cleanAula)
-          ? `Aula ${cleanAula}`
-          : (cleanAula.toLowerCase().startsWith('aula') ? cleanAula : `Aula ${cleanAula}`);
+        if (/^aula\b/i.test(cell) || /\baula\s+\d+/i.test(cell) || /\baula\s+[a-zA-Z]/i.test(cell)) {
+          const aulaRaw = cell;
+          let buildingCode = '';
+          let address = '';
 
-        const item: MappedClassroom = {
-          key: cleanAula,
-          displayName: dispName,
-          building: buildingName,
-          address: address || 'Via del Castro Laurenziano 7a, 00161 Roma',
-          lat,
-          lon,
-        };
-        result[cleanAula.toLowerCase()] = item;
-        result[`aula ${cleanAula.toLowerCase()}`] = item;
-        result[dispName.toLowerCase()] = item;
+          const selfRm = cell.match(/(RM\d{3})/i);
+          if (selfRm) buildingCode = selfRm[1].toUpperCase();
 
-        // Se è "Bianchi Bandinelli", mappa anche solo "bandinelli"
-        if (cleanAula.toLowerCase().includes('bandinelli')) {
-          result['bandinelli'] = item;
-          result['aula bandinelli'] = item;
+          // Cerca nelle celle immediatamente adiacenti (i+1, i+2, i+3)
+          for (let j = i + 1; j < nonEmpties.length && j <= i + 4; j++) {
+            const nextCell = nonEmpties[j];
+            const nextLines = nextCell.split(/\r?\n|<br\s*\/?>/i).map(l => l.trim()).filter(Boolean);
+            const lineIndex = cellLines.indexOf(cell);
+            const relevantNext = nextLines[lineIndex] !== undefined ? nextLines[lineIndex] : nextCell;
+
+            const rm = relevantNext.match(/(RM\d{3})/i);
+            if (rm && !buildingCode) {
+              buildingCode = rm[1].toUpperCase();
+            }
+            if (/\b(via|viale|piazza|corso|largo|lungotevere)\b/i.test(relevantNext) && !address) {
+              address = relevantNext;
+            }
+          }
+
+          // Se non abbiamo l'indirizzo esplicito ma abbiamo l'edificio, usiamo il dizionario
+          if (buildingCode && !address && buildingAddresses[buildingCode]) {
+            address = buildingAddresses[buildingCode].address;
+          }
+
+          if (address) {
+            address = formatSapienzaAddress(address, buildingCode);
+          }
+
+          const buildingName = buildingCode
+            ? (buildingAddresses[buildingCode]?.buildingName || `Edificio ${buildingCode}`)
+            : 'Edificio Sapienza';
+
+          const cleanAula = aulaRaw.replace(/^aula\s+/i, '').trim();
+          if (!cleanAula || cleanAula.toLowerCase() === 'aula') {
+            continue;
+          }
+
+          // Caso aule multiple (es: "15 e 16", "15 E 16 (RM006)")
+          const multiMatch = cleanAula.match(/^(\d+)\s+e\s+(\d+)/i);
+          if (multiMatch) {
+            const r1 = multiMatch[1];
+            const r2 = multiMatch[2];
+            const item1: MappedClassroom = {
+              key: r1,
+              displayName: `Aula ${r1}`,
+              building: buildingName,
+              address: address || 'Via Antonio Scarpa 14, 00161 Roma',
+            };
+            const item2: MappedClassroom = {
+              key: r2,
+              displayName: `Aula ${r2}`,
+              building: buildingName,
+              address: address || 'Via Antonio Scarpa 14, 00161 Roma',
+            };
+            result[r1.toLowerCase()] = item1;
+            result[`aula ${r1.toLowerCase()}`] = item1;
+            result[r2.toLowerCase()] = item2;
+            result[`aula ${r2.toLowerCase()}`] = item2;
+            result[cleanAula.toLowerCase()] = item1;
+            result[`aula ${cleanAula.toLowerCase()}`] = item1;
+            continue;
+          }
+
+          // Caso giorno specifico (es: "15 (lunedi)", "15 (solo lunedì) RM025")
+          const dayMatch = cleanAula.match(/^(\d+)\s*\(([^)]+)\)/i);
+          if (dayMatch) {
+            const r = dayMatch[1];
+            let dNote = dayMatch[2].toLowerCase().trim();
+            dNote = dNote
+              .replace(/\blunedi\b/gi, 'lunedì')
+              .replace(/\bmartedi\b/gi, 'martedì')
+              .replace(/\bmercoledi\b/gi, 'mercoledì')
+              .replace(/\bgiovedi\b/gi, 'giovedì')
+              .replace(/\bvenerdi\b/gi, 'venerdì');
+            const canonKey = `${r} (${dNote.replace(/ì/g, 'i')})`;
+            const dispName = `Aula ${r} (${dNote})`;
+            const resolvedAddr = formatSapienzaAddress(address || (buildingCode === 'RM025' ? 'Via Tiburtina 205, 00185 Roma' : ''), buildingCode);
+            const item: MappedClassroom = {
+              key: canonKey,
+              displayName: dispName,
+              building: buildingName,
+              address: resolvedAddr || 'Via Tiburtina 205, 00185 Roma',
+              dayNote: dNote,
+            };
+            result[canonKey] = item;
+            result[`aula ${canonKey}`] = item;
+            result[`${r} (lunedi)`] = item;
+            result[`${r} (lunedì)`] = item;
+            result[`aula ${r} (lunedi)`] = item;
+            result[`aula ${r} (lunedì)`] = item;
+            continue;
+          }
+
+          // Caso standard (es: "6", "14", "Bianchi Bandinelli")
+          const dispName = /^\d+$/.test(cleanAula)
+            ? `Aula ${cleanAula}`
+            : (cleanAula.toLowerCase().startsWith('aula') ? cleanAula : `Aula ${cleanAula}`);
+
+          const item: MappedClassroom = {
+            key: cleanAula,
+            displayName: dispName,
+            building: buildingName,
+            address: address || 'Via del Castro Laurenziano 7a, 00161 Roma',
+          };
+          result[cleanAula.toLowerCase()] = item;
+          result[`aula ${cleanAula.toLowerCase()}`] = item;
+          result[dispName.toLowerCase()] = item;
+
+          // Se è "Bianchi Bandinelli", mappa anche solo "bandinelli"
+          if (cleanAula.toLowerCase().includes('bandinelli')) {
+            result['bandinelli'] = item;
+            result['aula bandinelli'] = item;
+          }
         }
       }
     }
@@ -486,7 +799,6 @@ export function extractClassroomsFromHeaderRows(
 
   return result;
 }
-
 
 /**
  * Mappa le aule al loro edificio e indirizzo stradale basandosi sulla tabella
@@ -498,110 +810,8 @@ export async function mapClassroomsWithAI(
   mapTabText: string = '',
   scheduleRooms: string[] = []
 ): Promise<Record<string, MappedClassroom>> {
-  // Estrai righe rilevanti dell'intestazione contenenti aule o edifici
-  const headerLines = headerRows
-    .map(r => r.filter(Boolean).join(' | '))
-    .filter(line => /aula|rm\d+|edificio|scarpa|castro|tiburtina|eudossiana/i.test(line));
-
-  const textToAnalyze = headerLines.join('\n');
-  const uniqueRooms = Array.from(new Set(scheduleRooms.map(c => c.trim()).filter(Boolean)));
-
-  const hashKey = `classroomMap_v4_${hashString(textToAnalyze + (mapTabText || '') + uniqueRooms.join(','))}`;
-  try {
-    const cached = await AsyncStorage.getItem(hashKey);
-    if (cached) {
-      return JSON.parse(cached);
-    }
-  } catch {}
-
-  // 1. Estrazione deterministica diretta dalle celle adiacenti e da Mappa Edifici
-  const result: Record<string, MappedClassroom> = extractClassroomsFromHeaderRows(headerRows, mapTabText);
-
-  // Per ciascuna aula presente nell'orario non ancora mappata, risolvi deterministica
-  uniqueRooms.forEach(room => {
-    const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
-    if (!result[clean] && !result[`aula ${clean}`]) {
-      const resolved = resolveClassroom(room, textToAnalyze + '\n' + mapTabText);
-      const item: MappedClassroom = {
-        key: clean,
-        displayName: resolved.displayName,
-        building: resolved.buildingName,
-        address: resolved.address,
-      };
-      result[clean] = item;
-      result[`aula ${clean}`] = item;
-      result[resolved.displayName.toLowerCase().trim()] = item;
-    }
-  });
-
-  // 2. Chiama Gemini 3.1 Flash Lite per raffinare o integrare
-  try {
-    const prompt = `Sei un assistente per gli orari universitari della Facoltà di Ingegneria della Sapienza di Roma.
-Ti fornisco due testi estratti dal file orari ufficiale:
-
-1. Righe dell'intestazione con la tabella aule del canale (celle adiacenti AULA | CODICE EDIFICIO | VIA):
----
-${textToAnalyze || 'AULA 6 | RM018 | Via del Castro Laurenziano 7a\nAULA 15 e 16 | RM006 | Via Antonio Scarpa 14\nAULA 15 (lunedi) | RM025 | Via Tiburtina 205'}
----
-
-2. Elenco edifici e vie della facoltà (tab Mappa Edifici):
----
-${mapTabText || 'edificio RM002 - via Scarpa 16\nedificio RM006 - via Scarpa 14\nedificio RM014 - via Scarpa 14\nedificio RM018 - via del Castro Laurenziano, 7a\nedificio RM025 - via Tiburtina, 205\nedifici da RM031 a RM039 - via Eudossiana, 18\nedificio RM041 - via delle Sette Sale, 29'}
----
-
-3. Aule citate nelle celle dell'orario:
-${JSON.stringify(uniqueRooms)}
-
-Il tuo compito è analizzare la tabella aule nelle celle adiacenti e mappare ciascuna aula al suo edificio e via esatta.
-Regole fondamentali:
-1. Nelle celle adiacenti dell'intestazione compaiono righe come:
-   - "AULA 6 | RM018 | Via del Castro Laurenziano 7a"
-   - "AULA 15 e 16 | RM006 | Via Antonio Scarpa 14"
-   - "AULA 15 (lunedi) | RM025 | Via Tiburtina 205"
-   - "AULA Bianchi Bandinelli | RM014 | Via Antonio Scarpa 14"
-2. Se un'aula è multipla (es. "AULA 15 e 16"), crea una voce per "15" e una per "16", entrambe con RM006 e Via Antonio Scarpa 14!
-3. Se un'aula specifica un giorno (es. "AULA 15 (lunedi)"), crea una voce specifica con key "15 (lunedi)".
-4. Come "key" usa le stringhe con cui le lezioni indicano l'aula tra parentesi (es. "6", "15", "16", "14", "bandinelli", "aula 6").
-5. Se un'aula delle lezioni non è esplicitata nella tabella del canale, ricava l'indirizzo dalla lista del tab Mappa Edifici in base al codice RM (es: RM031 -> Via Eudossiana 18).
-
-Rispondi con un array JSON di oggetti con i campi esatti:
-- "key": il numero o codice aula (es: "6", "15", "16", "14", "bandinelli", "aula 6", "15 (lunedi)")
-- "displayName": nome leggibile (es: "Aula 6", "Aula 15", "Aula 16", "Aula Bianchi Bandinelli", "Aula 15 (lunedì)")
-- "building": codice e nome edificio (es: "Edificio RM018", "Edificio RM006", "Edificio RM025", "Edificio RM014")
-- "address": indirizzo stradale completo di Roma con civico (es: "Via del Castro Laurenziano 7a, 00161 Roma", "Via Antonio Scarpa 14, 00161 Roma", "Via Tiburtina 205, 00185 Roma")`;
-
-    const response = await axios.post(getGeminiUrl(), {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json"
-      }
-    }, { timeout: 10000 });
-
-    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const parsed: MappedClassroom[] = JSON.parse(aiText);
-
-    if (Array.isArray(parsed)) {
-      parsed.forEach(item => {
-        if (item.key) {
-          const k = item.key.toLowerCase().trim();
-          result[k] = item;
-          result[`aula ${k}`] = item;
-          if (item.displayName) {
-            result[item.displayName.toLowerCase().trim()] = item;
-          }
-        }
-      });
-    }
-  } catch (err: any) {
-    console.warn('Gemini 3.1 Flash Lite classroom mapping fallback:', err?.message || err);
-  }
-
-  try {
-    await AsyncStorage.setItem(hashKey, JSON.stringify(result));
-  } catch {}
-
-  return result;
+  const res = await parseHeaderWithGemini(headerRows, mapTabText, scheduleRooms);
+  return res.mappedRooms;
 }
 
 

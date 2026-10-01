@@ -5,10 +5,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchDegrees, fetchTabs, Degree, Tab } from '../utils/scraper';
-import { useFocusEffect } from 'expo-router';
+import { fetchDegrees, fetchTabs, fetchAllCourseData, Degree, Tab } from '../utils/scraper';
+import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
+import { CourseDownloadView } from '../components/CourseDownloadView';
 
 const SAPIENZA_RED = '#822433';
 
@@ -21,6 +22,8 @@ export default function ProfiloScreen() {
   const [loading, setLoading] = useState(true);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
+  const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(null);
+  const [downloadProgressText, setDownloadProgressText] = useState('');
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -53,18 +56,41 @@ export default function ProfiloScreen() {
   );
 
   const selectDegree = async (degree: Degree) => {
-    setDegreeUrl(degree.url);
-    setDegreeName(degree.name);
-    await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
-    await AsyncStorage.setItem('selectedDegreeName', degree.name);
-    // Reset default channel
-    await AsyncStorage.removeItem('defaultTabUrl');
-    setDefaultTabUrl(null);
+    // Chiudi il modal di selezione corsi e avvia la schermata di download
     setCourseModalVisible(false);
+    setDownloadingCourse(degree);
+    setDownloadProgressText('Preparazione e analisi canali...');
 
-    // Fetch tabs for new degree
-    const tabs = await fetchTabs(degree.url);
-    setAvailableTabs(tabs);
+    try {
+      // 1. Scarica TUTTO in un'unica botta con avanzamento in tempo reale
+      const { tabs } = await fetchAllCourseData(degree.url, true, (stepMsg) => {
+        setDownloadProgressText(stepMsg);
+      });
+
+      // 2. Solo al 100% completato salviamo in AsyncStorage
+      await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
+      await AsyncStorage.setItem('selectedDegreeName', degree.name);
+      await AsyncStorage.removeItem('defaultTabUrl');
+
+      setDegreeUrl(degree.url);
+      setDegreeName(degree.name);
+      setDefaultTabUrl(null);
+      setAvailableTabs(tabs);
+
+      // 3. Breve ritardo visivo per completamento, poi switcha direttamente agli orari
+      setTimeout(() => {
+        setDownloadingCourse(null);
+        router.replace('/');
+      }, 300);
+    } catch (err) {
+      console.error('Errore durante download nuovo corso:', err);
+      setDownloadingCourse(null);
+      Alert.alert(
+        'Errore di Connessione',
+        'Impossibile scaricare i dati del corso dal sito Sapienza. Controlla la tua connessione e riprova.',
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   const selectDefaultTab = async (tab: Tab) => {
@@ -74,15 +100,53 @@ export default function ProfiloScreen() {
   };
 
   const clearCacheAndReload = async () => {
+    if (!degreeUrl) return;
     try {
+      const dummyDegree: Degree = {
+        name: degreeName || 'Corso di Laurea',
+        url: degreeUrl,
+        className: '',
+      };
+      setDownloadingCourse(dummyDegree);
+      setDownloadProgressText('Svuotamento cache...');
+
       const allKeys = await AsyncStorage.getAllKeys();
       const keysToKeep = ['selectedDegreeUrl', 'selectedDegreeName', 'defaultTabUrl'];
       const cacheKeys = allKeys.filter(k => !keysToKeep.includes(k));
       await AsyncStorage.multiRemove(cacheKeys);
-      Alert.alert('Cache Svuotata', 'I dati dell\'orario e le aule verranno ricaricati aggiornati dal sito Sapienza.');
+
+      const { tabs } = await fetchAllCourseData(degreeUrl, true, (stepMsg) => {
+        setDownloadProgressText(stepMsg);
+      });
+      setAvailableTabs(tabs);
+      setDownloadingCourse(null);
+
+      Alert.alert('Cache Aggiornata', 'Orari e aule di tutti i canali sono stati riscaricati dal sito Sapienza.', [
+        { text: 'OK', onPress: () => router.replace('/') }
+      ]);
     } catch (e) {
       console.error(e);
+      setDownloadingCourse(null);
+      Alert.alert('Errore', 'Si è verificato un errore durante l\'aggiornamento.');
     }
+  };
+
+  const resetApp = async () => {
+    Alert.alert(
+      'Reset Completo',
+      'Sei sicuro di voler ripristinare l\'app? Perderai il corso selezionato.',
+      [
+        { text: 'Annulla', style: 'cancel' },
+        { 
+          text: 'Reset', 
+          style: 'destructive', 
+          onPress: async () => {
+            await AsyncStorage.clear();
+            router.replace('/');
+          }
+        }
+      ]
+    );
   };
 
   const openSourceWebsite = async () => {
@@ -156,16 +220,26 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Gestione Cache */}
+        {/* Gestione Cache & Reset */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>GESTIONE CACHE</Text>
-          <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={clearCacheAndReload}>
+          <Text style={styles.sectionLabel}>SISTEMA</Text>
+          <TouchableOpacity style={[styles.card, { marginBottom: 10 }]} activeOpacity={0.8} onPress={clearCacheAndReload}>
             <View style={styles.cardIconCircle}>
               <Ionicons name="refresh" size={22} color="#10b981" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Svuota Cache e Ricarica</Text>
-              <Text style={styles.cardSubtitle}>{"Scarica di nuovo l'orario se i docenti hanno fatto modifiche"}</Text>
+              <Text style={styles.cardTitle}>Svuota Cache</Text>
+              <Text style={styles.cardSubtitle}>{"Forza un nuovo download di orari e aule"}</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={resetApp}>
+            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+              <Ionicons name="trash" size={22} color="#ef4444" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>Reset Totale App</Text>
+              <Text style={styles.cardSubtitle}>{"Cancella tutto e torna alla configurazione"}</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -249,6 +323,21 @@ export default function ProfiloScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Modal Schermata Download Unificato (uguale all'onboarding iniziale) */}
+      <Modal
+        visible={Boolean(downloadingCourse)}
+        animationType="fade"
+        presentationStyle="fullScreen"
+      >
+        {downloadingCourse && (
+          <CourseDownloadView
+            courseName={downloadingCourse.name}
+            progressText={downloadProgressText}
+            title="Configurazione in corso"
+          />
+        )}
       </Modal>
     </SafeAreaView>
   );

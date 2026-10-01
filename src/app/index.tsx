@@ -1,15 +1,16 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Modal
+  TouchableOpacity, Modal, RefreshControl
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchTabs, fetchScheduleData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
-import { resolveClassroom, ResolvedClassroom, SAPIENZA_BUILDINGS } from '../utils/classroomLocations';
+import { fetchScheduleData, fetchAllCourseData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
+import { resolveClassroom, ResolvedClassroom, formatSapienzaAddress } from '../utils/classroomLocations';
 import { ClassroomModal } from '../components/ClassroomModal';
+import { YearChannelSelector } from '../components/YearChannelSelector';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 
 const SAPIENZA_RED = '#822433';
 const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
@@ -29,8 +30,9 @@ export default function ScheduleScreen() {
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
   const [selectedRoomModal, setSelectedRoomModal] = useState<ResolvedClassroom | null>(null);
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (force = false) => {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
@@ -41,87 +43,51 @@ export default function ScheduleScreen() {
         return;
       }
 
-      // Se il corso è cambiato o è il primo avvio
-      if (storedUrl !== degreeUrl || tabs.length === 0) {
-        setDegreeUrl(storedUrl);
+      if (degreeUrl && storedUrl !== degreeUrl) {
+        setTabs([]);
+        setSelectedTab(null);
+        setSchedulesMap({});
+        setSchedule(null);
+      }
 
-        // 1. Controlla se abbiamo la cache locale persistita per questo corso
-        const storedCourseData = await AsyncStorage.getItem(`allSchedules_${storedUrl}`);
-        if (storedCourseData) {
-          try {
-            const parsed = JSON.parse(storedCourseData);
-            if (parsed.tabs && parsed.schedules) {
-              setTabs(parsed.tabs);
-              setSchedulesMap(parsed.schedules);
-              const target = parsed.tabs.find((t: Tab) => t.url === storedDefaultTab) || parsed.tabs[0];
-              setSelectedTab(target);
-              if (parsed.schedules[target.url]) {
-                setSchedule(parsed.schedules[target.url]);
-                setLoading(false);
-              }
-            }
-          } catch {}
-        } else {
-          setLoading(true);
-        }
+      setDegreeUrl(storedUrl);
+      if (tabs.length === 0 || force || (degreeUrl && storedUrl !== degreeUrl)) {
+        setLoading(true);
+      }
 
-        const fetchedTabs = await fetchTabs(storedUrl);
+      const { tabs: fetchedTabs, schedules: fetchedSchedules } = await fetchAllCourseData(storedUrl, force);
+
+      if (fetchedTabs.length > 0) {
         setTabs(fetchedTabs);
+        setSchedulesMap(fetchedSchedules);
 
-        if (fetchedTabs.length > 0) {
-          const targetTab = fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
-          setSelectedTab(targetTab);
+        const currentActive = selectedTab && fetchedTabs.find(t => t.url === selectedTab.url);
+        const target = currentActive || fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
 
-          const firstData = await fetchScheduleData(targetTab.url);
-          setSchedule(firstData);
-          setLoading(false);
-
-          setSchedulesMap(prev => {
-            const updated = { ...prev, [targetTab.url]: firstData };
-            AsyncStorage.setItem(`allSchedules_${storedUrl}`, JSON.stringify({
-              tabs: fetchedTabs,
-              schedules: updated
-            })).catch(() => {});
-            return updated;
-          });
-
-          // Scarica in background gli altri canali e salvali
-          for (let i = 0; i < fetchedTabs.length; i++) {
-            const currentTab = fetchedTabs[i];
-            if (currentTab.url !== targetTab.url) {
-              fetchScheduleData(currentTab.url).then(tabData => {
-                setSchedulesMap(prev => {
-                  const updated = { ...prev, [currentTab.url]: tabData };
-                  AsyncStorage.setItem(`allSchedules_${storedUrl}`, JSON.stringify({
-                    tabs: fetchedTabs,
-                    schedules: updated
-                  })).catch(() => {});
-                  return updated;
-                });
-              }).catch(() => {});
-            }
-          }
-        } else {
-          setLoading(false);
-        }
-      } else if (storedDefaultTab && selectedTab?.url !== storedDefaultTab) {
-        const match = tabs.find(t => t.url === storedDefaultTab);
-        if (match && schedulesMap[match.url]) {
-          setSelectedTab(match);
-          setSchedule(schedulesMap[match.url]);
+        setSelectedTab(target);
+        if (fetchedSchedules[target.url]) {
+          setSchedule(fetchedSchedules[target.url]);
         }
       }
+      setLoading(false);
     } catch (e) {
       console.error(e);
       setLoading(false);
     }
-  }, [degreeUrl, schedulesMap, selectedTab, tabs]);
+  }, [degreeUrl, selectedTab, tabs.length]);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      loadData(false);
     }, [loadData])
   );
+
+  const onRefresh = useCallback(async () => {
+    if (!degreeUrl) return;
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [degreeUrl, loadData]);
 
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
@@ -139,22 +105,13 @@ export default function ScheduleScreen() {
 
   const handleRoomClick = (cls: ClassEvent) => {
     if (!cls.room) return;
-    /** Ricava coordinate dal codice edificio (es. "Edificio RM018") */
-    const coordsFromBuilding = (bName?: string) => {
-      const rm = bName?.match(/(RM\d{3})/i);
-      if (rm) {
-        const b = SAPIENZA_BUILDINGS[rm[1].toUpperCase()];
-        if (b) return { lat: b.lat, lon: b.lon };
-      }
-      return {};
-    };
     if (cls.building && cls.address) {
+      const bCode = cls.building.replace(/^Edificio\s+/i, '');
       setSelectedRoomModal({
         displayName: cls.room,
         buildingName: cls.building,
-        buildingCode: cls.building.replace(/^Edificio\s+/i, ''),
-        address: cls.address,
-        ...coordsFromBuilding(cls.building),
+        buildingCode: bCode,
+        address: formatSapienzaAddress(cls.address, bCode),
       });
       setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
       return;
@@ -170,52 +127,33 @@ export default function ScheduleScreen() {
     setSelectedRoomSubjects(cls.subject ? [cls.subject] : []);
   };
 
-
   const todayClasses = schedule?.days[selectedDay] || [];
 
-  // Onboarding
-  if (!degreeUrl && !loading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centerContainer}>
-          <Ionicons name="school" size={80} color={SAPIENZA_RED} style={{ marginBottom: 20 }} />
-          <Text style={styles.welcomeText}>Benvenuto in StudICI</Text>
-          <Text style={styles.subText}>Seleziona il tuo corso per iniziare.</Text>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => router.push('/settings')}>
-            <Text style={styles.primaryButtonText}>Scegli Corso</Text>
-            <Ionicons name="chevron-forward" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // L'onboarding ora è gestito globalmente in _layout.tsx
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ── Tab Canali (pill chips) ── */}
-      <View style={styles.topTabsContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.tabsScroll}
-          contentContainerStyle={styles.tabsRow}
-        >
-          {tabs.map((tab, i) => {
-            const isActive = selectedTab?.url === tab.url;
-            return (
-              <TouchableOpacity
-                key={i}
-                onPress={() => selectTab(tab)}
-                style={[styles.tabChip, isActive && styles.tabChipActive]}
-              >
-                <Text style={[styles.tabChipText, isActive && styles.tabChipTextActive]}>
-                  {tab.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      {/* ── Selezione Gerarchica Anni e Canali (2 Righe di Pill) ── */}
+      <YearChannelSelector
+        tabs={tabs}
+        selectedTab={selectedTab}
+        onSelectTab={selectTab}
+      />
+
+      {/* ── Periodo Didattico / Semestre (Evidente e separato dagli avvisi) ── */}
+      {schedule?.info?.semester ? (
+        <View style={styles.semesterCard}>
+          <View style={styles.semesterIconBox}>
+            <Ionicons name="calendar" size={16} color="#ffffff" />
+          </View>
+          <View style={styles.semesterContent}>
+            <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+            <Text style={styles.semesterValue} numberOfLines={2}>
+              {schedule.info.semester}
+            </Text>
+          </View>
+        </View>
+      ) : null}
 
       {/* ── Info banner (AI Alerts) ── */}
       {schedule?.alerts && schedule.alerts.length > 0 ? (
@@ -234,14 +172,6 @@ export default function ScheduleScreen() {
             </View>
           )}
         </TouchableOpacity>
-      ) : schedule?.info.semester ? (
-        // Fallback se l'AI non trova avvisi
-        <View style={styles.infoBanner}>
-          <Ionicons name="information-circle" size={20} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
-          <Text style={styles.infoBannerText}>
-            {schedule.info.semester}
-          </Text>
-        </View>
       ) : null}
 
       {/* ── Day Selector ── */}
@@ -285,12 +215,20 @@ export default function ScheduleScreen() {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={SAPIENZA_RED} />
-          <Text style={styles.loadingText}>Scarico orario e canali con Gemini...</Text>
+          <Text style={styles.loadingText}>Caricamento lezioni...</Text>
         </View>
       ) : (
         <ScrollView
           style={styles.classList}
           contentContainerStyle={{ paddingBottom: 120 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={SAPIENZA_RED}
+              colors={[SAPIENZA_RED]}
+            />
+          }
         >
           {todayClasses.length === 0 && (
             <View style={styles.emptyDay}>
@@ -425,6 +363,46 @@ const styles = StyleSheet.create({
   tabChipActive: { backgroundColor: SAPIENZA_RED, borderColor: SAPIENZA_RED },
   tabChipText: { color: '#8e8e93', fontWeight: '600', fontSize: 12 },
   tabChipTextActive: { color: '#fff' },
+
+  /* Semester Card */
+  semesterCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    marginHorizontal: 16,
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(130, 36, 51, 0.4)',
+  },
+  semesterIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: SAPIENZA_RED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  semesterContent: {
+    flex: 1,
+  },
+  semesterTitle: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#e05666',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  semesterValue: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#ffffff',
+    lineHeight: 16,
+  },
 
   /* Info Banner */
   infoBanner: {
