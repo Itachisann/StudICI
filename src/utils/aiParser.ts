@@ -67,7 +67,18 @@ export async function parseTabsWithAI(tabNames: string[]): Promise<string[]> {
   // Filtra già a monte mappe ed edifici
   const cleanInput = tabNames.map(t => /mappa|edifici|aule/i.test(t) ? '' : t);
 
-  const hashKey = `tabs_ai_v3_${hashString(cleanInput.join('|'))}`;
+  // Ottimizzazione istantanea (0ms): se tutti i tab corrispondono a canali standard Sapienza,
+  // usiamo direttamente il parser deterministico senza alcuna attesa di rete o rischio di 503!
+  const fallbackRes = tabNames.map(cleanTabNameFallback);
+  const allResolved = fallbackRes.every((name, idx) => {
+    if (!cleanInput[idx]) return true; // era mappa/aule
+    return name && /^\d+°\s*Anno/i.test(name);
+  });
+  if (allResolved) {
+    return fallbackRes;
+  }
+
+  const hashKey = `tabs_ai_v4_${hashString(cleanInput.join('|'))}`;
   try {
     const cached = await AsyncStorage.getItem(hashKey);
     if (cached) {
@@ -95,7 +106,7 @@ ${JSON.stringify(cleanInput)}`;
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 10000 });
+    }, { timeout: 4000 });
     
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed: string[] = JSON.parse(aiText);
@@ -107,18 +118,17 @@ ${JSON.stringify(cleanInput)}`;
       } catch {}
       return res;
     }
-    const fallbackRes = tabNames.map(cleanTabNameFallback);
     try {
       await AsyncStorage.setItem(hashKey, JSON.stringify(fallbackRes));
     } catch {}
     return fallbackRes;
   } catch (err: any) {
-    if (err?.response?.status === 429) {
-      console.log('Gemini: Rate-limit (429) tab, attivo fallback deterministico istantaneo');
+    if (err?.response?.status === 429 || err?.response?.status === 503) {
+      console.log(`Gemini: Servizio temporaneamente occupato (${err?.response?.status}) per tab, applicato fallback locale istantaneo`);
     } else {
-      console.log('Gemini 3.1 Flash Lite tab parsing fallback:', err?.message || err);
+      console.log('Gemini tab parsing fallback:', err?.message || err);
     }
-    return tabNames.map(cleanTabNameFallback);
+    return fallbackRes;
   }
 }
 
@@ -372,10 +382,16 @@ export async function parseHeaderWithGemini(
     return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
   }
 
-  // CHIAVE DI CACHE BASATA SUL CONTENUTO DELL'INTESTAZIONE DEL CORSO (INDIPENDENTE DAI SINGOLI CANALI)
-  // In questo modo il 1° canale effettua la chiamata AI e TUTTI gli altri canali dello stesso corso
-  // leggono istantaneamente dalla cache in 0ms, prevenendo al 100% il rate-limit 429 di Google!
-  const hashKey = `header_ai_v6_${hashString(headerLines + (mapTabText || ''))}`;
+  // CHIAVE DI CACHE NORMALIZZATA CONDIVISA TRA TUTTI I CANALI DELLO STESSO CORSO:
+  // Rimuoviamo le diciture specifiche del singolo canale (es: "CANALE A-K", "I ANNO")
+  // così il primo canale effettua la chiamata AI e TUTTI gli altri canali dello stesso corso
+  // leggono dalla cache in 0ms senza duplicare chiamate né saturare la quota API!
+  const normalizedForCourse = (headerLines + '\n' + (mapTabText || ''))
+    .replace(/\b(?:canale|can\.?)\s*[a-zA-Z]\s*-\s*[a-zA-Z]\b/gi, '')
+    .replace(/\b(I{1,3}V?|IV|V|[1-5])\s*°?\s*anno\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const hashKey = `header_ai_v7_${hashString(normalizedForCourse)}`;
   try {
     const cached = await AsyncStorage.getItem(hashKey);
     if (cached) {
@@ -452,7 +468,7 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 8000 });
+    }, { timeout: 4500 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(aiText);
@@ -516,8 +532,8 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
 
     return finalResult;
   } catch (err: any) {
-    if (err?.response?.status === 429) {
-      console.log('Gemini: Rate-limit (429) intestazione, applicato fallback deterministico');
+    if (err?.response?.status === 429 || err?.response?.status === 503) {
+      console.log(`Gemini: Servizio temporaneamente occupato (${err?.response?.status}), applicato fallback locale istantaneo`);
     } else {
       console.log('Gemini unified header parsing fallback:', err?.message || err);
     }

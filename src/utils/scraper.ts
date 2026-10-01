@@ -215,7 +215,7 @@ export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[
 
     if (mapTabUrl) {
       try {
-        const mapRes = await axios.get(mapTabUrl, { timeout: 6000 });
+        const mapRes = await axios.get(mapTabUrl, { timeout: 3500 });
         const cleanText = mapRes.data
           .replace(/<\/tr>|<\/p>|<br\s*\/?>/gi, '\n')
           .replace(/<\/td>/gi, ' - ')
@@ -532,9 +532,9 @@ export async function fetchAllCourseData(
     } catch (e) {
       console.warn(`Errore caricamento ${tab.name}:`, e);
     }
-    // Breve pausa di 400ms per consentire l'animazione e l'aggiornamento dell'interfaccia grafica
+    // Breve pausa di 50ms per consentire il re-render fluido della progress bar
     if (i < tabs.length - 1) {
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 50));
     }
   }
 
