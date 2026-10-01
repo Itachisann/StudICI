@@ -449,8 +449,14 @@ const styles = StyleSheet.create({
   dayCircle: {
     width: 44, height: 44, borderRadius: 14, // squircle instead of circle
     justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
-  dayCircleActive: { backgroundColor: SAPIENZA_RED },
+  dayCircleActive: {
+    backgroundColor: 'rgba(130, 36, 51, 0.45)',
+    borderWidth: 1,
+    borderColor: SAPIENZA_RED,
+  },
 
   /* Loading State */
   loadingContainer: { alignItems: 'center', marginTop: 60 },
@@ -496,11 +502,16 @@ const styles = StyleSheet.create({
   },
   accentBar: {
     width: 4,
-    marginLeft: 14,
-    marginVertical: 16,
+    marginLeft: 16,
+    marginVertical: 18,
     borderRadius: 2,
   },
-  cardBody: { flex: 1, padding: 14, paddingLeft: 12 },
+  cardBody: {
+    flex: 1,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    paddingLeft: 14,
+  },
   subjectText: {
     color: '#fff',
     fontSize: 16,

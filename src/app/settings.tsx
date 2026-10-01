@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#1c1c1e',
     borderRadius: 20,
-    padding: 16,
+    padding: 18,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,

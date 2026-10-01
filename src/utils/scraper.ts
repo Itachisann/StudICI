@@ -48,11 +48,14 @@ export function cleanTdCellHtml(tdTag: string, innerHtml: string, classBgColors:
   });
 
   return cleaned
+    .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s+/g, '\n')
+    .replace(/\s+\n/g, '\n')
     .trim();
 }
 
