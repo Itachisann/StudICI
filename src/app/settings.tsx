@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Modal, Alert
+  ActivityIndicator, Modal, Alert, TextInput
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,8 +13,6 @@ import Constants from 'expo-constants';
 import { CourseDownloadView } from '../components/CourseDownloadView';
 import { DefaultTabPicker } from '../components/DefaultTabPicker';
 import { parseTabHierarchy } from '../components/YearChannelSelector';
-import { NativeDropdownMenu } from '../components/NativeDropdownMenu';
-import { MenuAction } from '@expo/ui/community/menu';
 
 const SAPIENZA_RED = '#822433';
 
@@ -27,6 +25,7 @@ export default function ProfiloScreen() {
   const [loading, setLoading] = useState(true);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
+  const [searchCourse, setSearchCourse] = useState('');
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(null);
   const [downloadProgressText, setDownloadProgressText] = useState('');
 
@@ -72,6 +71,9 @@ export default function ProfiloScreen() {
 
       await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
       await AsyncStorage.setItem('selectedDegreeName', degree.name);
+      if (degree.className) {
+        await AsyncStorage.setItem('selectedDegreeClassName', degree.className);
+      }
       
       const firstTab = tabs && tabs[0] ? tabs[0].url : null;
       if (firstTab) {
@@ -120,7 +122,7 @@ export default function ProfiloScreen() {
       setDownloadProgressText('Svuotamento cache e aggiornamento...');
 
       const allKeys = await AsyncStorage.getAllKeys();
-      const keysToKeep = ['selectedDegreeUrl', 'selectedDegreeName', 'defaultTabUrl'];
+      const keysToKeep = ['selectedDegreeUrl', 'selectedDegreeName', 'selectedDegreeClassName', 'defaultTabUrl'];
       const cacheKeys = allKeys.filter(k => !keysToKeep.includes(k));
       await AsyncStorage.multiRemove(cacheKeys);
 
@@ -175,74 +177,14 @@ export default function ProfiloScreen() {
     return `${defaultTabInfo.year}${defaultTabInfo.channel ? ` · ${defaultTabInfo.channel}` : ''}`;
   }, [defaultTabInfo, defaultTabObj]);
 
-  // Menu nativo iOS per Cambio Corso di Laurea
-  const courseMenuActions = useMemo<MenuAction[]>(() => {
-    if (!degrees || degrees.length === 0) return [];
-
-    const actions: MenuAction[] = degrees.map(deg => {
-      const isSelected = degreeUrl === deg.url;
-      return {
-        id: deg.url,
-        title: deg.name,
-        state: isSelected ? 'on' : 'off',
-        image: isSelected ? 'checkmark.seal.fill' : 'graduationcap',
-      };
-    });
-
-    actions.push({
-      id: 'open_modal',
-      title: 'Tutti i corsi...',
-      image: 'ellipsis.circle',
-    });
-
-    return actions;
-  }, [degrees, degreeUrl]);
-
-  // Menu nativo iOS per Cambio Anno e Canale Predefinito
-  const channelMenuActions = useMemo<MenuAction[]>(() => {
-    if (!availableTabs || availableTabs.length === 0) return [];
-
-    const actions: MenuAction[] = parsedAvailable.map(info => {
-      const isSelected = info.tab.url === defaultTabUrl;
-      const title = `${info.year}${info.channel ? ` · ${info.channel}` : ''}`;
-      return {
-        id: info.tab.url,
-        title,
-        state: isSelected ? 'on' : 'off',
-        image: isSelected ? 'checkmark.circle.fill' : 'calendar',
-      };
-    });
-
-    actions.push({
-      id: 'open_modal',
-      title: 'Personalizza...',
-      image: 'slider.horizontal.3',
-    });
-
-    return actions;
-  }, [availableTabs, parsedAvailable, defaultTabUrl]);
-
-  const handleCourseMenuSelect = (actionId: string) => {
-    if (actionId === 'open_modal') {
-      setCourseModalVisible(true);
-      return;
-    }
-    const selected = degrees.find(d => d.url === actionId);
-    if (selected) {
-      selectDegree(selected);
-    }
-  };
-
-  const handleChannelMenuSelect = async (actionId: string) => {
-    if (actionId === 'open_modal') {
-      setChannelModalVisible(true);
-      return;
-    }
-    const tab = availableTabs.find(t => t.url === actionId);
-    if (tab) {
-      await selectDefaultTab(tab);
-    }
-  };
+  const filteredDegrees = useMemo(() => {
+    if (!searchCourse.trim()) return degrees;
+    const q = searchCourse.toLowerCase().trim();
+    return degrees.filter(d =>
+      d.name.toLowerCase().includes(q) ||
+      (d.className && d.className.toLowerCase().includes(q))
+    );
+  }, [degrees, searchCourse]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -272,45 +214,39 @@ export default function ProfiloScreen() {
         <Text style={styles.sectionHeader}>CORSO & DIDATTICA</Text>
         <View style={styles.groupedCard}>
           
-          {/* Riga 1: Corso di Laurea con Menu Nativo iOS */}
-          <NativeDropdownMenu
-            title="Scegli Corso di Laurea"
-            actions={courseMenuActions}
-            onSelect={handleCourseMenuSelect}
-            onFallbackPress={() => setCourseModalVisible(true)}
+          {/* Riga 1: Corso di Laurea */}
+          <TouchableOpacity 
+            style={styles.tableRow} 
+            activeOpacity={0.7} 
+            onPress={() => setCourseModalVisible(true)}
           >
-            <View style={styles.tableRow}>
-              <View style={[styles.iconBox, { backgroundColor: SAPIENZA_RED }]}>
-                <Ionicons name="school" size={17} color="#ffffff" />
-              </View>
-              <Text style={styles.rowTitle}>Corso di Laurea</Text>
-              <Text style={styles.rowDetail} numberOfLines={1}>
-                {degreeName || 'Seleziona'}
-              </Text>
-              <Ionicons name="chevron-forward" size={15} color="#48484a" />
+            <View style={[styles.iconBox, { backgroundColor: SAPIENZA_RED }]}>
+              <Ionicons name="school" size={17} color="#ffffff" />
             </View>
-          </NativeDropdownMenu>
+            <Text style={styles.rowTitle}>Corso di Laurea</Text>
+            <Text style={styles.rowDetail} numberOfLines={1}>
+              {degreeName || 'Seleziona'}
+            </Text>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
 
           <View style={styles.separator} />
 
-          {/* Riga 2: Canale / Anno Predefinito con Menu Nativo iOS */}
-          <NativeDropdownMenu
-            title="Canale / Anno Predefinito"
-            actions={channelMenuActions}
-            onSelect={handleChannelMenuSelect}
-            onFallbackPress={() => setChannelModalVisible(true)}
+          {/* Riga 2: Canale / Anno Predefinito */}
+          <TouchableOpacity 
+            style={styles.tableRow} 
+            activeOpacity={0.7} 
+            onPress={() => setChannelModalVisible(true)}
           >
-            <View style={styles.tableRow}>
-              <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
-                <Ionicons name="funnel" size={16} color="#ffffff" />
-              </View>
-              <Text style={styles.rowTitle}>Canale Predefinito</Text>
-              <Text style={styles.rowDetail} numberOfLines={1}>
-                {defaultTabLabel}
-              </Text>
-              <Ionicons name="chevron-forward" size={15} color="#48484a" />
+            <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
+              <Ionicons name="funnel" size={16} color="#ffffff" />
             </View>
-          </NativeDropdownMenu>
+            <Text style={styles.rowTitle}>Canale Predefinito</Text>
+            <Text style={styles.rowDetail} numberOfLines={1}>
+              {defaultTabLabel}
+            </Text>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
 
         </View>
         <Text style={styles.sectionFooter}>
@@ -369,7 +305,7 @@ export default function ProfiloScreen() {
 
       </ScrollView>
 
-      {/* Modal Fallback Cambio Corso (usato in Expo Go o cliccando 'Tutti i corsi...') */}
+      {/* Modal Selezione Corso di Laurea in stile App / iOS */}
       <Modal
         visible={courseModalVisible}
         animationType="slide"
@@ -378,26 +314,68 @@ export default function ProfiloScreen() {
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Corsi di Laurea ICI</Text>
-            <TouchableOpacity onPress={() => setCourseModalVisible(false)}>
-              <Text style={styles.modalCloseText}>Fine</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>Corso di Laurea</Text>
+              <Text style={styles.modalSubtitle}>Facoltà di Ingegneria Civile e Industriale</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.modalCloseCircle} 
+              activeOpacity={0.7} 
+              onPress={() => setCourseModalVisible(false)}
+            >
+              <Ionicons name="close" size={20} color="#a1a1aa" />
             </TouchableOpacity>
           </View>
+
+          {/* Barra di Ricerca in stile iOS */}
+          <View style={styles.searchBarContainer}>
+            <Ionicons name="search" size={16} color="#8e8e93" style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Cerca corso o classe (es. Clinica, L-9)..."
+              placeholderTextColor="#71717a"
+              value={searchCourse}
+              onChangeText={setSearchCourse}
+              clearButtonMode="while-editing"
+            />
+            {searchCourse.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchCourse('')}>
+                <Ionicons name="close-circle" size={16} color="#8e8e93" />
+              </TouchableOpacity>
+            )}
+          </View>
+
           {loading ? (
             <ActivityIndicator size="large" color={SAPIENZA_RED} style={{ marginTop: 40 }} />
           ) : (
-            <ScrollView style={styles.modalScroll}>
-              {degrees.map((deg, i) => {
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {filteredDegrees.map((deg, i) => {
                 const isSelected = degreeUrl === deg.url;
+                const isMagistrale = deg.name.toLowerCase().includes('magistrale') || deg.className?.toUpperCase().startsWith('LM');
                 return (
                   <TouchableOpacity
                     key={i}
                     style={[styles.modalItem, isSelected && styles.modalItemSelected]}
+                    activeOpacity={0.7}
                     onPress={() => selectDegree(deg)}
                   >
+                    <View style={[styles.courseIconBox, isSelected && { backgroundColor: SAPIENZA_RED }]}>
+                      <Ionicons name="school" size={18} color="#ffffff" />
+                    </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.modalItemTitle, isSelected && { color: '#fff' }]}>{deg.name}</Text>
-                      {deg.className ? <Text style={styles.modalItemClass}>{deg.className}</Text> : null}
+                      <View style={styles.courseBadgesRow}>
+                        <View style={[styles.typeBadge, { backgroundColor: isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }]}>
+                          <Text style={[styles.typeBadgeText, { color: isMagistrale ? '#c084fc' : '#60a5fa' }]}>
+                            {isMagistrale ? 'Magistrale' : 'Triennale'}
+                          </Text>
+                        </View>
+                        {deg.className ? (
+                          <View style={styles.classBadge}>
+                            <Text style={styles.classBadgeText}>{deg.className}</Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
                     {isSelected && <Ionicons name="checkmark-circle" size={22} color={SAPIENZA_RED} />}
                   </TouchableOpacity>
@@ -595,49 +573,109 @@ const styles = StyleSheet.create({
   /* Modal styling */
   modalContainer: {
     flex: 1,
-    backgroundColor: '#1c1c1e',
+    backgroundColor: '#111111',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 18,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#2c2c2e',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#27272a',
   },
   modalTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
   },
-  modalCloseText: {
-    color: SAPIENZA_RED,
-    fontSize: 17,
-    fontWeight: '600',
+  modalSubtitle: {
+    color: '#8e8e93',
+    fontSize: 12.5,
+    marginTop: 2,
+  },
+  modalCloseCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#27272a',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    height: 42,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+  },
+  searchInput: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 14.5,
   },
   modalScroll: {
     padding: 16,
   },
   modalItem: {
-    backgroundColor: '#2c2c2e',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: '#1c1c1e',
+    padding: 14,
+    borderRadius: 16,
     marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#27272a',
   },
   modalItemSelected: {
     borderColor: SAPIENZA_RED,
+    backgroundColor: 'rgba(130, 36, 51, 0.15)',
     borderWidth: 1.5,
   },
+  courseIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#2c2c2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
   modalItemTitle: {
-    color: '#d4d4d4',
+    color: '#f4f4f5',
     fontSize: 15,
     fontWeight: '600',
+    marginBottom: 6,
   },
-  modalItemClass: {
-    color: '#8e8e93',
-    fontSize: 12,
-    marginTop: 4,
+  courseBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  typeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  classBadge: {
+    backgroundColor: 'rgba(255, 159, 10, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  classBadgeText: {
+    color: '#ff9f0a',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

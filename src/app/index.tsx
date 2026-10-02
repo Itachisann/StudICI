@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   TouchableOpacity, Modal, RefreshControl
@@ -24,6 +24,8 @@ export default function ScheduleScreen() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
+  const [degreeName, setDegreeName] = useState<string>('');
+  const [degreeClassName, setDegreeClassName] = useState<string>('');
   // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
@@ -36,8 +38,13 @@ export default function ScheduleScreen() {
   const loadData = useCallback(async (force = false) => {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+      const storedName = await AsyncStorage.getItem('selectedDegreeName');
+      const storedClassName = await AsyncStorage.getItem('selectedDegreeClassName');
       const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
       
+      if (storedName) setDegreeName(storedName);
+      if (storedClassName) setDegreeClassName(storedClassName);
+
       if (!storedUrl) {
         setDegreeUrl(null);
         setLoading(false);
@@ -130,10 +137,94 @@ export default function ScheduleScreen() {
 
   const todayClasses = schedule?.days[selectedDay] || [];
 
+  // Calcolo metadati corso: Tipologia Laurea (Triennale/Magistrale), Percorso/Classe (LR9, L-9, LM-21), Facoltà
+  const courseMetadata = useMemo(() => {
+    const rawName = degreeName || schedule?.info?.course || '';
+    const rawClass = degreeClassName || '';
+
+    // Tipologia Laurea
+    const isMagistrale = rawName.toLowerCase().includes('magistrale') || rawClass.toUpperCase().startsWith('LM');
+    const isCicloUnico = rawName.toLowerCase().includes('ciclo unico');
+    const degreeTypeLabel = isCicloUnico 
+      ? 'Laurea a Ciclo Unico' 
+      : (isMagistrale ? 'Laurea Magistrale' : 'Laurea Triennale');
+
+    // Percorso / Classe (es. "LR9", "L-9", "LM-21")
+    let displayClass = rawClass;
+    if (!displayClass && rawName) {
+      const match = rawName.match(/\b(L[MR]?[- ]?\d+|L[- ]\d+)\b/i);
+      if (match) displayClass = match[1].toUpperCase();
+    }
+    if (displayClass && !displayClass.toLowerCase().startsWith('classe') && !displayClass.toLowerCase().startsWith('percorso')) {
+      displayClass = displayClass.startsWith('L') ? `Classe ${displayClass}` : `Percorso ${displayClass}`;
+    }
+
+    const faculty = schedule?.info?.faculty || 'Facoltà di Ingegneria Civile e Industriale';
+
+    return {
+      degreeTypeLabel,
+      isMagistrale,
+      displayClass,
+      faculty,
+    };
+  }, [degreeName, degreeClassName, schedule?.info]);
+
   // L'onboarding ora è gestito globalmente in _layout.tsx
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* ── Header Principale App: Facoltà, Corso, Tipologia Laurea & Percorso ── */}
+      <View style={styles.appHeader}>
+        <View style={styles.appHeaderTopRow}>
+          <Ionicons name="school" size={13} color="#c24153" style={{ marginRight: 6 }} />
+          <Text style={styles.appHeaderFacultyText} numberOfLines={1}>
+            {courseMetadata.faculty.toUpperCase()}
+          </Text>
+        </View>
+
+        <Text style={styles.appHeaderCourseTitle} numberOfLines={2}>
+          {degreeName || schedule?.info?.course || 'Orario Lezioni'}
+        </Text>
+
+        <View style={styles.appHeaderBadgesRow}>
+          {/* Badge Tipologia (Triennale / Magistrale / Ciclo Unico) */}
+          <View style={[
+            styles.headerBadge,
+            { backgroundColor: courseMetadata.isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }
+          ]}>
+            <View style={[
+              styles.headerBadgeDot,
+              { backgroundColor: courseMetadata.isMagistrale ? '#c084fc' : '#60a5fa' }
+            ]} />
+            <Text style={[
+              styles.headerBadgeText,
+              { color: courseMetadata.isMagistrale ? '#c084fc' : '#60a5fa' }
+            ]}>
+              {courseMetadata.degreeTypeLabel}
+            </Text>
+          </View>
+
+          {/* Badge Percorso / Classe (es. Classe L-9 o Percorso LR9) */}
+          {courseMetadata.displayClass ? (
+            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 159, 10, 0.15)' }]}>
+              <Ionicons name="ribbon-outline" size={12} color="#ff9f0a" style={{ marginRight: 4 }} />
+              <Text style={[styles.headerBadgeText, { color: '#ff9f0a' }]}>
+                {courseMetadata.displayClass}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Badge Anno Accademico se presente */}
+          {schedule?.info?.academicYear ? (
+            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 255, 255, 0.08)' }]}>
+              <Text style={[styles.headerBadgeText, { color: '#a1a1aa' }]}>
+                {schedule.info.academicYear}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+
       {/* ── Selezione Gerarchica Anni e Canali (2 Righe di Pill) ── */}
       <YearChannelSelector
         tabs={tabs}
@@ -372,7 +463,56 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '600', marginRight: 8 },
 
-  /* Header */
+  /* App Main Header */
+  appHeader: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 10,
+  },
+  appHeaderTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  appHeaderFacultyText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#8e8e93',
+    letterSpacing: 0.5,
+  },
+  appHeaderCourseTitle: {
+    fontSize: 21,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: -0.3,
+    marginBottom: 8,
+    lineHeight: 26,
+  },
+  appHeaderBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 7,
+  },
+  headerBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  headerBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
+
   /* Top Tabs */
   topTabsContainer: {
     paddingTop: 16,

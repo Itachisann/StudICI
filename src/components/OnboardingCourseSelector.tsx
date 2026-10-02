@@ -64,6 +64,9 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
         // Corso a canale unico: salva direttamente
         await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
         await AsyncStorage.setItem('selectedDegreeName', degree.name);
+        if (degree.className) {
+          await AsyncStorage.setItem('selectedDegreeClassName', degree.className);
+        }
         if (tabs && tabs.length === 1) {
           await AsyncStorage.setItem('defaultTabUrl', tabs[0].url);
         } else {
@@ -88,6 +91,9 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
     try {
       await AsyncStorage.setItem('selectedDegreeUrl', pendingDegree.url);
       await AsyncStorage.setItem('selectedDegreeName', pendingDegree.name);
+      if (pendingDegree.className) {
+        await AsyncStorage.setItem('selectedDegreeClassName', pendingDegree.className);
+      }
       await AsyncStorage.setItem('defaultTabUrl', chosenTab.url);
       onComplete();
     } catch (e) {

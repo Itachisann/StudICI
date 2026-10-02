@@ -645,32 +645,6 @@ export async function fetchAllCourseData(
     )
   );
 
-  // 2. Raccogli tutte le celle dell'intero corso per risolverle con UN'UNICA chiamata batch AI condivisa.
-  // In questo modo i canali successivi non fanno ulteriori chiamate API: 0 rischio di 503 e velocità istantanea!
-  const allRawCells: string[] = [];
-  for (const html of htmlResults) {
-    if (!html) continue;
-    const classBg = extractClassBgColors(html);
-    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let trMatch;
-    while ((trMatch = trRegex.exec(html)) !== null) {
-      const tdRegex = /(<td[^>]*>)([\s\S]*?)<\/td>/gi;
-      let tdMatch;
-      while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
-        const text = cleanTdCellHtml(tdMatch[1], tdMatch[2], classBg);
-        if (text && text.length > 2) {
-          allRawCells.push(text);
-        }
-      }
-    }
-  }
-
-  if (allRawCells.length > 0) {
-    try {
-      await parseScheduleCells(allRawCells);
-    } catch {}
-  }
-
   const schedules: Record<string, ScheduleData> = {};
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i];
