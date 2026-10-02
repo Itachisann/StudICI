@@ -146,7 +146,7 @@ export function DefaultTabPicker({
           </View>
         )}
 
-        {/* ── 2. Selezione Canale / Suddivisione (Segmented Control Unificato) ── */}
+        {/* ── 2. Selezione Canale / Suddivisione (IPA: Segmented Control | Expo Go: Pill Centrate) ── */}
         {showChannelSection && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
@@ -171,18 +171,24 @@ export function DefaultTabPicker({
                 style={styles.nativeSegmentedControl}
               />
             ) : (
-              <View style={styles.unifiedSegmentedControl}>
+              <View style={styles.chipsContainer}>
                 {channelsForSelectedYear.map((item, idx) => {
                   const isSelected = (item.channel || '') === selectedChannel;
                   const displayName = item.channel || item.tab.name;
                   return (
                     <TouchableOpacity
                       key={idx}
-                      style={[styles.segmentItem, isSelected && styles.segmentItemActive]}
-                      activeOpacity={0.8}
+                      style={[styles.chip, isSelected && styles.chipActive]}
+                      activeOpacity={0.7}
                       onPress={() => handleSelectChannel(item.channel)}
                     >
-                      <Text style={[styles.segmentItemText, isSelected && styles.segmentItemTextActive]}>
+                      <Ionicons
+                        name={isSelected ? 'checkmark-circle' : 'people-outline'}
+                        size={15}
+                        color={isSelected ? '#ffffff' : '#8e8e93'}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
                         {displayName}
                       </Text>
                     </TouchableOpacity>
@@ -289,13 +295,16 @@ const styles = StyleSheet.create({
     color: '#71717a',
     letterSpacing: 0.8,
     marginBottom: 12,
+    textAlign: 'center',
   },
   chipsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
   },
-  // Stile Pill Anno (snello e staccato)
+  // Stile Pill Anno e Canale (snello, staccato e centrato)
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -320,42 +329,12 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
-  // Canale Unificato (Segmented Control)
+  // Canale Nativo (Segmented Control per IPA)
   nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
     height: 36,
-  },
-  unifiedSegmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#1c1c1e',
-    borderRadius: 11,
-    padding: 3,
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    alignItems: 'center',
-  },
-  segmentItem: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  segmentItemActive: {
-    backgroundColor: SAPIENZA_RED,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  segmentItemText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#a1a1aa',
-  },
-  segmentItemTextActive: {
-    color: '#ffffff',
-    fontWeight: '700',
   },
   summaryCard: {
     flexDirection: 'row',

@@ -157,7 +157,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 
   return (
     <View style={styles.container}>
-      {/* ── Riga 1: Selezione Anno (Pillole Staccate e Snelle) ── */}
+      {/* ── Riga 1: Selezione Anno (Pillole Staccate e Snelle, Centrate sull'Asse Verticale) ── */}
       {uniqueYears.length > 1 && (
         <ScrollView
           horizontal
@@ -171,7 +171,11 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
               <TouchableOpacity
                 key={i}
                 onPress={() => handleSelectYear(year)}
-                style={[styles.yearChip, isYearActive && styles.yearChipActive]}
+                style={[
+                  styles.yearChip,
+                  isYearActive && styles.yearChipActive,
+                  i === uniqueYears.length - 1 && { marginRight: 0 },
+                ]}
                 activeOpacity={0.7}
               >
                 <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
@@ -183,10 +187,10 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         </ScrollView>
       )}
 
-      {/* ── Riga 2: Selezione Canale Unificata (Segmented Control Nativo iOS / Expo) ── */}
+      {/* ── Riga 2: Selezione Canale (IPA: Segmented Control Nativo | Expo Go: Pill Centrate) ── */}
       {showChannelRow && (
-        <View style={styles.channelContainer}>
-          {isNativeIos ? (
+        isNativeIos ? (
+          <View style={styles.channelContainer}>
             <SegmentedControl
               values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
@@ -203,30 +207,36 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
               activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
               style={styles.nativeSegmentedControl}
             />
-          ) : (
-            <View style={styles.unifiedSegmentedControl}>
-              {channelsForActiveYear.map((item, i) => {
-                const isChannelActive = currentParsed?.tab.url === item.tab.url;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => onSelectTab(item.tab)}
-                    style={[
-                      styles.segmentItem,
-                      isChannelActive && styles.segmentItemActive,
-                    ]}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.segmentItemText, isChannelActive && styles.segmentItemTextActive]}>
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-        </View>
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.channelScroll}
+            contentContainerStyle={styles.rowContainer}
+          >
+            {channelsForActiveYear.map((item, i) => {
+              const isChannelActive = currentParsed?.tab.url === item.tab.url;
+              const displayName = item.channel || item.tab.name;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => onSelectTab(item.tab)}
+                  style={[
+                    styles.chip,
+                    isChannelActive && styles.chipActive,
+                    i === channelsForActiveYear.length - 1 && { marginRight: 0 },
+                  ]}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.chipText, isChannelActive && styles.chipTextActive]}>
+                    {displayName}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )
       )}
     </View>
   );
@@ -234,15 +244,26 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 
 const styles = StyleSheet.create({
   container: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 10,
   },
   yearScroll: {
     maxHeight: 40,
     marginBottom: 8,
+    width: '100%',
+  },
+  channelScroll: {
+    maxHeight: 40,
+    marginBottom: 4,
+    width: '100%',
   },
   rowContainer: {
+    flexGrow: 1,
     paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   // Pillole Staccate Anno (più compatte e proporzionate)
   yearChip: {
@@ -270,45 +291,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Canale Unificato (Segmented Control)
+  // Pillole Canale per Expo Go
+  chip: {
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 15,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chipActive: {
+    backgroundColor: 'rgba(130, 36, 51, 0.45)',
+    borderColor: SAPIENZA_RED,
+  },
+  chipText: {
+    color: '#a1a1aa',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  chipTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+
+  // Canale Nativo (Segmented Control per IPA)
   channelContainer: {
+    width: '100%',
     paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 4,
   },
   nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
     height: 34,
-  },
-  unifiedSegmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#1c1c1e',
-    borderRadius: 11,
-    padding: 3,
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    alignItems: 'center',
-  },
-  segmentItem: {
-    flex: 1,
-    paddingVertical: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  segmentItemActive: {
-    backgroundColor: SAPIENZA_RED,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  segmentItemText: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#a1a1aa',
-  },
-  segmentItemTextActive: {
-    color: '#ffffff',
-    fontWeight: '700',
   },
 });
