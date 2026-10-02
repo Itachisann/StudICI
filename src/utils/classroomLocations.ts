@@ -4,30 +4,33 @@ export interface BuildingInfo {
   code: string;
   name: string;
   address: string;
+  campus: string;
+  latitude: number;
+  longitude: number;
 }
 
 export const SAPIENZA_BUILDINGS: Record<string, BuildingInfo> = {
-  RM002: { code: 'RM002', name: 'Edificio RM002', address: 'Via Antonio Scarpa 16, 00161 Roma' },
-  RM004: { code: 'RM004', name: 'Edificio RM004', address: 'Via Antonio Scarpa 16, 00161 Roma' },
-  RM006: { code: 'RM006', name: 'Edificio RM006', address: 'Via Antonio Scarpa 14, 00161 Roma' },
-  RM014: { code: 'RM014', name: 'Edificio RM014', address: 'Via Antonio Scarpa 14, 00161 Roma' },
-  RM018: { code: 'RM018', name: 'Edificio RM018 (Castro Laurenziano)', address: 'Via del Castro Laurenziano 7a, 00161 Roma' },
-  RM025: { code: 'RM025', name: 'Edificio RM025 (Tiburtina)', address: 'Via Tiburtina 205, 00185 Roma' },
-  RM031: { code: 'RM031', name: 'Edificio RM031 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM032: { code: 'RM032', name: 'Edificio RM032 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM033: { code: 'RM033', name: 'Edificio RM033 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM034: { code: 'RM034', name: 'Edificio RM034 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM035: { code: 'RM035', name: 'Edificio RM035 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM036: { code: 'RM036', name: 'Edificio RM036 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM037: { code: 'RM037', name: 'Edificio RM037 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM038: { code: 'RM038', name: 'Edificio RM038 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM039: { code: 'RM039', name: 'Edificio RM039 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma' },
-  RM041: { code: 'RM041', name: 'Edificio RM041 (Mensa Sette Sale)', address: 'Via delle Sette Sale 29, 00184 Roma' },
-  RM049: { code: 'RM049', name: 'Palazzo Baleani', address: 'Corso Vittorio Emanuele II 244, 00186 Roma' },
-  RM076: { code: 'RM076', name: 'Edificio RM076', address: 'Via Salaria 851, 00138 Roma' },
-  RM089: { code: 'RM089', name: 'Facoltà di Architettura', address: 'Via Cesare Gianturco 2, 00196 Roma' },
-  RM102: { code: 'RM102', name: 'Facoltà I3S (Ariosto)', address: 'Via Ariosto 25, 00185 Roma' },
-  RM158: { code: 'RM158', name: 'Edificio RM158', address: 'Via Tiburtina 205, 00185 Roma' },
+  RM002: { code: 'RM002', name: 'Edificio RM002', address: 'Via Antonio Scarpa 16, 00161 Roma', campus: 'Plesso Scarpa', latitude: 41.90558, longitude: 12.51845 },
+  RM004: { code: 'RM004', name: 'Edificio RM004', address: 'Via Antonio Scarpa 16, 00161 Roma', campus: 'Plesso Scarpa', latitude: 41.90558, longitude: 12.51845 },
+  RM006: { code: 'RM006', name: 'Edificio RM006', address: 'Via Antonio Scarpa 14, 00161 Roma', campus: 'Plesso Scarpa', latitude: 41.90545, longitude: 12.51835 },
+  RM014: { code: 'RM014', name: 'Edificio RM014', address: 'Via Antonio Scarpa 14, 00161 Roma', campus: 'Plesso Scarpa', latitude: 41.90545, longitude: 12.51835 },
+  RM018: { code: 'RM018', name: 'Edificio RM018 (Castro Laurenziano)', address: 'Via del Castro Laurenziano 7a, 00161 Roma', campus: 'Campus Castro Laurenziano', latitude: 41.90382, longitude: 12.51685 },
+  RM025: { code: 'RM025', name: 'Edificio RM025 (Tiburtina)', address: 'Via Tiburtina 205, 00185 Roma', campus: 'Polo Tiburtina', latitude: 41.89885, longitude: 12.51735 },
+  RM031: { code: 'RM031', name: 'Edificio RM031 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM032: { code: 'RM032', name: 'Edificio RM032 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM033: { code: 'RM033', name: 'Edificio RM033 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM034: { code: 'RM034', name: 'Edificio RM034 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM035: { code: 'RM035', name: 'Edificio RM035 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM036: { code: 'RM036', name: 'Edificio RM036 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM037: { code: 'RM037', name: 'Edificio RM037 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM038: { code: 'RM038', name: 'Edificio RM038 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM039: { code: 'RM039', name: 'Edificio RM039 (S. Pietro in Vincoli)', address: 'Via Eudossiana 18, 00184 Roma', campus: 'Sede Storica (S. Pietro in Vincoli)', latitude: 41.89315, longitude: 12.49382 },
+  RM041: { code: 'RM041', name: 'Edificio RM041 (Mensa Sette Sale)', address: 'Via delle Sette Sale 29, 00184 Roma', campus: 'Sede Sette Sale', latitude: 41.89370, longitude: 12.49600 },
+  RM049: { code: 'RM049', name: 'Palazzo Baleani', address: 'Corso Vittorio Emanuele II 244, 00186 Roma', campus: 'Palazzo Baleani', latitude: 41.89740, longitude: 12.46740 },
+  RM076: { code: 'RM076', name: 'Edificio RM076', address: 'Via Salaria 851, 00138 Roma', campus: 'Polo Salaria', latitude: 41.97230, longitude: 12.50850 },
+  RM089: { code: 'RM089', name: 'Facoltà di Architettura', address: 'Via Cesare Gianturco 2, 00196 Roma', campus: 'Polo Gianturco', latitude: 41.91420, longitude: 12.47460 },
+  RM102: { code: 'RM102', name: 'Facoltà I3S (Ariosto)', address: 'Via Ariosto 25, 00185 Roma', campus: 'Polo Ariosto', latitude: 41.88850, longitude: 12.50420 },
+  RM158: { code: 'RM158', name: 'Edificio RM158', address: 'Via Tiburtina 205, 00185 Roma', campus: 'Polo Tiburtina', latitude: 41.89885, longitude: 12.51735 },
 };
 
 export interface ResolvedClassroom {
@@ -35,6 +38,9 @@ export interface ResolvedClassroom {
   buildingName: string;
   buildingCode: string;
   address: string;
+  campus?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 /**
@@ -161,40 +167,55 @@ export function resolveClassroom(roomText: string, contextText: string = ''): Re
       buildingName: b.name,
       buildingCode: b.code,
       address: b.address,
+      campus: b.campus,
+      latitude: b.latitude,
+      longitude: b.longitude,
     };
   }
 
   // 4. Se aula è 15 o 16 (default ICI: RM006 Scarpa 14)
   if (cleanRoom === '15' || cleanRoom === '16' || cleanRoom.includes('15') || cleanRoom.includes('16')) {
+    const b = SAPIENZA_BUILDINGS.RM006;
     return {
       displayName: displayName,
-      buildingName: 'Edificio RM006',
-      buildingCode: 'RM006',
-      address: 'Via Antonio Scarpa 14, 00161 Roma',
+      buildingName: b.name,
+      buildingCode: b.code,
+      address: b.address,
+      campus: b.campus,
+      latitude: b.latitude,
+      longitude: b.longitude,
     };
   }
 
   // 5. Se aula è 6 (default ICI: RM018 Castro Laurenziano 7a)
   if (cleanRoom === '6') {
+    const b = SAPIENZA_BUILDINGS.RM018;
     return {
       displayName: 'Aula 6',
-      buildingName: 'Edificio RM018 (Castro Laurenziano)',
-      buildingCode: 'RM018',
-      address: 'Via del Castro Laurenziano 7a, 00161 Roma',
+      buildingName: b.name,
+      buildingCode: b.code,
+      address: b.address,
+      campus: b.campus,
+      latitude: b.latitude,
+      longitude: b.longitude,
     };
   }
 
   // 6. Default per le aule ICI (Castro Laurenziano)
+  const defaultB = SAPIENZA_BUILDINGS.RM018;
   return {
     displayName: displayName || cleanRoom || 'Aula',
-    buildingName: buildingCode ? `Edificio ${buildingCode}` : 'Edificio RM018 (Castro Laurenziano)',
+    buildingName: buildingCode ? `Edificio ${buildingCode}` : defaultB.name,
     buildingCode: buildingCode || 'RM018',
-    address: 'Via del Castro Laurenziano 7a, 00161 Roma',
+    address: defaultB.address,
+    campus: defaultB.campus,
+    latitude: defaultB.latitude,
+    longitude: defaultB.longitude,
   };
 }
 
 /**
- * Apre la posizione in Apple Mappe o Google Maps
+ * Apre la posizione in Apple Mappe o Google Maps con navigazione turn-by-turn
  */
 export function openInMaps(classroom: ResolvedClassroom, provider: 'apple' | 'google') {
   // Cerca solo ed esclusivamente via, numero civico e città (senza aula o codici edificio) per precisione al 100%
@@ -204,12 +225,24 @@ export function openInMaps(classroom: ResolvedClassroom, provider: 'apple' | 'go
   const query = encodeURIComponent(cleanAddress);
 
   if (provider === 'apple') {
-    Linking.openURL(`http://maps.apple.com/?q=${query}`).catch(err => {
-      console.warn('Errore apertura Apple Maps', err);
-    });
+    if (classroom.latitude && classroom.longitude) {
+      Linking.openURL(`http://maps.apple.com/?daddr=${classroom.latitude},${classroom.longitude}&q=${query}`).catch(err => {
+        console.warn('Errore apertura Apple Maps', err);
+      });
+    } else {
+      Linking.openURL(`http://maps.apple.com/?q=${query}`).catch(err => {
+        console.warn('Errore apertura Apple Maps', err);
+      });
+    }
   } else {
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`).catch(err => {
-      console.warn('Errore apertura Google Maps', err);
-    });
+    if (classroom.latitude && classroom.longitude) {
+      Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${classroom.latitude},${classroom.longitude}&query=${query}`).catch(err => {
+        console.warn('Errore apertura Google Maps', err);
+      });
+    } else {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`).catch(err => {
+        console.warn('Errore apertura Google Maps', err);
+      });
+    }
   }
 }
