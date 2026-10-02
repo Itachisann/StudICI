@@ -215,11 +215,12 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         <View style={styles.channelContainer}>
           {isNativeIos ? (
             <SegmentedControl
+              key={`seg-${activeYear}-${channelsForActiveYear.length}`}
               values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
               onChange={(event) => {
                 const idx = event.nativeEvent.selectedSegmentIndex;
-                if (channelsForActiveYear[idx]) {
+                if (idx !== selectedChannelIdx && channelsForActiveYear[idx]) {
                   onSelectTab(channelsForActiveYear[idx].tab);
                 }
               }}

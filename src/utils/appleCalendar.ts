@@ -2,6 +2,7 @@ import * as Calendar from 'expo-calendar/legacy';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScheduleData } from './scraper';
+import { resolveClassroom, formatSapienzaAddress } from './classroomLocations';
 
 const LAST_CALENDAR_SYNC_KEY = 'studici_last_calendar_sync';
 
@@ -181,29 +182,35 @@ export async function syncScheduleToAppleCalendar(
         const endDate = new Date(startDate);
         endDate.setHours(endH, endM || 0, 0, 0);
 
-        const locationStr = cls.room
-          ? cls.building
-            ? `${cls.room} (${cls.building})`
-            : cls.room
-          : '';
+        const resolved = resolveClassroom(cls.room || '', cls.building || '');
+        // Posizione: via/indirizzo per Apple Maps e indicazioni
+        const locationAddress = resolved.address
+          ? resolved.address
+          : cls.address
+            ? formatSapienzaAddress(cls.address, cls.building)
+            : 'Via Eudossiana 18, 00184 Roma';
 
+        // Note: dettagli puliti senza dicitura "Generato da ICIStud"
         const notesParts = [
+          cls.room ? `Aula: ${cls.room}` : '',
+          cls.teacher ? `Docente: Prof. ${cls.teacher}` : '',
           `Corso: ${courseName}`,
           channelName ? `Canale: ${channelName}` : '',
-          cls.teacher ? `Docente: Prof. ${cls.teacher}` : '',
-          'Sincronizzato automaticamente da StudICI (Sapienza)',
+          resolved.buildingName ? `Edificio: ${resolved.buildingName}` : '',
+          resolved.campus ? `Campus: ${resolved.campus}` : '',
         ].filter(Boolean);
 
+        // Titolo con materia, aula e docente
         const subjectUpper = cls.subject?.trim().toUpperCase() || 'LEZIONE';
-        const eventTitle = cls.teacher
-          ? `${subjectUpper} - Prof. ${cls.teacher}`
-          : subjectUpper;
+        const roomStr = cls.room ? ` (${cls.room})` : '';
+        const profStr = cls.teacher ? ` - Prof. ${cls.teacher}` : '';
+        const eventTitle = `${subjectUpper}${roomStr}${profStr}`;
 
         await Calendar.createEventAsync(calendarId, {
           title: eventTitle,
           startDate,
           endDate,
-          location: locationStr,
+          location: locationAddress,
           notes: notesParts.join('\n'),
           timeZone: 'Europe/Rome',
           recurrenceRule: {

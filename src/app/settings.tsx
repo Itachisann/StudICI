@@ -568,11 +568,6 @@ export default function ProfiloScreen() {
       await syncWithICloudStorage();
       const updatedTime = await getLastCloudSync();
       setLastCloudSyncTime(updatedTime);
-      Alert.alert(
-        "iCloud Sync Automatico Attivo",
-        "Le tue materie e presenze verranno sincronizzate automaticamente tra tutti i dispositivi collegati allo stesso ID Apple.",
-        [{ text: "OK" }]
-      );
     }
   };
 
@@ -934,30 +929,7 @@ export default function ProfiloScreen() {
 
           <View style={styles.separator} />
 
-          {/* Riga 2: iCloud Sync Automatico con Switch Nativo UISwitch */}
-          <View style={styles.tableRow}>
-            <View style={[styles.iconBox, { backgroundColor: "#34c759" }]}>
-              <Ionicons name="cloud" size={17} color="#ffffff" />
-            </View>
-            <View style={{ flex: 1, paddingRight: 8 }}>
-              <Text style={styles.rowTitle}>iCloud Sync Automatico</Text>
-              <Text style={styles.rowSubTitle}>
-                {iCloudAutoSync
-                  ? "Sincronizza tra i tuoi dispositivi Apple"
-                  : "Disattivo · Tocca per sincronizzare"}
-              </Text>
-            </View>
-            <Switch
-              value={iCloudAutoSync}
-              onValueChange={handleToggleICloudAutoSync}
-              trackColor={{ false: "#39393d", true: "#34c759" }}
-              ios_backgroundColor="#39393d"
-            />
-          </View>
-
-          <View style={styles.separator} />
-
-          {/* Riga 3: Calendario Apple */}
+          {/* Riga 2: Calendario Apple */}
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}

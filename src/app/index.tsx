@@ -4,7 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -100,7 +100,19 @@ export default function ScheduleScreen() {
   const [schedule, setSchedule] = useState<ScheduleData | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
+  const selectedTabRef = useRef<Tab | null>(null);
+  useEffect(() => {
+    selectedTabRef.current = selectedTab;
+  }, [selectedTab]);
+  const tabsRef = useRef<Tab[]>([]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
+  const degreeUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    degreeUrlRef.current = degreeUrl;
+  }, [degreeUrl]);
   // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
@@ -142,7 +154,8 @@ export default function ScheduleScreen() {
           return;
         }
 
-        if (degreeUrl && storedUrl !== degreeUrl) {
+        const prevDegree = degreeUrlRef.current;
+        if (prevDegree && storedUrl !== prevDegree) {
           setTabs([]);
           setSelectedTab(null);
           setSchedulesMap({});
@@ -151,9 +164,9 @@ export default function ScheduleScreen() {
 
         setDegreeUrl(storedUrl);
         if (
-          tabs.length === 0 ||
+          tabsRef.current.length === 0 ||
           force ||
-          (degreeUrl && storedUrl !== degreeUrl)
+          (prevDegree && storedUrl !== prevDegree)
         ) {
           setLoading(true);
         }
@@ -166,7 +179,8 @@ export default function ScheduleScreen() {
           setSchedulesMap(fetchedSchedules);
 
           const currentActive =
-            selectedTab && fetchedTabs.find((t) => t.url === selectedTab.url);
+            selectedTabRef.current &&
+            fetchedTabs.find((t) => t.url === selectedTabRef.current?.url);
           const target =
             currentActive ||
             fetchedTabs.find((t) => t.url === storedDefaultTab) ||
@@ -183,7 +197,7 @@ export default function ScheduleScreen() {
         setLoading(false);
       }
     },
-    [degreeUrl, selectedTab, tabs.length],
+    [],
   );
 
   const loadAttendance = useCallback(async () => {
