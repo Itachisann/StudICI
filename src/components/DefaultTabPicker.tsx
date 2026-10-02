@@ -1,18 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform
+  View, Text, StyleSheet, TouchableOpacity, ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import SegmentedControl from '@react-native-segmented-control/segmented-control';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { parseTabHierarchy } from './YearChannelSelector';
-import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
-
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
 export interface DefaultTabPickerProps {
   tabs: Tab[];
@@ -147,44 +141,34 @@ export function DefaultTabPicker({
           </View>
         )}
 
-        {/* ── 2. Selezione Canale / Suddivisione (IPA: Segmented Control | Expo Go: Pill Centrate a Larghezza Uguale) ── */}
+        {/* ── 2. Selezione Canale / Suddivisione ── */}
         {showChannelSection && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
-            {isNativeIos ? (
-              <SegmentedControl
-                key={`picker-seg-${selectedYear}-${channelsForSelectedYear.length}`}
-                values={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
-                selectedIndex={Math.max(
-                  0,
-                  channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
-                )}
-                onChange={(event) => {
-                  const idx = event.nativeEvent.selectedSegmentIndex;
-                  if (channelsForSelectedYear[idx]) {
-                    handleSelectChannel(channelsForSelectedYear[idx].channel);
-                  }
-                }}
-                appearance="dark"
-                tintColor={SAPIENZA_RED}
-                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
-                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
-                style={styles.nativeSegmentedControl}
-              />
-            ) : (
-              <ChannelSegmentedSlider
-                items={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
-                selectedIndex={Math.max(
-                  0,
-                  channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
-                )}
-                onSelectIndex={(idx) => {
-                  if (channelsForSelectedYear[idx]) {
-                    handleSelectChannel(channelsForSelectedYear[idx].channel);
-                  }
-                }}
-              />
-            )}
+            <View style={styles.channelRowEqual}>
+              {channelsForSelectedYear.map((item, idx) => {
+                const isSelected = (item.channel || '') === selectedChannel;
+                const displayName = item.channel || item.tab.name;
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[styles.chipEqual, isSelected && styles.chipActive]}
+                    activeOpacity={0.7}
+                    onPress={() => handleSelectChannel(item.channel)}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'checkmark-circle' : 'people-outline'}
+                      size={15}
+                      color={isSelected ? '#ffffff' : '#8e8e93'}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text style={[styles.chipText, isSelected && styles.chipTextActive]} numberOfLines={1}>
+                      {displayName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
         )}
 
@@ -318,14 +302,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
-  nativeSegmentedControl: {
-    width: '100%',
-    maxWidth: 420,
-    alignSelf: 'center',
-    height: 36,
-  },
-
-  // Canale Expo Go a Larghezza Uguale
+  // Canale a Larghezza Uguale
   channelRowEqual: {
     flexDirection: 'row',
     justifyContent: 'center',
