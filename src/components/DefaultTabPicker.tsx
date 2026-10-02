@@ -231,12 +231,6 @@ export function DefaultTabPicker({
             style={{ marginLeft: 8 }}
           />
         </TouchableOpacity>
-
-        {onCancel && (
-          <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-            <Text style={styles.cancelButtonText}>Annulla</Text>
-          </TouchableOpacity>
-        )}
       </View>
     </View>
   );

@@ -185,50 +185,53 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
             </View>
           )}
 
-          {/* ── Pulsante Primario Indicazioni (Turn-by-turn Navigation) ── */}
-          <TouchableOpacity
-            style={styles.primaryDirectionButton}
-            activeOpacity={0.8}
-            onPress={() => {
-              openInMaps(classroom, 'apple');
-              onClose();
-            }}
-          >
-            <View style={styles.directionIconBox}>
-              <Ionicons name="navigate" size={18} color="#ffffff" />
+          {/* ── Ottieni Indicazioni (Apple Mappe & Google Maps) ── */}
+          <View style={styles.directionSection}>
+            <Text style={styles.sectionLabel}>OTTIENI INDICAZIONI</Text>
+            <View style={styles.directionRow}>
+              {/* Apple Mappe */}
+              <TouchableOpacity
+                style={[styles.directionButton, styles.appleButton]}
+                activeOpacity={0.8}
+                onPress={() => {
+                  openInMaps(classroom, 'apple');
+                  onClose();
+                }}
+              >
+                <View style={styles.directionIconCircle}>
+                  <Ionicons name="navigate" size={16} color="#ffffff" />
+                </View>
+                <View style={styles.directionTextContainer}>
+                  <Text style={styles.directionMainText}>Apple Mappe</Text>
+                  <Text style={styles.directionSubText}>Avvia itinerario</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Google Maps */}
+              <TouchableOpacity
+                style={[styles.directionButton, styles.googleButton]}
+                activeOpacity={0.8}
+                onPress={() => {
+                  openInMaps(classroom, 'google');
+                  onClose();
+                }}
+              >
+                <View style={[styles.directionIconCircle, styles.googleIconCircle]}>
+                  <Ionicons name="map" size={16} color="#38bdf8" />
+                </View>
+                <View style={styles.directionTextContainer}>
+                  <Text style={styles.directionMainText}>Google Maps</Text>
+                  <Text style={styles.directionSubText}>Avvia itinerario</Text>
+                </View>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.primaryDirectionText}>OTTIENI INDICAZIONI</Text>
-            <Ionicons name="arrow-forward" size={18} color="#ffffff" style={{ marginLeft: 'auto' }} />
-          </TouchableOpacity>
+          </View>
 
-          {/* ── Barra Azioni Rapide iOS: Google Maps, Copia, Condividi ── */}
-          <View style={styles.actionRow}>
-            {/* Google Maps Button */}
-            <TouchableOpacity
-              style={styles.actionChip}
-              activeOpacity={0.7}
-              onPress={() => {
-                openInMaps(classroom, 'google');
-                onClose();
-              }}
-            >
-              <Ionicons name="map" size={16} color="#38bdf8" style={{ marginRight: 6 }} />
-              <Text style={styles.actionChipText}>Google Maps</Text>
-            </TouchableOpacity>
-
-            {/* Condividi Aula */}
-            <TouchableOpacity
-              style={styles.actionChip}
-              activeOpacity={0.7}
-              onPress={handleShare}
-            >
-              <Ionicons name="share-outline" size={16} color="#a855f7" style={{ marginRight: 6 }} />
-              <Text style={styles.actionChipText}>Condividi</Text>
-            </TouchableOpacity>
-
+          {/* ── Barra Azioni Secondarie: Condividi & Copia Indirizzo ── */}
+          <View style={styles.secondaryActionsRow}>
             {/* Copia Indirizzo */}
             <TouchableOpacity
-              style={[styles.actionChip, copied && styles.actionChipActive]}
+              style={[styles.secondaryButton, copied && styles.secondaryButtonActive]}
               activeOpacity={0.7}
               onPress={handleCopy}
             >
@@ -236,11 +239,21 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
                 name={copied ? 'checkmark-circle' : 'copy-outline'}
                 size={16}
                 color={copied ? '#10b981' : '#f59e0b'}
-                style={{ marginRight: 6 }}
+                style={{ marginRight: 8 }}
               />
-              <Text style={[styles.actionChipText, copied && { color: '#10b981' }]}>
-                {copied ? 'Copiato!' : 'Copia'}
+              <Text style={[styles.secondaryButtonText, copied && { color: '#10b981' }]}>
+                {copied ? 'Indirizzo Copiato!' : 'Copia Indirizzo'}
               </Text>
+            </TouchableOpacity>
+
+            {/* Condividi Aula */}
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              activeOpacity={0.7}
+              onPress={handleShare}
+            >
+              <Ionicons name="share-outline" size={16} color="#a855f7" style={{ marginRight: 8 }} />
+              <Text style={styles.secondaryButtonText}>Condividi Aula</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -452,59 +465,97 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  /* Indicazioni Button Primario */
-  primaryDirectionButton: {
+  sectionLabel: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#71717a',
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  /* Indicazioni Section (Dual Buttons: Apple & Google) */
+  directionSection: {
+    marginBottom: 10,
+  },
+  directionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  directionButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: SAPIENZA_RED,
     height: 52,
     borderRadius: 16,
-    paddingHorizontal: 18,
-    marginBottom: 12,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+  },
+  appleButton: {
+    backgroundColor: SAPIENZA_RED,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
     shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 6,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  directionIconBox: {
+  googleButton: {
+    backgroundColor: '#27272a',
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  directionIconCircle: {
     width: 32,
     height: 32,
     borderRadius: 10,
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 9,
   },
-  primaryDirectionText: {
+  googleIconCircle: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+  },
+  directionTextContainer: {
+    flex: 1,
+  },
+  directionMainText: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.4,
+    fontSize: 13,
+    fontWeight: '700',
   },
-  /* Action Row */
-  actionRow: {
+  directionSubText: {
+    color: 'rgba(255, 255, 255, 0.65)',
+    fontSize: 10,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  /* Azioni Secondarie Row */
+  secondaryActionsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
   },
-  actionChip: {
+  secondaryButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#27272a',
-    height: 40,
+    height: 42,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  actionChipActive: {
+  secondaryButtonActive: {
     borderColor: '#10b981',
     backgroundColor: 'rgba(16, 185, 129, 0.15)',
   },
-  actionChipText: {
+  secondaryButtonText: {
     color: '#e4e4e7',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
   },
 });

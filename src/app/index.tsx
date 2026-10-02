@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   TouchableOpacity, Modal, RefreshControl
@@ -13,6 +13,14 @@ import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
+import {
+  getAttendanceRecords,
+  toggleAttendance,
+  toggleDayAttendance,
+  getDateForDayIndex,
+  generateAttendanceId,
+  AttendanceRecord,
+} from '../utils/attendance';
 
 const SAPIENZA_RED = '#822433';
 const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
@@ -33,6 +41,9 @@ export default function ScheduleScreen() {
   const [selectedRoomModal, setSelectedRoomModal] = useState<ResolvedClassroom | null>(null);
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insets = useSafeAreaInsets();
 
   const loadData = useCallback(async (force = false) => {
@@ -79,11 +90,71 @@ export default function ScheduleScreen() {
     }
   }, [degreeUrl, selectedTab, tabs.length]);
 
+  const loadAttendance = useCallback(async () => {
+    try {
+      const records = await getAttendanceRecords();
+      setAttendanceRecords(records);
+    } catch {}
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadData(false);
-    }, [loadData])
+      loadAttendance();
+    }, [loadData, loadAttendance])
   );
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMessage(msg);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 2400);
+  }, []);
+
+  const handleClassLongPress = useCallback(async (cls: ClassEvent) => {
+    try {
+      const res = await toggleAttendance(selectedDay, DAYS_FULL[selectedDay], cls);
+      setAttendanceRecords(res.records);
+      if (res.added) {
+        showToast(`✓ Presenza registrata: ${cls.subject}`);
+      } else {
+        showToast(`Presenza rimossa: ${cls.subject}`);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, [selectedDay, showToast]);
+
+  const handleDayLongPress = useCallback(async (dayIdx: number) => {
+    const dayClasses = schedule?.days[dayIdx] || [];
+    if (dayClasses.length === 0) {
+      showToast(`Nessuna lezione programmata per ${DAYS_FULL[dayIdx]}`);
+      return;
+    }
+    try {
+      const res = await toggleDayAttendance(dayIdx, DAYS_FULL[dayIdx], dayClasses);
+      setAttendanceRecords(res.records);
+      if (res.added) {
+        showToast(`✓ Segnate ${res.count} presenze per ${DAYS_FULL[dayIdx]}!`);
+      } else {
+        showToast(`Presenze rimosse per ${DAYS_FULL[dayIdx]}`);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, [schedule, showToast]);
+
+  const checkIsAttended = useCallback((cls: ClassEvent) => {
+    const { dateStr } = getDateForDayIndex(selectedDay);
+    const id = generateAttendanceId(dateStr, cls.subject, cls.startTime);
+    return attendanceRecords.some(r => r.id === id);
+  }, [selectedDay, attendanceRecords]);
+
+  const dayHasAttendance = useCallback((dayIdx: number) => {
+    const { dateStr } = getDateForDayIndex(dayIdx);
+    return attendanceRecords.some(r => r.date === dateStr);
+  }, [attendanceRecords]);
 
   const onRefresh = useCallback(async () => {
     if (!degreeUrl) return;
@@ -236,17 +307,24 @@ export default function ScheduleScreen() {
             {DAYS.map((day, i) => {
               const isActive = selectedDay === i;
               const isToday = i === todayIdx;
+              const hasAttendance = dayHasAttendance(i);
               return (
                 <TouchableOpacity
                   key={i}
                   onPress={() => setSelectedDay(i)}
+                  onLongPress={() => handleDayLongPress(i)}
+                  delayLongPress={400}
                   style={styles.dayItem}
                   activeOpacity={0.7}
                 >
                   <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
                     <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
                   </View>
-                  {isToday && <View style={[styles.dayDot, isActive && styles.dayDotActive]} />}
+                  {isToday ? (
+                    <View style={[styles.dayDot, isActive && styles.dayDotActive]} />
+                  ) : hasAttendance ? (
+                    <View style={styles.attendanceDayDot} />
+                  ) : null}
                 </TouchableOpacity>
               );
             })}
@@ -261,10 +339,13 @@ export default function ScheduleScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── Day label ── */}
-        <Text style={styles.dayLabel}>
-          {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
-        </Text>
+        {/* ── Day label con indicatore ── */}
+        <View style={styles.dayLabelRow}>
+          <Text style={styles.dayLabel}>
+            {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
+          </Text>
+          <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
+        </View>
 
         {/* ── Classes List ── */}
         {loading ? (
@@ -284,24 +365,35 @@ export default function ScheduleScreen() {
             {todayClasses.map((cls: ClassEvent, i: number) => {
               const accentColor = ACCENT_COLORS[i % ACCENT_COLORS.length];
               const isLive = isCurrentClass(cls);
+              const isAttended = checkIsAttended(cls);
 
               return (
-                <View key={i} style={[styles.classCard, isLive && styles.classCardLive]}>
+                <TouchableOpacity
+                  key={i}
+                  activeOpacity={0.85}
+                  onLongPress={() => handleClassLongPress(cls)}
+                  delayLongPress={400}
+                  style={[
+                    styles.classCard,
+                    isLive && styles.classCardLive,
+                    isAttended && styles.classCardAttended,
+                  ]}
+                >
                   {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
                   <View style={styles.timeColumn}>
                     <Text style={styles.timeStartText}>{cls.startTime}</Text>
                     <View style={styles.timeLineConnector}>
-                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
-                      <View style={styles.durationBadge}>
-                        <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
+                      <View style={[styles.timeLineBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
+                      <View style={[styles.durationBadge, isAttended && styles.durationBadgeAttended]}>
+                        <Text style={[styles.durationBadgeText, isAttended && styles.durationBadgeTextAttended]}>{cls.duration}h</Text>
                       </View>
-                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                      <View style={[styles.timeLineBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
                     </View>
                     <Text style={styles.timeEndText}>{cls.endTime}</Text>
                   </View>
 
                   {/* Barra di Accento Verticale Colorata stile Calendario */}
-                  <View style={[styles.calendarAccentBar, { backgroundColor: accentColor }]} />
+                  <View style={[styles.calendarAccentBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
 
                   {/* Dettagli Lezione */}
                   <View style={styles.cardBody}>
@@ -309,12 +401,20 @@ export default function ScheduleScreen() {
                       <Text style={styles.subjectText} numberOfLines={2}>
                         {cls.subject?.toUpperCase()}
                       </Text>
-                      {isLive && (
-                        <View style={styles.liveBadge}>
-                          <View style={styles.liveDot} />
-                          <Text style={styles.liveText}>ORA</Text>
-                        </View>
-                      )}
+                      <View style={styles.badgesCluster}>
+                        {isAttended && (
+                          <View style={styles.attendedBadge}>
+                            <Ionicons name="checkmark-circle" size={11} color="#10b981" style={{ marginRight: 3 }} />
+                            <Text style={styles.attendedBadgeText}>PRESENTE</Text>
+                          </View>
+                        )}
+                        {isLive && (
+                          <View style={styles.liveBadge}>
+                            <View style={styles.liveDot} />
+                            <Text style={styles.liveText}>ORA</Text>
+                          </View>
+                        )}
+                      </View>
                     </View>
 
                     {/* Docente */}
@@ -338,7 +438,7 @@ export default function ScheduleScreen() {
                       </TouchableOpacity>
                     ) : null}
                   </View>
-                </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -383,15 +483,6 @@ export default function ScheduleScreen() {
                 </View>
               ))}
             </ScrollView>
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={styles.modalCloseBtn}
-                activeOpacity={0.8}
-                onPress={() => setAlertsModalVisible(false)}
-              >
-                <Text style={styles.modalCloseText}>Ho capito</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -403,6 +494,24 @@ export default function ScheduleScreen() {
         subjects={selectedRoomSubjects}
         onClose={() => setSelectedRoomModal(null)}
       />
+
+      {/* Toast Feedback Notifica Fluttuante iOS */}
+      {toastMessage && (
+        <View style={[styles.toastFloatingContainer, { top: insets.top > 0 ? insets.top + 8 : 16 }]}>
+          <BlurView tint="dark" intensity={85} style={StyleSheet.absoluteFill} />
+          <View style={styles.toastContent}>
+            <Ionicons
+              name={toastMessage.startsWith('✓') ? 'checkmark-circle' : 'information-circle'}
+              size={18}
+              color={toastMessage.startsWith('✓') ? '#10b981' : '#38bdf8'}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.toastText} numberOfLines={1}>
+              {toastMessage}
+            </Text>
+          </View>
+        </View>
+      )}
 
     </SafeAreaView>
   );
@@ -634,19 +743,37 @@ const styles = StyleSheet.create({
   dayDotActive: {
     backgroundColor: '#ffffff',
   },
+  attendanceDayDot: {
+    position: 'absolute',
+    bottom: -7,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#10b981',
+  },
 
   /* Loading State */
   loadingContainer: { alignItems: 'center', marginTop: 60 },
   loadingText: { color: '#8e8e93', marginTop: 16, fontSize: 14 },
 
   /* Day label */
+  dayLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
   dayLabel: {
     color: '#8e8e93',
     fontSize: 12,
     fontWeight: 'bold',
     letterSpacing: 1,
-    paddingHorizontal: 16,
-    marginBottom: 12,
+  },
+  dayHintText: {
+    color: '#71717a',
+    fontSize: 10.5,
+    fontWeight: '500',
   },
 
   /* Empty state */
@@ -675,6 +802,10 @@ const styles = StyleSheet.create({
   classCardLive: {
     borderColor: 'rgba(52, 199, 89, 0.45)',
     backgroundColor: '#1a221c',
+  },
+  classCardAttended: {
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+    backgroundColor: '#152119',
   },
   /* Colonna Orario a mo' di Calendario */
   timeColumn: {
@@ -705,10 +836,16 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginVertical: 2,
   },
+  durationBadgeAttended: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+  },
   durationBadgeText: {
     color: '#a1a1aa',
     fontSize: 10,
     fontWeight: '700',
+  },
+  durationBadgeTextAttended: {
+    color: '#10b981',
   },
   timeEndText: {
     color: '#8e8e93',
@@ -738,6 +875,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 20,
     flex: 1,
+  },
+  badgesCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  attendedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+  },
+  attendedBadgeText: {
+    color: '#10b981',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   liveBadge: {
     flexDirection: 'row',
@@ -883,23 +1041,33 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '400',
   },
-  modalFooter: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#2c2c2e',
-    backgroundColor: '#1c1c1e',
+  /* Toast Feedback Fluttuante iOS */
+  toastFloatingContainer: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 8,
+    zIndex: 9999,
   },
-  modalCloseBtn: {
-    backgroundColor: '#2c2c2e',
-    height: 46,
-    borderRadius: 14,
-    justifyContent: 'center',
+  toastContent: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(28, 28, 30, 0.78)',
   },
-  modalCloseText: {
+  toastText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: 13.5,
     fontWeight: '600',
+    flex: 1,
   },
 });

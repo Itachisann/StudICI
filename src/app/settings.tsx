@@ -13,6 +13,14 @@ import Constants from 'expo-constants';
 import { CourseDownloadView } from '../components/CourseDownloadView';
 import { DefaultTabPicker } from '../components/DefaultTabPicker';
 import { parseTabHierarchy } from '../components/YearChannelSelector';
+import {
+  getAttendanceRecords,
+  getAttendanceStats,
+  deleteAttendanceRecord,
+  clearAllAttendance,
+  AttendanceRecord,
+  AttendanceStats,
+} from '../utils/attendance';
 
 const SAPIENZA_RED = '#822433';
 
@@ -26,9 +34,12 @@ export default function ProfiloScreen() {
   const [loading, setLoading] = useState(true);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
+  const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
   const [searchCourse, setSearchCourse] = useState('');
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(null);
   const [downloadProgressText, setDownloadProgressText] = useState('');
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [attendanceStats, setAttendanceStats] = useState<AttendanceStats | null>(null);
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -50,6 +61,10 @@ export default function ProfiloScreen() {
 
       const degList = await fetchDegrees();
       setDegrees(degList);
+
+      const attList = await getAttendanceRecords();
+      setAttendanceRecords(attList);
+      setAttendanceStats(getAttendanceStats(attList));
     } catch (e) {
       console.error(e);
     }
@@ -160,6 +175,45 @@ export default function ProfiloScreen() {
             router.replace('/');
           }
         }
+      ]
+    );
+  };
+
+  const handleDeleteAttendance = (record: AttendanceRecord) => {
+    Alert.alert(
+      'Rimuovi Presenza',
+      `Vuoi rimuovere la presenza per ${record.subject} del ${record.displayDate || record.date}?`,
+      [
+        { text: 'Annulla', style: 'cancel' },
+        {
+          text: 'Rimuovi',
+          style: 'destructive',
+          onPress: async () => {
+            const updated = await deleteAttendanceRecord(record.id);
+            setAttendanceRecords(updated);
+            setAttendanceStats(getAttendanceStats(updated));
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearAllAttendance = () => {
+    Alert.alert(
+      'Azzera Registro Presenze',
+      'Sei sicuro di voler cancellare tutte le presenze registrate finora? Questa operazione non può essere annullata.',
+      [
+        { text: 'Annulla', style: 'cancel' },
+        {
+          text: 'Azzera Tutto',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAllAttendance();
+            setAttendanceRecords([]);
+            setAttendanceStats(getAttendanceStats([]));
+            setAttendanceModalVisible(false);
+          },
+        },
       ]
     );
   };
@@ -316,6 +370,98 @@ export default function ProfiloScreen() {
           {"L'app visualizzerà in automatico l'orario e le aule del canale selezionato."}
         </Text>
 
+        {/* Gruppo: REGISTRO PRESENZE */}
+        <Text style={styles.sectionHeader}>REGISTRO PRESENZE</Text>
+
+        {/* 3 KPI Health / Fitness Cards */}
+        <View style={styles.statsCardsRow}>
+          {/* Card 1: Ore Totali */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconSquircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+              <Ionicons name="time" size={17} color="#10b981" />
+            </View>
+            <Text style={styles.statValue}>{attendanceStats?.totalHours || 0}h</Text>
+            <Text style={styles.statLabel}>FREQUENZA</Text>
+          </View>
+
+          {/* Card 2: Lezioni */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconSquircle, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+              <Ionicons name="checkmark-done" size={17} color="#3b82f6" />
+            </View>
+            <Text style={styles.statValue}>{attendanceStats?.totalLessons || 0}</Text>
+            <Text style={styles.statLabel}>LEZIONI</Text>
+          </View>
+
+          {/* Card 3: Materie */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconSquircle, { backgroundColor: 'rgba(168, 85, 247, 0.15)' }]}>
+              <Ionicons name="book" size={17} color="#a855f7" />
+            </View>
+            <Text style={styles.statValue}>{attendanceStats?.subjectsCount || 0}</Text>
+            <Text style={styles.statLabel}>MATERIE</Text>
+          </View>
+        </View>
+
+        {/* Dettaglio Registro Table Card */}
+        <View style={styles.groupedCard}>
+          {attendanceRecords.length === 0 ? (
+            <View style={styles.attendanceEmptyBox}>
+              <Ionicons name="calendar-outline" size={28} color="#71717a" style={{ marginBottom: 8 }} />
+              <Text style={styles.attendanceEmptyTitle}>Nessuna presenza ancora registrata</Text>
+              <Text style={styles.attendanceEmptySub}>
+                Tieni premuto su una lezione o su un giorno nell&apos;Orario per registrarne la frequenza.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* Materie più frequentate (top 3) */}
+              {attendanceStats?.subjectStats.slice(0, 3).map((sub, idx) => (
+                <React.Fragment key={idx}>
+                  {idx > 0 && <View style={styles.separator} />}
+                  <View style={styles.subjectStatRow}>
+                    <View style={styles.subjectStatIcon}>
+                      <Ionicons name="school-outline" size={16} color="#ffffff" />
+                    </View>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                      <Text style={styles.subjectStatTitle} numberOfLines={1}>
+                        {sub.subject}
+                      </Text>
+                      <Text style={styles.subjectStatSubtitle}>
+                        Ultima lezione: {sub.lastDate}
+                      </Text>
+                    </View>
+                    <View style={styles.subjectStatBadge}>
+                      <Text style={styles.subjectStatBadgeText}>
+                        {sub.hours}h · {sub.count} {sub.count === 1 ? 'lezione' : 'lezioni'}
+                      </Text>
+                    </View>
+                  </View>
+                </React.Fragment>
+              ))}
+
+              <View style={styles.separator} />
+
+              {/* Tasto Apri Registro Completo */}
+              <TouchableOpacity
+                style={styles.tableRow}
+                activeOpacity={0.7}
+                onPress={() => setAttendanceModalVisible(true)}
+              >
+                <View style={[styles.iconBox, { backgroundColor: '#10b981' }]}>
+                  <Ionicons name="list" size={17} color="#ffffff" />
+                </View>
+                <Text style={styles.rowTitle}>Visualizza Registro Completo</Text>
+                <Text style={styles.rowDetail}>{attendanceRecords.length} registrate</Text>
+                <Ionicons name="chevron-forward" size={15} color="#48484a" />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+        <Text style={styles.sectionFooter}>
+          {"Segna la presenza tenendo premuta una lezione nell'orario. Tutte le statistiche sono salvate sul dispositivo."}
+        </Text>
+
         {/* Gruppo 2: FONTI UFFICIALI */}
         <Text style={styles.sectionHeader}>FONTI UFFICIALI</Text>
         <View style={styles.groupedCard}>
@@ -461,8 +607,12 @@ export default function ProfiloScreen() {
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#111111' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 20, paddingTop: 16 }}>
-            <TouchableOpacity onPress={() => setChannelModalVisible(false)}>
-              <Text style={{ color: '#8e8e93', fontSize: 16, fontWeight: '600' }}>Fine</Text>
+            <TouchableOpacity
+              style={styles.modalCloseCircle}
+              activeOpacity={0.7}
+              onPress={() => setChannelModalVisible(false)}
+            >
+              <Ionicons name="close" size={20} color="#a1a1aa" />
             </TouchableOpacity>
           </View>
           <DefaultTabPicker
@@ -475,8 +625,91 @@ export default function ProfiloScreen() {
             onConfirm={async (tab) => {
               await selectDefaultTab(tab);
             }}
-            onCancel={() => setChannelModalVisible(false)}
           />
+        </SafeAreaView>
+      </Modal>
+
+      {/* Modal Registro Presenze Completo */}
+      <Modal
+        visible={attendanceModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setAttendanceModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>Registro Presenze</Text>
+              <Text style={styles.modalSubtitle}>
+                {attendanceRecords.length} {attendanceRecords.length === 1 ? 'lezione frequentata' : 'lezioni frequentate'} · {attendanceStats?.totalHours || 0} ore
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.modalCloseCircle}
+              activeOpacity={0.7}
+              onPress={() => setAttendanceModalVisible(false)}
+            >
+              <Ionicons name="close" size={20} color="#a1a1aa" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+            {attendanceRecords.length === 0 ? (
+              <View style={styles.attendanceEmptyBox}>
+                <Ionicons name="calendar-outline" size={36} color="#71717a" style={{ marginBottom: 10 }} />
+                <Text style={styles.attendanceEmptyTitle}>Nessuna presenza</Text>
+              </View>
+            ) : (
+              attendanceRecords.map((item, idx) => (
+                <View key={item.id || idx} style={styles.attendanceHistoryItem}>
+                  <View style={styles.attendanceDateSquircle}>
+                    <Text style={styles.attendanceDayName}>{item.dayName?.slice(0, 3).toUpperCase() || 'GIORNO'}</Text>
+                    <Text style={styles.attendanceDateNum}>{item.displayDate?.split(' ')[0] || ''}</Text>
+                  </View>
+
+                  <View style={{ flex: 1, marginHorizontal: 12 }}>
+                    <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
+                      {item.subject?.toUpperCase()}
+                    </Text>
+                    <View style={styles.attendanceTimeRow}>
+                      <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
+                      <Text style={styles.attendanceHistoryTime}>
+                        {item.startTime} - {item.endTime} ({item.duration}h)
+                      </Text>
+                    </View>
+                    {item.room ? (
+                      <View style={styles.attendanceRoomRow}>
+                        <Ionicons name="location-outline" size={12} color="#ef4444" style={{ marginRight: 3 }} />
+                        <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+                          {item.room}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.attendanceDeleteButton}
+                    activeOpacity={0.7}
+                    onPress={() => handleDeleteAttendance(item)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+
+            {attendanceRecords.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearAttendanceBtn}
+                activeOpacity={0.7}
+                onPress={handleClearAllAttendance}
+              >
+                <Ionicons name="trash" size={16} color="#ef4444" style={{ marginRight: 6 }} />
+                <Text style={styles.clearAttendanceText}>Azzera Tutto il Registro</Text>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
         </SafeAreaView>
       </Modal>
 
@@ -762,6 +995,183 @@ const styles = StyleSheet.create({
   classBadgeText: {
     color: '#ff9f0a',
     fontSize: 11,
+    fontWeight: '700',
+  },
+  /* ── Registro Presenze Styles ── */
+  statsCardsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 12,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#1c1c1e',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+  },
+  statIconSquircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statValue: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  statLabel: {
+    color: '#71717a',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    marginTop: 2,
+  },
+  attendanceEmptyBox: {
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attendanceEmptyTitle: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  attendanceEmptySub: {
+    color: '#8e8e93',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  subjectStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  subjectStatIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#27272a',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  subjectStatTitle: {
+    color: '#ffffff',
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  subjectStatSubtitle: {
+    color: '#71717a',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  subjectStatBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  subjectStatBadgeText: {
+    color: '#10b981',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  /* Full Modal Attendance History */
+  attendanceHistoryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  attendanceDateSquircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attendanceDayName: {
+    color: '#10b981',
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  attendanceDateNum: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  attendanceHistorySubject: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  attendanceTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 3,
+  },
+  attendanceHistoryTime: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  attendanceRoomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  attendanceHistoryRoom: {
+    color: '#ef4444',
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  attendanceDeleteButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  clearAttendanceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.25)',
+    marginTop: 16,
+    marginBottom: 32,
+  },
+  clearAttendanceText: {
+    color: '#ef4444',
+    fontSize: 13.5,
     fontWeight: '700',
   },
 });
