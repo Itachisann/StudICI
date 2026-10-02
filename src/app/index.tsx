@@ -1,11 +1,13 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Modal, RefreshControl
+  TouchableOpacity, Modal, RefreshControl, Platform
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { MenuView } from '@expo/ui/community/menu';
 import { fetchScheduleData, fetchAllCourseData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
 import { resolveClassroom, ResolvedClassroom, formatSapienzaAddress } from '../utils/classroomLocations';
 import { hasDateInfo } from '../utils/aiParser';
@@ -23,6 +25,8 @@ import {
 } from '../utils/attendance';
 
 const SAPIENZA_RED = '#822433';
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
 const DAYS_FULL = ['LUNEDÌ', 'MARTEDÌ', 'MERCOLEDÌ', 'GIOVEDÌ', 'VENERDÌ'];
 const ACCENT_COLORS = ['#3b82f6', '#a855f7', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#6366f1'];
@@ -367,33 +371,23 @@ export default function ScheduleScreen() {
               const isLive = isCurrentClass(cls);
               const isAttended = checkIsAttended(cls);
 
-              return (
-                <TouchableOpacity
-                  key={i}
-                  activeOpacity={0.85}
-                  onLongPress={() => handleClassLongPress(cls)}
-                  delayLongPress={400}
-                  style={[
-                    styles.classCard,
-                    isLive && styles.classCardLive,
-                    isAttended && styles.classCardAttended,
-                  ]}
-                >
+              const cardView = (
+                <View style={[styles.classCard, isLive && styles.classCardLive]}>
                   {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
                   <View style={styles.timeColumn}>
                     <Text style={styles.timeStartText}>{cls.startTime}</Text>
                     <View style={styles.timeLineConnector}>
-                      <View style={[styles.timeLineBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
-                      <View style={[styles.durationBadge, isAttended && styles.durationBadgeAttended]}>
-                        <Text style={[styles.durationBadgeText, isAttended && styles.durationBadgeTextAttended]}>{cls.duration}h</Text>
+                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                      <View style={styles.durationBadge}>
+                        <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
                       </View>
-                      <View style={[styles.timeLineBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
+                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
                     </View>
                     <Text style={styles.timeEndText}>{cls.endTime}</Text>
                   </View>
 
                   {/* Barra di Accento Verticale Colorata stile Calendario */}
-                  <View style={[styles.calendarAccentBar, { backgroundColor: isAttended ? '#10b981' : accentColor }]} />
+                  <View style={[styles.calendarAccentBar, { backgroundColor: accentColor }]} />
 
                   {/* Dettagli Lezione */}
                   <View style={styles.cardBody}>
@@ -402,10 +396,10 @@ export default function ScheduleScreen() {
                         {cls.subject?.toUpperCase()}
                       </Text>
                       <View style={styles.badgesCluster}>
+                        {/* Simbolo colorato distintivo della presenza (senza colorare tutta la card di verde) */}
                         {isAttended && (
-                          <View style={styles.attendedBadge}>
-                            <Ionicons name="checkmark-circle" size={11} color="#10b981" style={{ marginRight: 3 }} />
-                            <Text style={styles.attendedBadgeText}>PRESENTE</Text>
+                          <View style={styles.presenceSymbolBox}>
+                            <Ionicons name="checkmark-circle" size={17} color="#38bdf8" />
                           </View>
                         )}
                         {isLive && (
@@ -438,6 +432,46 @@ export default function ScheduleScreen() {
                       </TouchableOpacity>
                     ) : null}
                   </View>
+                </View>
+              );
+
+              // In standalone iOS (.IPA), usa UIContextMenuInteraction nativo
+              if (isNativeComponentAvailable) {
+                return (
+                  <MenuView
+                    key={i}
+                    title={cls.subject}
+                    shouldOpenOnLongPress={true}
+                    onPressAction={({ nativeEvent }) => {
+                      if (nativeEvent.event === 'toggle_presence') {
+                        handleClassLongPress(cls);
+                      }
+                    }}
+                    actions={[
+                      {
+                        id: 'toggle_presence',
+                        title: isAttended ? 'Rimuovi Presenza' : 'Segna Presenza',
+                        image: isAttended ? 'checkmark.circle.badge.xmark' : 'checkmark.circle',
+                        attributes: {
+                          destructive: isAttended,
+                        },
+                      },
+                    ]}
+                  >
+                    {cardView}
+                  </MenuView>
+                );
+              }
+
+              // Fallback per Expo Go o piattaforme non native
+              return (
+                <TouchableOpacity
+                  key={i}
+                  activeOpacity={0.85}
+                  onLongPress={() => handleClassLongPress(cls)}
+                  delayLongPress={400}
+                >
+                  {cardView}
                 </TouchableOpacity>
               );
             })}
@@ -881,21 +915,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
   },
-  attendedBadge: {
-    flexDirection: 'row',
+  presenceSymbolBox: {
+    justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.18)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
-  },
-  attendedBadgeText: {
-    color: '#10b981',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+    marginRight: 2,
   },
   liveBadge: {
     flexDirection: 'row',

@@ -21,6 +21,7 @@ import {
   AttendanceRecord,
   AttendanceStats,
 } from '../utils/attendance';
+import Swipeable from 'react-native-gesture-handler/Swipeable';
 
 const SAPIENZA_RED = '#822433';
 
@@ -218,6 +219,17 @@ export default function ProfiloScreen() {
     );
   };
 
+  const renderRightActions = (item: AttendanceRecord) => (
+    <TouchableOpacity
+      style={styles.swipeDeleteAction}
+      activeOpacity={0.8}
+      onPress={() => handleDeleteAttendance(item)}
+    >
+      <Ionicons name="trash" size={20} color="#ffffff" />
+      <Text style={styles.swipeDeleteText}>Elimina</Text>
+    </TouchableOpacity>
+  );
+
   const openSourceWebsite = async () => {
     await WebBrowser.openBrowserAsync('https://ici.web.uniroma1.it/node/388');
   };
@@ -266,6 +278,31 @@ export default function ProfiloScreen() {
       faculty: 'Facoltà di Ingegneria Civile e Industriale',
     };
   }, [degreeName, degreeClassName]);
+
+  const groupedAttendance = useMemo(() => {
+    const groups: { date: string; displayDate: string; dayName: string; records: AttendanceRecord[] }[] = [];
+    const map = new Map<string, { date: string; displayDate: string; dayName: string; records: AttendanceRecord[] }>();
+
+    // Sort by timestamp descending (newest first)
+    const sorted = [...attendanceRecords].sort((a, b) => b.timestamp - a.timestamp);
+
+    for (const r of sorted) {
+      const key = r.date || 'other';
+      if (!map.has(key)) {
+        const group = {
+          date: r.date,
+          displayDate: r.displayDate || r.date,
+          dayName: r.dayName || 'Giorno',
+          records: [],
+        };
+        map.set(key, group);
+        groups.push(group);
+      }
+      map.get(key)!.records.push(r);
+    }
+
+    return groups;
+  }, [attendanceRecords]);
 
   const filteredDegrees = useMemo(() => {
     if (!searchCourse.trim()) return degrees;
@@ -403,63 +440,25 @@ export default function ProfiloScreen() {
           </View>
         </View>
 
-        {/* Dettaglio Registro Table Card */}
+        {/* Dettaglio Registro Table Card Compatto */}
         <View style={styles.groupedCard}>
-          {attendanceRecords.length === 0 ? (
-            <View style={styles.attendanceEmptyBox}>
-              <Ionicons name="calendar-outline" size={28} color="#71717a" style={{ marginBottom: 8 }} />
-              <Text style={styles.attendanceEmptyTitle}>Nessuna presenza ancora registrata</Text>
-              <Text style={styles.attendanceEmptySub}>
-                Tieni premuto su una lezione o su un giorno nell&apos;Orario per registrarne la frequenza.
-              </Text>
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setAttendanceModalVisible(true)}
+          >
+            <View style={[styles.iconBox, { backgroundColor: '#10b981' }]}>
+              <Ionicons name="calendar" size={17} color="#ffffff" />
             </View>
-          ) : (
-            <>
-              {/* Materie più frequentate (top 3) */}
-              {attendanceStats?.subjectStats.slice(0, 3).map((sub, idx) => (
-                <React.Fragment key={idx}>
-                  {idx > 0 && <View style={styles.separator} />}
-                  <View style={styles.subjectStatRow}>
-                    <View style={styles.subjectStatIcon}>
-                      <Ionicons name="school-outline" size={16} color="#ffffff" />
-                    </View>
-                    <View style={{ flex: 1, marginRight: 10 }}>
-                      <Text style={styles.subjectStatTitle} numberOfLines={1}>
-                        {sub.subject}
-                      </Text>
-                      <Text style={styles.subjectStatSubtitle}>
-                        Ultima lezione: {sub.lastDate}
-                      </Text>
-                    </View>
-                    <View style={styles.subjectStatBadge}>
-                      <Text style={styles.subjectStatBadgeText}>
-                        {sub.hours}h · {sub.count} {sub.count === 1 ? 'lezione' : 'lezioni'}
-                      </Text>
-                    </View>
-                  </View>
-                </React.Fragment>
-              ))}
-
-              <View style={styles.separator} />
-
-              {/* Tasto Apri Registro Completo */}
-              <TouchableOpacity
-                style={styles.tableRow}
-                activeOpacity={0.7}
-                onPress={() => setAttendanceModalVisible(true)}
-              >
-                <View style={[styles.iconBox, { backgroundColor: '#10b981' }]}>
-                  <Ionicons name="list" size={17} color="#ffffff" />
-                </View>
-                <Text style={styles.rowTitle}>Visualizza Registro Completo</Text>
-                <Text style={styles.rowDetail}>{attendanceRecords.length} registrate</Text>
-                <Ionicons name="chevron-forward" size={15} color="#48484a" />
-              </TouchableOpacity>
-            </>
-          )}
+            <Text style={styles.rowTitle}>Registro Presenze</Text>
+            <Text style={styles.rowDetail}>
+              {attendanceRecords.length > 0 ? `${attendanceRecords.length} registrate` : 'Nessuna'}
+            </Text>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          {"Segna la presenza tenendo premuta una lezione nell'orario. Tutte le statistiche sono salvate sul dispositivo."}
+          {"Tieni premuta una lezione nell'orario per registrarne la frequenza."}
         </Text>
 
         {/* Gruppo 2: FONTI UFFICIALI */}
@@ -654,47 +653,75 @@ export default function ProfiloScreen() {
           </View>
 
           <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
-            {attendanceRecords.length === 0 ? (
+            {groupedAttendance.length === 0 ? (
               <View style={styles.attendanceEmptyBox}>
                 <Ionicons name="calendar-outline" size={36} color="#71717a" style={{ marginBottom: 10 }} />
                 <Text style={styles.attendanceEmptyTitle}>Nessuna presenza</Text>
+                <Text style={styles.attendanceEmptySub}>
+                  Tieni premuto su una lezione nell&apos;Orario per registrarne la presenza.
+                </Text>
               </View>
             ) : (
-              attendanceRecords.map((item, idx) => (
-                <View key={item.id || idx} style={styles.attendanceHistoryItem}>
-                  <View style={styles.attendanceDateSquircle}>
-                    <Text style={styles.attendanceDayName}>{item.dayName?.slice(0, 3).toUpperCase() || 'GIORNO'}</Text>
-                    <Text style={styles.attendanceDateNum}>{item.displayDate?.split(' ')[0] || ''}</Text>
-                  </View>
-
-                  <View style={{ flex: 1, marginHorizontal: 12 }}>
-                    <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
-                      {item.subject?.toUpperCase()}
+              groupedAttendance.map(group => (
+                <View key={group.date} style={styles.dayGroupContainer}>
+                  {/* Intestazione del Giorno */}
+                  <View style={styles.dayGroupHeader}>
+                    <Ionicons name="calendar" size={13} color="#10b981" style={{ marginRight: 6 }} />
+                    <Text style={styles.dayGroupTitle}>
+                      {group.dayName.toUpperCase()} · {group.displayDate.toUpperCase()}
                     </Text>
-                    <View style={styles.attendanceTimeRow}>
-                      <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
-                      <Text style={styles.attendanceHistoryTime}>
-                        {item.startTime} - {item.endTime} ({item.duration}h)
+                    <View style={styles.dayGroupBadge}>
+                      <Text style={styles.dayGroupBadgeText}>
+                        {group.records.length} {group.records.length === 1 ? 'lezione' : 'lezioni'}
                       </Text>
                     </View>
-                    {item.room ? (
-                      <View style={styles.attendanceRoomRow}>
-                        <Ionicons name="location-outline" size={12} color="#ef4444" style={{ marginRight: 3 }} />
-                        <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
-                          {item.room}
-                        </Text>
-                      </View>
-                    ) : null}
                   </View>
 
-                  <TouchableOpacity
-                    style={styles.attendanceDeleteButton}
-                    activeOpacity={0.7}
-                    onPress={() => handleDeleteAttendance(item)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="trash-outline" size={18} color="#ef4444" />
-                  </TouchableOpacity>
+                  {/* Lista Lezioni con Slide Nativo iOS per Eliminare */}
+                  {group.records.map(item => (
+                    <Swipeable
+                      key={item.id}
+                      renderRightActions={() => renderRightActions(item)}
+                      overshootRight={false}
+                      containerStyle={{ marginBottom: 10, borderRadius: 16, overflow: 'hidden' }}
+                    >
+                      <View style={styles.attendanceHistoryItem}>
+                        <View style={styles.attendanceDateSquircle}>
+                          <Text style={styles.attendanceDayName}>{item.dayName?.slice(0, 3).toUpperCase() || 'GIORNO'}</Text>
+                          <Text style={styles.attendanceDateNum}>{item.displayDate?.split(' ')[0] || ''}</Text>
+                        </View>
+
+                        <View style={{ flex: 1, marginHorizontal: 12 }}>
+                          <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
+                            {item.subject?.toUpperCase()}
+                          </Text>
+                          <View style={styles.attendanceTimeRow}>
+                            <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
+                            <Text style={styles.attendanceHistoryTime}>
+                              {item.startTime} - {item.endTime} ({item.duration}h)
+                            </Text>
+                          </View>
+                          {item.room ? (
+                            <View style={styles.attendanceRoomRow}>
+                              <Ionicons name="location-outline" size={12} color="#ef4444" style={{ marginRight: 3 }} />
+                              <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+                                {item.room}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+
+                        <TouchableOpacity
+                          style={styles.attendanceDeleteButton}
+                          activeOpacity={0.7}
+                          onPress={() => handleDeleteAttendance(item)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="trash-outline" size={17} color="#ef4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </Swipeable>
+                  ))}
                 </View>
               ))
             )}
@@ -1173,5 +1200,48 @@ const styles = StyleSheet.create({
     color: '#ef4444',
     fontSize: 13.5,
     fontWeight: '700',
+  },
+  /* Swipeable Slide to Delete & Day Groups */
+  swipeDeleteAction: {
+    backgroundColor: '#ff3b30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 78,
+    height: '100%',
+    borderRadius: 16,
+    marginLeft: 6,
+  },
+  swipeDeleteText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  dayGroupContainer: {
+    marginBottom: 16,
+  },
+  dayGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  dayGroupTitle: {
+    color: '#a1a1aa',
+    fontSize: 11.5,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    flex: 1,
+  },
+  dayGroupBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  dayGroupBadgeText: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    fontWeight: '600',
   },
 });
