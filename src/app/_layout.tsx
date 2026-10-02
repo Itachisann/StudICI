@@ -1,18 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Platform, UIManager, StyleSheet, View, ActivityIndicator } from 'react-native';
+import { Platform, StyleSheet, View, ActivityIndicator } from 'react-native';
 import { Tabs as ExpoTabs } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { NativeTabs } from '@/components/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 
 const SAPIENZA_RED = '#822433';
 
-const isNativeComponentAvailable = 
-  Platform.OS === 'ios' && Boolean(UIManager.getViewManagerConfig?.('RNCTabView'));
+// In Expo Go i moduli nativi personalizzati non sono inclusi nel runtime condiviso.
+// Nell'IPA (standalone / development build su iOS), i native-bottom-tabs sono compilati e attivi.
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 
 export default function AppLayout() {
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
