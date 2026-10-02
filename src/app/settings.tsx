@@ -13,6 +13,8 @@ import Constants from 'expo-constants';
 import { CourseDownloadView } from '../components/CourseDownloadView';
 import { DefaultTabPicker } from '../components/DefaultTabPicker';
 import { parseTabHierarchy } from '../components/YearChannelSelector';
+import { NativeDropdownMenu } from '../components/NativeDropdownMenu';
+import { MenuAction } from '@expo/ui/community/menu';
 
 const SAPIENZA_RED = '#822433';
 
@@ -59,18 +61,15 @@ export default function ProfiloScreen() {
   );
 
   const selectDegree = async (degree: Degree) => {
-    // Chiudi il modal di selezione corsi e avvia la schermata di download
     setCourseModalVisible(false);
     setDownloadingCourse(degree);
     setDownloadProgressText('Preparazione e analisi canali...');
 
     try {
-      // 1. Scarica TUTTO in un'unica botta con avanzamento in tempo reale
       const { tabs } = await fetchAllCourseData(degree.url, true, (stepMsg) => {
         setDownloadProgressText(stepMsg);
       });
 
-      // 2. Salviamo il corso e impostiamo il tab predefinito
       await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
       await AsyncStorage.setItem('selectedDegreeName', degree.name);
       
@@ -87,7 +86,6 @@ export default function ProfiloScreen() {
       setAvailableTabs(tabs);
       setDownloadingCourse(null);
 
-      // 3. Se ci sono più canali, apri subito la scelta di anno e canale per il nuovo corso
       if (tabs && tabs.length > 1) {
         setChannelModalVisible(true);
       } else {
@@ -119,7 +117,7 @@ export default function ProfiloScreen() {
         className: '',
       };
       setDownloadingCourse(dummyDegree);
-      setDownloadProgressText('Svuotamento cache...');
+      setDownloadProgressText('Svuotamento cache e aggiornamento...');
 
       const allKeys = await AsyncStorage.getAllKeys();
       const keysToKeep = ['selectedDegreeUrl', 'selectedDegreeName', 'defaultTabUrl'];
@@ -144,12 +142,12 @@ export default function ProfiloScreen() {
 
   const resetApp = async () => {
     Alert.alert(
-      'Reset Completo',
-      'Sei sicuro di voler ripristinare l\'app? Perderai il corso selezionato.',
+      'Ripristina Applicazione',
+      'Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso e le impostazioni salvate.',
       [
         { text: 'Annulla', style: 'cancel' },
         { 
-          text: 'Reset', 
+          text: 'Ripristina', 
           style: 'destructive', 
           onPress: async () => {
             await AsyncStorage.clear();
@@ -172,109 +170,207 @@ export default function ProfiloScreen() {
 
   const defaultTabObj = availableTabs.find(t => t.url === defaultTabUrl) || (availableTabs[0] || null);
 
+  const defaultTabLabel = useMemo(() => {
+    if (!defaultTabInfo) return defaultTabObj ? defaultTabObj.name : 'Non impostato';
+    return `${defaultTabInfo.year}${defaultTabInfo.channel ? ` · ${defaultTabInfo.channel}` : ''}`;
+  }, [defaultTabInfo, defaultTabObj]);
+
+  // Menu nativo iOS per Cambio Corso di Laurea
+  const courseMenuActions = useMemo<MenuAction[]>(() => {
+    if (!degrees || degrees.length === 0) return [];
+
+    const actions: MenuAction[] = degrees.map(deg => {
+      const isSelected = degreeUrl === deg.url;
+      return {
+        id: deg.url,
+        title: deg.name,
+        state: isSelected ? 'on' : 'off',
+        image: isSelected ? 'checkmark.seal.fill' : 'graduationcap',
+      };
+    });
+
+    actions.push({
+      id: 'open_modal',
+      title: 'Tutti i corsi...',
+      image: 'ellipsis.circle',
+    });
+
+    return actions;
+  }, [degrees, degreeUrl]);
+
+  // Menu nativo iOS per Cambio Anno e Canale Predefinito
+  const channelMenuActions = useMemo<MenuAction[]>(() => {
+    if (!availableTabs || availableTabs.length === 0) return [];
+
+    const actions: MenuAction[] = parsedAvailable.map(info => {
+      const isSelected = info.tab.url === defaultTabUrl;
+      const title = `${info.year}${info.channel ? ` · ${info.channel}` : ''}`;
+      return {
+        id: info.tab.url,
+        title,
+        state: isSelected ? 'on' : 'off',
+        image: isSelected ? 'checkmark.circle.fill' : 'calendar',
+      };
+    });
+
+    actions.push({
+      id: 'open_modal',
+      title: 'Personalizza...',
+      image: 'slider.horizontal.3',
+    });
+
+    return actions;
+  }, [availableTabs, parsedAvailable, defaultTabUrl]);
+
+  const handleCourseMenuSelect = (actionId: string) => {
+    if (actionId === 'open_modal') {
+      setCourseModalVisible(true);
+      return;
+    }
+    const selected = degrees.find(d => d.url === actionId);
+    if (selected) {
+      selectDegree(selected);
+    }
+  };
+
+  const handleChannelMenuSelect = async (actionId: string) => {
+    if (actionId === 'open_modal') {
+      setChannelModalVisible(true);
+      return;
+    }
+    const tab = availableTabs.find(t => t.url === actionId);
+    if (tab) {
+      await selectDefaultTab(tab);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <Text style={styles.largeTitle}>Profilo & Impostazioni</Text>
-        <Text style={styles.subHeader}>Gestisci il tuo corso, preferenze e fonti ufficiali.</Text>
+        <Text style={styles.largeTitle}>Profilo</Text>
+        <Text style={styles.headerSubtitle}>Sapienza Università di Roma</Text>
       </View>
 
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 120 }}>
-        {/* Sezione Corso Attuale */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>CORSO DI LAUREA</Text>
-          <View style={styles.card}>
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(130, 36, 51, 0.18)' }]}>
-              <Ionicons name="school" size={22} color="#e57373" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>{degreeName || 'Nessun corso selezionato'}</Text>
-              <Text style={styles.cardSubtitle}>Facoltà ICI · Sapienza Roma</Text>
-            </View>
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 130 }} showsVerticalScrollIndicator={false}>
+        
+        {/* Apple ID Style Account Header Card */}
+        <View style={styles.profileHeaderCard}>
+          <View style={styles.profileAvatarBox}>
+            <Ionicons name="school" size={26} color="#ffffff" />
           </View>
-          <TouchableOpacity style={styles.actionButton} activeOpacity={0.85} onPress={() => setCourseModalVisible(true)}>
-            <Ionicons name="swap-horizontal" size={18} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.actionButtonText}>Cambia Corso di Laurea</Text>
-          </TouchableOpacity>
+          <View style={styles.profileHeaderInfo}>
+            <Text style={styles.profileDegreeTitle} numberOfLines={2}>
+              {degreeName || 'Nessun corso'}
+            </Text>
+            <Text style={styles.profileFacultySubtitle}>
+              Facoltà di Ingegneria Civile e Industriale
+            </Text>
+          </View>
         </View>
 
-        {/* Sezione Canale / Anno Predefinito */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>CANALE / ANNO PREDEFINITO</Text>
-          <Text style={styles.sectionDescription}>
-            {"Il canale o anno con cui l'app si aprirà in automatico."}
-          </Text>
-          <TouchableOpacity
-            style={styles.card}
-            activeOpacity={0.8}
-            onPress={() => setChannelModalVisible(true)}
-          >
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(245, 158, 11, 0.18)' }]}>
-              <Ionicons name="funnel" size={20} color="#fbbf24" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>
-                {defaultTabInfo
-                  ? `${defaultTabInfo.year}${defaultTabInfo.channel ? ` · ${defaultTabInfo.channel}` : ''}`
-                  : (defaultTabObj ? defaultTabObj.name : 'Seleziona canale predefinito')}
-              </Text>
-              <Text style={styles.cardSubtitle}>
-                {defaultTabInfo ? `Foglio: ${defaultTabInfo.tab.name}` : 'Tocca per modificare'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#8e8e93" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Sezione Fonte Dati */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>FONTE DATI UFFICIALE</Text>
-          <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={openSourceWebsite}>
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(59, 130, 246, 0.18)' }]}>
-              <Ionicons name="globe-outline" size={20} color="#60a5fa" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Sito Ufficiale ICI Sapienza</Text>
-              <Text style={styles.cardSubtitle}>ici.web.uniroma1.it/node/388</Text>
-            </View>
-            <Ionicons name="open-outline" size={18} color="#8e8e93" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Gestione Cache & Reset */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>SISTEMA</Text>
-          <TouchableOpacity style={[styles.card, { marginBottom: 12 }]} activeOpacity={0.8} onPress={clearCacheAndReload}>
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.18)' }]}>
-              <Ionicons name="refresh" size={20} color="#34d399" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Svuota Cache</Text>
-              <Text style={styles.cardSubtitle}>{"Forza un nuovo download di orari e aule"}</Text>
-            </View>
-          </TouchableOpacity>
+        {/* Gruppo 1: CORSO & DIDATTICA */}
+        <Text style={styles.sectionHeader}>CORSO & DIDATTICA</Text>
+        <View style={styles.groupedCard}>
           
-          <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={resetApp}>
-            <View style={[styles.cardIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.18)' }]}>
-              <Ionicons name="trash" size={20} color="#f87171" />
+          {/* Riga 1: Corso di Laurea con Menu Nativo iOS */}
+          <NativeDropdownMenu
+            title="Scegli Corso di Laurea"
+            actions={courseMenuActions}
+            onSelect={handleCourseMenuSelect}
+            onFallbackPress={() => setCourseModalVisible(true)}
+          >
+            <View style={styles.tableRow}>
+              <View style={[styles.iconBox, { backgroundColor: SAPIENZA_RED }]}>
+                <Ionicons name="school" size={17} color="#ffffff" />
+              </View>
+              <Text style={styles.rowTitle}>Corso di Laurea</Text>
+              <Text style={styles.rowDetail} numberOfLines={1}>
+                {degreeName || 'Seleziona'}
+              </Text>
+              <Ionicons name="chevron-forward" size={15} color="#48484a" />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Reset Totale App</Text>
-              <Text style={styles.cardSubtitle}>{"Cancella tutto e torna alla configurazione"}</Text>
+          </NativeDropdownMenu>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Canale / Anno Predefinito con Menu Nativo iOS */}
+          <NativeDropdownMenu
+            title="Canale / Anno Predefinito"
+            actions={channelMenuActions}
+            onSelect={handleChannelMenuSelect}
+            onFallbackPress={() => setChannelModalVisible(true)}
+          >
+            <View style={styles.tableRow}>
+              <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
+                <Ionicons name="funnel" size={16} color="#ffffff" />
+              </View>
+              <Text style={styles.rowTitle}>Canale Predefinito</Text>
+              <Text style={styles.rowDetail} numberOfLines={1}>
+                {defaultTabLabel}
+              </Text>
+              <Ionicons name="chevron-forward" size={15} color="#48484a" />
             </View>
+          </NativeDropdownMenu>
+
+        </View>
+        <Text style={styles.sectionFooter}>
+          {"L'app visualizzerà in automatico l'orario e le aule del canale selezionato."}
+        </Text>
+
+        {/* Gruppo 2: FONTI UFFICIALI */}
+        <Text style={styles.sectionHeader}>FONTI UFFICIALI</Text>
+        <View style={styles.groupedCard}>
+          <TouchableOpacity style={styles.tableRow} activeOpacity={0.7} onPress={openSourceWebsite}>
+            <View style={[styles.iconBox, { backgroundColor: '#007aff' }]}>
+              <Ionicons name="globe-outline" size={17} color="#ffffff" />
+            </View>
+            <Text style={styles.rowTitle}>Portale Orari ICI</Text>
+            <Text style={styles.rowDetail} numberOfLines={1}>web.uniroma1.it</Text>
+            <Ionicons name="open-outline" size={15} color="#48484a" />
           </TouchableOpacity>
         </View>
+        <Text style={styles.sectionFooter}>
+          Orari e aule sono estratti direttamente dalle tabelle ufficiali della presidenza.
+        </Text>
 
-        {/* Info App */}
+        {/* Gruppo 3: SISTEMA & ARCHIVIAZIONE */}
+        <Text style={styles.sectionHeader}>SISTEMA & ARCHIVIAZIONE</Text>
+        <View style={styles.groupedCard}>
+          
+          {/* Riga 1: Svuota Cache */}
+          <TouchableOpacity style={styles.tableRow} activeOpacity={0.7} onPress={clearCacheAndReload}>
+            <View style={[styles.iconBox, { backgroundColor: '#34c759' }]}>
+              <Ionicons name="refresh" size={17} color="#ffffff" />
+            </View>
+            <Text style={styles.rowTitle}>Aggiorna & Svuota Cache</Text>
+            <Text style={styles.rowDetail}>Riscarica</Text>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Reset Totale */}
+          <TouchableOpacity style={styles.tableRow} activeOpacity={0.7} onPress={resetApp}>
+            <View style={[styles.iconBox, { backgroundColor: '#ff3b30' }]}>
+              <Ionicons name="trash" size={16} color="#ffffff" />
+            </View>
+            <Text style={[styles.rowTitle, { color: '#ff453a' }]}>Ripristina Applicazione</Text>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+
+        </View>
+
+        {/* Footer Info App */}
         <View style={styles.footer}>
           <Text style={styles.footerText}>
-            {`StudICI · Versione ${Constants.expoConfig?.version || '1.0.1'}`}
+            {`StudICI per iOS · v${Constants.expoConfig?.version || '1.0.6'} (Build ${Constants.expoConfig?.ios?.buildNumber || '7'})`}
           </Text>
           <Text style={styles.footerSubText}>Sapienza Università di Roma</Text>
         </View>
+
       </ScrollView>
 
-      {/* Modal Cambio Corso */}
+      {/* Modal Fallback Cambio Corso (usato in Expo Go o cliccando 'Tutti i corsi...') */}
       <Modal
         visible={courseModalVisible}
         animationType="slide"
@@ -283,9 +379,9 @@ export default function ProfiloScreen() {
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Scegli Corso di Laurea</Text>
+            <Text style={styles.modalTitle}>Corsi di Laurea ICI</Text>
             <TouchableOpacity onPress={() => setCourseModalVisible(false)}>
-              <Text style={styles.modalCloseText}>Chiudi</Text>
+              <Text style={styles.modalCloseText}>Fine</Text>
             </TouchableOpacity>
           </View>
           {loading ? (
@@ -313,7 +409,7 @@ export default function ProfiloScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal Cambio Canale / Anno Predefinito */}
+      {/* Modal Fallback Cambio Canale / Anno (usato in Expo Go o cliccando 'Personalizza...') */}
       <Modal
         visible={channelModalVisible}
         animationType="slide"
@@ -323,7 +419,7 @@ export default function ProfiloScreen() {
         <SafeAreaView style={{ flex: 1, backgroundColor: '#111111' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 20, paddingTop: 16 }}>
             <TouchableOpacity onPress={() => setChannelModalVisible(false)}>
-              <Text style={{ color: '#8e8e93', fontSize: 16, fontWeight: '600' }}>Chiudi</Text>
+              <Text style={{ color: '#8e8e93', fontSize: 16, fontWeight: '600' }}>Fine</Text>
             </TouchableOpacity>
           </View>
           <DefaultTabPicker
@@ -331,8 +427,8 @@ export default function ProfiloScreen() {
             initialTabUrl={defaultTabUrl}
             degreeName={degreeName}
             title="Anno e Canale Predefinito"
-            subtitle="Scegli quale orario visualizzare in automatico all'apertura dell'app."
-            confirmButtonText="Salva come Predefinito"
+            subtitle="Scegli quale orario visualizzare all'apertura dell'app."
+            confirmButtonText="Imposta come Predefinito"
             onConfirm={async (tab) => {
               await selectDefaultTab(tab);
             }}
@@ -341,7 +437,7 @@ export default function ProfiloScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal Schermata Download Unificato (uguale all'onboarding iniziale) */}
+      {/* Modal Schermata Download Unificato */}
       <Modal
         visible={Boolean(downloadingCourse)}
         animationType="fade"
@@ -362,111 +458,142 @@ export default function ProfiloScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#111111',
+    backgroundColor: '#000000',
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 16,
+    paddingTop: 8,
+    paddingBottom: 14,
   },
   largeTitle: {
-    fontSize: 30,
-    fontWeight: 'bold',
+    fontSize: 34,
+    fontWeight: '700',
     color: '#ffffff',
+    letterSpacing: 0.37,
   },
-  subHeader: {
-    fontSize: 14,
+  headerSubtitle: {
+    fontSize: 13,
     color: '#8e8e93',
-    marginTop: 4,
+    marginTop: 2,
   },
   container: {
     flex: 1,
     paddingHorizontal: 16,
   },
-  section: {
-    marginBottom: 24,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#8e8e93',
-    letterSpacing: 0.8,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  sectionDescription: {
-    fontSize: 13,
-    color: '#636366',
-    marginBottom: 10,
-    marginLeft: 4,
-  },
-  card: {
+  /* Card stile profilo Apple ID */
+  profileHeaderCard: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 20,
-    padding: 18,
+    borderRadius: 16,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
+    marginBottom: 8,
+    borderWidth: 0.5,
     borderColor: 'rgba(255, 255, 255, 0.08)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 3,
   },
-  cardIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  profileAvatarBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: SAPIENZA_RED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+  },
+  profileHeaderInfo: {
+    flex: 1,
+  },
+  profileDegreeTitle: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  profileFacultySubtitle: {
+    color: '#8e8e93',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  /* Sezioni e Gruppi Inset Grouped iOS */
+  sectionHeader: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: '#8e8e93',
+    textTransform: 'uppercase',
+    letterSpacing: -0.08,
+    marginLeft: 16,
+    marginBottom: 6,
+    marginTop: 22,
+  },
+  sectionFooter: {
+    fontSize: 13,
+    color: '#636366',
+    marginLeft: 16,
+    marginRight: 16,
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  groupedCard: {
+    backgroundColor: '#1c1c1e',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    minHeight: 48,
+  },
+  iconBox: {
+    width: 30,
+    height: 30,
+    borderRadius: 7,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
   },
-  cardTitle: {
-    color: '#ffffff',
+  rowTitle: {
     fontSize: 16,
-    fontWeight: '600',
-  },
-  cardSubtitle: {
-    color: '#8e8e93',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    backgroundColor: SAPIENZA_RED,
-    borderRadius: 16,
-    padding: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 10,
-    shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  actionButtonText: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '600',
+    flex: 1,
+    letterSpacing: -0.2,
   },
+  rowDetail: {
+    fontSize: 15,
+    color: '#8e8e93',
+    marginRight: 6,
+    maxWidth: '48%',
+    textAlign: 'right',
+  },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginLeft: 60,
+  },
+  /* Footer */
   footer: {
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 40,
+    marginTop: 32,
+    marginBottom: 20,
   },
   footerText: {
     color: '#636366',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   footerSubText: {
     color: '#48484a',
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 3,
   },
+  /* Modal styling */
   modalContainer: {
     flex: 1,
     backgroundColor: '#1c1c1e',
@@ -475,18 +602,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
+    padding: 18,
+    borderBottomWidth: 0.5,
     borderBottomColor: '#2c2c2e',
   },
   modalTitle: {
     color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '600',
   },
   modalCloseText: {
     color: SAPIENZA_RED,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '600',
   },
   modalScroll: {
@@ -513,51 +640,5 @@ const styles = StyleSheet.create({
     color: '#8e8e93',
     fontSize: 12,
     marginTop: 4,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  channelDialog: {
-    backgroundColor: '#1c1c1e',
-    borderRadius: 20,
-    width: '100%',
-    padding: 20,
-  },
-  channelDialogTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  channelDialogSubtitle: {
-    color: '#8e8e93',
-    fontSize: 13,
-    marginTop: 4,
-  },
-  channelItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2c2c2e',
-  },
-  channelItemSelected: {},
-  channelItemText: {
-    color: '#fff',
-    fontSize: 15,
-  },
-  dialogCloseButton: {
-    padding: 14,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  dialogCloseText: {
-    color: '#8e8e93',
-    fontSize: 15,
-    fontWeight: '600',
   },
 });
