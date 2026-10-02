@@ -1,7 +1,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, ParsedClass, MappedClassroom, extractDeterministicSemester } from './aiParser';
-import { getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from './classroomLocations';
+import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, ParsedClass, extractDeterministicSemester } from './aiParser';
+import { getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress, SAPIENZA_BUILDINGS, resolveClassroom } from './classroomLocations';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -270,8 +270,8 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
     // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
     const contentFingerprint = extractSheetContentFingerprint(html);
-    const cacheKey = `scheduleCache_v5_${tabUrl}`;
-    const fpKey = `tabFingerprint_v5_${tabUrl}`;
+    const cacheKey = `scheduleCache_v6_${tabUrl}`;
+    const fpKey = `tabFingerprint_v6_${tabUrl}`;
     if (!forceRefresh) {
       try {
         const cachedStr = await AsyncStorage.getItem(cacheKey);
@@ -478,46 +478,75 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
         const slot = timeSlots[slotIdx];
 
         if (p && p.subject) {
-          const roomClean = p.room ? p.room.replace(/^aula\s+/i, '').toLowerCase().trim() : '';
-          let mInfo: MappedClassroom | undefined;
-          
-          const dayNames = ['lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi'];
-          const currentDayStr = dayNames[day];
-          
-          // Cerca chiavi che includono il numero dell'aula (come parola esatta) E il giorno corrente
-          const specificDayKey = Object.keys(mappedRooms).find(k => {
-             const canonK = getCanonicalRoomKey(k);
-             const hasRoom = new RegExp(`\\b${roomClean}\\b`, 'i').test(canonK);
-             const hasDay = canonK.includes(currentDayStr);
-             return hasRoom && hasDay;
-          });
+          const roomLabel = p.room ? normalizeDisplayName(p.room) : '';
+          const rawCellText = timeSlots[slotIdx]?.cells[day] || '';
 
-          if (specificDayKey) {
-            mInfo = mappedRooms[specificDayKey];
-          } else {
-            const canonRoom = getCanonicalRoomKey(p.room);
-            mInfo = mappedRooms[canonRoom] || mappedRooms[`aula ${canonRoom}`] || mappedRooms[roomClean] || mappedRooms[p.room];
+          let finalBuilding = '';
+          let finalAddress = '';
+
+          // 1. Risolvi da codice edificio estratto da Gemini o dalla cella (es. RM032, RM031, RM018)
+          const bCode = (p.buildingCode || rawCellText.match(/RM\d{3}/i)?.[1] || '').toUpperCase();
+          if (bCode && SAPIENZA_BUILDINGS[bCode]) {
+            finalBuilding = SAPIENZA_BUILDINGS[bCode].name;
+            finalAddress = SAPIENZA_BUILDINGS[bCode].address;
           }
 
-          // Se la cella originale del foglio orario contiene un indirizzo esplicito (es. "Via Tiburtina 205"), diamogli priorità assoluta!
-          const rawCellText = timeSlots[slotIdx]?.cells[day] || '';
-          let finalBuilding = mInfo?.building || '';
-          let finalAddress = mInfo?.address || '';
+          // 2. Risolvi da indirizzo esplicito nella cella o da Gemini
+          const explicitAddress = p.address || (rawCellText.match(/tiburtina\s*205/i) ? 'Via Tiburtina 205, 00185 Roma' : (rawCellText.match(/scarpa\s*14/i) ? 'Via Antonio Scarpa 14, 00161 Roma' : ''));
+          if (explicitAddress) {
+            finalAddress = formatSapienzaAddress(explicitAddress, bCode);
+            if (!finalBuilding) {
+              if (/tiburtina/i.test(finalAddress)) finalBuilding = 'Edificio RM025 (Tiburtina)';
+              else if (/scarpa/i.test(finalAddress)) finalBuilding = 'Edificio RM006';
+            }
+          }
 
-          if (/tiburtina/i.test(rawCellText)) {
-            finalBuilding = 'Edificio RM025';
-            finalAddress = 'Via Tiburtina 205, 00185 Roma';
-          } else if (/scarpa/i.test(rawCellText)) {
-            finalBuilding = 'Edificio RM006';
-            finalAddress = 'Via Antonio Scarpa 14, 00161 Roma';
+          // 3. Se non ancora risolto, cerca in mappedRooms dall'intestazione
+          if (!finalBuilding || !finalAddress) {
+            const roomClean = roomLabel.replace(/^aula\s+/i, '').toLowerCase().trim();
+            const dayNames = ['lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi'];
+            const currentDayStr = dayNames[day];
+            
+            const specificDayKey = Object.keys(mappedRooms).find(k => {
+               const canonK = getCanonicalRoomKey(k);
+               const hasRoom = new RegExp(`\\b${roomClean}\\b`, 'i').test(canonK);
+               const hasDay = canonK.includes(currentDayStr);
+               return hasRoom && hasDay;
+            });
+
+            const mInfo = specificDayKey
+              ? mappedRooms[specificDayKey]
+              : (mappedRooms[getCanonicalRoomKey(roomLabel)] || mappedRooms[roomClean] || mappedRooms[p.room]);
+
+            if (mInfo) {
+              finalBuilding = finalBuilding || mInfo.building;
+              finalAddress = finalAddress || mInfo.address;
+            }
+          }
+
+          // 4. Fallback: risoluzione deterministica Sapienza
+          if (!finalBuilding || !finalAddress) {
+            const resolved = resolveClassroom(roomLabel || p.room, mapText);
+            finalBuilding = finalBuilding || resolved.buildingName;
+            finalAddress = finalAddress || resolved.address;
           }
 
           if (finalAddress) {
             finalAddress = formatSapienzaAddress(finalAddress, (finalBuilding.match(/RM\d{3}/i)?.[1]));
           }
 
-          const roomLabel = mInfo ? normalizeDisplayName(mInfo.displayName) : (p.room ? normalizeDisplayName(p.room) : '');
-          
+          // Registra l'aula nella mappa aule del corso
+          if (roomLabel) {
+            const canon = getCanonicalRoomKey(roomLabel);
+            if (!uniqueClassroomsMap.has(canon)) {
+              uniqueClassroomsMap.set(canon, {
+                aulaName: roomLabel,
+                building: finalBuilding,
+                address: finalAddress,
+              });
+            }
+          }
+
           const cleanSubject = (p.subject || '').toUpperCase().trim();
           if (
             currentEvent &&
@@ -551,10 +580,12 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
       if (currentEvent) events.push(currentEvent);
       data.days[day] = events;
     }
+
+    data.classrooms = Array.from(uniqueClassroomsMap.values());
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentFingerprint, data }));
-      await AsyncStorage.setItem(`tabFingerprint_v5_${tabUrl}`, contentFingerprint);
+      await AsyncStorage.setItem(`tabFingerprint_v6_${tabUrl}`, contentFingerprint);
     } catch {}
 
     return data;
@@ -573,7 +604,7 @@ export async function fetchAllCourseData(
   forceRefresh = false,
   onProgress?: (step: string, current: number, total: number) => void
 ): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
-  const cacheKey = `allSchedules_v5_${degreeUrl}`;
+  const cacheKey = `allSchedules_v6_${degreeUrl}`;
 
   // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
   if (!forceRefresh) {
@@ -612,13 +643,13 @@ export async function fetchAllCourseData(
 
   // Calcola e memorizza il fingerprint complessivo dei canali
   // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
-  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v5_${t.url}`)));
+  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v6_${t.url}`)));
   const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
   try {
     await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
-    await AsyncStorage.setItem(`courseFingerprint_v5_${degreeUrl}`, combinedFingerprint);
+    await AsyncStorage.setItem(`courseFingerprint_v6_${degreeUrl}`, combinedFingerprint);
     await AsyncStorage.setItem(`lastCheckTime_${degreeUrl}`, Date.now().toString());
   } catch {}
 
@@ -637,7 +668,7 @@ export interface UpdateCheckResult {
  */
 export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
   try {
-    const cacheKey = `allSchedules_v5_${degreeUrl}`;
+    const cacheKey = `allSchedules_v6_${degreeUrl}`;
     const stored = await AsyncStorage.getItem(cacheKey);
     if (!stored) {
       return { hasChanges: true, reason: 'Nessun dato locale trovato' };
@@ -676,11 +707,11 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       const liveFp = currentFps[tab.url];
       if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
 
-      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v5_${tab.url}`);
+      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v6_${tab.url}`);
 
       // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
       if (!storedTabFp) {
-        await AsyncStorage.setItem(`tabFingerprint_v5_${tab.url}`, liveFp);
+        await AsyncStorage.setItem(`tabFingerprint_v6_${tab.url}`, liveFp);
         continue;
       }
 

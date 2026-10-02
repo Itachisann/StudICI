@@ -19,6 +19,8 @@ export interface ParsedClass {
   subject: string;
   teacher: string;
   room: string;
+  buildingCode?: string;
+  address?: string;
 }
 
 /**
@@ -141,7 +143,7 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
   const uniqueTexts = Array.from(new Set(cells.map(c => c.trim()).filter(Boolean)));
   
   if (uniqueTexts.length === 0) {
-    return cells.map(() => ({ subject: '', teacher: '', room: '' }));
+    return cells.map(() => ({ subject: '', teacher: '', room: '', buildingCode: '', address: '' }));
   }
 
   const map = new Map<string, ParsedClass>();
@@ -149,11 +151,11 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
 
   // 1. Controlla la cache per ogni cella unica
   for (const text of uniqueTexts) {
-    const hashKey = `cell_gemini_v6_${hashString(text)}`;
+    const hashKey = `cell_gemini_v7_${hashString(text)}`;
     try {
       const cached = await AsyncStorage.getItem(hashKey);
       if (cached) {
-        map.set(text, cleanParsedClass(JSON.parse(cached)));
+        map.set(text, validateAndCleanClass(JSON.parse(cached), text));
       } else {
         toFetch.push(text);
       }
@@ -162,18 +164,38 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
     }
   }
 
-  // 2. Se ci sono celle non in cache, lascia che sia Gemini a decodificarle direttamente
+  // 2. Se ci sono celle non in cache, analisi semantica rigida con Gemini
   if (toFetch.length > 0) {
     try {
-      const prompt = `Sei un parser esperto di orari universitari della Facoltà di Ingegneria (Sapienza Università di Roma).
-Ti fornisco un elenco di celle di una tabella orario. Possono essere in vari formati, orizzontali o verticali, con note, trattini o sigle (es. "Analisi matematica 1 PISTOIA Angela (16)", "Laboratorio di matematica PISTOIA Angela (16)", "ELETTRONICA (RM032 aula 33) CAPUTO DOMENICO ----", "SEGNALI DETERMINISTICI E STOCASTICI ED ELABORAZIONE DATI E SEGNALI BIOMEDICI I (RM031 aula 1) PIAZZO LORENZO").
+      const prompt = `Sei l'analizzatore semantico ufficiale degli orari universitari della Facoltà di Ingegneria - Sapienza Università di Roma.
+Ricevi un array di testi estratti da tabelle orario (possono contenere abbreviazioni, formati non convenzionali, trattini o sigle).
 
-Per CIASCUNA cella estrai con precisione:
-- "subject": SOLO ed esclusivamente il nome completo della materia/insegnamento, senza aula, senza docenti, senza trattini o note. Se il titolo è composto da più parole (es. "Laboratorio di matematica", "Laboratorio di Calcolo Numerico", "Segnali deterministici e stocastici ed elaborazione dati e segnali biomedici I"), estrai il titolo intero.
-- "teacher": nome e cognome del docente (es: "PISTOIA Angela", "CAPUTO Domenico", "D'ORAZIO Annunziata") oppure "" se non presente.
-- "room": SOLO l'indicazione dell'aula (es: "16", "aula 33", "RM032 aula 33", "aula 1") oppure "" se non presente.
+Per CIASCUNA cella analizza semanticamente il contenuto ed estrai con assoluta precisione:
 
-Rispondi rigorosamente con un array JSON di oggetti con i campi "subject", "teacher", "room", nello stesso identico ordine.
+1. "subject":
+   - Il nome COMPLETO dell'insegnamento / materia.
+   - NON troncare titoli composti (es: "Laboratorio di matematica", "Laboratorio di Calcolo Numerico", "Segnali deterministici e stocastici ed elaborazione dati e segnali biomedici I", "Analisi matematica 1").
+   - Escludi aula, docente, note, date e trattini decorativi.
+
+2. "teacher":
+   - Il nome completo del docente nel formato convenzionale "COGNOME Nome" (es. "PISTOIA Angela", "CAPUTO Domenico", "D'ORAZIO Annunziata", "RIZZUTO Emanuele").
+   - Se non indicato o assente, restituisci "".
+
+3. "room":
+   - Il nome NORMALIZZATO dell'aula precisa secondo le convenzioni Sapienza:
+     * Se è un numero (es: "16", "(16)"), normalizza in "Aula 16".
+     * Se è abbreviata (es: "A. 3", "A3", "Piano 1 - A3"), normalizza in "Aula 3".
+     * Se contiene il codice edificio (es: "RM032 aula 33", "RM031 aula 1"), estrai SOLO il nome dell'aula normalizzato, es: "Aula 33", "Aula 1".
+     * Se ha un nome proprio (es: "Aula Magna", "Lab Comp", "Laboratorio Informatico"), mantieni il nome convenzionale normalizzato (es. "Aula Magna", "Lab Comp").
+     * Se non presente, restituisci "".
+
+4. "buildingCode":
+   - Il codice edificio Sapienza (formato RMxxx es. "RM032", "RM031", "RM038", "RM006", "RM018", "RM025") se presente nella cella, oppure "" se non presente.
+
+5. "address":
+   - L'indirizzo esplicito se specificato nella cella (es: "Via Tiburtina 205"), altrimenti "".
+
+Rispondi RIGOROSAMENTE con un array JSON di oggetti [{"subject": string, "teacher": string, "room": string, "buildingCode": string, "address": string}] nello stesso identico ordine.
 
 Celle:
 ${JSON.stringify(toFetch)}`;
@@ -193,13 +215,9 @@ ${JSON.stringify(toFetch)}`;
         for (let i = 0; i < toFetch.length; i++) {
           const rawText = toFetch[i];
           if (parsed[i]) {
-            const item = cleanParsedClass({
-              subject: (parsed[i].subject || '').trim().toUpperCase(),
-              teacher: (parsed[i].teacher || '').trim(),
-              room: (parsed[i].room || '').trim(),
-            });
+            const item = validateAndCleanClass(parsed[i], rawText);
             map.set(rawText, item);
-            AsyncStorage.setItem(`cell_gemini_v6_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
+            AsyncStorage.setItem(`cell_gemini_v7_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
           }
         }
       }
@@ -222,30 +240,58 @@ ${JSON.stringify(toFetch)}`;
   // Costruisci il risultato finale usando la mappa o il fallback
   return cells.map(c => {
     const trimmed = c.trim();
-    if (!trimmed) return { subject: '', teacher: '', room: '' };
+    if (!trimmed) return { subject: '', teacher: '', room: '', buildingCode: '', address: '' };
     return map.get(trimmed) || fallbackParse(trimmed);
   });
 }
 
 /**
- * Ripara eventuali parole di materia finite erroneamente nel nome del docente
- * (es. subject: "LABORATORIO", teacher: "di matematica PISTOIA Angela")
+ * Valida ed effettua guardrail sui campi estratti, integrando regex per evitare errori o allucinazioni.
  */
-export function cleanParsedClass(result: ParsedClass): ParsedClass {
-  let { subject, teacher, room } = result;
+export function validateAndCleanClass(geminiParsed: ParsedClass, rawText: string = ''): ParsedClass {
+  let { subject, teacher, room, buildingCode, address } = geminiParsed || {};
+  subject = (subject || '').trim();
+  teacher = (teacher || '').trim();
+  room = (room || '').trim();
+  buildingCode = (buildingCode || '').toUpperCase().trim();
+  address = (address || '').trim();
 
+  // 1. Guardrail contro parole di materia finite erroneamente nel docente
   if (teacher) {
     const leakedMatch = teacher.match(/^(di|del|della|delle|dei|degli|e|ed|in|per)\s+([a-zA-Zà-öø-ÿ0-9'\s]+?)\s+((?:(?:Prof\.|Prof\.ssa)\s+)?[A-ZÀ-ÖØ-ß]{2,}(?:\s+[A-ZÀ-ÖØ-ß]{2,})*\s+[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+.*)$/i);
     if (leakedMatch) {
-      subject = (subject + ' ' + leakedMatch[1] + ' ' + leakedMatch[2]).trim().toUpperCase();
+      subject = (subject + ' ' + leakedMatch[1] + ' ' + leakedMatch[2]).trim();
       teacher = leakedMatch[3].trim();
     }
   }
 
+  // 2. Integrazione regex di sicurezza: estrai codice edificio se presente nel testo originale
+  if (!buildingCode && rawText) {
+    const rmMatch = rawText.match(/(RM\d{3})/i);
+    if (rmMatch) buildingCode = rmMatch[1].toUpperCase();
+  }
+
+  // 3. Normalizzazione nome aula secondo le convenzioni Sapienza
+  if (!room && rawText) {
+    const rMatch = rawText.match(/\(([^)]+)\)/);
+    if (rMatch) room = rMatch[1].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
+  }
+  if (room) {
+    room = normalizeDisplayName(room);
+  }
+
+  // 4. Indirizzo esplicito di sicurezza (es. Tiburtina 205 o Scarpa 14)
+  if (!address && rawText) {
+    if (/tiburtina\s*205/i.test(rawText)) address = 'Via Tiburtina 205, 00185 Roma';
+    else if (/scarpa\s*14/i.test(rawText)) address = 'Via Antonio Scarpa 14, 00161 Roma';
+  }
+
   return {
-    subject: subject.trim().toUpperCase(),
-    teacher: teacher.trim(),
-    room: room.trim(),
+    subject: subject.toUpperCase(),
+    teacher,
+    room,
+    buildingCode,
+    address,
   };
 }
 
@@ -254,13 +300,21 @@ export function cleanParsedClass(result: ParsedClass): ParsedClass {
  */
 export function fallbackParse(cell: string): ParsedClass {
   if (!cell || cell.trim() === '') {
-    return { subject: '', teacher: '', room: '' };
+    return { subject: '', teacher: '', room: '', buildingCode: '', address: '' };
   }
   
   const raw = cell
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&')
     .trim();
+
+  let buildingCode = '';
+  const rmMatch = raw.match(/(RM\d{3})/i);
+  if (rmMatch) buildingCode = rmMatch[1].toUpperCase();
+
+  let address = '';
+  if (/tiburtina\s*205/i.test(raw)) address = 'Via Tiburtina 205, 00185 Roma';
+  else if (/scarpa\s*14/i.test(raw)) address = 'Via Antonio Scarpa 14, 00161 Roma';
 
   // Se la cella ha più righe (es. da <br>), linea 1 è solitamente la materia
   if (raw.includes('\n')) {
@@ -270,33 +324,34 @@ export function fallbackParse(cell: string): ParsedClass {
       const rest = lines.slice(1).join(' ');
       
       const roomMatch = rest.match(/\(([^)]+)\)/);
-      const room = roomMatch ? roomMatch[1].trim() : '';
+      const room = roomMatch ? roomMatch[1].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim() : '';
       let teacher = rest.replace(/\(([^)]+)\)/, '').trim();
       teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
       teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-      return cleanParsedClass({ subject, teacher, room });
+      return validateAndCleanClass({ subject, teacher, room, buildingCode, address }, cell);
     }
   }
 
   const decoded = raw.replace(/\s+/g, ' ').trim();
   
-  // 1. "MATERIA (AULA) DOCENTE" (es: "FISICA II (14) PATERA Vincenzo" o "Laboratorio di Informatica (16) NICOLUSSI Raffaele")
+  // 1. "MATERIA (AULA) DOCENTE"
   const m1 = decoded.match(/^(.+?)\s*\(([^)]+)\)\s+(.+)$/);
   if (m1) {
     let teacher = m1[3].trim();
     teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
     teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-    return cleanParsedClass({ subject: m1[1].trim().toUpperCase(), teacher, room: m1[2].trim() });
+    const room = m1[2].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
+    return validateAndCleanClass({ subject: m1[1].trim().toUpperCase(), teacher, room, buildingCode, address }, cell);
   }
   
   // 2. "MATERIA DOCENTE (AULA)" con docente con cognome in MAIUSCOLO
-  // (es: "Laboratorio di matematica PISTOIA Angela (16)", "Analisi matematica 1 PISTOIA Angela (16)", "Geometria BURATTI Marco (16)")
   const mTeacherCaps = decoded.match(/^(.+?)\s+((?:(?:Prof\.|Prof\.ssa)\s+)?[A-ZÀ-ÖØ-ß]{2,}(?:\s+[A-ZÀ-ÖØ-ß]{2,})*\s+[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+(?:\s+[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+)*)\s*\(([^)]+)\)$/);
   if (mTeacherCaps) {
     let teacher = mTeacherCaps[2].trim();
     teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
     teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-    return cleanParsedClass({ subject: mTeacherCaps[1].trim().toUpperCase(), teacher, room: mTeacherCaps[3].trim() });
+    const room = mTeacherCaps[3].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
+    return validateAndCleanClass({ subject: mTeacherCaps[1].trim().toUpperCase(), teacher, room, buildingCode, address }, cell);
   }
 
   // Fallback 2: "MATERIA DOCENTE (AULA)" generico
@@ -305,14 +360,18 @@ export function fallbackParse(cell: string): ParsedClass {
     let teacher = m2[2].trim();
     teacher = teacher.replace(/\s*(?:via|viale|piazza|corso|largo)\s+[a-zA-Z0-9\s,]+$/i, '').trim();
     teacher = teacher.replace(/\s*RM\d{3}\b.*/i, '').trim();
-    return cleanParsedClass({ subject: m2[1].trim().toUpperCase(), teacher, room: m2[3].trim() });
+    const room = m2[3].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
+    return validateAndCleanClass({ subject: m2[1].trim().toUpperCase(), teacher, room, buildingCode, address }, cell);
   }
   
   // 3. "MATERIA (AULA)"
   const m3 = decoded.match(/^(.+?)\s*\(([^)]+)\)$/);
-  if (m3) return cleanParsedClass({ subject: m3[1].trim().toUpperCase(), teacher: '', room: m3[2].trim() });
+  if (m3) {
+    const room = m3[2].replace(/RM\d{3}/i, '').replace(/aula/i, '').trim();
+    return validateAndCleanClass({ subject: m3[1].trim().toUpperCase(), teacher: '', room, buildingCode, address }, cell);
+  }
 
-  return cleanParsedClass({ subject: decoded.trim().toUpperCase(), teacher: '', room: '' });
+  return validateAndCleanClass({ subject: decoded.trim().toUpperCase(), teacher: '', room: '', buildingCode, address }, cell);
 }
 
 export function isAnnouncement(text: string): boolean {
