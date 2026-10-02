@@ -1,12 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import SegmentedControl from '@react-native-segmented-control/segmented-control';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { parseTabHierarchy } from './YearChannelSelector';
 
 const SAPIENZA_RED = '#822433';
+
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
 export interface DefaultTabPickerProps {
   tabs: Tab[];
@@ -141,34 +146,50 @@ export function DefaultTabPicker({
           </View>
         )}
 
-        {/* ── 2. Selezione Canale / Suddivisione (se presenti più canali) ── */}
+        {/* ── 2. Selezione Canale / Suddivisione (Segmented Control Unificato) ── */}
         {showChannelSection && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
-            <View style={styles.chipsContainer}>
-              {channelsForSelectedYear.map((item, idx) => {
-                const isSelected = (item.channel || '') === selectedChannel;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[styles.chip, isSelected && styles.chipActive]}
-                    activeOpacity={0.7}
-                    onPress={() => handleSelectChannel(item.channel)}
-                  >
-                    <Ionicons
-                      name={isSelected ? 'checkmark-circle' : 'people-outline'}
-                      size={16}
-                      color={isSelected ? '#ffffff' : '#8e8e93'}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {isNativeIos ? (
+              <SegmentedControl
+                values={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
+                selectedIndex={Math.max(
+                  0,
+                  channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
+                )}
+                onChange={(event) => {
+                  const idx = event.nativeEvent.selectedSegmentIndex;
+                  if (channelsForSelectedYear[idx]) {
+                    handleSelectChannel(channelsForSelectedYear[idx].channel);
+                  }
+                }}
+                appearance="dark"
+                backgroundColor="#1c1c1e"
+                tintColor={SAPIENZA_RED}
+                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
+                style={styles.nativeSegmentedControl}
+              />
+            ) : (
+              <View style={styles.unifiedSegmentedControl}>
+                {channelsForSelectedYear.map((item, idx) => {
+                  const isSelected = (item.channel || '') === selectedChannel;
+                  const displayName = item.channel || item.tab.name;
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[styles.segmentItem, isSelected && styles.segmentItemActive]}
+                      activeOpacity={0.8}
+                      onPress={() => handleSelectChannel(item.channel)}
+                    >
+                      <Text style={[styles.segmentItemText, isSelected && styles.segmentItemTextActive]}>
+                        {displayName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
           </View>
         )}
 
@@ -274,33 +295,65 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
-  // Stile Pill identico a YearChannelSelector nella Home
+  // Stile Pill Anno (snello e staccato)
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#242426',
-    paddingHorizontal: 18,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1.5,
-    borderColor: '#333336',
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 15,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
     justifyContent: 'center',
   },
   chipActive: {
     backgroundColor: 'rgba(130, 36, 51, 0.45)',
     borderColor: SAPIENZA_RED,
-    shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 3,
   },
   chipText: {
-    fontSize: 13.5,
+    fontSize: 13,
     fontWeight: '600',
     color: '#a1a1aa',
   },
   chipTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  // Canale Unificato (Segmented Control)
+  nativeSegmentedControl: {
+    height: 36,
+  },
+  unifiedSegmentedControl: {
+    flexDirection: 'row',
+    backgroundColor: '#1c1c1e',
+    borderRadius: 11,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    alignItems: 'center',
+  },
+  segmentItem: {
+    flex: 1,
+    paddingVertical: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  segmentItemActive: {
+    backgroundColor: SAPIENZA_RED,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentItemText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#a1a1aa',
+  },
+  segmentItemTextActive: {
     color: '#ffffff',
     fontWeight: '700',
   },

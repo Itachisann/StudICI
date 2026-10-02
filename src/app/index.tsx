@@ -159,9 +159,13 @@ export default function ScheduleScreen() {
       displayClass = displayClass.startsWith('L') ? `Classe ${displayClass}` : `Percorso ${displayClass}`;
     }
 
+    // Titolo pulito (es. rimuove "- Triennale" o "- Magistrale" ridondante se presente nel titolo Sapienza)
+    const cleanCourseTitle = rawName.replace(/\s*[-–]\s*(?:triennale|magistrale)\b/gi, '').trim() || 'Orario Lezioni';
+
     const faculty = schedule?.info?.faculty || 'Facoltà di Ingegneria Civile e Industriale';
 
     return {
+      cleanCourseTitle,
       degreeTypeLabel,
       isMagistrale,
       displayClass,
@@ -176,21 +180,21 @@ export default function ScheduleScreen() {
       {/* ── Header Principale App: Facoltà, Corso, Tipologia Laurea & Percorso ── */}
       <View style={styles.appHeader}>
         <View style={styles.appHeaderTopRow}>
-          <Ionicons name="school" size={13} color="#c24153" style={{ marginRight: 6 }} />
+          <Ionicons name="school" size={12} color="#c24153" style={{ marginRight: 5 }} />
           <Text style={styles.appHeaderFacultyText} numberOfLines={1}>
             {courseMetadata.faculty.toUpperCase()}
           </Text>
         </View>
 
         <Text style={styles.appHeaderCourseTitle} numberOfLines={2}>
-          {degreeName || schedule?.info?.course || 'Orario Lezioni'}
+          {courseMetadata.cleanCourseTitle}
         </Text>
 
         <View style={styles.appHeaderBadgesRow}>
           {/* Badge Tipologia (Triennale / Magistrale / Ciclo Unico) */}
           <View style={[
             styles.headerBadge,
-            { backgroundColor: courseMetadata.isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }
+            { backgroundColor: courseMetadata.isMagistrale ? 'rgba(168, 85, 247, 0.12)' : 'rgba(59, 130, 246, 0.12)' }
           ]}>
             <View style={[
               styles.headerBadgeDot,
@@ -206,8 +210,8 @@ export default function ScheduleScreen() {
 
           {/* Badge Percorso / Classe (es. Classe L-9 o Percorso LR9) */}
           {courseMetadata.displayClass ? (
-            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 159, 10, 0.15)' }]}>
-              <Ionicons name="ribbon-outline" size={12} color="#ff9f0a" style={{ marginRight: 4 }} />
+            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 159, 10, 0.12)' }]}>
+              <Ionicons name="ribbon-outline" size={11} color="#ff9f0a" style={{ marginRight: 4 }} />
               <Text style={[styles.headerBadgeText, { color: '#ff9f0a' }]}>
                 {courseMetadata.displayClass}
               </Text>
@@ -216,8 +220,8 @@ export default function ScheduleScreen() {
 
           {/* Badge Anno Accademico se presente */}
           {schedule?.info?.academicYear ? (
-            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 255, 255, 0.08)' }]}>
-              <Text style={[styles.headerBadgeText, { color: '#a1a1aa' }]}>
+            <View style={[styles.headerBadge, { backgroundColor: 'rgba(255, 255, 255, 0.06)' }]}>
+              <Text style={[styles.headerBadgeText, { color: '#8e8e93' }]}>
                 {schedule.info.academicYear}
               </Text>
             </View>
@@ -466,50 +470,50 @@ const styles = StyleSheet.create({
   /* App Main Header */
   appHeader: {
     paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 10,
+    paddingTop: 4,
+    paddingBottom: 8,
   },
   appHeaderTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 3,
+    marginBottom: 2,
   },
   appHeaderFacultyText: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
     color: '#8e8e93',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   appHeaderCourseTitle: {
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: '700',
     color: '#ffffff',
     letterSpacing: -0.3,
-    marginBottom: 8,
-    lineHeight: 26,
+    marginBottom: 6,
+    lineHeight: 25,
   },
   appHeaderBadgesRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 7,
+    gap: 6,
   },
   headerBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 7,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
   },
   headerBadgeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 5,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
   },
   headerBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 10.5,
+    fontWeight: '600',
     letterSpacing: 0.1,
   },
 
