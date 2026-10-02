@@ -51,43 +51,107 @@ export async function syncScheduleToAppleCalendar(
       };
     }
 
-    // Cerca o ricrea il calendario dedicato StudICI
+    // 1. Cerca o riusa il calendario dedicato StudICI (evita cancellazione totale per non triggerare restrizioni account)
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
     const existingCal = calendars.find(
-      c => c.name === 'studici_lessons' || c.title === 'StudICI - Lezioni Sapienza'
+      c => (c.name === 'studici_lessons' || c.title === 'StudICI - Lezioni Sapienza') && c.allowsModifications
     );
 
+    let calendarId: string | null = null;
+    let isDefaultCalendarFallback = false;
+
     if (existingCal) {
+      calendarId = existingCal.id;
+      // Rimuovi vecchi eventi delle lezioni per evitare duplicati senza cancellare il calendario
       try {
-        await Calendar.deleteCalendarAsync(existingCal.id);
+        const pastDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+        const futureDate = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+        const oldEvents = await Calendar.getEventsAsync([existingCal.id], pastDate, futureDate);
+        for (const evt of oldEvents) {
+          if (evt.notes?.includes('StudICI') || evt.notes?.includes('Sapienza')) {
+            try {
+              await Calendar.deleteEventAsync(evt.id, { futureEvents: true });
+            } catch {
+              // ignora errore su singolo evento
+            }
+          }
+        }
       } catch {
-        // Se non riesce a cancellare il calendario, procediamo a crearne un altro o usarlo
+        // ignora
       }
     }
 
-    let calendarId: string;
-    if (Platform.OS === 'ios') {
-      const defaultCal = await Calendar.getDefaultCalendarAsync();
-      calendarId = await Calendar.createCalendarAsync({
-        title: 'StudICI - Lezioni Sapienza',
-        color: '#822433',
-        entityType: Calendar.EntityTypes.EVENT,
-        sourceId: defaultCal.source.id,
-        source: defaultCal.source,
-        name: 'studici_lessons',
-        ownerAccount: 'personal',
-        accessLevel: Calendar.CalendarAccessLevel.OWNER,
-      });
-    } else {
-      calendarId = await Calendar.createCalendarAsync({
-        title: 'StudICI - Lezioni Sapienza',
-        color: '#822433',
-        entityType: Calendar.EntityTypes.EVENT,
-        source: { isLocalAccount: true, name: 'StudICI', type: 'LOCAL' },
-        name: 'studici_lessons',
-        ownerAccount: 'StudICI',
-        accessLevel: Calendar.CalendarAccessLevel.OWNER,
-      });
+    // 2. Se non esiste un calendario StudICI, tenta di crearlo testando le sorgenti disponibili
+    if (!calendarId) {
+      if (Platform.OS === 'ios') {
+        const defaultCal = await Calendar.getDefaultCalendarAsync();
+        const candidateSources: Calendar.Source[] = [];
+
+        // Priorità 1: iCloud (sorgente primaria che permette creazione calendari su iOS)
+        const iCloudCal = calendars.find(
+          c => c.source && (c.source.name?.toLowerCase().includes('icloud') || c.source.type === Calendar.SourceType.CALDAV) && c.allowsModifications
+        );
+        if (iCloudCal?.source) candidateSources.push(iCloudCal.source);
+
+        // Priorità 2: sorgente defaultCal
+        if (defaultCal?.source) candidateSources.push(defaultCal.source);
+
+        // Priorità 3: sorgente locale
+        const localCal = calendars.find(
+          c => c.source && (c.source.type === Calendar.SourceType.LOCAL || c.source.name?.toLowerCase() === 'default') && c.allowsModifications
+        );
+        if (localCal?.source) candidateSources.push(localCal.source);
+
+        // Priorità 4: tutte le altre sorgenti modificabili
+        for (const cal of calendars) {
+          if (cal.source && cal.allowsModifications && !candidateSources.some(s => s.id === cal.source.id)) {
+            candidateSources.push(cal.source);
+          }
+        }
+
+        // Tenta la creazione su ciascuna sorgente candidata
+        for (const src of candidateSources) {
+          try {
+            calendarId = await Calendar.createCalendarAsync({
+              title: 'StudICI - Lezioni Sapienza',
+              color: '#822433',
+              entityType: Calendar.EntityTypes.EVENT,
+              sourceId: src.id,
+              source: src,
+              name: 'studici_lessons',
+              ownerAccount: 'personal',
+              accessLevel: Calendar.CalendarAccessLevel.OWNER,
+            });
+            if (calendarId) break;
+          } catch (createErr: any) {
+            console.warn(`Creazione calendario su sorgente ${src.name} non supportata:`, createErr?.message);
+          }
+        }
+
+        // 3. Fallback sicuro: se l'account/dispositivo non consente creazione di nuovi calendari,
+        // inserisci direttamente nel calendario predefinito dell'utente
+        if (!calendarId) {
+          calendarId = defaultCal.id;
+          isDefaultCalendarFallback = true;
+        }
+      } else {
+        // Android
+        try {
+          calendarId = await Calendar.createCalendarAsync({
+            title: 'StudICI - Lezioni Sapienza',
+            color: '#822433',
+            entityType: Calendar.EntityTypes.EVENT,
+            source: { isLocalAccount: true, name: 'StudICI', type: 'LOCAL' },
+            name: 'studici_lessons',
+            ownerAccount: 'StudICI',
+            accessLevel: Calendar.CalendarAccessLevel.OWNER,
+          });
+        } catch {
+          const defaultCal = await Calendar.getDefaultCalendarAsync();
+          calendarId = defaultCal.id;
+          isDefaultCalendarFallback = true;
+        }
+      }
     }
 
     let eventsCount = 0;
@@ -155,10 +219,14 @@ export async function syncScheduleToAppleCalendar(
     const timestamp = Date.now();
     await AsyncStorage.setItem(LAST_CALENDAR_SYNC_KEY, timestamp.toString());
 
+    const targetCalendarName = isDefaultCalendarFallback
+      ? 'tuo Calendario'
+      : "Calendario Apple ('StudICI - Lezioni Sapienza')";
+
     return {
       success: true,
       eventsCount,
-      message: `Sincronizzazione completata: ${eventsCount} lezioni inserite nel Calendario Apple ('StudICI - Lezioni Sapienza')!`,
+      message: `Sincronizzazione completata: ${eventsCount} lezioni inserite nel ${targetCalendarName}!`,
     };
   } catch (err: any) {
     console.error('Errore sincronizzazione calendario Apple:', err);

@@ -1,8 +1,13 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import SegmentedControl from '@react-native-segmented-control/segmented-control';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 
 const SAPIENZA_RED = '#822433';
+
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
 export interface ParsedTabInfo {
   tab: Tab;
@@ -126,6 +131,13 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
     return false;
   }, [channelsForActiveYear]);
 
+  // Indice del canale correntemente attivo
+  const selectedChannelIdx = useMemo(() => {
+    return channelsForActiveYear.findIndex(
+      c => currentParsed && c.tab.url === currentParsed.tab.url
+    );
+  }, [channelsForActiveYear, currentParsed]);
+
   const handleSelectYear = (year: string) => {
     const available = parsedTabs.filter(p => p.year === year);
     if (available.length === 0) return;
@@ -198,65 +210,83 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         )
       )}
 
-      {/* ── Riga 2: Selezione Canale (Pillole uniformate, stessa larghezza degli anni) ── */}
+      {/* ── Riga 2: Selezione Canale (IPA: UISegmentedControl Nativo Apple | Expo: Pillole a larghezza uguale) ── */}
       {showChannelRow && (
         <View style={styles.channelContainer}>
-          {channelsForActiveYear.length <= 3 ? (
-            <View style={styles.channelRowEqual}>
-              {channelsForActiveYear.map((item, i) => {
-                const isChannelActive = currentParsed?.tab.url === item.tab.url;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => onSelectTab(item.tab)}
-                    style={[
-                      styles.chipEqual,
-                      isChannelActive && styles.chipActive,
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
-                      numberOfLines={1}
-                    >
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+          {isNativeIos ? (
+            <SegmentedControl
+              values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
+              selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
+              onChange={(event) => {
+                const idx = event.nativeEvent.selectedSegmentIndex;
+                if (channelsForActiveYear[idx]) {
+                  onSelectTab(channelsForActiveYear[idx].tab);
+                }
+              }}
+              appearance="dark"
+              tintColor={SAPIENZA_RED}
+              fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+              activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
+              style={styles.nativeSegmentedControl}
+            />
           ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.channelScroll}
-              contentContainerStyle={styles.rowContainer}
-            >
-              {channelsForActiveYear.map((item, i) => {
-                const isChannelActive = currentParsed?.tab.url === item.tab.url;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => onSelectTab(item.tab)}
-                    style={[
-                      styles.chipFixedEqual,
-                      isChannelActive && styles.chipActive,
-                      i === channelsForActiveYear.length - 1 && { marginRight: 0 },
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
-                      numberOfLines={1}
+            channelsForActiveYear.length <= 3 ? (
+              <View style={styles.channelRowEqual}>
+                {channelsForActiveYear.map((item, i) => {
+                  const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                  const displayName = item.channel || item.tab.name;
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => onSelectTab(item.tab)}
+                      style={[
+                        styles.chipEqual,
+                        isChannelActive && styles.chipActive,
+                      ]}
+                      activeOpacity={0.7}
                     >
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+                      <Text
+                        style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                        numberOfLines={1}
+                      >
+                        {displayName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.channelScroll}
+                contentContainerStyle={styles.rowContainer}
+              >
+                {channelsForActiveYear.map((item, i) => {
+                  const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                  const displayName = item.channel || item.tab.name;
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => onSelectTab(item.tab)}
+                      style={[
+                        styles.chipFixedEqual,
+                        isChannelActive && styles.chipActive,
+                        i === channelsForActiveYear.length - 1 && { marginRight: 0 },
+                      ]}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                        numberOfLines={1}
+                      >
+                        {displayName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )
           )}
         </View>
       )}
@@ -348,6 +378,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+  },
+  nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
+    height: 36,
   },
 
   // Canale a Larghezza Uguale (Sia Verticale che Orizzontale)
