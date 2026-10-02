@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Modal, RefreshControl, Platform
+  TouchableOpacity, Modal, RefreshControl, Platform, Animated
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -31,6 +31,33 @@ const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
 const DAYS_FULL = ['LUNEDÌ', 'MARTEDÌ', 'MERCOLEDÌ', 'GIOVEDÌ', 'VENERDÌ'];
 const ACCENT_COLORS = ['#3b82f6', '#a855f7', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#6366f1'];
 
+function AttendanceCheckmark() {
+  const [scale] = useState(() => new Animated.Value(0));
+  const [opacity] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 1,
+        tension: 120,
+        friction: 5,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scale, opacity]);
+
+  return (
+    <Animated.View style={[styles.presenceSymbolBox, { transform: [{ scale }], opacity }]}>
+      <Ionicons name="checkmark-circle" size={17} color="#38bdf8" />
+    </Animated.View>
+  );
+}
+
 export default function ScheduleScreen() {
   const [loading, setLoading] = useState(true);
   const [schedule, setSchedule] = useState<ScheduleData | null>(null);
@@ -46,8 +73,6 @@ export default function ScheduleScreen() {
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insets = useSafeAreaInsets();
 
   const loadData = useCallback(async (force = false) => {
@@ -108,46 +133,25 @@ export default function ScheduleScreen() {
     }, [loadData, loadAttendance])
   );
 
-  const showToast = useCallback((msg: string) => {
-    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-    setToastMessage(msg);
-    toastTimeoutRef.current = setTimeout(() => {
-      setToastMessage(null);
-    }, 2400);
-  }, []);
-
   const handleClassLongPress = useCallback(async (cls: ClassEvent) => {
     try {
       const res = await toggleAttendance(selectedDay, DAYS_FULL[selectedDay], cls);
       setAttendanceRecords(res.records);
-      if (res.added) {
-        showToast(`✓ Presenza registrata: ${cls.subject}`);
-      } else {
-        showToast(`Presenza rimossa: ${cls.subject}`);
-      }
     } catch (err) {
       console.error(err);
     }
-  }, [selectedDay, showToast]);
+  }, [selectedDay]);
 
   const handleDayLongPress = useCallback(async (dayIdx: number) => {
     const dayClasses = schedule?.days[dayIdx] || [];
-    if (dayClasses.length === 0) {
-      showToast(`Nessuna lezione programmata per ${DAYS_FULL[dayIdx]}`);
-      return;
-    }
+    if (dayClasses.length === 0) return;
     try {
       const res = await toggleDayAttendance(dayIdx, DAYS_FULL[dayIdx], dayClasses);
       setAttendanceRecords(res.records);
-      if (res.added) {
-        showToast(`✓ Segnate ${res.count} presenze per ${DAYS_FULL[dayIdx]}!`);
-      } else {
-        showToast(`Presenze rimosse per ${DAYS_FULL[dayIdx]}`);
-      }
     } catch (err) {
       console.error(err);
     }
-  }, [schedule, showToast]);
+  }, [schedule]);
 
   const checkIsAttended = useCallback((cls: ClassEvent) => {
     const { dateStr } = getDateForDayIndex(selectedDay);
@@ -324,10 +328,10 @@ export default function ScheduleScreen() {
                   <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
                     <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
                   </View>
-                  {isToday ? (
-                    <View style={[styles.dayDot, isActive && styles.dayDotActive]} />
-                  ) : hasAttendance ? (
+                  {hasAttendance ? (
                     <View style={styles.attendanceDayDot} />
+                  ) : isToday ? (
+                    <View style={[styles.dayDot, isActive && styles.dayDotActive]} />
                   ) : null}
                 </TouchableOpacity>
               );
@@ -396,12 +400,8 @@ export default function ScheduleScreen() {
                         {cls.subject?.toUpperCase()}
                       </Text>
                       <View style={styles.badgesCluster}>
-                        {/* Simbolo colorato distintivo della presenza (senza colorare tutta la card di verde) */}
-                        {isAttended && (
-                          <View style={styles.presenceSymbolBox}>
-                            <Ionicons name="checkmark-circle" size={17} color="#38bdf8" />
-                          </View>
-                        )}
+                        {/* Simbolo colorato distintivo della presenza (con animazione spring all'apparizione) */}
+                        {isAttended && <AttendanceCheckmark />}
                         {isLive && (
                           <View style={styles.liveBadge}>
                             <View style={styles.liveDot} />
@@ -441,6 +441,7 @@ export default function ScheduleScreen() {
                   <MenuView
                     key={i}
                     title={cls.subject}
+                    style={styles.cardMenuWrapper}
                     shouldOpenOnLongPress={true}
                     onPressAction={({ nativeEvent }) => {
                       if (nativeEvent.event === 'toggle_presence') {
@@ -467,6 +468,7 @@ export default function ScheduleScreen() {
               return (
                 <TouchableOpacity
                   key={i}
+                  style={styles.cardMenuWrapper}
                   activeOpacity={0.85}
                   onLongPress={() => handleClassLongPress(cls)}
                   delayLongPress={400}
@@ -528,24 +530,6 @@ export default function ScheduleScreen() {
         subjects={selectedRoomSubjects}
         onClose={() => setSelectedRoomModal(null)}
       />
-
-      {/* Toast Feedback Notifica Fluttuante iOS */}
-      {toastMessage && (
-        <View style={[styles.toastFloatingContainer, { top: insets.top > 0 ? insets.top + 8 : 16 }]}>
-          <BlurView tint="dark" intensity={85} style={StyleSheet.absoluteFill} />
-          <View style={styles.toastContent}>
-            <Ionicons
-              name={toastMessage.startsWith('✓') ? 'checkmark-circle' : 'information-circle'}
-              size={18}
-              color={toastMessage.startsWith('✓') ? '#10b981' : '#38bdf8'}
-              style={{ marginRight: 8 }}
-            />
-            <Text style={styles.toastText} numberOfLines={1}>
-              {toastMessage}
-            </Text>
-          </View>
-        </View>
-      )}
 
     </SafeAreaView>
   );
@@ -780,10 +764,10 @@ const styles = StyleSheet.create({
   attendanceDayDot: {
     position: 'absolute',
     bottom: -7,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#10b981',
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#38bdf8',
   },
 
   /* Loading State */
@@ -816,10 +800,14 @@ const styles = StyleSheet.create({
 
   /* Class cards (Formato Calendario ad Alto Impatto con Orari Evidenti) */
   classList: { flex: 1, paddingHorizontal: 16 },
+  cardMenuWrapper: {
+    width: '100%',
+    marginBottom: 12,
+  },
   classCard: {
+    width: '100%',
     backgroundColor: '#1c1c1e',
     borderRadius: 18,
-    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
@@ -1063,34 +1051,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     fontWeight: '400',
-  },
-  /* Toast Feedback Fluttuante iOS */
-  toastFloatingContainer: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
-    elevation: 8,
-    zIndex: 9999,
-  },
-  toastContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(28, 28, 30, 0.78)',
-  },
-  toastText: {
-    color: '#ffffff',
-    fontSize: 13.5,
-    fontWeight: '600',
-    flex: 1,
   },
 });

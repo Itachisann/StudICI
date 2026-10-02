@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Modal, Alert, TextInput, Platform
+  ActivityIndicator, Modal, Alert, TextInput, Platform,
+  Animated, LayoutAnimation
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -182,6 +183,19 @@ export default function ProfiloScreen() {
     );
   };
 
+  const handleDeleteAttendanceDirect = async (record: AttendanceRecord) => {
+    try {
+      if (Platform.OS === 'ios') {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      }
+      const updated = await deleteAttendanceRecord(record.id);
+      setAttendanceRecords(updated);
+      setAttendanceStats(getAttendanceStats(updated));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleDeleteAttendance = (record: AttendanceRecord) => {
     Alert.alert(
       'Rimuovi Presenza',
@@ -191,11 +205,7 @@ export default function ProfiloScreen() {
         {
           text: 'Rimuovi',
           style: 'destructive',
-          onPress: async () => {
-            const updated = await deleteAttendanceRecord(record.id);
-            setAttendanceRecords(updated);
-            setAttendanceStats(getAttendanceStats(updated));
-          },
+          onPress: () => handleDeleteAttendanceDirect(record),
         },
       ]
     );
@@ -211,6 +221,9 @@ export default function ProfiloScreen() {
           text: 'Azzera Tutto',
           style: 'destructive',
           onPress: async () => {
+            if (Platform.OS === 'ios') {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            }
             await clearAllAttendance();
             setAttendanceRecords([]);
             setAttendanceStats(getAttendanceStats([]));
@@ -221,16 +234,48 @@ export default function ProfiloScreen() {
     );
   };
 
-  const renderRightActions = (item: AttendanceRecord) => (
-    <TouchableOpacity
-      style={styles.swipeDeleteAction}
-      activeOpacity={0.8}
-      onPress={() => handleDeleteAttendance(item)}
-    >
-      <Ionicons name="trash" size={20} color="#ffffff" />
-      <Text style={styles.swipeDeleteText}>Elimina</Text>
-    </TouchableOpacity>
-  );
+  const renderRightActions = (
+    _progress: Animated.AnimatedInterpolation<number | string>,
+    dragX: Animated.AnimatedInterpolation<number | string>,
+    item: AttendanceRecord
+  ) => {
+    const scale = dragX.interpolate({
+      inputRange: [-160, -70, 0],
+      outputRange: [1.15, 1, 0.5],
+      extrapolate: 'clamp',
+    });
+    const opacity = dragX.interpolate({
+      inputRange: [-90, -30, 0],
+      outputRange: [1, 1, 0],
+      extrapolate: 'clamp',
+    });
+    const trans = dragX.interpolate({
+      inputRange: [-240, -70, 0],
+      outputRange: [0, 0, 30],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <TouchableOpacity
+        style={styles.swipeDeleteContainer}
+        activeOpacity={0.85}
+        onPress={() => handleDeleteAttendanceDirect(item)}
+      >
+        <Animated.View
+          style={[
+            styles.swipeDeleteContent,
+            {
+              opacity,
+              transform: [{ scale }, { translateX: trans }],
+            },
+          ]}
+        >
+          <Ionicons name="trash" size={20} color="#ffffff" />
+          <Text style={styles.swipeDeleteText}>Elimina</Text>
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  };
 
   const renderAttendanceCardContent = (item: AttendanceRecord) => (
     <>
@@ -722,8 +767,14 @@ export default function ProfiloScreen() {
                     isNativeComponentAvailable ? (
                       <Swipeable
                         key={item.id}
-                        renderRightActions={() => renderRightActions(item)}
-                        overshootRight={false}
+                        renderRightActions={(progress, dragX) => renderRightActions(progress, dragX, item)}
+                        rightThreshold={110}
+                        overshootRight={true}
+                        onSwipeableOpen={(direction) => {
+                          if (direction === 'right') {
+                            handleDeleteAttendanceDirect(item);
+                          }
+                        }}
                         containerStyle={{ marginBottom: 10, borderRadius: 16, overflow: 'hidden' }}
                       >
                         <View style={[styles.attendanceHistoryItem, { marginBottom: 0 }]}>
@@ -1220,14 +1271,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   /* Swipeable Slide to Delete & Day Groups */
-  swipeDeleteAction: {
+  swipeDeleteContainer: {
     backgroundColor: '#ff3b30',
+    flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
-    width: 78,
-    height: '100%',
+    alignItems: 'flex-end',
+    paddingRight: 22,
     borderRadius: 16,
-    marginLeft: 6,
+    height: '100%',
+  },
+  swipeDeleteContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   swipeDeleteText: {
     color: '#ffffff',
