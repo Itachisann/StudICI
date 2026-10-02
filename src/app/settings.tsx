@@ -18,6 +18,7 @@ const SAPIENZA_RED = '#822433';
 
 export default function ProfiloScreen() {
   const [degreeName, setDegreeName] = useState<string>('');
+  const [degreeClassName, setDegreeClassName] = useState<string>('');
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
   const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
   const [availableTabs, setAvailableTabs] = useState<Tab[]>([]);
@@ -34,10 +35,12 @@ export default function ProfiloScreen() {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const storedName = await AsyncStorage.getItem('selectedDegreeName');
+      const storedClassName = await AsyncStorage.getItem('selectedDegreeClassName');
       const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
 
       setDegreeUrl(storedUrl);
       setDegreeName(storedName || '');
+      setDegreeClassName(storedClassName || '');
       setDefaultTabUrl(storedDefaultTab);
 
       if (storedUrl) {
@@ -84,6 +87,7 @@ export default function ProfiloScreen() {
 
       setDegreeUrl(degree.url);
       setDegreeName(degree.name);
+      setDegreeClassName(degree.className || '');
       setDefaultTabUrl(firstTab);
       setAvailableTabs(tabs);
       setDownloadingCourse(null);
@@ -177,6 +181,38 @@ export default function ProfiloScreen() {
     return `${defaultTabInfo.year}${defaultTabInfo.channel ? ` · ${defaultTabInfo.channel}` : ''}`;
   }, [defaultTabInfo, defaultTabObj]);
 
+  const courseMetadata = useMemo(() => {
+    const rawName = degreeName || '';
+    const rawClass = degreeClassName || '';
+
+    // Tipologia Laurea
+    const isMagistrale = /magistrale|LM[- ]?\d+/i.test(rawName) || /LM[- ]?\d+/i.test(rawClass);
+    const isCicloUnico = /ciclo unico|quinquennale/i.test(rawName) || /ciclo unico/i.test(rawClass);
+    const degreeTypeLabel = isCicloUnico 
+      ? 'Laurea a Ciclo Unico' 
+      : (isMagistrale ? 'Laurea Magistrale' : 'Laurea Triennale');
+
+    // Percorso / Classe (es. "LR9", "L-9", "LM-21")
+    let displayClass = rawClass;
+    if (!displayClass && rawName) {
+      const match = rawName.match(/\b(L[MR]?[- ]?\d+|L[- ]\d+)\b/i);
+      if (match) displayClass = match[1].toUpperCase();
+    }
+    if (displayClass && !displayClass.toLowerCase().startsWith('classe') && !displayClass.toLowerCase().startsWith('percorso')) {
+      displayClass = displayClass.startsWith('L') ? `Classe ${displayClass}` : `Percorso ${displayClass}`;
+    }
+
+    const cleanCourseTitle = rawName.replace(/\s*[-–]\s*(?:triennale|magistrale)\b/gi, '').trim() || 'Nessun corso';
+
+    return {
+      cleanCourseTitle,
+      degreeTypeLabel,
+      isMagistrale,
+      displayClass,
+      faculty: 'Facoltà di Ingegneria Civile e Industriale',
+    };
+  }, [degreeName, degreeClassName]);
+
   const filteredDegrees = useMemo(() => {
     if (!searchCourse.trim()) return degrees;
     const q = searchCourse.toLowerCase().trim();
@@ -195,18 +231,46 @@ export default function ProfiloScreen() {
 
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 130 }} showsVerticalScrollIndicator={false}>
         
-        {/* Apple ID Style Account Header Card */}
+        {/* Apple ID Style Account Header Card con Metadati Corso */}
         <View style={styles.profileHeaderCard}>
           <View style={styles.profileAvatarBox}>
             <Ionicons name="school" size={26} color="#ffffff" />
           </View>
           <View style={styles.profileHeaderInfo}>
             <Text style={styles.profileDegreeTitle} numberOfLines={2}>
-              {degreeName || 'Nessun corso'}
+              {courseMetadata.cleanCourseTitle}
             </Text>
             <Text style={styles.profileFacultySubtitle}>
-              Facoltà di Ingegneria Civile e Industriale
+              {courseMetadata.faculty}
             </Text>
+            
+            {/* Badge Tipologia & Classe/Percorso */}
+            <View style={styles.profileBadgesRow}>
+              <View style={[
+                styles.profileBadge,
+                { backgroundColor: courseMetadata.isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }
+              ]}>
+                <View style={[
+                  styles.profileBadgeDot,
+                  { backgroundColor: courseMetadata.isMagistrale ? '#c084fc' : '#60a5fa' }
+                ]} />
+                <Text style={[
+                  styles.profileBadgeText,
+                  { color: courseMetadata.isMagistrale ? '#c084fc' : '#60a5fa' }
+                ]}>
+                  {courseMetadata.degreeTypeLabel}
+                </Text>
+              </View>
+
+              {courseMetadata.displayClass ? (
+                <View style={[styles.profileBadge, { backgroundColor: 'rgba(255, 159, 10, 0.15)' }]}>
+                  <Ionicons name="ribbon-outline" size={11} color="#ff9f0a" style={{ marginRight: 4 }} />
+                  <Text style={[styles.profileBadgeText, { color: '#ff9f0a' }]}>
+                    {courseMetadata.displayClass}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           </View>
         </View>
 
@@ -225,20 +289,49 @@ export default function ProfiloScreen() {
             </View>
             <Text style={styles.rowTitle}>Corso di Laurea</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
-              {degreeName || 'Seleziona'}
+              {courseMetadata.cleanCourseTitle}
             </Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
 
           <View style={styles.separator} />
 
-          {/* Riga 2: Canale / Anno Predefinito */}
+          {/* Riga 2: Tipologia Laurea */}
+          <View style={styles.tableRow}>
+            <View style={[styles.iconBox, { backgroundColor: courseMetadata.isMagistrale ? '#a855f7' : '#3b82f6' }]}>
+              <Ionicons name="ribbon" size={16} color="#ffffff" />
+            </View>
+            <Text style={styles.rowTitle}>Tipologia</Text>
+            <Text style={styles.rowDetail} numberOfLines={1}>
+              {courseMetadata.degreeTypeLabel}
+            </Text>
+          </View>
+
+          {courseMetadata.displayClass ? (
+            <>
+              <View style={styles.separator} />
+              {/* Riga 3: Percorso / Classe */}
+              <View style={styles.tableRow}>
+                <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
+                  <Ionicons name="bookmark" size={16} color="#ffffff" />
+                </View>
+                <Text style={styles.rowTitle}>Classe / Percorso</Text>
+                <Text style={styles.rowDetail} numberOfLines={1}>
+                  {courseMetadata.displayClass}
+                </Text>
+              </View>
+            </>
+          ) : null}
+
+          <View style={styles.separator} />
+
+          {/* Riga 4: Canale / Anno Predefinito */}
           <TouchableOpacity 
             style={styles.tableRow} 
             activeOpacity={0.7} 
             onPress={() => setChannelModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
+            <View style={[styles.iconBox, { backgroundColor: '#ff2d55' }]}>
               <Ionicons name="funnel" size={16} color="#ffffff" />
             </View>
             <Text style={styles.rowTitle}>Canale Predefinito</Text>
@@ -494,6 +587,31 @@ const styles = StyleSheet.create({
     color: '#8e8e93',
     fontSize: 13,
     marginTop: 3,
+  },
+  profileBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  profileBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  profileBadgeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
+  },
+  profileBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.1,
   },
   /* Sezioni e Gruppi Inset Grouped iOS */
   sectionHeader: {
