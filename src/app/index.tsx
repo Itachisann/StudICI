@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  TouchableOpacity, Modal, RefreshControl, Platform, Animated
+  TouchableOpacity, Modal, RefreshControl, Platform, Animated,
+  useWindowDimensions
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -74,6 +75,8 @@ export default function ScheduleScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const cardWidth = Math.max(windowWidth - 32, 280);
 
   const loadData = useCallback(async (force = false) => {
     try {
@@ -376,7 +379,7 @@ export default function ScheduleScreen() {
               const isAttended = checkIsAttended(cls);
 
               const cardView = (
-                <View style={[styles.classCard, isLive && styles.classCardLive]}>
+                <View style={[styles.classCard, { width: cardWidth }, isLive && styles.classCardLive]}>
                   {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
                   <View style={styles.timeColumn}>
                     <Text style={styles.timeStartText}>{cls.startTime}</Text>
@@ -441,7 +444,7 @@ export default function ScheduleScreen() {
                   <MenuView
                     key={i}
                     title={cls.subject}
-                    style={styles.cardMenuWrapper}
+                    style={[styles.cardMenuWrapper, { width: cardWidth }]}
                     shouldOpenOnLongPress={true}
                     onPressAction={({ nativeEvent }) => {
                       if (nativeEvent.event === 'toggle_presence') {
@@ -468,7 +471,7 @@ export default function ScheduleScreen() {
               return (
                 <TouchableOpacity
                   key={i}
-                  style={styles.cardMenuWrapper}
+                  style={[styles.cardMenuWrapper, { width: cardWidth }]}
                   activeOpacity={0.85}
                   onLongPress={() => handleClassLongPress(cls)}
                   delayLongPress={400}
