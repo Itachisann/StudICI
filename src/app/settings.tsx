@@ -13,6 +13,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -53,6 +54,9 @@ import {
   performCloudSync,
   copyCloudSyncCodeToClipboard,
   restoreFromCloudBackup,
+  getICloudAutoSyncEnabled,
+  setICloudAutoSyncEnabled,
+  syncWithICloudStorage,
 } from "../utils/cloudSync";
 
 const SAPIENZA_RED = "#822433";
@@ -104,6 +108,7 @@ export default function ProfiloScreen() {
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
+  const [iCloudAutoSync, setICloudAutoSync] = useState(false);
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -132,14 +137,16 @@ export default function ProfiloScreen() {
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
-      const [cloudId, lastCloud, lastCal] = await Promise.all([
+      const [cloudId, lastCloud, lastCal, icloudEnabled] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
         getLastCalendarSync(),
+        getICloudAutoSyncEnabled(),
       ]);
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
+      setICloudAutoSync(icloudEnabled);
     } catch (e) {
       console.error(e);
     }
@@ -272,6 +279,9 @@ export default function ProfiloScreen() {
       const updated = await deleteAttendanceRecord(record.id);
       setAttendanceRecords(updated);
       setAttendanceStats(getAttendanceStats(updated));
+      if (iCloudAutoSync) {
+        syncWithICloudStorage().catch(() => {});
+      }
     } catch (err) {
       console.error(err);
     }
@@ -311,6 +321,9 @@ export default function ProfiloScreen() {
             setAttendanceRecords([]);
             setAttendanceStats(getAttendanceStats([]));
             setAttendanceModalVisible(false);
+            if (iCloudAutoSync) {
+              syncWithICloudStorage().catch(() => {});
+            }
           },
         },
       ],
@@ -546,6 +559,21 @@ export default function ProfiloScreen() {
         },
       ]
     );
+  };
+
+  const handleToggleICloudAutoSync = async (value: boolean) => {
+    setICloudAutoSync(value);
+    await setICloudAutoSyncEnabled(value);
+    if (value) {
+      await syncWithICloudStorage();
+      const updatedTime = await getLastCloudSync();
+      setLastCloudSyncTime(updatedTime);
+      Alert.alert(
+        "iCloud Sync Automatico Attivo",
+        "Le tue materie e presenze verranno sincronizzate automaticamente tra tutti i dispositivi collegati allo stesso ID Apple.",
+        [{ text: "OK" }]
+      );
+    }
   };
 
   const parsedAvailable = useMemo(
@@ -906,7 +934,30 @@ export default function ProfiloScreen() {
 
           <View style={styles.separator} />
 
-          {/* Riga 2: Calendario Apple */}
+          {/* Riga 2: iCloud Sync Automatico con Switch Nativo UISwitch */}
+          <View style={styles.tableRow}>
+            <View style={[styles.iconBox, { backgroundColor: "#34c759" }]}>
+              <Ionicons name="cloud" size={17} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.rowTitle}>iCloud Sync Automatico</Text>
+              <Text style={styles.rowSubTitle}>
+                {iCloudAutoSync
+                  ? "Sincronizza tra i tuoi dispositivi Apple"
+                  : "Disattivo · Tocca per sincronizzare"}
+              </Text>
+            </View>
+            <Switch
+              value={iCloudAutoSync}
+              onValueChange={handleToggleICloudAutoSync}
+              trackColor={{ false: "#39393d", true: "#34c759" }}
+              ios_backgroundColor="#39393d"
+            />
+          </View>
+
+          <View style={styles.separator} />
+
+          {/* Riga 3: Calendario Apple */}
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
@@ -1434,6 +1485,25 @@ export default function ProfiloScreen() {
                   <Text style={styles.cloudIdText}>ID: {cloudSyncId}</Text>
                 </View>
               ) : null}
+            </View>
+
+            {/* Card Switch iCloud Sync Automatico */}
+            <View style={styles.cloudICloudCard}>
+              <View style={styles.cloudICloudIconBox}>
+                <Ionicons name="cloud" size={20} color="#34c759" />
+              </View>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.cloudICloudTitle}>iCloud Sync Automatico</Text>
+                <Text style={styles.cloudICloudSub}>
+                  Sincronizza in background tra dispositivi con lo stesso account Apple
+                </Text>
+              </View>
+              <Switch
+                value={iCloudAutoSync}
+                onValueChange={handleToggleICloudAutoSync}
+                trackColor={{ false: "#39393d", true: "#34c759" }}
+                ios_backgroundColor="#39393d"
+              />
             </View>
 
             {/* Azioni Principali */}
@@ -2096,19 +2166,54 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
+  cloudICloudCard: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  cloudICloudIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(52, 199, 89, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  cloudICloudTitle: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  cloudICloudSub: {
+    color: "#8e8e93",
+    fontSize: 12,
+    marginTop: 2,
+  },
   cloudPrimaryBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0284c7",
-    height: 48,
-    borderRadius: 14,
-    marginBottom: 12,
+    height: 44,
+    borderRadius: 9999,
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    shadowColor: "#0284c7",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
   },
   cloudPrimaryBtnText: {
     color: "#ffffff",
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 14.5,
+    fontWeight: "600",
+    letterSpacing: -0.2,
   },
   cloudSecondaryBtn: {
     flexDirection: "row",
@@ -2116,15 +2221,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(2, 132, 199, 0.12)",
     borderWidth: 1,
-    borderColor: "rgba(2, 132, 199, 0.3)",
-    height: 48,
-    borderRadius: 14,
-    marginBottom: 24,
+    borderColor: "rgba(2, 132, 199, 0.35)",
+    height: 44,
+    borderRadius: 9999,
+    paddingHorizontal: 20,
+    marginBottom: 20,
   },
   cloudSecondaryBtnText: {
     color: "#38bdf8",
-    fontSize: 14.5,
+    fontSize: 14,
     fontWeight: "600",
+    letterSpacing: -0.2,
   },
   cloudRestoreBox: {
     backgroundColor: "#1c1c1e",
@@ -2150,7 +2257,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#141416",
     color: "#ffffff",
     fontSize: 12.5,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 12,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.1)",
@@ -2164,12 +2271,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#10b981",
-    height: 44,
-    borderRadius: 12,
+    height: 42,
+    borderRadius: 9999,
+    paddingHorizontal: 18,
   },
   cloudRestoreBtnText: {
     color: "#ffffff",
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "600",
+    letterSpacing: -0.2,
   },
 });

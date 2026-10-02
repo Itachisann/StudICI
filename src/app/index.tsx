@@ -39,6 +39,10 @@ import {
   ResolvedClassroom,
 } from "../utils/classroomLocations";
 import {
+  getICloudAutoSyncEnabled,
+  syncWithICloudStorage,
+} from "../utils/cloudSync";
+import {
   ClassEvent,
   fetchAllCourseData,
   fetchScheduleData,
@@ -120,6 +124,15 @@ export default function ScheduleScreen() {
   const loadData = useCallback(
     async (force = false) => {
       try {
+        try {
+          const icloudEnabled = await getICloudAutoSyncEnabled();
+          if (icloudEnabled) {
+            await syncWithICloudStorage();
+          }
+        } catch {
+          // ignore
+        }
+
         const storedUrl = await AsyncStorage.getItem("selectedDegreeUrl");
         const storedDefaultTab = await AsyncStorage.getItem("defaultTabUrl");
 
@@ -196,6 +209,9 @@ export default function ScheduleScreen() {
           cls,
         );
         setAttendanceRecords(res.records);
+        getICloudAutoSyncEnabled().then((enabled) => {
+          if (enabled) syncWithICloudStorage().catch(() => {});
+        }).catch(() => {});
       } catch (err) {
         console.error(err);
       }
@@ -214,6 +230,9 @@ export default function ScheduleScreen() {
           dayClasses,
         );
         setAttendanceRecords(res.records);
+        getICloudAutoSyncEnabled().then((enabled) => {
+          if (enabled) syncWithICloudStorage().catch(() => {});
+        }).catch(() => {});
       } catch (err) {
         console.error(err);
       }

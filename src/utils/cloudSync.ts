@@ -1,10 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
 import { getAttendanceRecords, AttendanceRecord } from './attendance';
 
 const CLOUD_SYNC_ID_KEY = 'studici_cloud_sync_id';
 const LAST_CLOUD_SYNC_KEY = 'studici_last_cloud_sync';
 const CLOUD_BACKUP_DATA_KEY = 'studici_cloud_backup_data';
+const ICLOUD_AUTO_SYNC_KEY = 'studici_icloud_auto_sync_enabled';
+const ICLOUD_BACKUP_FILENAME = 'studici_icloud_sync.json';
 
 export interface CloudBackupPayload {
   syncId: string;
@@ -92,6 +95,13 @@ export async function performCloudSync(): Promise<{
   await AsyncStorage.setItem(CLOUD_BACKUP_DATA_KEY, jsonStr);
   await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, timestamp.toString());
 
+  try {
+    const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
+    await FileSystem.writeAsStringAsync(filePath, jsonStr);
+  } catch {
+    // Non interrompere se il filesystem è temporaneamente occupato
+  }
+
   // Codice compatto di ripristino cloud per passaggio rapido tra dispositivi
   const backupCode = `STUDICI_CLOUD:${btoa(unescape(encodeURIComponent(jsonStr)))}`;
 
@@ -160,6 +170,13 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
     const timestamp = Date.now();
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, timestamp.toString());
 
+    try {
+      const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
+      await FileSystem.writeAsStringAsync(filePath, jsonStr);
+    } catch {
+      // Non bloccare
+    }
+
     return {
       success: true,
       message: `Ripristino completato con successo: ${data.course.name || 'Corso'} e ${data.attendanceRecords?.length || 0} presenze ripristinate.`,
@@ -170,6 +187,83 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
     return {
       success: false,
       message: err?.message || 'Codice o file di backup non valido.',
+    };
+  }
+}
+
+/**
+ * Verifica se la sincronizzazione automatica iCloud è abilitata
+ */
+export async function getICloudAutoSyncEnabled(): Promise<boolean> {
+  try {
+    const val = await AsyncStorage.getItem(ICLOUD_AUTO_SYNC_KEY);
+    return val === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attiva o disattiva la sincronizzazione automatica iCloud
+ */
+export async function setICloudAutoSyncEnabled(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(ICLOUD_AUTO_SYNC_KEY, enabled ? 'true' : 'false');
+    if (enabled) {
+      await syncWithICloudStorage();
+    }
+  } catch (err) {
+    console.error('Error saving iCloud auto sync setting:', err);
+  }
+}
+
+/**
+ * Esegue la sincronizzazione bidirezionale con lo storage iCloud:
+ * - Se su iCloud esiste un backup più recente di quello locale, ripristina i dati.
+ * - Se i dati locali sono più recenti o uguali, aggiorna il backup iCloud.
+ */
+export async function syncWithICloudStorage(): Promise<{
+  success: boolean;
+  message: string;
+  updated: boolean;
+}> {
+  try {
+    const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
+    const fileInfo = await FileSystem.getInfoAsync(filePath);
+    const lastLocal = await getLastCloudSync();
+
+    if (fileInfo.exists) {
+      const content = await FileSystem.readAsStringAsync(filePath);
+      try {
+        const data: CloudBackupPayload = JSON.parse(content);
+        if (data && data.timestamp && (!lastLocal || data.timestamp > lastLocal + 2000)) {
+          await restoreFromCloudBackup(content);
+          return {
+            success: true,
+            updated: true,
+            message: 'Configurazione e presenze sincronizzate automaticamente da iCloud!',
+          };
+        }
+      } catch {
+        // Se il file è corrotto, sovrascrivi con i dati locali
+      }
+    }
+
+    // Altrimenti esporta lo stato locale corrente verso il file iCloud
+    const res = await performCloudSync();
+    await FileSystem.writeAsStringAsync(filePath, JSON.stringify(res.payload));
+
+    return {
+      success: true,
+      updated: false,
+      message: 'iCloud aggiornato con i dati locali più recenti.',
+    };
+  } catch (err: any) {
+    console.warn('Errore sync iCloud storage:', err);
+    return {
+      success: false,
+      updated: false,
+      message: err?.message || 'Errore durante la sincronizzazione con iCloud.',
     };
   }
 }

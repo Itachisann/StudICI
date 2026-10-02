@@ -1,4 +1,4 @@
-import * as Calendar from 'expo-calendar';
+import * as Calendar from 'expo-calendar/legacy';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScheduleData } from './scraper';
@@ -126,18 +126,22 @@ export async function syncScheduleToAppleCalendar(
         const notesParts = [
           `Corso: ${courseName}`,
           channelName ? `Canale: ${channelName}` : '',
-          cls.teacher ? `Docente: ${cls.teacher}` : '',
+          cls.teacher ? `Docente: Prof. ${cls.teacher}` : '',
           'Sincronizzato automaticamente da StudICI (Sapienza)',
         ].filter(Boolean);
 
+        const subjectUpper = cls.subject?.trim().toUpperCase() || 'LEZIONE';
+        const eventTitle = cls.teacher
+          ? `${subjectUpper} - Prof. ${cls.teacher}`
+          : subjectUpper;
+
         await Calendar.createEventAsync(calendarId, {
-          title: cls.subject?.toUpperCase() || 'LEZIONE',
+          title: eventTitle,
           startDate,
           endDate,
           location: locationStr,
           notes: notesParts.join('\n'),
           timeZone: 'Europe/Rome',
-          alarms: [{ relativeOffset: -15 }],
           recurrenceRule: {
             frequency: Calendar.Frequency.WEEKLY,
             endDate: semesterEndDate,
