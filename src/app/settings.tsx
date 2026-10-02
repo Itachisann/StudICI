@@ -343,7 +343,6 @@ export default function ProfiloScreen() {
               <Ionicons name="refresh" size={17} color="#ffffff" />
             </View>
             <Text style={styles.rowTitle}>Aggiorna & Svuota Cache</Text>
-            <Text style={styles.rowDetail}>Riscarica</Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
 

@@ -256,7 +256,11 @@ export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[
   }
 }
 
-export async function fetchScheduleData(tabUrl: string, forceRefresh = false): Promise<ScheduleData> {
+export async function fetchScheduleData(
+  tabUrl: string,
+  forceRefresh = false,
+  preloadedHtml?: string
+): Promise<ScheduleData> {
   const defaultData: ScheduleData = {
     info: { faculty: '', course: '', year: '', academicYear: '', channel: '', semester: '' },
     alerts: [],
@@ -265,8 +269,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
   };
 
   try {
-    const res = await axios.get(tabUrl);
-    const html = res.data;
+    const html = preloadedHtml || (await axios.get(tabUrl, { timeout: 6000 })).data;
 
     // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
     const contentFingerprint = extractSheetContentFingerprint(html);
@@ -628,19 +631,59 @@ export async function fetchAllCourseData(
     return { tabs: [], schedules: {} };
   }
 
+  onProgress?.('Scaricamento canali del corso...', 0, tabs.length);
+  
+  // 1. Scarica in parallelo tutti gli HTML dei canali (~300ms totali anziché richieste sequenziali)
+  const htmlResults = await Promise.all(
+    tabs.map(t =>
+      axios.get(t.url, { timeout: 6000 })
+        .then(r => r.data)
+        .catch(err => {
+          console.warn(`Impossibile scaricare ${t.name}:`, err?.message);
+          return '';
+        })
+    )
+  );
+
+  // 2. Raccogli tutte le celle dell'intero corso per risolverle con UN'UNICA chiamata batch AI condivisa.
+  // In questo modo i canali successivi non fanno ulteriori chiamate API: 0 rischio di 503 e velocità istantanea!
+  const allRawCells: string[] = [];
+  for (const html of htmlResults) {
+    if (!html) continue;
+    const classBg = extractClassBgColors(html);
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let trMatch;
+    while ((trMatch = trRegex.exec(html)) !== null) {
+      const tdRegex = /(<td[^>]*>)([\s\S]*?)<\/td>/gi;
+      let tdMatch;
+      while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
+        const text = cleanTdCellHtml(tdMatch[1], tdMatch[2], classBg);
+        if (text && text.length > 2) {
+          allRawCells.push(text);
+        }
+      }
+    }
+  }
+
+  if (allRawCells.length > 0) {
+    try {
+      await parseScheduleCells(allRawCells);
+    } catch {}
+  }
+
   const schedules: Record<string, ScheduleData> = {};
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i];
     onProgress?.(`Download ${i + 1}/${tabs.length}: ${tab.name}`, i + 1, tabs.length);
     try {
-      const data = await fetchScheduleData(tab.url, forceRefresh);
+      const data = await fetchScheduleData(tab.url, forceRefresh, htmlResults[i]);
       schedules[tab.url] = data;
     } catch (e) {
       console.warn(`Errore caricamento ${tab.name}:`, e);
     }
-    // Breve pausa di 50ms per consentire il re-render fluido della progress bar
+    // Breve pausa di 30ms per consentire il re-render fluido della progress bar
     if (i < tabs.length - 1) {
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 30));
     }
   }
 

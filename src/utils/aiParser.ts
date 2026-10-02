@@ -200,15 +200,33 @@ Rispondi RIGOROSAMENTE con un array JSON di oggetti [{"subject": string, "teache
 Celle:
 ${JSON.stringify(toFetch)}`;
 
-      const response = await axios.post(getGeminiUrl(), {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json"
+      // Chiamata con micro-retry di 350ms in caso di sovraccarico temporaneo (503 / 429) di Google
+      let response;
+      try {
+        response = await axios.post(getGeminiUrl(), {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        }, { timeout: 6500 });
+      } catch (firstErr: any) {
+        const status = firstErr?.response?.status;
+        if (status === 503 || status === 429) {
+          await new Promise(r => setTimeout(r, 400));
+          response = await axios.post(getGeminiUrl(), {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0,
+              responseMimeType: "application/json"
+            }
+          }, { timeout: 6500 });
+        } else {
+          throw firstErr;
         }
-      }, { timeout: 8500 });
+      }
 
-      const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
       const parsed: ParsedClass[] = JSON.parse(aiText);
 
       if (Array.isArray(parsed)) {
@@ -222,8 +240,8 @@ ${JSON.stringify(toFetch)}`;
         }
       }
     } catch (error: any) {
-      if (error?.response?.status === 429) {
-        console.log('Gemini: Rate-limit (429) celle, attivo fallback deterministico locale');
+      if (error?.response?.status === 429 || error?.response?.status === 503) {
+        console.log(`Gemini: Servizio temporaneamente occupato (${error?.response?.status}) su celle, applicato fallback deterministico locale`);
       } else {
         console.log('Gemini cell parsing fallback:', error?.message || error);
       }
@@ -493,8 +511,133 @@ export function extractDeterministicSemester(headerRows: string[][]): string {
   return '';
 }
 
+/**
+ * Normalizza il testo di un avviso per garantire uniformità visiva e grammaticale:
+ * - Converte testi urlati (ALL CAPS) o tutti minuscoli in Sentence Case elegante.
+ * - Mantiene intatte le sigle ufficiali (es. RM018, ICI, CFU, Aula 4, ecc.).
+ * - Pulisce simboli, etichette ridondanti e garantisce punteggiatura coerente.
+ */
+export function normalizeAlertText(text: string): string {
+  if (!text) return '';
+  let cleaned = text
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/^[-*•\s]+/, '')
+    .replace(/^(?:note\s+e\s+avvisi:?|avvisi:?|avviso:?|comunicazione:?|nota:?)\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+
+  // Conta lettere minuscole e maiuscole per decidere se convertire
+  const upperLetters = (cleaned.match(/[A-ZÀ-ÖØ-ß]/g) || []).length;
+  const lowerLetters = (cleaned.match(/[a-zà-öø-ÿ]/g) || []).length;
+  const totalLetters = upperLetters + lowerLetters;
+
+  // Se è prevalentemente MAIUSCOLO (>65% di maiuscole o tutte maiuscole) oppure tutto minuscolo
+  const isShouting = totalLetters > 6 && (upperLetters / totalLetters > 0.65 || lowerLetters === 0);
+  const isAllLower = totalLetters > 6 && upperLetters === 0;
+
+  if (isShouting || isAllLower) {
+    const words = cleaned.toLowerCase().split(' ');
+
+    const acronymMap: Record<string, string> = {
+      ici: 'ICI',
+      diag: 'DIAG',
+      dis: 'DIS',
+      diet: 'DIET',
+      cfu: 'CFU',
+      aa: 'A.A.',
+      'a.a.': 'A.A.',
+      tolc: 'TOLC',
+      ofa: 'OFA',
+    };
+
+    const properNouns: Record<string, string> = {
+      roma: 'Roma',
+      sapienza: 'Sapienza',
+      san: 'San',
+      pietro: 'Pietro',
+      vincoli: 'Vincoli',
+      tiburtina: 'Tiburtina',
+      scarpa: 'Scarpa',
+      castro: 'Castro',
+      laurenziano: 'Laurenziano',
+      ercoli: 'Ercoli',
+      paolo: 'Paolo',
+      boaga: 'Boaga',
+      lunedì: 'Lunedì',
+      lunedi: 'Lunedì',
+      martedì: 'Martedì',
+      martedi: 'Martedì',
+      mercoledì: 'Mercoledì',
+      mercoledi: 'Mercoledì',
+      giovedì: 'Giovedì',
+      giovedi: 'Giovedì',
+      venerdì: 'Venerdì',
+      venerdi: 'Venerdì',
+      prof: 'Prof.',
+      'prof.': 'Prof.',
+      'prof.ssa': 'Prof.ssa',
+      profssa: 'Prof.ssa',
+      dott: 'Dott.',
+      'dott.': 'Dott.',
+      dottssa: 'Dott.ssa',
+      ing: 'Ing.',
+      'ing.': 'Ing.',
+    };
+
+    const formattedWords = words.map((w, idx) => {
+      const punctMatch = w.match(/^([a-zà-öø-ÿ0-9'-]+)([.!,;:?]*)$/i);
+      if (!punctMatch) return w;
+      const base = punctMatch[1];
+      const trailingPunct = punctMatch[2];
+
+      // 1. Sigle edificio RMxxx (es. RM018, RM032)
+      if (/^rm\d{3}$/i.test(base)) {
+        return base.toUpperCase() + trailingPunct;
+      }
+      // 2. Acronimi noti
+      if (acronymMap[base.toLowerCase()]) {
+        return acronymMap[base.toLowerCase()] + trailingPunct;
+      }
+      // 3. Nomi propri e titoli
+      if (properNouns[base.toLowerCase()]) {
+        return properNouns[base.toLowerCase()] + trailingPunct;
+      }
+      // 4. Parola "aula" -> Aula
+      if (base.toLowerCase() === 'aula') {
+        return 'Aula' + trailingPunct;
+      }
+
+      // Prima parola della frase -> Lettera maiuscola
+      if (idx === 0) {
+        return base.charAt(0).toUpperCase() + base.slice(1) + trailingPunct;
+      }
+
+      return base + trailingPunct;
+    });
+
+    cleaned = formattedWords.join(' ');
+    cleaned = cleaned.replace(/([.!?]\s+)([a-zà-öø-ÿ])/g, (_m, p1, p2) => p1 + p2.toUpperCase());
+  } else {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    cleaned = cleaned.replace(/\brm(\d{3})\b/gi, 'RM$1');
+  }
+
+  // Aggiungi punto finale se termina con lettera o numero
+  if (/[a-zA-Z0-9à-öø-ÿ]$/.test(cleaned)) {
+    cleaned += '.';
+  }
+
+  return cleaned;
+}
+
 export function extractDeterministicAlerts(headerRows: string[][]): string[] {
   const deterministicAlerts: string[] = [];
+  const seenAlerts = new Set<string>();
+
   headerRows.forEach(row => {
     const nonEmpties = row.map(c => c.trim()).filter(Boolean);
     if (nonEmpties.length === 0) return;
@@ -504,13 +647,11 @@ export function extractDeterministicAlerts(headerRows: string[][]): string[] {
     if (/\bsemestre\b/i.test(fullRowText) && hasDateInfo(fullRowText)) return;
 
     if (isAnnouncement(fullRowText)) {
-      deterministicAlerts.push(
-        fullRowText
-          .replace(/&#39;/g, "'")
-          .replace(/&amp;/g, '&')
-          .replace(/\s+/g, ' ')
-          .trim()
-      );
+      const normalized = normalizeAlertText(fullRowText);
+      if (normalized && !seenAlerts.has(normalized.toLowerCase())) {
+        seenAlerts.add(normalized.toLowerCase());
+        deterministicAlerts.push(normalized);
+      }
     }
   });
   return deterministicAlerts;
@@ -613,7 +754,11 @@ Il tuo compito è analizzare con intelligenza e precisione l'intestazione e rest
    - REQUISITO FONDAMENTALE: Deve contenere informazioni temporali o date effettive di svolgimento delle lezioni. Se il foglio non specifica date o periodo di svolgimento, restituisci stringa vuota "".
    - NON inserire mai il solo nome della facoltà, elenco edifici o note redazionali.
 
-2. "alerts": Array di stringhe con i VERI avvisi e comunicazioni urgenti/straordinarie per gli studenti (es: "Le lezioni inizieranno il 24 settembre", "Lezione sospesa", "Variazione orario/aula").
+2. "alerts": Array di stringhe con i VERI avvisi e comunicazioni urgenti/straordinarie per gli studenti (es: "Le lezioni del docente X inizieranno il 24 settembre in Aula 4", "Lezione di Fisica 1 sospesa per il canale A-L", "Variazione orario del laboratorio").
+   - UNIFORMITÀ E FORMATTAZIONE OBBLIGATORIE:
+     * NON restituire MAI testi urlati in TUTTO MAIUSCOLO o scritti in tutto minuscolo!
+     * Uniforma ciascun avviso in elegante Sentence Case con la prima lettera maiuscola, grammatica italiana corretta e punteggiatura coerente (es: "Le lezioni del docente X inizieranno il 23 settembre.").
+     * Preserva le sigle ufficiali (es: "RM018", "Aula 4", "ICI", "CFU").
    - DISTINZIONE CRUCIALE: Riconosci semanticamente ciò che è un VERO AVVISO per gli studenti e ciò che NON lo è.
    - NON SONO AVVISI (IGNORALI CATEGORICAMENTE):
      * Metadati tecnici o codici interni del foglio Excel (es: "codice interno", "BCLR5", "MBIR3").
@@ -637,15 +782,32 @@ Il tuo compito è analizzare con intelligenza e precisione l'intestazione e rest
 
 Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classrooms": [...] }.`;
 
-    const response = await axios.post(getGeminiUrl(), {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json"
+    let response;
+    try {
+      response = await axios.post(getGeminiUrl(), {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json"
+        }
+      }, { timeout: 6000 });
+    } catch (firstErr: any) {
+      const status = firstErr?.response?.status;
+      if (status === 503 || status === 429) {
+        await new Promise(r => setTimeout(r, 400));
+        response = await axios.post(getGeminiUrl(), {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        }, { timeout: 6000 });
+      } else {
+        throw firstErr;
       }
-    }, { timeout: 5500 });
+    }
 
-    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(aiText);
 
     const rawSemester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
@@ -659,17 +821,24 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
       ? parsed.alerts 
       : fallbackAlerts;
 
-    // Guardrail: escludi tassativamente metadati, legende, note redazionali e stringhe senza contenuto
-    const alerts = rawAlerts
-      .map(a => typeof a === 'string' ? a.replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim() : '')
-      .filter(a => {
-        if (!a || a.length < 5) return false;
-        if (/^(?:note\s+e\s+avvisi:?|avvisi:?|note:?)$/i.test(a)) return false;
-        if (/\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(a)) return false;
-        if (/\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(a)) return false;
-        if (/^(facolt[aà]|corso di studi|laurea\s+(?:triennale|magistrale))\b/i.test(a)) return false;
-        return true;
-      });
+    // Guardrail: escludi tassativamente metadati, legende, note redazionali e normalizza uniformemente il case
+    const seenAlerts = new Set<string>();
+    const alerts: string[] = [];
+    rawAlerts.forEach(a => {
+      if (typeof a !== 'string') return;
+      const normalized = normalizeAlertText(a);
+      if (!normalized || normalized.length < 5) return;
+      if (/^(?:note\s+e\s+avvisi:?|avvisi:?|note:?)$/i.test(normalized)) return;
+      if (/\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(normalized)) return;
+      if (/\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(normalized)) return;
+      if (/^(facolt[aà]|corso di studi|laurea\s+(?:triennale|magistrale))\b/i.test(normalized)) return;
+      
+      const key = normalized.toLowerCase();
+      if (!seenAlerts.has(key)) {
+        seenAlerts.add(key);
+        alerts.push(normalized);
+      }
+    });
 
     const mappedRooms: Record<string, MappedClassroom> = {};
 

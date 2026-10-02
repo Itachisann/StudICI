@@ -156,21 +156,25 @@ export default function ScheduleScreen() {
         </View>
       ) : null}
 
-      {/* ── Info banner (AI Alerts) ── */}
+      {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
       {schedule?.alerts && schedule.alerts.length > 0 ? (
         <TouchableOpacity 
           style={styles.infoBanner} 
-          onPress={() => schedule.alerts.length > 1 && setAlertsModalVisible(true)}
-          activeOpacity={schedule.alerts.length > 1 ? 0.7 : 1}
+          onPress={() => setAlertsModalVisible(true)}
+          activeOpacity={0.7}
         >
-          <Ionicons name="information-circle" size={20} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
-          <Text style={styles.infoBannerText} numberOfLines={schedule.alerts.length > 1 ? 1 : undefined}>
+          <View style={styles.alertIconSquircle}>
+            <Ionicons name="megaphone" size={15} color="#ff9f0a" />
+          </View>
+          <Text style={styles.infoBannerText} numberOfLines={1}>
             {schedule.alerts[0]}
           </Text>
-          {schedule.alerts.length > 1 && (
+          {schedule.alerts.length > 1 ? (
             <View style={styles.moreAlertsBadge}>
               <Text style={styles.moreAlertsText}>+{schedule.alerts.length - 1}</Text>
             </View>
+          ) : (
+            <Ionicons name="chevron-forward" size={14} color="#71717a" style={{ marginLeft: 6 }} />
           )}
         </TouchableOpacity>
       ) : null}
@@ -281,29 +285,53 @@ export default function ScheduleScreen() {
         </ScrollView>
       )}
 
-      {/* ── Modal Avvisi (Alerts) ── */}
+      {/* ── Modal Avvisi (Alerts) Fluttuante iOS ── */}
       <Modal
         visible={alertsModalVisible}
         transparent={true}
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setAlertsModalVisible(false)}
       >
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAlertsModalVisible(false)}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalGrabber} />
             <View style={styles.modalHeader}>
-              <Ionicons name="notifications" size={24} color="#f59e0b" />
-              <Text style={styles.modalTitle}>Avvisi</Text>
+              <View style={styles.modalHeaderIconBox}>
+                <Ionicons name="megaphone" size={18} color="#ff9f0a" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.modalTitle}>Avvisi & Comunicazioni</Text>
+                <Text style={styles.modalSubtitle}>
+                  {schedule?.alerts?.length === 1 ? '1 comunicazione ufficiale' : `${schedule?.alerts?.length || 0} comunicazioni ufficiali`}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modalCloseIconButton}
+                activeOpacity={0.7}
+                onPress={() => setAlertsModalVisible(false)}
+              >
+                <Ionicons name="close" size={18} color="#a1a1aa" />
+              </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalScroll}>
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
               {schedule?.alerts?.map((alert, idx) => (
                 <View key={idx} style={styles.modalAlertItem}>
-                  <Text style={styles.modalAlertText}>{alert}</Text>
+                  <View style={styles.alertItemAccent} />
+                  <View style={styles.alertItemContent}>
+                    <Text style={styles.modalAlertText}>{alert}</Text>
+                  </View>
                 </View>
               ))}
             </ScrollView>
-            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setAlertsModalVisible(false)}>
-              <Text style={styles.modalCloseText}>Chiudi</Text>
-            </TouchableOpacity>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                activeOpacity={0.8}
+                onPress={() => setAlertsModalVisible(false)}
+              >
+                <Text style={styles.modalCloseText}>Ho capito</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -405,27 +433,45 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  /* Info Banner */
+  /* Info Banner Fluttuante iOS */
   infoBanner: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    backgroundColor: 'rgba(255, 159, 10, 0.08)',
     marginHorizontal: 16,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     marginBottom: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
+    borderColor: 'rgba(255, 159, 10, 0.22)',
   },
-  infoBannerText: { color: '#d4d4d4', fontSize: 13, flex: 1, lineHeight: 18 },
-  moreAlertsBadge: {
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  alertIconSquircle: {
+    width: 28,
+    height: 28,
     borderRadius: 8,
-    marginLeft: 8,
+    backgroundColor: 'rgba(255, 159, 10, 0.16)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
   },
-  moreAlertsText: { color: '#f59e0b', fontSize: 11, fontWeight: 'bold' },
+  infoBannerText: {
+    color: '#e4e4e7',
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+    lineHeight: 18,
+  },
+  moreAlertsBadge: {
+    backgroundColor: 'rgba(255, 159, 10, 0.22)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginLeft: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 159, 10, 0.4)',
+  },
+  moreAlertsText: { color: '#ff9f0a', fontSize: 11, fontWeight: '700' },
 
   /* Day selector */
   daySelectorContainer: {
@@ -546,59 +592,116 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   
-  /* Modal */
+  /* Modal Fluttuante iOS */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+    padding: 16,
+    paddingBottom: 32,
   },
   modalContent: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 20,
+    borderRadius: 26,
     width: '100%',
-    maxHeight: '80%',
+    maxHeight: '82%',
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalGrabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#3a3a3c',
+    alignSelf: 'center',
+    marginTop: 10,
+    marginBottom: 4,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#2c2c2e',
   },
+  modalHeaderIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 159, 10, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalTitle: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginLeft: 10,
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  modalSubtitle: {
+    color: '#8e8e93',
+    fontSize: 12,
+    marginTop: 1,
+  },
+  modalCloseIconButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#2c2c2e',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalScroll: {
-    padding: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    maxHeight: 380,
   },
   modalAlertItem: {
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    borderLeftWidth: 3,
-    borderLeftColor: '#f59e0b',
-    padding: 12,
-    borderRadius: 8,
+    flexDirection: 'row',
+    backgroundColor: '#242426',
+    borderRadius: 16,
     marginBottom: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#2e2e32',
+  },
+  alertItemAccent: {
+    width: 4,
+    backgroundColor: '#ff9f0a',
+  },
+  alertItemContent: {
+    flex: 1,
+    padding: 14,
   },
   modalAlertText: {
-    color: '#d4d4d4',
+    color: '#f4f4f5',
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
+    fontWeight: '400',
   },
-  modalCloseBtn: {
-    padding: 16,
-    alignItems: 'center',
+  modalFooter: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: '#2c2c2e',
+    backgroundColor: '#1c1c1e',
+  },
+  modalCloseBtn: {
+    backgroundColor: '#2c2c2e',
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalCloseText: {
-    color: '#3b82f6',
-    fontSize: 16,
+    color: '#ffffff',
+    fontSize: 15,
     fontWeight: '600',
   },
 });
