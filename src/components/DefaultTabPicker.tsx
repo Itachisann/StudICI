@@ -3,10 +3,10 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { parseTabHierarchy } from './YearChannelSelector';
-import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
 
@@ -151,18 +151,24 @@ export function DefaultTabPicker({
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
             {isNativeIos ? (
-              <ChannelSegmentedSlider
+              <SegmentedControl
                 key={`picker-seg-${selectedYear}-${channelsForSelectedYear.length}`}
-                items={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
+                values={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
                 selectedIndex={Math.max(
                   0,
                   channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
                 )}
-                onSelectIndex={(idx) => {
+                onChange={(event) => {
+                  const idx = event.nativeEvent.selectedSegmentIndex;
                   if (channelsForSelectedYear[idx]) {
                     handleSelectChannel(channelsForSelectedYear[idx].channel);
                   }
                 }}
+                appearance="dark"
+                tintColor={SAPIENZA_RED}
+                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
+                style={styles.nativeSegmentedControl}
               />
             ) : (
               <View style={styles.channelRowEqual}>
@@ -322,6 +328,12 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: '#ffffff',
     fontWeight: '700',
+  },
+  nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    height: 36,
   },
 
   // Canale Expo Go a Larghezza Uguale

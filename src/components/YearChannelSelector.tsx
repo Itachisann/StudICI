@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
-import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
 
@@ -210,20 +210,24 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         )
       )}
 
-      {/* ── Riga 2: Selezione Canale (IPA: Slider unificato fluido con selezione identica alle pillole | Expo: Pillole a larghezza uguale) ── */}
+      {/* ── Riga 2: Selezione Canale (IPA: UISegmentedControl Nativo Apple Liquid Glass | Expo: Pillole a larghezza uguale) ── */}
       {showChannelRow && (
         <View style={styles.channelContainer}>
           {isNativeIos ? (
-            <ChannelSegmentedSlider
-              key={`seg-${activeYear}-${channelsForActiveYear.length}`}
-              items={channelsForActiveYear.map(c => c.channel || c.tab.name)}
+            <SegmentedControl
+              values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
-              onSelectIndex={(idx) => {
+              onChange={(event) => {
+                const idx = event.nativeEvent.selectedSegmentIndex;
                 if (channelsForActiveYear[idx]) {
                   onSelectTab(channelsForActiveYear[idx].tab);
                 }
               }}
-              maxWidth={420}
+              appearance="dark"
+              tintColor={SAPIENZA_RED}
+              fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+              activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
+              style={styles.nativeSegmentedControl}
             />
           ) : (
             channelsForActiveYear.length <= 3 ? (
@@ -374,6 +378,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+  },
+  nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
+    height: 36,
   },
 
   // Canale per Expo Go a Larghezza Uguale (Sia Verticale che Orizzontale)
