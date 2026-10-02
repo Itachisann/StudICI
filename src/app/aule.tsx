@@ -193,89 +193,93 @@ export default function AuleScreen() {
         />
       </View>
 
-      {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
-      {currentSemester && hasDateInfo(currentSemester) ? (
-        <View style={styles.semesterCard}>
-          <View style={styles.semesterIconBox}>
-            <Ionicons name="calendar" size={16} color="#ffffff" />
-          </View>
-          <View style={styles.semesterContent}>
-            <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
-            <Text style={styles.semesterValue} numberOfLines={2}>
-              {currentSemester}
-            </Text>
-          </View>
-        </View>
-      ) : null}
-
-      {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={SAPIENZA_RED} />
-          <Text style={styles.loadingText}>Carico le aule...</Text>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.list}
-          contentContainerStyle={{ paddingBottom: 120 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={SAPIENZA_RED}
-              colors={[SAPIENZA_RED]}
-            />
-          }
-        >
-          {roomEntries.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="business-outline" size={48} color="#3a3a3c" />
-              <Text style={styles.emptyText}>Nessuna aula registrata per questo canale</Text>
+      {/* ── ScrollView Principale: Pull-to-refresh dall'alto dello schermo ── */}
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={{ paddingBottom: 130 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={SAPIENZA_RED}
+            colors={[SAPIENZA_RED]}
+          />
+        }
+      >
+        {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
+        {currentSemester && hasDateInfo(currentSemester) ? (
+          <View style={styles.semesterCard}>
+            <View style={styles.semesterIconBox}>
+              <Ionicons name="calendar" size={16} color="#ffffff" />
             </View>
-          ) : (
-            roomEntries.map((entry, idx) => (
-              <TouchableOpacity
-                key={idx}
-                style={styles.card}
-                activeOpacity={0.8}
-                onPress={() => setSelectedRoomModal(entry)}
-              >
-                <View style={styles.cardHeader}>
-                  <View style={styles.iconCircle}>
-                    <Ionicons name="location" size={20} color="#ef4444" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.roomName}>{entry.resolved.displayName}</Text>
-                    <Text style={styles.buildingName}>{entry.resolved.buildingName}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#666" />
-                </View>
+            <View style={styles.semesterContent}>
+              <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+              <Text style={styles.semesterValue} numberOfLines={2}>
+                {currentSemester}
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
-                <View style={styles.addressRow}>
-                  <Ionicons name="navigate-outline" size={14} color="#8e8e93" style={{ marginRight: 6 }} />
-                  <Text style={styles.addressText} numberOfLines={1}>
-                    {entry.resolved.address}
-                  </Text>
-                </View>
-
-                {entry.subjects.length > 0 && (
-                  <View style={styles.subjectsRow}>
-                    {entry.subjects.slice(0, 3).map((sub, sIdx) => (
-                      <View key={sIdx} style={styles.subBadge}>
-                        <Text style={styles.subBadgeText} numberOfLines={1}>{sub}</Text>
-                      </View>
-                    ))}
-                    {entry.subjects.length > 3 && (
-                      <View style={styles.subBadgeMore}>
-                        <Text style={styles.subBadgeMoreText}>+{entry.subjects.length - 3}</Text>
-                      </View>
-                    )}
+        {loading ? (
+          <View style={styles.centerContainer}>
+            <ActivityIndicator size="large" color={SAPIENZA_RED} />
+            <Text style={styles.loadingText}>Carico le aule...</Text>
+          </View>
+        ) : (
+          <View style={styles.list}>
+            {roomEntries.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="business-outline" size={48} color="#3a3a3c" />
+                <Text style={styles.emptyText}>Nessuna aula registrata per questo canale</Text>
+              </View>
+            ) : (
+              roomEntries.map((entry, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.card}
+                  activeOpacity={0.8}
+                  onPress={() => setSelectedRoomModal(entry)}
+                >
+                  <View style={styles.cardHeader}>
+                    <View style={styles.iconCircle}>
+                      <Ionicons name="location" size={20} color="#ef4444" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.roomName}>{entry.resolved.displayName}</Text>
+                      <Text style={styles.buildingName}>{entry.resolved.buildingName}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#666" />
                   </View>
-                )}
-              </TouchableOpacity>
-            ))
-          )}
-        </ScrollView>
-      )}
+
+                  <View style={styles.addressRow}>
+                    <Ionicons name="navigate-outline" size={14} color="#8e8e93" style={{ marginRight: 6 }} />
+                    <Text style={styles.addressText} numberOfLines={1}>
+                      {entry.resolved.address}
+                    </Text>
+                  </View>
+
+                  {entry.subjects.length > 0 && (
+                    <View style={styles.subjectsRow}>
+                      {entry.subjects.slice(0, 3).map((sub, sIdx) => (
+                        <View key={sIdx} style={styles.subBadge}>
+                          <Text style={styles.subBadgeText} numberOfLines={1}>{sub}</Text>
+                        </View>
+                      ))}
+                      {entry.subjects.length > 3 && (
+                        <View style={styles.subBadgeMore}>
+                          <Text style={styles.subBadgeMoreText}>+{entry.subjects.length - 3}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
+      </ScrollView>
 
       {/* Modal Mappe */}
       <ClassroomModal
@@ -292,6 +296,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#111111',
+  },
+  mainScrollView: {
+    flex: 1,
   },
   /* Liquid Glass Header */
   liquidGlassHeader: {

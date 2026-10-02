@@ -7,6 +7,7 @@ import SegmentedControl from '@react-native-segmented-control/segmented-control'
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { parseTabHierarchy } from './YearChannelSelector';
+import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
 
@@ -171,30 +172,18 @@ export function DefaultTabPicker({
                 style={styles.nativeSegmentedControl}
               />
             ) : (
-              <View style={styles.channelRowEqual}>
-                {channelsForSelectedYear.map((item, idx) => {
-                  const isSelected = (item.channel || '') === selectedChannel;
-                  const displayName = item.channel || item.tab.name;
-                  return (
-                    <TouchableOpacity
-                      key={idx}
-                      style={[styles.chipEqual, isSelected && styles.chipActive]}
-                      activeOpacity={0.7}
-                      onPress={() => handleSelectChannel(item.channel)}
-                    >
-                      <Ionicons
-                        name={isSelected ? 'checkmark-circle' : 'people-outline'}
-                        size={15}
-                        color={isSelected ? '#ffffff' : '#8e8e93'}
-                        style={{ marginRight: 6 }}
-                      />
-                      <Text style={[styles.chipText, isSelected && styles.chipTextActive]} numberOfLines={1}>
-                        {displayName}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              <ChannelSegmentedSlider
+                items={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
+                selectedIndex={Math.max(
+                  0,
+                  channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
+                )}
+                onSelectIndex={(idx) => {
+                  if (channelsForSelectedYear[idx]) {
+                    handleSelectChannel(channelsForSelectedYear[idx].channel);
+                  }
+                }}
+              />
             )}
           </View>
         )}

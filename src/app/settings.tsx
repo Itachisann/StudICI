@@ -415,6 +415,9 @@ export default function ProfiloScreen() {
               {filteredDegrees.map((deg, i) => {
                 const isSelected = degreeUrl === deg.url;
                 const isMagistrale = deg.name.toLowerCase().includes('magistrale') || deg.className?.toUpperCase().startsWith('LM');
+                const cleanDegreeName = deg.name
+                  .replace(/\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi, '')
+                  .trim();
                 return (
                   <TouchableOpacity
                     key={i}
@@ -426,7 +429,7 @@ export default function ProfiloScreen() {
                       <Ionicons name="school" size={18} color="#ffffff" />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.modalItemTitle, isSelected && { color: '#fff' }]}>{deg.name}</Text>
+                      <Text style={[styles.modalItemTitle, isSelected && { color: '#fff' }]}>{cleanDegreeName}</Text>
                       <View style={styles.courseBadgesRow}>
                         <View style={[styles.typeBadge, { backgroundColor: isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }]}>
                           <Text style={[styles.typeBadgeText, { color: isMagistrale ? '#c084fc' : '#60a5fa' }]}>

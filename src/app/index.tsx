@@ -170,176 +170,180 @@ export default function ScheduleScreen() {
         />
       </View>
 
-      {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
-      {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
-        <View style={styles.semesterCard}>
-          <View style={styles.semesterIconBox}>
-            <Ionicons name="calendar" size={16} color="#ffffff" />
+      {/* ── ScrollView Principale: Pull-to-refresh dall'alto dello schermo ── */}
+      <ScrollView
+        style={styles.mainScrollView}
+        contentContainerStyle={{ paddingBottom: 130 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={SAPIENZA_RED}
+            colors={[SAPIENZA_RED]}
+          />
+        }
+      >
+        {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
+        {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
+          <View style={styles.semesterCard}>
+            <View style={styles.semesterIconBox}>
+              <Ionicons name="calendar" size={16} color="#ffffff" />
+            </View>
+            <View style={styles.semesterContent}>
+              <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+              <Text style={styles.semesterValue} numberOfLines={2}>
+                {schedule.info.semester}
+              </Text>
+            </View>
           </View>
-          <View style={styles.semesterContent}>
-            <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
-            <Text style={styles.semesterValue} numberOfLines={2}>
-              {schedule.info.semester}
+        ) : null}
+
+        {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
+        {schedule?.alerts && schedule.alerts.length > 0 ? (
+          <TouchableOpacity 
+            style={styles.infoBanner} 
+            onPress={() => setAlertsModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.alertIconSquircle}>
+              <Ionicons name="megaphone" size={15} color="#ff9f0a" />
+            </View>
+            <Text style={styles.infoBannerText} numberOfLines={1}>
+              {schedule.alerts[0]}
             </Text>
-          </View>
-        </View>
-      ) : null}
-
-      {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
-      {schedule?.alerts && schedule.alerts.length > 0 ? (
-        <TouchableOpacity 
-          style={styles.infoBanner} 
-          onPress={() => setAlertsModalVisible(true)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.alertIconSquircle}>
-            <Ionicons name="megaphone" size={15} color="#ff9f0a" />
-          </View>
-          <Text style={styles.infoBannerText} numberOfLines={1}>
-            {schedule.alerts[0]}
-          </Text>
-          {schedule.alerts.length > 1 ? (
-            <View style={styles.moreAlertsBadge}>
-              <Text style={styles.moreAlertsText}>+{schedule.alerts.length - 1}</Text>
-            </View>
-          ) : (
-            <Ionicons name="chevron-forward" size={14} color="#71717a" style={{ marginLeft: 6 }} />
-          )}
-        </TouchableOpacity>
-      ) : null}
-
-      {/* ── Day Selector (Allineamento Orizzontale Perfetto & Navigazione Ciclica) ── */}
-      <View style={styles.daySelectorContainer}>
-        <TouchableOpacity
-          style={styles.navArrow}
-          onPress={() => setSelectedDay(d => (d === 0 ? 4 : d - 1))}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-back" size={18} color="#ffffff" />
-        </TouchableOpacity>
-
-        <View style={styles.daysRow}>
-          {DAYS.map((day, i) => {
-            const isActive = selectedDay === i;
-            const isToday = i === todayIdx;
-            return (
-              <TouchableOpacity
-                key={i}
-                onPress={() => setSelectedDay(i)}
-                style={styles.dayItem}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
-                  <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
-                </View>
-                {isToday && <View style={[styles.dayDot, isActive && styles.dayDotActive]} />}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <TouchableOpacity
-          style={styles.navArrow}
-          onPress={() => setSelectedDay(d => (d === 4 ? 0 : d + 1))}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-forward" size={18} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Day label ── */}
-      <Text style={styles.dayLabel}>
-        {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
-      </Text>
-
-      {/* ── Classes List ── */}
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={SAPIENZA_RED} />
-          <Text style={styles.loadingText}>Caricamento lezioni...</Text>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.classList}
-          contentContainerStyle={{ paddingBottom: 120 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={SAPIENZA_RED}
-              colors={[SAPIENZA_RED]}
-            />
-          }
-        >
-          {todayClasses.length === 0 && (
-            <View style={styles.emptyDay}>
-              <Ionicons name="sunny-outline" size={48} color="#3a3a3c" />
-              <Text style={styles.emptyDayText}>Nessuna lezione oggi</Text>
-            </View>
-          )}
-
-          {todayClasses.map((cls: ClassEvent, i: number) => {
-            const accentColor = ACCENT_COLORS[i % ACCENT_COLORS.length];
-            const isLive = isCurrentClass(cls);
-
-            return (
-              <View key={i} style={[styles.classCard, isLive && styles.classCardLive]}>
-                {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
-                <View style={styles.timeColumn}>
-                  <Text style={styles.timeStartText}>{cls.startTime}</Text>
-                  <View style={styles.timeLineConnector}>
-                    <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
-                    <View style={styles.durationBadge}>
-                      <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
-                    </View>
-                    <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
-                  </View>
-                  <Text style={styles.timeEndText}>{cls.endTime}</Text>
-                </View>
-
-                {/* Barra di Accento Verticale Colorata stile Calendario */}
-                <View style={[styles.calendarAccentBar, { backgroundColor: accentColor }]} />
-
-                {/* Dettagli Lezione */}
-                <View style={styles.cardBody}>
-                  <View style={styles.cardTitleRow}>
-                    <Text style={styles.subjectText} numberOfLines={2}>
-                      {cls.subject?.toUpperCase()}
-                    </Text>
-                    {isLive && (
-                      <View style={styles.liveBadge}>
-                        <View style={styles.liveDot} />
-                        <Text style={styles.liveText}>ORA</Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Docente */}
-                  {cls.teacher ? (
-                    <View style={styles.infoRow}>
-                      <Ionicons name="person-outline" size={13} color="#8e8e93" />
-                      <Text style={styles.teacherText} numberOfLines={1}>{cls.teacher}</Text>
-                    </View>
-                  ) : null}
-
-                  {/* Badge Aula */}
-                  {cls.room ? (
-                    <TouchableOpacity
-                      style={styles.roomBadge}
-                      onPress={() => handleRoomClick(cls)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="location" size={12} color="#ef4444" />
-                      <Text style={styles.roomBadgeText} numberOfLines={1}>{cls.room}</Text>
-                      <Ionicons name="chevron-forward" size={11} color="#ef4444" style={{ marginLeft: 2, opacity: 0.8 }} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
+            {schedule.alerts.length > 1 ? (
+              <View style={styles.moreAlertsBadge}>
+                <Text style={styles.moreAlertsText}>+{schedule.alerts.length - 1}</Text>
               </View>
-            );
-          })}
-        </ScrollView>
-      )}
+            ) : (
+              <Ionicons name="chevron-forward" size={14} color="#71717a" style={{ marginLeft: 6 }} />
+            )}
+          </TouchableOpacity>
+        ) : null}
+
+        {/* ── Day Selector (Allineamento Orizzontale Perfetto & Navigazione Ciclica) ── */}
+        <View style={styles.daySelectorContainer}>
+          <TouchableOpacity
+            style={styles.navArrow}
+            onPress={() => setSelectedDay(d => (d === 0 ? 4 : d - 1))}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-back" size={18} color="#ffffff" />
+          </TouchableOpacity>
+
+          <View style={styles.daysRow}>
+            {DAYS.map((day, i) => {
+              const isActive = selectedDay === i;
+              const isToday = i === todayIdx;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => setSelectedDay(i)}
+                  style={styles.dayItem}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
+                    <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
+                  </View>
+                  {isToday && <View style={[styles.dayDot, isActive && styles.dayDotActive]} />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity
+            style={styles.navArrow}
+            onPress={() => setSelectedDay(d => (d === 4 ? 0 : d + 1))}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Day label ── */}
+        <Text style={styles.dayLabel}>
+          {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
+        </Text>
+
+        {/* ── Classes List ── */}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={SAPIENZA_RED} />
+            <Text style={styles.loadingText}>Caricamento lezioni...</Text>
+          </View>
+        ) : (
+          <View style={styles.classList}>
+            {todayClasses.length === 0 && (
+              <View style={styles.emptyDay}>
+                <Ionicons name="sunny-outline" size={48} color="#3a3a3c" />
+                <Text style={styles.emptyDayText}>Nessuna lezione oggi</Text>
+              </View>
+            )}
+
+            {todayClasses.map((cls: ClassEvent, i: number) => {
+              const accentColor = ACCENT_COLORS[i % ACCENT_COLORS.length];
+              const isLive = isCurrentClass(cls);
+
+              return (
+                <View key={i} style={[styles.classCard, isLive && styles.classCardLive]}>
+                  {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
+                  <View style={styles.timeColumn}>
+                    <Text style={styles.timeStartText}>{cls.startTime}</Text>
+                    <View style={styles.timeLineConnector}>
+                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                      <View style={styles.durationBadge}>
+                        <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
+                      </View>
+                      <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                    </View>
+                    <Text style={styles.timeEndText}>{cls.endTime}</Text>
+                  </View>
+
+                  {/* Barra di Accento Verticale Colorata stile Calendario */}
+                  <View style={[styles.calendarAccentBar, { backgroundColor: accentColor }]} />
+
+                  {/* Dettagli Lezione */}
+                  <View style={styles.cardBody}>
+                    <View style={styles.cardTitleRow}>
+                      <Text style={styles.subjectText} numberOfLines={2}>
+                        {cls.subject?.toUpperCase()}
+                      </Text>
+                      {isLive && (
+                        <View style={styles.liveBadge}>
+                          <View style={styles.liveDot} />
+                          <Text style={styles.liveText}>ORA</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Docente */}
+                    {cls.teacher ? (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="person-outline" size={13} color="#8e8e93" />
+                        <Text style={styles.teacherText} numberOfLines={1}>{cls.teacher}</Text>
+                      </View>
+                    ) : null}
+
+                    {/* Badge Aula */}
+                    {cls.room ? (
+                      <TouchableOpacity
+                        style={styles.roomBadge}
+                        onPress={() => handleRoomClick(cls)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="location" size={12} color="#ef4444" />
+                        <Text style={styles.roomBadgeText} numberOfLines={1}>{cls.room}</Text>
+                        <Ionicons name="chevron-forward" size={11} color="#ef4444" style={{ marginLeft: 2, opacity: 0.8 }} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </ScrollView>
 
       {/* ── Modal Avvisi (Alerts) Fluttuante iOS ── */}
       <Modal
@@ -409,6 +413,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#111111',
+  },
+  mainScrollView: {
+    flex: 1,
   },
   centerContainer: {
     flex: 1,

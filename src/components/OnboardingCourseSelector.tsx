@@ -183,27 +183,40 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
               <Text style={styles.emptyText}>Nessun corso trovato per &quot;{search}&quot;</Text>
             </View>
           ) : (
-            filteredDegrees.map((deg, i) => (
-              <TouchableOpacity
-                key={i}
-                style={styles.courseCard}
-                activeOpacity={0.7}
-                onPress={() => handleSelectDegree(deg)}
-              >
-                <View style={styles.courseIconCircle}>
-                  <Ionicons name="book-outline" size={22} color={SAPIENZA_RED} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.courseName}>{deg.name}</Text>
-                  {deg.className ? (
-                    <Text style={styles.courseClass}>{deg.className}</Text>
-                  ) : (
-                    <Text style={styles.courseClass}>Corso di Laurea ICI</Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#636366" />
-              </TouchableOpacity>
-            ))
+              filteredDegrees.map((deg, i) => {
+                const cleanDegreeName = deg.name
+                  .replace(/\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi, '')
+                  .trim();
+                const isMagistrale = deg.name.toLowerCase().includes('magistrale') || deg.className?.toUpperCase().startsWith('LM');
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.courseCard}
+                    activeOpacity={0.7}
+                    onPress={() => handleSelectDegree(deg)}
+                  >
+                    <View style={styles.courseIconCircle}>
+                      <Ionicons name="book-outline" size={22} color={SAPIENZA_RED} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.courseName}>{cleanDegreeName}</Text>
+                      <View style={styles.courseBadgesRow}>
+                        <View style={[styles.typeBadge, { backgroundColor: isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }]}>
+                          <Text style={[styles.typeBadgeText, { color: isMagistrale ? '#c084fc' : '#60a5fa' }]}>
+                            {isMagistrale ? 'Magistrale' : 'Triennale'}
+                          </Text>
+                        </View>
+                        {deg.className ? (
+                          <View style={styles.classBadge}>
+                            <Text style={styles.classBadgeText}>{deg.className}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#636366" />
+                  </TouchableOpacity>
+                );
+              })
           )}
         </ScrollView>
       )}
@@ -295,11 +308,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
+    marginBottom: 6,
   },
-  courseClass: {
-    fontSize: 12,
-    color: '#8e8e93',
-    marginTop: 3,
+  courseBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  typeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  classBadge: {
+    backgroundColor: 'rgba(255, 159, 10, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  classBadgeText: {
+    color: '#ff9f0a',
+    fontSize: 11,
+    fontWeight: '700',
   },
   centerContainer: {
     flex: 1,
