@@ -406,14 +406,14 @@ const styles = StyleSheet.create({
   },
   liquidGlassTitleRow: {
     paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 6,
+    paddingTop: 6,
+    paddingBottom: 16,
   },
   liquidGlassTitle: {
     fontSize: 34,
-    fontWeight: '800',
+    fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: 0.36,
+    letterSpacing: 0.35,
   },
 
   /* Top Tabs */

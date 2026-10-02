@@ -96,7 +96,6 @@ export default function AuleScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
-  const [degreeName, setDegreeName] = useState<string>('');
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
@@ -106,7 +105,6 @@ export default function AuleScreen() {
   const loadData = useCallback(async (force = false) => {
     try {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
-      const storedName = await AsyncStorage.getItem('selectedDegreeName');
       const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
 
       if (!storedUrl) {
@@ -123,7 +121,6 @@ export default function AuleScreen() {
       }
 
       setDegreeUrl(storedUrl);
-      if (storedName) setDegreeName(storedName);
 
       if (tabs.length === 0 || force || (degreeUrl && storedUrl !== degreeUrl)) {
         setLoading(true);
@@ -177,8 +174,7 @@ export default function AuleScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <Text style={styles.title}>Aule & Edifici</Text>
-        <Text style={styles.subtitle}>{degreeName || 'Sapienza Università di Roma'}</Text>
+        <Text style={styles.largeTitle}>Aule</Text>
       </View>
 
       {/* ── Selezione Gerarchica Anni e Canali (2 Righe di Pill) ── */}
@@ -290,18 +286,14 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
-  title: {
+  largeTitle: {
+    fontSize: 34,
+    fontWeight: '700',
     color: '#ffffff',
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    color: '#8e8e93',
-    fontSize: 14,
-    marginTop: 2,
+    letterSpacing: 0.35,
   },
   semesterCard: {
     flexDirection: 'row',

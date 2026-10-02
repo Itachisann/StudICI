@@ -146,12 +146,13 @@ export function DefaultTabPicker({
           </View>
         )}
 
-        {/* ── 2. Selezione Canale / Suddivisione (IPA: Segmented Control | Expo Go: Pill Centrate) ── */}
+        {/* ── 2. Selezione Canale / Suddivisione (IPA: Segmented Control | Expo Go: Pill Centrate a Larghezza Uguale) ── */}
         {showChannelSection && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
             {isNativeIos ? (
               <SegmentedControl
+                key={`picker-seg-${selectedYear}-${channelsForSelectedYear.length}`}
                 values={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
                 selectedIndex={Math.max(
                   0,
@@ -164,21 +165,21 @@ export function DefaultTabPicker({
                   }
                 }}
                 appearance="dark"
-                backgroundColor="#1c1c1e"
+                backgroundColor="transparent"
                 tintColor={SAPIENZA_RED}
                 fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
                 activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
                 style={styles.nativeSegmentedControl}
               />
             ) : (
-              <View style={styles.chipsContainer}>
+              <View style={styles.channelRowEqual}>
                 {channelsForSelectedYear.map((item, idx) => {
                   const isSelected = (item.channel || '') === selectedChannel;
                   const displayName = item.channel || item.tab.name;
                   return (
                     <TouchableOpacity
                       key={idx}
-                      style={[styles.chip, isSelected && styles.chipActive]}
+                      style={[styles.chipEqual, isSelected && styles.chipActive]}
                       activeOpacity={0.7}
                       onPress={() => handleSelectChannel(item.channel)}
                     >
@@ -188,7 +189,7 @@ export function DefaultTabPicker({
                         color={isSelected ? '#ffffff' : '#8e8e93'}
                         style={{ marginRight: 6 }}
                       />
-                      <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                      <Text style={[styles.chipText, isSelected && styles.chipTextActive]} numberOfLines={1}>
                         {displayName}
                       </Text>
                     </TouchableOpacity>
@@ -335,6 +336,30 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     alignSelf: 'center',
     height: 36,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  // Canale Expo Go a Larghezza Uguale
+  channelRowEqual: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    gap: 8,
+  },
+  chipEqual: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 8,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    justifyContent: 'center',
   },
   summaryCard: {
     flexDirection: 'row',

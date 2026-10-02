@@ -187,11 +187,12 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         </ScrollView>
       )}
 
-      {/* ── Riga 2: Selezione Canale (IPA: Segmented Control Nativo | Expo Go: Pill Centrate) ── */}
+      {/* ── Riga 2: Selezione Canale (IPA: UISegmented Senza Sfondo Rettangolare | Expo: Canali a Larghezza Uguale) ── */}
       {showChannelRow && (
         isNativeIos ? (
           <View style={styles.channelContainer}>
             <SegmentedControl
+              key={`seg-${activeYear}-${channelsForActiveYear.length}`}
               values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
               onChange={(event) => {
@@ -201,7 +202,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                 }
               }}
               appearance="dark"
-              backgroundColor="#1c1c1e"
+              backgroundColor="transparent"
               tintColor={SAPIENZA_RED}
               fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
               activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
@@ -209,33 +210,63 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
             />
           </View>
         ) : (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.channelScroll}
-            contentContainerStyle={styles.rowContainer}
-          >
-            {channelsForActiveYear.map((item, i) => {
-              const isChannelActive = currentParsed?.tab.url === item.tab.url;
-              const displayName = item.channel || item.tab.name;
-              return (
-                <TouchableOpacity
-                  key={i}
-                  onPress={() => onSelectTab(item.tab)}
-                  style={[
-                    styles.chip,
-                    isChannelActive && styles.chipActive,
-                    i === channelsForActiveYear.length - 1 && { marginRight: 0 },
-                  ]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.chipText, isChannelActive && styles.chipTextActive]}>
-                    {displayName}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          channelsForActiveYear.length <= 3 ? (
+            <View style={styles.channelRowEqual}>
+              {channelsForActiveYear.map((item, i) => {
+                const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                const displayName = item.channel || item.tab.name;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => onSelectTab(item.tab)}
+                    style={[
+                      styles.chipEqual,
+                      isChannelActive && styles.chipActive,
+                    ]}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                      numberOfLines={1}
+                    >
+                      {displayName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.channelScroll}
+              contentContainerStyle={styles.rowContainer}
+            >
+              {channelsForActiveYear.map((item, i) => {
+                const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                const displayName = item.channel || item.tab.name;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => onSelectTab(item.tab)}
+                    style={[
+                      styles.chipFixedEqual,
+                      isChannelActive && styles.chipActive,
+                      i === channelsForActiveYear.length - 1 && { marginRight: 0 },
+                    ]}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                      numberOfLines={1}
+                    >
+                      {displayName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )
         )
       )}
     </View>
@@ -269,6 +300,7 @@ const styles = StyleSheet.create({
   yearChip: {
     backgroundColor: '#1c1c1e',
     paddingHorizontal: 15,
+    minWidth: 84,
     height: 32,
     borderRadius: 16,
     marginRight: 8,
@@ -291,10 +323,48 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Pillole Canale per Expo Go
-  chip: {
+  // Canale Nativo (Segmented Control per IPA)
+  channelContainer: {
+    width: '100%',
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  nativeSegmentedControl: {
+    width: '100%',
+    maxWidth: 420,
+    height: 34,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+
+  // Canale per Expo Go a Larghezza Uguale (Sia Verticale che Orizzontale)
+  channelRowEqual: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+    gap: 8,
+    marginBottom: 4,
+  },
+  chipEqual: {
+    flex: 1,
     backgroundColor: '#1c1c1e',
-    paddingHorizontal: 15,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  chipFixedEqual: {
+    width: 120,
+    backgroundColor: '#1c1c1e',
     height: 32,
     borderRadius: 16,
     marginRight: 8,
@@ -302,6 +372,7 @@ const styles = StyleSheet.create({
     borderColor: '#2c2c2e',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 8,
   },
   chipActive: {
     backgroundColor: 'rgba(130, 36, 51, 0.45)',
@@ -315,19 +386,5 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: '#ffffff',
     fontWeight: '700',
-  },
-
-  // Canale Nativo (Segmented Control per IPA)
-  channelContainer: {
-    width: '100%',
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  nativeSegmentedControl: {
-    width: '100%',
-    maxWidth: 420,
-    height: 34,
   },
 });

@@ -226,7 +226,6 @@ export default function ProfiloScreen() {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
         <Text style={styles.largeTitle}>Profilo</Text>
-        <Text style={styles.headerSubtitle}>Sapienza Università di Roma</Text>
       </View>
 
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 130 }} showsVerticalScrollIndicator={false}>
@@ -532,19 +531,14 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
   largeTitle: {
     fontSize: 34,
     fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: 0.37,
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    color: '#8e8e93',
-    marginTop: 2,
+    letterSpacing: 0.35,
   },
   container: {
     flex: 1,
