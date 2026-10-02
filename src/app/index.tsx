@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchScheduleData, fetchAllCourseData, Tab, ScheduleData, ClassEvent } from '../utils/scraper';
 import { resolveClassroom, ResolvedClassroom, formatSapienzaAddress } from '../utils/classroomLocations';
+import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 import { Ionicons } from '@expo/vector-icons';
@@ -140,8 +141,8 @@ export default function ScheduleScreen() {
         onSelectTab={selectTab}
       />
 
-      {/* ── Periodo Didattico / Semestre (Evidente e separato dagli avvisi) ── */}
-      {schedule?.info?.semester ? (
+      {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
+      {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
         <View style={styles.semesterCard}>
           <View style={styles.semesterIconBox}>
             <Ionicons name="calendar" size={16} color="#ffffff" />

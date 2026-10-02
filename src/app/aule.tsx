@@ -9,6 +9,7 @@ import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchAllCourseData, Tab, ScheduleData } from '../utils/scraper';
 import { resolveClassroom, ResolvedClassroom, getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from '../utils/classroomLocations';
+import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 
@@ -187,8 +188,8 @@ export default function AuleScreen() {
         onSelectTab={onSelectTab}
       />
 
-      {/* ── Periodo Didattico / Semestre ── */}
-      {currentSemester ? (
+      {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
+      {currentSemester && hasDateInfo(currentSemester) ? (
         <View style={styles.semesterCard}>
           <View style={styles.semesterIconBox}>
             <Ionicons name="calendar" size={16} color="#ffffff" />

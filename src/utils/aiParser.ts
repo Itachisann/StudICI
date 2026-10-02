@@ -374,26 +374,58 @@ export function fallbackParse(cell: string): ParsedClass {
   return validateAndCleanClass({ subject: decoded.trim().toUpperCase(), teacher: '', room: '', buildingCode, address }, cell);
 }
 
-export function isAnnouncement(text: string): boolean {
+export function hasDateInfo(text?: string): boolean {
+  if (!text || typeof text !== 'string') return false;
   const t = text.toLowerCase().trim();
-  // Ignora metadati standard del corso
-  if (/^(facolt[aà]|corso di studi|anno di corso|a\.a\.|canale)\b/i.test(t)) {
+  const hasNumericDate = /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(t);
+  const hasMonthName = /\b(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/.test(t);
+  const hasDateRange = /\bdal\b.*\bal\b/.test(t);
+
+  const isOnlyAcademicYear = /^(?:a\.a\.\s*)?\d{4}[-/]\d{2,4}$/.test(t.replace(/[^a-z0-9/-]/g, ''));
+  if (isOnlyAcademicYear) return false;
+
+  return (hasNumericDate || (hasMonthName && /\d{1,2}/.test(t)) || (hasDateRange && (hasNumericDate || hasMonthName)));
+}
+
+export function isAnnouncement(text: string): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase().trim();
+
+  // 1. FILTRI NEGATIVI RIGIDI: Metadati, legende, intestazioni o codici foglio NON sono avvisi!
+  if (
+    /^(facolt[aà]|corso di studi|anno di corso|a\.a\.|canale)\b/i.test(t) ||
+    /\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(t) ||
+    /\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(t) ||
+    /\b(laurea\s+(?:triennale|magistrale))\b/i.test(t) ||
+    /^note\s+e\s+avvisi:?$/i.test(t) ||
+    /^avvisi:?$/i.test(t) ||
+    /^note:?$/i.test(t)
+  ) {
     return false;
   }
-  // Se è una riga di aula pura (es: "AULA 6 | RM018", "AULA 15 (lunedi)") non è un avviso
+
+  // 2. Se è solo la riga dell'aula o della mappa edifici
   if (/^aula\s+\d+(\s+e\s+\d+)?(\s*\([^)]+\))?(\s*\|\s*RM\d+)?$/i.test(t)) {
     return false;
   }
-  // Se la riga è una comunicazione con date o parole chiave, è sicuramente un avviso
-  if (t.length > 35 && (/\b(lezione|lezioni|orario|inizia|settembre|ottobre|novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno)\b/i.test(t))) {
+  if (/^edifici?o?\s+RM\d+/i.test(t)) {
+    return false;
+  }
+
+  // 3. Se è solo il periodo didattico / date lezioni standard (es. "Lezioni dal 25/09/2017 al 21/12/2017")
+  if (/^lezioni\s+dal\s+\d{1,2}[/-]\d{1,2}.*al\s+\d{1,2}[/-]\d{1,2}$/i.test(t)) {
+    return false;
+  }
+
+  // 4. VERI AVVISI PER GLI STUDENTI:
+  if (/\b(inizieranno|inizier[aà]|inizio lezioni|si terr[aà]|sospesa|sospese|variazione|avviso agli studenti|sostituito|recupero|anticipat[ao]|posticipat[ao]|non si terr[aà]|eccezionalmente)\b/i.test(t)) {
     return true;
   }
-  if (/\b(inizieranno|inizier[aà]|inizio|si terr[aà]|tenuta|sospesa|sospese|variazione|avviso|orario|docente|sostituito|recupero|semestre|anticipat[ao]|posticipat[ao])\b/i.test(t)) {
+
+  if (t.length > 30 && /\b(lezione|lezioni)\b/i.test(t) && /\b(aula|online|meet|zoom|docente|professore|prof|orario)\b/i.test(t) && !/\b(laurea|corso di studi)\b/i.test(t)) {
     return true;
   }
-  if (/\b\d{1,2}\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i.test(t)) {
-    return true;
-  }
+
   return false;
 }
 
@@ -412,13 +444,52 @@ export interface HeaderAnalysisResult {
 }
 
 export function extractDeterministicSemester(headerRows: string[][]): string {
+  let semesterPrefix = '';
+  for (const row of headerRows) {
+    const fullText = row.join(' ');
+    const semMatch = fullText.match(/\b(I{1,2}|1|2)\s*°?\s*sem(?:estre)?\b/i);
+    if (semMatch) {
+      const num = (semMatch[1].toUpperCase() === 'II' || semMatch[1] === '2') ? '2' : '1';
+      semesterPrefix = `${num}° Semestre`;
+      break;
+    }
+  }
+
+  // Cerca prima riga/cella specifica con date delle lezioni
+  for (const row of headerRows) {
+    for (const cell of row) {
+      const c = cell.trim();
+      if (!c) continue;
+      if (
+        /lezioni\s+dal\s+\d{1,2}[/-]\d{1,2}.*al\s+\d{1,2}[/-]\d{1,2}/i.test(c) ||
+        /dal\s+\d{1,2}\s+[a-z]+.*al\s+\d{1,2}\s+[a-z]+/i.test(c)
+      ) {
+        const cleanDateText = c
+          .replace(/codice interno|legenda.*|ultimo aggiornamento.*|laurea\s+(?:triennale|magistrale).*/gi, '')
+          .replace(/&#39;/g, "'")
+          .replace(/&amp;/g, '&')
+          .trim();
+        if (hasDateInfo(cleanDateText)) {
+          if (/semestre/i.test(cleanDateText)) return cleanDateText;
+          return semesterPrefix ? `${semesterPrefix} · ${cleanDateText}` : cleanDateText;
+        }
+      }
+    }
+  }
+
+  // Altrimenti cerca riga con "semestre" che contenga effettivamente date
   for (const row of headerRows) {
     const nonEmpties = row.map(c => c.trim()).filter(Boolean);
     const joined = nonEmpties.join(' ');
-    if (/\bsemestre\b/i.test(joined)) {
-      return nonEmpties.join(' · ').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
+    if (/\bsemestre\b/i.test(joined) && hasDateInfo(joined)) {
+      const semCell = nonEmpties.find(c => hasDateInfo(c)) || joined;
+      const clean = semCell.replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
+      if (hasDateInfo(clean)) {
+        return clean;
+      }
     }
   }
+
   return '';
 }
 
@@ -429,8 +500,8 @@ export function extractDeterministicAlerts(headerRows: string[][]): string[] {
     if (nonEmpties.length === 0) return;
     if (isClassroomTableRow(nonEmpties)) return;
     const fullRowText = nonEmpties.join(' ');
-    // Il semestre ha il suo campo dedicato, quindi non lo duplichiamo negli avvisi
-    if (/\bsemestre\b/i.test(fullRowText)) return;
+    // Il semestre ha il suo campo dedicato se contiene date, quindi non lo duplichiamo negli avvisi
+    if (/\bsemestre\b/i.test(fullRowText) && hasDateInfo(fullRowText)) return;
 
     if (isAnnouncement(fullRowText)) {
       deterministicAlerts.push(
@@ -446,9 +517,9 @@ export function extractDeterministicAlerts(headerRows: string[][]): string[] {
 }
 
 /**
- * Affida a Gemini l'interpretazione completa e generica dell'intestazione di qualsiasi foglio orario della Sapienza.
- * Distingue intelligentemente il SEMESTRE (con date), gli AVVISI e le AULE REALI,
- * formattando ciascuno in modo impeccabile per ogni corso e facoltà.
+ * Affida a Gemini l'interpretazione semantica completa dell'intestazione di qualsiasi foglio orario della Sapienza.
+ * Distingue intelligentemente il SEMESTRE (con date), gli AVVISI REALI e le AULE,
+ * filtrando categoricamente metadati tecnici, legende e date di aggiornamento del file Excel.
  */
 export async function parseHeaderWithGemini(
   headerRows: string[][],
@@ -481,23 +552,13 @@ export async function parseHeaderWithGemini(
     return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
   }
 
-  // FAST-PATH LOCALE ISTANTANEO (0ms):
-  // Se il parser deterministico locale ha già estratto con successo sia il semestre che le aule,
-  // restituiamo i dati locali all'istante senza alcuna attesa di rete, timeout o errore 503 di Google!
-  if (fallbackSemester && Object.keys(fallbackRooms).length > 0) {
-    return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
-  }
-
   // CHIAVE DI CACHE NORMALIZZATA CONDIVISA TRA TUTTI I CANALI DELLO STESSO CORSO:
-  // Rimuoviamo le diciture specifiche del singolo canale (es: "CANALE A-K", "I ANNO")
-  // così il primo canale effettua la chiamata AI e TUTTI gli altri canali dello stesso corso
-  // leggono dalla cache in 0ms senza duplicare chiamate né saturare la quota API!
   const normalizedForCourse = (headerLines + '\n' + (mapTabText || ''))
     .replace(/\b(?:canale|can\.?)\s*[a-zA-Z]\s*-\s*[a-zA-Z]\b/gi, '')
     .replace(/\b(I{1,3}V?|IV|V|[1-5])\s*°?\s*anno\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
-  const hashKey = `header_ai_v7_${hashString(normalizedForCourse)}`;
+  const hashKey = `header_ai_v8_${hashString(normalizedForCourse)}`;
   try {
     const cached = await AsyncStorage.getItem(hashKey);
     if (cached) {
@@ -548,12 +609,20 @@ ${JSON.stringify(uniqueRooms)}
 
 Il tuo compito è analizzare con intelligenza e precisione l'intestazione e restituire un unico oggetto JSON con esattamente questi tre campi:
 
-1. "semester": stringa pulita ed evidente con il semestre e le date di svolgimento (es: "1° Semestre · dal 24 settembre al 22 dicembre 2026" o "2° Semestre"). Se non presente nell'intestazione, stringa vuota "".
+1. "semester": stringa pulita ed evidente con il semestre e le date effettive di svolgimento delle lezioni (es: "1° Semestre · dal 24 settembre al 22 dicembre 2026" oppure "1° Semestre · Lezioni dal 25/09/2017 al 21/12/2017").
+   - REQUISITO FONDAMENTALE: Deve contenere informazioni temporali o date effettive di svolgimento delle lezioni. Se il foglio non specifica date o periodo di svolgimento, restituisci stringa vuota "".
+   - NON inserire mai il solo nome della facoltà, elenco edifici o note redazionali.
 
-2. "alerts": Array di stringhe con TUTTI gli avvisi, comunicazioni (anche scritte in evidenza, rosso o blu), date di inizio corsi, lezioni straordinarie o variazioni orario.
-   - NON inserire qui le date standard del semestre (vanno nel campo dedicato "semester")!
-   - Formatta ciascun avviso in modo chiaro, pulito e leggibile per lo studente (sostituisci codici come &#39; con apostrofo).
-   - NON inserire metadati generici come il solo nome della facoltà o "Anno di corso 1".
+2. "alerts": Array di stringhe con i VERI avvisi e comunicazioni urgenti/straordinarie per gli studenti (es: "Le lezioni inizieranno il 24 settembre", "Lezione sospesa", "Variazione orario/aula").
+   - DISTINZIONE CRUCIALE: Riconosci semanticamente ciò che è un VERO AVVISO per gli studenti e ciò che NON lo è.
+   - NON SONO AVVISI (IGNORALI CATEGORICAMENTE):
+     * Metadati tecnici o codici interni del foglio Excel (es: "codice interno", "BCLR5", "MBIR3").
+     * Date di modifica del file (es: "ultimo aggiornamento last update 24/8/26 17:34").
+     * Legende di lettura (es: "Legenda / Legend: Materia (edificio aula) Docente Subject...").
+     * Intestazioni di colonna o etichette vuote (es: "NOTE E AVVISI:", "Avvisi:", "Note:").
+     * Metadati del corso (es: "Laurea triennale in Ingegneria Clinica...", "Facoltà di...").
+     * Le date ordinarie delle lezioni (vanno in "semester", mai negli alerts).
+   - Se non sono presenti veri avvisi o comunicazioni straordinarie per gli studenti, restituisci un array vuoto [].
 
 3. "classrooms": Array di oggetti che rappresentano le AULE REALI del corso, ciascuna associata al rispettivo edificio e indirizzo stradale.
    - NON inserire assolutamente la sola parola "AULA" come nome o chiave di aula! "AULA" è solo l'intestazione di colonna della tabella.
@@ -574,18 +643,33 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
         temperature: 0,
         responseMimeType: "application/json"
       }
-    }, { timeout: 3500 });
+    }, { timeout: 5500 });
 
     const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(aiText);
 
-    const semester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
+    const rawSemester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
       ? parsed.semester.trim()
       : fallbackSemester;
 
-    const alerts: string[] = Array.isArray(parsed.alerts) && parsed.alerts.length > 0 
+    // Guardrail: il calendario didattico deve contenere effettive date o periodi
+    const semester = (rawSemester && hasDateInfo(rawSemester)) ? rawSemester : '';
+
+    const rawAlerts: string[] = Array.isArray(parsed.alerts) && parsed.alerts.length > 0 
       ? parsed.alerts 
       : fallbackAlerts;
+
+    // Guardrail: escludi tassativamente metadati, legende, note redazionali e stringhe senza contenuto
+    const alerts = rawAlerts
+      .map(a => typeof a === 'string' ? a.replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim() : '')
+      .filter(a => {
+        if (!a || a.length < 5) return false;
+        if (/^(?:note\s+e\s+avvisi:?|avvisi:?|note:?)$/i.test(a)) return false;
+        if (/\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(a)) return false;
+        if (/\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(a)) return false;
+        if (/^(facolt[aà]|corso di studi|laurea\s+(?:triennale|magistrale))\b/i.test(a)) return false;
+        return true;
+      });
 
     const mappedRooms: Record<string, MappedClassroom> = {};
 

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, ParsedClass, extractDeterministicSemester } from './aiParser';
+import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, ParsedClass, extractDeterministicSemester, hasDateInfo } from './aiParser';
 import { getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress, SAPIENZA_BUILDINGS, resolveClassroom } from './classroomLocations';
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
@@ -270,8 +270,8 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
     // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
     const contentFingerprint = extractSheetContentFingerprint(html);
-    const cacheKey = `scheduleCache_v6_${tabUrl}`;
-    const fpKey = `tabFingerprint_v6_${tabUrl}`;
+    const cacheKey = `scheduleCache_v7_${tabUrl}`;
+    const fpKey = `tabFingerprint_v7_${tabUrl}`;
     if (!forceRefresh) {
       try {
         const cachedStr = await AsyncStorage.getItem(cacheKey);
@@ -409,7 +409,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
         const aaMatch = row.join(' ').match(/\d{4}-\d{2,4}/);
         if (aaMatch) data.info.academicYear = aaMatch[0];
       }
-      if (joined.includes('semestre')) {
+      if (joined.includes('semestre') && hasDateInfo(joined)) {
         data.info.semester = row.filter(Boolean).join(' · ').trim();
       }
     }
@@ -449,8 +449,11 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
 
     // UNIFICATO: Gemini analizza l'intera intestazione estraendo SIA il semestre SIA gli avvisi formattati SIA le aule reali
     const headerResult = await parseHeaderWithGemini(headerRows, mapText, uniqueRooms);
-    data.info.semester = headerResult.semester || extractDeterministicSemester(headerRows) || data.info.semester;
-    data.alerts = headerResult.alerts;
+    const validSemester = (headerResult.semester && hasDateInfo(headerResult.semester))
+      ? headerResult.semester
+      : (extractDeterministicSemester(headerRows) || '');
+    data.info.semester = validSemester;
+    data.alerts = headerResult.alerts || [];
     const mappedRooms = headerResult.mappedRooms;
 
     const uniqueClassroomsMap = new Map<string, ClassroomInfo>();
@@ -585,7 +588,7 @@ export async function fetchScheduleData(tabUrl: string, forceRefresh = false): P
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentFingerprint, data }));
-      await AsyncStorage.setItem(`tabFingerprint_v6_${tabUrl}`, contentFingerprint);
+      await AsyncStorage.setItem(`tabFingerprint_v7_${tabUrl}`, contentFingerprint);
     } catch {}
 
     return data;
@@ -604,7 +607,7 @@ export async function fetchAllCourseData(
   forceRefresh = false,
   onProgress?: (step: string, current: number, total: number) => void
 ): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
-  const cacheKey = `allSchedules_v6_${degreeUrl}`;
+  const cacheKey = `allSchedules_v7_${degreeUrl}`;
 
   // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
   if (!forceRefresh) {
@@ -643,13 +646,13 @@ export async function fetchAllCourseData(
 
   // Calcola e memorizza il fingerprint complessivo dei canali
   // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
-  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v6_${t.url}`)));
+  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v7_${t.url}`)));
   const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
   try {
     await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
-    await AsyncStorage.setItem(`courseFingerprint_v6_${degreeUrl}`, combinedFingerprint);
+    await AsyncStorage.setItem(`courseFingerprint_v7_${degreeUrl}`, combinedFingerprint);
     await AsyncStorage.setItem(`lastCheckTime_${degreeUrl}`, Date.now().toString());
   } catch {}
 
@@ -668,7 +671,7 @@ export interface UpdateCheckResult {
  */
 export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
   try {
-    const cacheKey = `allSchedules_v6_${degreeUrl}`;
+    const cacheKey = `allSchedules_v7_${degreeUrl}`;
     const stored = await AsyncStorage.getItem(cacheKey);
     if (!stored) {
       return { hasChanges: true, reason: 'Nessun dato locale trovato' };
@@ -707,11 +710,11 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       const liveFp = currentFps[tab.url];
       if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
 
-      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v6_${tab.url}`);
+      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v7_${tab.url}`);
 
       // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
       if (!storedTabFp) {
-        await AsyncStorage.setItem(`tabFingerprint_v6_${tab.url}`, liveFp);
+        await AsyncStorage.setItem(`tabFingerprint_v7_${tab.url}`, liveFp);
         continue;
       }
 
