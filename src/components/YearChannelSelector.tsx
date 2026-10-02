@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
-import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
+import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
 
@@ -157,117 +157,134 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 
   return (
     <View style={styles.container}>
-      {/* ── Riga 1: Selezione Anno (Pillole Staccate e Snelle, Centrate sull'Asse Verticale) ── */}
+      {/* ── Riga 1: Selezione Anno (Pillole Staccate, Stessa Larghezza della Riga Canali Sotto) ── */}
       {uniqueYears.length > 1 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.yearScroll}
-          contentContainerStyle={styles.rowContainer}
-        >
-          {uniqueYears.map((year, i) => {
-            const isYearActive = year === activeYear;
-            return (
-              <TouchableOpacity
-                key={i}
-                onPress={() => handleSelectYear(year)}
-                style={[
-                  styles.yearChip,
-                  isYearActive && styles.yearChipActive,
-                  i === uniqueYears.length - 1 && { marginRight: 0 },
-                ]}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
-                  {year}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        uniqueYears.length <= 4 ? (
+          <View style={styles.yearRowEqual}>
+            {uniqueYears.map((year, i) => {
+              const isYearActive = year === activeYear;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => handleSelectYear(year)}
+                  style={[
+                    styles.yearChipEqual,
+                    isYearActive && styles.yearChipActive,
+                  ]}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
+                    {year}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.yearScroll}
+            contentContainerStyle={styles.rowContainer}
+          >
+            {uniqueYears.map((year, i) => {
+              const isYearActive = year === activeYear;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => handleSelectYear(year)}
+                  style={[
+                    styles.yearChip,
+                    isYearActive && styles.yearChipActive,
+                    i === uniqueYears.length - 1 && { marginRight: 0 },
+                  ]}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
+                    {year}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )
       )}
 
-      {/* ── Riga 2: Selezione Canale (IPA: UISegmented Senza Sfondo Rettangolare | Expo: Canali a Larghezza Uguale) ── */}
+      {/* ── Riga 2: Selezione Canale (IPA: Slider unificato fluido con selezione identica alle pillole | Expo: Pillole a larghezza uguale) ── */}
       {showChannelRow && (
-        isNativeIos ? (
-          <View style={styles.channelContainer}>
-            <SegmentedControl
+        <View style={styles.channelContainer}>
+          {isNativeIos ? (
+            <ChannelSegmentedSlider
               key={`seg-${activeYear}-${channelsForActiveYear.length}`}
-              values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
+              items={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
-              onChange={(event) => {
-                const idx = event.nativeEvent.selectedSegmentIndex;
+              onSelectIndex={(idx) => {
                 if (channelsForActiveYear[idx]) {
                   onSelectTab(channelsForActiveYear[idx].tab);
                 }
               }}
-              appearance="dark"
-              backgroundColor="transparent"
-              tintColor={SAPIENZA_RED}
-              fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
-              activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
-              style={styles.nativeSegmentedControl}
+              maxWidth={420}
             />
-          </View>
-        ) : (
-          channelsForActiveYear.length <= 3 ? (
-            <View style={styles.channelRowEqual}>
-              {channelsForActiveYear.map((item, i) => {
-                const isChannelActive = currentParsed?.tab.url === item.tab.url;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => onSelectTab(item.tab)}
-                    style={[
-                      styles.chipEqual,
-                      isChannelActive && styles.chipActive,
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
-                      numberOfLines={1}
-                    >
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
           ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.channelScroll}
-              contentContainerStyle={styles.rowContainer}
-            >
-              {channelsForActiveYear.map((item, i) => {
-                const isChannelActive = currentParsed?.tab.url === item.tab.url;
-                const displayName = item.channel || item.tab.name;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => onSelectTab(item.tab)}
-                    style={[
-                      styles.chipFixedEqual,
-                      isChannelActive && styles.chipActive,
-                      i === channelsForActiveYear.length - 1 && { marginRight: 0 },
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[styles.chipText, isChannelActive && styles.chipTextActive]}
-                      numberOfLines={1}
+            channelsForActiveYear.length <= 3 ? (
+              <View style={styles.channelRowEqual}>
+                {channelsForActiveYear.map((item, i) => {
+                  const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                  const displayName = item.channel || item.tab.name;
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => onSelectTab(item.tab)}
+                      style={[
+                        styles.chipEqual,
+                        isChannelActive && styles.chipActive,
+                      ]}
+                      activeOpacity={0.7}
                     >
-                      {displayName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )
-        )
+                      <Text
+                        style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                        numberOfLines={1}
+                      >
+                        {displayName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.channelScroll}
+                contentContainerStyle={styles.rowContainer}
+              >
+                {channelsForActiveYear.map((item, i) => {
+                  const isChannelActive = currentParsed?.tab.url === item.tab.url;
+                  const displayName = item.channel || item.tab.name;
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => onSelectTab(item.tab)}
+                      style={[
+                        styles.chipFixedEqual,
+                        isChannelActive && styles.chipActive,
+                        i === channelsForActiveYear.length - 1 && { marginRight: 0 },
+                      ]}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[styles.chipText, isChannelActive && styles.chipTextActive]}
+                        numberOfLines={1}
+                      >
+                        {displayName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )
+          )}
+        </View>
       )}
     </View>
   );
@@ -280,14 +297,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 10,
   },
+  // Riga Anni a Larghezza Uguale (perfettamente simmetrica al container canali)
+  yearRowEqual: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+    gap: 8,
+    marginBottom: 8,
+  },
+  yearChipEqual: {
+    flex: 1,
+    backgroundColor: '#1c1c1e',
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
   yearScroll: {
-    maxHeight: 40,
+    maxHeight: 42,
     marginBottom: 8,
     width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
   },
   channelScroll: {
-    maxHeight: 40,
-    marginBottom: 4,
+    maxHeight: 42,
     width: '100%',
   },
   rowContainer: {
@@ -296,13 +337,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Pillole Staccate Anno (più compatte e proporzionate)
+  // Pillole Staccate Anno (per liste lunghe > 4)
   yearChip: {
     backgroundColor: '#1c1c1e',
     paddingHorizontal: 15,
     minWidth: 84,
-    height: 32,
-    borderRadius: 16,
+    height: 34,
+    borderRadius: 17,
     marginRight: 8,
     borderWidth: 1,
     borderColor: '#2c2c2e',
@@ -312,6 +353,7 @@ const styles = StyleSheet.create({
   yearChipActive: {
     backgroundColor: 'rgba(130, 36, 51, 0.45)',
     borderColor: SAPIENZA_RED,
+    borderWidth: 1,
   },
   yearChipText: {
     color: '#a1a1aa',
@@ -323,20 +365,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Canale Nativo (Segmented Control per IPA)
+  // Container Canali (Identica larghezza e allineamento degli anni)
   channelContainer: {
     width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
     paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
-  },
-  nativeSegmentedControl: {
-    width: '100%',
-    maxWidth: 420,
-    height: 34,
-    backgroundColor: 'transparent',
-    overflow: 'hidden',
   },
 
   // Canale per Expo Go a Larghezza Uguale (Sia Verticale che Orizzontale)
@@ -345,17 +382,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
-    maxWidth: 420,
-    alignSelf: 'center',
-    paddingHorizontal: 16,
     gap: 8,
-    marginBottom: 4,
   },
   chipEqual: {
     flex: 1,
     backgroundColor: '#1c1c1e',
-    height: 32,
-    borderRadius: 16,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1,
     borderColor: '#2c2c2e',
     justifyContent: 'center',
@@ -365,8 +398,8 @@ const styles = StyleSheet.create({
   chipFixedEqual: {
     width: 120,
     backgroundColor: '#1c1c1e',
-    height: 32,
-    borderRadius: 16,
+    height: 34,
+    borderRadius: 17,
     marginRight: 8,
     borderWidth: 1,
     borderColor: '#2c2c2e',
@@ -377,6 +410,7 @@ const styles = StyleSheet.create({
   chipActive: {
     backgroundColor: 'rgba(130, 36, 51, 0.45)',
     borderColor: SAPIENZA_RED,
+    borderWidth: 1,
   },
   chipText: {
     color: '#a1a1aa',

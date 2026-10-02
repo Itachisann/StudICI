@@ -3,10 +3,10 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { parseTabHierarchy } from './YearChannelSelector';
+import { ChannelSegmentedSlider } from './ChannelSegmentedSlider';
 
 const SAPIENZA_RED = '#822433';
 
@@ -151,25 +151,18 @@ export function DefaultTabPicker({
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>CANALE / SUDDIVISIONE</Text>
             {isNativeIos ? (
-              <SegmentedControl
+              <ChannelSegmentedSlider
                 key={`picker-seg-${selectedYear}-${channelsForSelectedYear.length}`}
-                values={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
+                items={channelsForSelectedYear.map(c => c.channel || c.tab.name)}
                 selectedIndex={Math.max(
                   0,
                   channelsForSelectedYear.findIndex(c => (c.channel || '') === selectedChannel)
                 )}
-                onChange={(event) => {
-                  const idx = event.nativeEvent.selectedSegmentIndex;
+                onSelectIndex={(idx) => {
                   if (channelsForSelectedYear[idx]) {
                     handleSelectChannel(channelsForSelectedYear[idx].channel);
                   }
                 }}
-                appearance="dark"
-                backgroundColor="transparent"
-                tintColor={SAPIENZA_RED}
-                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
-                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
-                style={styles.nativeSegmentedControl}
               />
             ) : (
               <View style={styles.channelRowEqual}>
@@ -330,15 +323,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
-  // Canale Nativo (Segmented Control per IPA)
-  nativeSegmentedControl: {
-    width: '100%',
-    maxWidth: 420,
-    alignSelf: 'center',
-    height: 36,
-    backgroundColor: 'transparent',
-    overflow: 'hidden',
-  },
+
   // Canale Expo Go a Larghezza Uguale
   channelRowEqual: {
     flexDirection: 'row',

@@ -295,36 +295,7 @@ export default function ProfiloScreen() {
 
           <View style={styles.separator} />
 
-          {/* Riga 2: Tipologia Laurea */}
-          <View style={styles.tableRow}>
-            <View style={[styles.iconBox, { backgroundColor: courseMetadata.isMagistrale ? '#a855f7' : '#3b82f6' }]}>
-              <Ionicons name="ribbon" size={16} color="#ffffff" />
-            </View>
-            <Text style={styles.rowTitle}>Tipologia</Text>
-            <Text style={styles.rowDetail} numberOfLines={1}>
-              {courseMetadata.degreeTypeLabel}
-            </Text>
-          </View>
-
-          {courseMetadata.displayClass ? (
-            <>
-              <View style={styles.separator} />
-              {/* Riga 3: Percorso / Classe */}
-              <View style={styles.tableRow}>
-                <View style={[styles.iconBox, { backgroundColor: '#ff9500' }]}>
-                  <Ionicons name="bookmark" size={16} color="#ffffff" />
-                </View>
-                <Text style={styles.rowTitle}>Classe / Percorso</Text>
-                <Text style={styles.rowDetail} numberOfLines={1}>
-                  {courseMetadata.displayClass}
-                </Text>
-              </View>
-            </>
-          ) : null}
-
-          <View style={styles.separator} />
-
-          {/* Riga 4: Canale / Anno Predefinito */}
+          {/* Riga 2: Canale / Anno Predefinito */}
           <TouchableOpacity 
             style={styles.tableRow} 
             activeOpacity={0.7} 

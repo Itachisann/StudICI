@@ -3,7 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
   RefreshControl
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -101,6 +102,7 @@ export default function AuleScreen() {
   const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
   const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
+  const insets = useSafeAreaInsets();
 
   const loadData = useCallback(async (force = false) => {
     try {
@@ -172,17 +174,24 @@ export default function AuleScreen() {
   const currentSemester = (selectedTab && schedulesMap[selectedTab.url]?.info?.semester) || '';
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
-        <Text style={styles.largeTitle}>Aule</Text>
-      </View>
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
+      {/* ── Liquid Glass Header: Titolo "Aule" + Selezione Anni & Canali (fino ai canali) ── */}
+      <View style={[styles.liquidGlassHeader, { paddingTop: insets.top > 0 ? insets.top + 6 : 14 }]}>
+        <BlurView tint="dark" intensity={65} style={StyleSheet.absoluteFill} />
+        <View style={styles.liquidGlassOverlay} />
 
-      {/* ── Selezione Gerarchica Anni e Canali (2 Righe di Pill) ── */}
-      <YearChannelSelector
-        tabs={tabs}
-        selectedTab={selectedTab}
-        onSelectTab={onSelectTab}
-      />
+        {/* Titolo iOS Large Title "Aule" */}
+        <View style={styles.liquidGlassTitleRow}>
+          <Text style={styles.liquidGlassTitle}>Aule</Text>
+        </View>
+
+        {/* Selezione Gerarchica Anni e Canali */}
+        <YearChannelSelector
+          tabs={tabs}
+          selectedTab={selectedTab}
+          onSelectTab={onSelectTab}
+        />
+      </View>
 
       {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
       {currentSemester && hasDateInfo(currentSemester) ? (
@@ -284,12 +293,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#111111',
   },
-  header: {
+  /* Liquid Glass Header */
+  liquidGlassHeader: {
+    overflow: 'hidden',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.12)',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 8,
+    marginBottom: 8,
+  },
+  liquidGlassOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(24, 24, 26, 0.65)',
+  },
+  liquidGlassTitleRow: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 6,
     paddingBottom: 16,
   },
-  largeTitle: {
+  liquidGlassTitle: {
     fontSize: 34,
     fontWeight: '700',
     color: '#ffffff',
