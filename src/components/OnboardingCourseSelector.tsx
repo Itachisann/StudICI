@@ -1,31 +1,47 @@
-import React, { useState, useEffect } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect, useState } from "react";
 import {
-  View, Text, StyleSheet, TextInput, ScrollView,
-  TouchableOpacity, ActivityIndicator, Alert, Image
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchDegrees, fetchAllCourseData, Degree, Tab } from '../utils/scraper';
-import { CourseDownloadView } from './CourseDownloadView';
-import { DefaultTabPicker } from './DefaultTabPicker';
+  ActivityIndicator,
+  Alert,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  Degree,
+  fetchAllCourseData,
+  fetchDegrees,
+  Tab,
+} from "../utils/scraper";
+import { CourseDownloadView } from "./CourseDownloadView";
+import { DefaultTabPicker } from "./DefaultTabPicker";
 
-const SAPIENZA_RED = '#822433';
+const SAPIENZA_RED = "#822433";
 
 interface OnboardingCourseSelectorProps {
   onComplete: () => void;
 }
 
-export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelectorProps) {
+export function OnboardingCourseSelector({
+  onComplete,
+}: OnboardingCourseSelectorProps) {
   const [degrees, setDegrees] = useState<Degree[]>([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-  const [progressText, setProgressText] = useState('');
-  const [currentDegreeName, setCurrentDegreeName] = useState('');
+  const [progressText, setProgressText] = useState("");
+  const [currentDegreeName, setCurrentDegreeName] = useState("");
 
   // Step 2: Selezione Anno e Canale
-  const [step, setStep] = useState<'select_course' | 'select_channel'>('select_course');
+  const [step, setStep] = useState<"select_course" | "select_channel">(
+    "select_course",
+  );
   const [downloadedTabs, setDownloadedTabs] = useState<Tab[]>([]);
   const [pendingDegree, setPendingDegree] = useState<Degree | null>(null);
 
@@ -36,7 +52,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
         const degList = await fetchDegrees();
         setDegrees(degList);
       } catch (e) {
-        console.error('Errore caricamento corsi:', e);
+        console.error("Errore caricamento corsi:", e);
       }
       setLoading(false);
     }
@@ -47,7 +63,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
     setCurrentDegreeName(degree.name);
     setPendingDegree(degree);
     setDownloading(true);
-    setProgressText('Preparazione e analisi canali...');
+    setProgressText("Preparazione e analisi canali...");
 
     try {
       // 1. Scarica TUTTO in un'unica botta con avanzamento in tempo reale
@@ -59,29 +75,32 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
       if (tabs && tabs.length > 1) {
         setDownloadedTabs(tabs);
         setDownloading(false);
-        setStep('select_channel');
+        setStep("select_channel");
       } else {
         // Corso a canale unico: salva direttamente
-        await AsyncStorage.setItem('selectedDegreeUrl', degree.url);
-        await AsyncStorage.setItem('selectedDegreeName', degree.name);
+        await AsyncStorage.setItem("selectedDegreeUrl", degree.url);
+        await AsyncStorage.setItem("selectedDegreeName", degree.name);
         if (degree.className) {
-          await AsyncStorage.setItem('selectedDegreeClassName', degree.className);
+          await AsyncStorage.setItem(
+            "selectedDegreeClassName",
+            degree.className,
+          );
         }
         if (tabs && tabs.length === 1) {
-          await AsyncStorage.setItem('defaultTabUrl', tabs[0].url);
+          await AsyncStorage.setItem("defaultTabUrl", tabs[0].url);
         } else {
-          await AsyncStorage.removeItem('defaultTabUrl');
+          await AsyncStorage.removeItem("defaultTabUrl");
         }
         onComplete();
       }
     } catch (err) {
-      console.error('Errore durante download iniziale:', err);
+      console.error("Errore durante download iniziale:", err);
       setDownloading(false);
-      setStep('select_course');
+      setStep("select_course");
       Alert.alert(
-        'Errore di Connessione',
-        'Impossibile scaricare i dati del corso dal sito Sapienza. Controlla la tua connessione e riprova.',
-        [{ text: 'OK' }]
+        "Errore di Connessione",
+        "Impossibile scaricare i dati del corso dal sito Sapienza. Controlla la tua connessione e riprova.",
+        [{ text: "OK" }],
       );
     }
   };
@@ -89,12 +108,15 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
   const handleConfirmDefaultTab = async (chosenTab: Tab) => {
     if (!pendingDegree) return;
     try {
-      await AsyncStorage.setItem('selectedDegreeUrl', pendingDegree.url);
-      await AsyncStorage.setItem('selectedDegreeName', pendingDegree.name);
+      await AsyncStorage.setItem("selectedDegreeUrl", pendingDegree.url);
+      await AsyncStorage.setItem("selectedDegreeName", pendingDegree.name);
       if (pendingDegree.className) {
-        await AsyncStorage.setItem('selectedDegreeClassName', pendingDegree.className);
+        await AsyncStorage.setItem(
+          "selectedDegreeClassName",
+          pendingDegree.className,
+        );
       }
-      await AsyncStorage.setItem('defaultTabUrl', chosenTab.url);
+      await AsyncStorage.setItem("defaultTabUrl", chosenTab.url);
       onComplete();
     } catch (e) {
       console.error(e);
@@ -102,9 +124,10 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
     }
   };
 
-  const filteredDegrees = degrees.filter(d =>
-    d.name.toLowerCase().includes(search.toLowerCase()) ||
-    (d.className && d.className.toLowerCase().includes(search.toLowerCase()))
+  const filteredDegrees = degrees.filter(
+    (d) =>
+      d.name.toLowerCase().includes(search.toLowerCase()) ||
+      (d.className && d.className.toLowerCase().includes(search.toLowerCase())),
   );
 
   // Schermata di Download Unificato
@@ -119,7 +142,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
   }
 
   // Schermata Step 2: Selezione Anno e Canale
-  if (step === 'select_channel' && pendingDegree) {
+  if (step === "select_channel" && pendingDegree) {
     return (
       <SafeAreaView style={styles.container}>
         <DefaultTabPicker
@@ -127,7 +150,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
           degreeName={pendingDegree.name}
           title="Personalizza il tuo Orario"
           subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico all'avvio."
-          confirmButtonText="Inizia con questo Orario"
+          confirmButtonText="Imposta come predefinito"
           onConfirm={handleConfirmDefaultTab}
         />
       </SafeAreaView>
@@ -140,7 +163,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
       <View style={styles.header}>
         <View style={styles.logoBadge}>
           <Image
-            source={require('../../assets/images/icon.png')}
+            source={require("../../assets/images/icon.png")}
             style={styles.logoBadgeImage}
             resizeMode="cover"
           />
@@ -150,13 +173,19 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
           Sapienza Università di Roma · Facoltà I.C.I.
         </Text>
         <Text style={styles.instruction}>
-          Seleziona il tuo corso di laurea per iniziare. Orari e aule verranno memorizzati sul telefono.
+          Seleziona il tuo corso di laurea per iniziare. Orari e aule verranno
+          memorizzati sul telefono.
         </Text>
       </View>
 
       {/* Barra di Ricerca */}
       <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#8e8e93" style={styles.searchIcon} />
+        <Ionicons
+          name="search"
+          size={20}
+          color="#8e8e93"
+          style={styles.searchIcon}
+        />
         <TextInput
           style={styles.searchInput}
           placeholder="Cerca corso (es. Informatica, Clinica...)"
@@ -167,7 +196,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
           autoCorrect={false}
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
+          <TouchableOpacity onPress={() => setSearch("")}>
             <Ionicons name="close-circle" size={18} color="#8e8e93" />
           </TouchableOpacity>
         )}
@@ -177,50 +206,82 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
       {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={SAPIENZA_RED} />
-          <Text style={styles.loadingText}>Caricamento elenco corsi Sapienza...</Text>
+          <Text style={styles.loadingText}>
+            Caricamento elenco corsi Sapienza...
+          </Text>
         </View>
       ) : (
-        <ScrollView style={styles.scrollList} contentContainerStyle={{ paddingBottom: 40 }}>
+        <ScrollView
+          style={styles.scrollList}
+          contentContainerStyle={{ paddingBottom: 40 }}
+        >
           {filteredDegrees.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="search-outline" size={40} color="#3a3a3c" />
-              <Text style={styles.emptyText}>Nessun corso trovato per &quot;{search}&quot;</Text>
+              <Text style={styles.emptyText}>
+                Nessun corso trovato per &quot;{search}&quot;
+              </Text>
             </View>
           ) : (
-              filteredDegrees.map((deg, i) => {
-                const cleanDegreeName = deg.name
-                  .replace(/\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi, '')
-                  .trim();
-                const isMagistrale = deg.name.toLowerCase().includes('magistrale') || deg.className?.toUpperCase().startsWith('LM');
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    style={styles.courseCard}
-                    activeOpacity={0.7}
-                    onPress={() => handleSelectDegree(deg)}
-                  >
-                    <View style={styles.courseIconCircle}>
-                      <Ionicons name="book-outline" size={22} color={SAPIENZA_RED} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.courseName}>{cleanDegreeName}</Text>
-                      <View style={styles.courseBadgesRow}>
-                        <View style={[styles.typeBadge, { backgroundColor: isMagistrale ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)' }]}>
-                          <Text style={[styles.typeBadgeText, { color: isMagistrale ? '#c084fc' : '#60a5fa' }]}>
-                            {isMagistrale ? 'Magistrale' : 'Triennale'}
+            filteredDegrees.map((deg, i) => {
+              const cleanDegreeName = deg.name
+                .replace(
+                  /\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi,
+                  "",
+                )
+                .trim();
+              const isMagistrale =
+                deg.name.toLowerCase().includes("magistrale") ||
+                deg.className?.toUpperCase().startsWith("LM");
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={styles.courseCard}
+                  activeOpacity={0.7}
+                  onPress={() => handleSelectDegree(deg)}
+                >
+                  <View style={styles.courseIconCircle}>
+                    <Ionicons
+                      name="book-outline"
+                      size={22}
+                      color={SAPIENZA_RED}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.courseName}>{cleanDegreeName}</Text>
+                    <View style={styles.courseBadgesRow}>
+                      <View
+                        style={[
+                          styles.typeBadge,
+                          {
+                            backgroundColor: isMagistrale
+                              ? "rgba(168, 85, 247, 0.15)"
+                              : "rgba(59, 130, 246, 0.15)",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.typeBadgeText,
+                            { color: isMagistrale ? "#c084fc" : "#60a5fa" },
+                          ]}
+                        >
+                          {isMagistrale ? "Magistrale" : "Triennale"}
+                        </Text>
+                      </View>
+                      {deg.className ? (
+                        <View style={styles.classBadge}>
+                          <Text style={styles.classBadgeText}>
+                            {deg.className}
                           </Text>
                         </View>
-                        {deg.className ? (
-                          <View style={styles.classBadge}>
-                            <Text style={styles.classBadgeText}>{deg.className}</Text>
-                          </View>
-                        ) : null}
-                      </View>
+                      ) : null}
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color="#636366" />
-                  </TouchableOpacity>
-                );
-              })
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#636366" />
+                </TouchableOpacity>
+              );
+            })
           )}
         </ScrollView>
       )}
@@ -231,7 +292,7 @@ export function OnboardingCourseSelector({ onComplete }: OnboardingCourseSelecto
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#111111',
+    backgroundColor: "#111111",
   },
   header: {
     paddingHorizontal: 20,
@@ -243,57 +304,57 @@ const styles = StyleSheet.create({
     height: 68,
     borderRadius: 18,
     backgroundColor: SAPIENZA_RED,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     marginBottom: 14,
     shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 10,
     elevation: 6,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   logoBadgeImage: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
     borderRadius: 18,
   },
   appTitle: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#ffffff',
+    fontWeight: "bold",
+    color: "#ffffff",
   },
   appSubtitle: {
     fontSize: 13,
     color: SAPIENZA_RED,
-    fontWeight: '600',
+    fontWeight: "600",
     marginTop: 2,
     letterSpacing: 0.5,
   },
   instruction: {
     fontSize: 14,
-    color: '#8e8e93',
+    color: "#8e8e93",
     marginTop: 8,
     lineHeight: 20,
   },
   searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1c1c1e',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
     marginHorizontal: 20,
     paddingHorizontal: 14,
     height: 46,
     borderRadius: 12,
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#2c2c2e',
+    borderColor: "#2c2c2e",
   },
   searchIcon: {
     marginRight: 10,
   },
   searchInput: {
     flex: 1,
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 15,
   },
   scrollList: {
@@ -301,33 +362,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   courseCard: {
-    backgroundColor: '#1c1c1e',
+    backgroundColor: "#1c1c1e",
     borderRadius: 14,
     padding: 16,
     marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: '#2c2c2e',
+    borderColor: "#2c2c2e",
   },
   courseIconCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#2c2c2e',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#2c2c2e",
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 14,
   },
   courseName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#ffffff',
+    fontWeight: "600",
+    color: "#ffffff",
     marginBottom: 6,
   },
   courseBadgesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   typeBadge: {
@@ -337,92 +398,92 @@ const styles = StyleSheet.create({
   },
   typeBadgeText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   classBadge: {
-    backgroundColor: 'rgba(255, 159, 10, 0.15)',
+    backgroundColor: "rgba(255, 159, 10, 0.15)",
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
   },
   classBadgeText: {
-    color: '#ff9f0a',
+    color: "#ff9f0a",
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   centerContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     paddingBottom: 60,
   },
   loadingText: {
-    color: '#8e8e93',
+    color: "#8e8e93",
     marginTop: 14,
     fontSize: 14,
   },
   emptyContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 60,
   },
   emptyText: {
-    color: '#636366',
+    color: "#636366",
     marginTop: 12,
     fontSize: 14,
   },
   // Stili schermata download
   downloadContainer: {
     flex: 1,
-    backgroundColor: '#111111',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#111111",
+    justifyContent: "center",
+    alignItems: "center",
   },
   downloadContent: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingHorizontal: 30,
-    width: '100%',
+    width: "100%",
   },
   iconCircle: {
     width: 90,
     height: 90,
     borderRadius: 45,
-    backgroundColor: 'rgba(130, 36, 51, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "rgba(130, 36, 51, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
     marginBottom: 20,
   },
   downloadTitle: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#ffffff',
+    fontWeight: "bold",
+    color: "#ffffff",
   },
   downloadCourseName: {
     fontSize: 15,
     color: SAPIENZA_RED,
-    fontWeight: '600',
+    fontWeight: "600",
     marginTop: 6,
-    textAlign: 'center',
+    textAlign: "center",
   },
   progressBox: {
-    backgroundColor: '#1c1c1e',
+    backgroundColor: "#1c1c1e",
     padding: 18,
     borderRadius: 16,
-    width: '100%',
-    alignItems: 'center',
+    width: "100%",
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: '#2c2c2e',
+    borderColor: "#2c2c2e",
   },
   progressStatus: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: "600",
+    textAlign: "center",
     marginBottom: 8,
   },
   progressHint: {
-    color: '#8e8e93',
+    color: "#8e8e93",
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
     lineHeight: 18,
   },
 });
