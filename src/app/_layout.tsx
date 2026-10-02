@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Platform, StyleSheet, View, ActivityIndicator } from 'react-native';
+import { Platform, StyleSheet, ActivityIndicator } from 'react-native';
 import { Tabs as ExpoTabs } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { NativeTabs } from '@/components/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 
@@ -76,51 +77,51 @@ export default function AppLayout() {
 
   if (!isReady) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#111111', justifyContent: 'center', alignItems: 'center' }}>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#111111', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color={SAPIENZA_RED} />
-      </View>
+      </GestureHandlerRootView>
     );
   }
 
   // Schermata Iniziale: Seleziona Corso (Nasconde interamente le Tab al primo avvio o dopo reset)
   if (!degreeUrl) {
     return (
-      <>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <StatusBar style="light" />
         <OnboardingCourseSelector onComplete={checkOnboarding} />
-      </>
+      </GestureHandlerRootView>
     );
   }
 
   // Schermata di Avvio con Controllo Aggiornamenti Foglio (eseguita una volta ad avvio sessione)
   if (!startupCheckDone) {
     return (
-      <>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <StatusBar style="light" />
         <StartupCheckScreen
           degreeUrl={degreeUrl}
           degreeName={degreeName}
           onFinish={() => setStartupCheckDone(true)}
         />
-      </>
+      </GestureHandlerRootView>
     );
   }
 
   if (isNativeComponentAvailable) {
     return (
-      <>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <StatusBar style="light" />
         <NativeTabs screenOptions={{ tabBarActiveTintColor: SAPIENZA_RED }}>
           <NativeTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' }) }} />
           <NativeTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' }) }} />
           <NativeTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: () => ({ sfSymbol: 'person.crop.circle' }) }} />
         </NativeTabs>
-      </>
+      </GestureHandlerRootView>
     );
   }
 
   return (
-    <>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
       <ExpoTabs
         screenOptions={{
@@ -139,6 +140,6 @@ export default function AppLayout() {
         <ExpoTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size} color={color} /> }} />
         <ExpoTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} /> }} />
       </ExpoTabs>
-    </>
+    </GestureHandlerRootView>
   );
 }

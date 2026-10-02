@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Modal, Alert, TextInput
+  ActivityIndicator, Modal, Alert, TextInput, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -9,7 +9,7 @@ import { fetchDegrees, fetchTabs, fetchAllCourseData, Degree, Tab } from '../uti
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { CourseDownloadView } from '../components/CourseDownloadView';
 import { DefaultTabPicker } from '../components/DefaultTabPicker';
 import { parseTabHierarchy } from '../components/YearChannelSelector';
@@ -24,6 +24,8 @@ import {
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 
 const SAPIENZA_RED = '#822433';
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 
 export default function ProfiloScreen() {
   const [degreeName, setDegreeName] = useState<string>('');
@@ -228,6 +230,44 @@ export default function ProfiloScreen() {
       <Ionicons name="trash" size={20} color="#ffffff" />
       <Text style={styles.swipeDeleteText}>Elimina</Text>
     </TouchableOpacity>
+  );
+
+  const renderAttendanceCardContent = (item: AttendanceRecord) => (
+    <>
+      <View style={styles.attendanceDateSquircle}>
+        <Text style={styles.attendanceDayName}>{item.dayName?.slice(0, 3).toUpperCase() || 'GIORNO'}</Text>
+        <Text style={styles.attendanceDateNum}>{item.displayDate?.split(' ')[0] || ''}</Text>
+      </View>
+
+      <View style={{ flex: 1, marginHorizontal: 12 }}>
+        <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
+          {item.subject?.toUpperCase()}
+        </Text>
+        <View style={styles.attendanceTimeRow}>
+          <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
+          <Text style={styles.attendanceHistoryTime}>
+            {item.startTime} - {item.endTime} ({item.duration}h)
+          </Text>
+        </View>
+        {item.room ? (
+          <View style={styles.attendanceRoomRow}>
+            <Ionicons name="location-outline" size={12} color="#ef4444" style={{ marginRight: 3 }} />
+            <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+              {item.room}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <TouchableOpacity
+        style={styles.attendanceDeleteButton}
+        activeOpacity={0.7}
+        onPress={() => handleDeleteAttendance(item)}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <Ionicons name="trash-outline" size={17} color="#ef4444" />
+      </TouchableOpacity>
+    </>
   );
 
   const openSourceWebsite = async () => {
@@ -677,50 +717,29 @@ export default function ProfiloScreen() {
                     </View>
                   </View>
 
-                  {/* Lista Lezioni con Slide Nativo iOS per Eliminare */}
+                  {/* Lista Lezioni: Slide Nativo iOS per IPA, Card con cestino e long press per Expo Go */}
                   {group.records.map(item => (
-                    <Swipeable
-                      key={item.id}
-                      renderRightActions={() => renderRightActions(item)}
-                      overshootRight={false}
-                      containerStyle={{ marginBottom: 10, borderRadius: 16, overflow: 'hidden' }}
-                    >
-                      <View style={styles.attendanceHistoryItem}>
-                        <View style={styles.attendanceDateSquircle}>
-                          <Text style={styles.attendanceDayName}>{item.dayName?.slice(0, 3).toUpperCase() || 'GIORNO'}</Text>
-                          <Text style={styles.attendanceDateNum}>{item.displayDate?.split(' ')[0] || ''}</Text>
+                    isNativeComponentAvailable ? (
+                      <Swipeable
+                        key={item.id}
+                        renderRightActions={() => renderRightActions(item)}
+                        overshootRight={false}
+                        containerStyle={{ marginBottom: 10, borderRadius: 16, overflow: 'hidden' }}
+                      >
+                        <View style={[styles.attendanceHistoryItem, { marginBottom: 0 }]}>
+                          {renderAttendanceCardContent(item)}
                         </View>
-
-                        <View style={{ flex: 1, marginHorizontal: 12 }}>
-                          <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
-                            {item.subject?.toUpperCase()}
-                          </Text>
-                          <View style={styles.attendanceTimeRow}>
-                            <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
-                            <Text style={styles.attendanceHistoryTime}>
-                              {item.startTime} - {item.endTime} ({item.duration}h)
-                            </Text>
-                          </View>
-                          {item.room ? (
-                            <View style={styles.attendanceRoomRow}>
-                              <Ionicons name="location-outline" size={12} color="#ef4444" style={{ marginRight: 3 }} />
-                              <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
-                                {item.room}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </View>
-
-                        <TouchableOpacity
-                          style={styles.attendanceDeleteButton}
-                          activeOpacity={0.7}
-                          onPress={() => handleDeleteAttendance(item)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons name="trash-outline" size={17} color="#ef4444" />
-                        </TouchableOpacity>
-                      </View>
-                    </Swipeable>
+                      </Swipeable>
+                    ) : (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={styles.attendanceHistoryItem}
+                        activeOpacity={0.8}
+                        onLongPress={() => handleDeleteAttendance(item)}
+                      >
+                        {renderAttendanceCardContent(item)}
+                      </TouchableOpacity>
+                    )
                   ))}
                 </View>
               ))
@@ -1028,7 +1047,6 @@ const styles = StyleSheet.create({
   statsCardsRow: {
     flexDirection: 'row',
     gap: 10,
-    marginHorizontal: 16,
     marginBottom: 12,
   },
   statCard: {
