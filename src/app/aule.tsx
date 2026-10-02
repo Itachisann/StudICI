@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#1c1c1e',
     marginHorizontal: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     paddingVertical: 9,
     paddingHorizontal: 12,
     marginBottom: 10,

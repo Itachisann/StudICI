@@ -132,6 +132,24 @@ export default function ScheduleScreen() {
 
   const todayClasses = schedule?.days[selectedDay] || [];
 
+  const isCurrentClass = useCallback((cls: ClassEvent) => {
+    if (selectedDay !== todayIdx) return false;
+    const now = new Date();
+    const currentDayOfWeek = now.getDay() - 1; // 0=lun, 4=ven
+    if (currentDayOfWeek !== todayIdx) return false;
+
+    if (!cls.startTime || !cls.endTime) return false;
+    const [startH, startM] = cls.startTime.split(':').map(Number);
+    const [endH, endM] = cls.endTime.split(':').map(Number);
+    if (isNaN(startH) || isNaN(endH)) return false;
+
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const startMinutes = startH * 60 + (startM || 0);
+    const endMinutes = endH * 60 + (endM || 0);
+
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  }, [selectedDay, todayIdx]);
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
       {/* ── Liquid Glass Header: Titolo "Orari" + Selezione Anni & Canali (fino ai canali) ── */}
@@ -190,21 +208,27 @@ export default function ScheduleScreen() {
         </TouchableOpacity>
       ) : null}
 
-      {/* ── Day Selector ── */}
+      {/* ── Day Selector (Allineamento Orizzontale Perfetto & Navigazione Ciclica) ── */}
       <View style={styles.daySelectorContainer}>
         <TouchableOpacity
           style={styles.navArrow}
-          onPress={() => setSelectedDay(d => Math.max(0, d - 1))}
+          onPress={() => setSelectedDay(d => (d === 0 ? 4 : d - 1))}
+          activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={18} color="#666" />
+          <Ionicons name="chevron-back" size={18} color="#ffffff" />
         </TouchableOpacity>
 
         <View style={styles.daysRow}>
           {DAYS.map((day, i) => {
             const isActive = selectedDay === i;
-              const isToday = i === todayIdx;
+            const isToday = i === todayIdx;
             return (
-              <TouchableOpacity key={i} onPress={() => setSelectedDay(i)} style={styles.dayItem}>
+              <TouchableOpacity
+                key={i}
+                onPress={() => setSelectedDay(i)}
+                style={styles.dayItem}
+                activeOpacity={0.7}
+              >
                 <View style={[styles.dayCircle, isActive && styles.dayCircleActive]}>
                   <Text style={[styles.dayText, isActive && styles.dayTextActive]}>{day}</Text>
                 </View>
@@ -216,9 +240,10 @@ export default function ScheduleScreen() {
 
         <TouchableOpacity
           style={styles.navArrow}
-          onPress={() => setSelectedDay(d => Math.min(4, d + 1))}
+          onPress={() => setSelectedDay(d => (d === 4 ? 0 : d + 1))}
+          activeOpacity={0.7}
         >
-          <Ionicons name="chevron-forward" size={18} color="#666" />
+          <Ionicons name="chevron-forward" size={18} color="#ffffff" />
         </TouchableOpacity>
       </View>
 
@@ -253,46 +278,66 @@ export default function ScheduleScreen() {
             </View>
           )}
 
-          {todayClasses.map((cls: ClassEvent, i: number) => (
-            <View key={i} style={styles.classCard}>
-              {/* Color accent bar */}
-              <View style={[styles.accentBar, { backgroundColor: ACCENT_COLORS[i % ACCENT_COLORS.length] }]} />
+          {todayClasses.map((cls: ClassEvent, i: number) => {
+            const accentColor = ACCENT_COLORS[i % ACCENT_COLORS.length];
+            const isLive = isCurrentClass(cls);
 
-              <View style={styles.cardBody}>
-                {/* Subject */}
-                <Text style={styles.subjectText} numberOfLines={2}>
-                  {cls.subject?.toUpperCase()}
-                </Text>
-
-                {/* Time */}
-                <View style={styles.infoRow}>
-                  <Ionicons name="time-outline" size={15} color="#8e8e93" />
-                  <Text style={styles.infoText}>
-                    {cls.startTime} – {cls.endTime} ({cls.duration}h)
-                  </Text>
+            return (
+              <View key={i} style={[styles.classCard, isLive && styles.classCardLive]}>
+                {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
+                <View style={styles.timeColumn}>
+                  <Text style={styles.timeStartText}>{cls.startTime}</Text>
+                  <View style={styles.timeLineConnector}>
+                    <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                    <View style={styles.durationBadge}>
+                      <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
+                    </View>
+                    <View style={[styles.timeLineBar, { backgroundColor: accentColor }]} />
+                  </View>
+                  <Text style={styles.timeEndText}>{cls.endTime}</Text>
                 </View>
 
-                {/* Teacher */}
-                {cls.teacher ? (
-                  <View style={styles.infoRow}>
-                    <Ionicons name="person-outline" size={15} color="#8e8e93" />
-                    <Text style={styles.infoText}>{cls.teacher}</Text>
-                  </View>
-                ) : null}
+                {/* Barra di Accento Verticale Colorata stile Calendario */}
+                <View style={[styles.calendarAccentBar, { backgroundColor: accentColor }]} />
 
-                {/* Room badge */}
-                {cls.room ? (
-                  <TouchableOpacity
-                    style={styles.roomBadge}
-                    onPress={() => handleRoomClick(cls)}
-                  >
-                    <Ionicons name="location" size={13} color="#ef4444" />
-                    <Text style={styles.roomBadgeText}>{cls.room}</Text>
-                  </TouchableOpacity>
-                ) : null}
+                {/* Dettagli Lezione */}
+                <View style={styles.cardBody}>
+                  <View style={styles.cardTitleRow}>
+                    <Text style={styles.subjectText} numberOfLines={2}>
+                      {cls.subject?.toUpperCase()}
+                    </Text>
+                    {isLive && (
+                      <View style={styles.liveBadge}>
+                        <View style={styles.liveDot} />
+                        <Text style={styles.liveText}>ORA</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Docente */}
+                  {cls.teacher ? (
+                    <View style={styles.infoRow}>
+                      <Ionicons name="person-outline" size={13} color="#8e8e93" />
+                      <Text style={styles.teacherText} numberOfLines={1}>{cls.teacher}</Text>
+                    </View>
+                  ) : null}
+
+                  {/* Badge Aula */}
+                  {cls.room ? (
+                    <TouchableOpacity
+                      style={styles.roomBadge}
+                      onPress={() => handleRoomClick(cls)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="location" size={12} color="#ef4444" />
+                      <Text style={styles.roomBadgeText} numberOfLines={1}>{cls.room}</Text>
+                      <Ionicons name="chevron-forward" size={11} color="#ef4444" style={{ marginLeft: 2, opacity: 0.8 }} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
 
@@ -442,7 +487,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#1c1c1e',
     marginHorizontal: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     paddingVertical: 9,
     paddingHorizontal: 12,
     marginBottom: 10,
@@ -516,49 +561,76 @@ const styles = StyleSheet.create({
   },
   moreAlertsText: { color: '#ff9f0a', fontSize: 11, fontWeight: '700' },
 
-  /* Day selector */
+  /* Day selector (Allineato sull'asse orizzontale) */
   daySelectorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   navArrow: {
-    width: 32, height: 32, borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#1c1c1e',
-    justifyContent: 'center', alignItems: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
   },
   daysRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 8,
-    gap: 12,
+    gap: 8,
   },
-  dayItem: { alignItems: 'center' },
+  dayItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    height: 36,
+  },
   dayCircle: {
-    width: 44, height: 44, borderRadius: 14, // squircle instead of circle
-    justifyContent: 'center', alignItems: 'center',
+    width: 44,
+    height: 36,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'transparent',
+    borderColor: '#2c2c2e',
+    backgroundColor: '#1c1c1e',
   },
   dayCircleActive: {
     backgroundColor: 'rgba(130, 36, 51, 0.45)',
     borderWidth: 1,
     borderColor: SAPIENZA_RED,
   },
+  dayText: {
+    color: '#8e8e93',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  dayTextActive: {
+    color: '#ffffff',
+  },
+  dayDot: {
+    position: 'absolute',
+    bottom: -7,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#8e8e93',
+  },
+  dayDotActive: {
+    backgroundColor: '#ffffff',
+  },
 
   /* Loading State */
   loadingContainer: { alignItems: 'center', marginTop: 60 },
   loadingText: { color: '#8e8e93', marginTop: 16, fontSize: 14 },
-  dayText: { color: '#8e8e93', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
-  dayTextActive: { color: '#fff' },
-  dayDot: {
-    width: 5, height: 5, borderRadius: 2.5,
-    backgroundColor: '#3a3a3c',
-    marginTop: 4,
-  },
-  dayDotActive: { backgroundColor: '#fff' },
 
   /* Day label */
   dayLabel: {
@@ -574,13 +646,14 @@ const styles = StyleSheet.create({
   emptyDay: { alignItems: 'center', marginTop: 60 },
   emptyDayText: { color: '#3a3a3c', fontSize: 16, marginTop: 12 },
 
-  /* Class cards */
+  /* Class cards (Formato Calendario ad Alto Impatto con Orari Evidenti) */
   classList: { flex: 1, paddingHorizontal: 16 },
   classCard: {
     backgroundColor: '#1c1c1e',
     borderRadius: 18,
-    marginBottom: 14,
+    marginBottom: 12,
     flexDirection: 'row',
+    alignItems: 'center',
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
@@ -589,48 +662,123 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 10,
     elevation: 3,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
   },
-  accentBar: {
-    width: 4,
-    marginLeft: 16,
-    marginVertical: 18,
+  classCardLive: {
+    borderColor: 'rgba(52, 199, 89, 0.45)',
+    backgroundColor: '#1a221c',
+  },
+  /* Colonna Orario a mo' di Calendario */
+  timeColumn: {
+    width: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeStartText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  timeLineConnector: {
+    alignItems: 'center',
+    marginVertical: 3,
+  },
+  timeLineBar: {
+    width: 2,
+    height: 6,
+    borderRadius: 1,
+    opacity: 0.7,
+  },
+  durationBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 5,
+    marginVertical: 2,
+  },
+  durationBadgeText: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  timeEndText: {
+    color: '#8e8e93',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  calendarAccentBar: {
+    width: 3.5,
+    height: '82%',
     borderRadius: 2,
+    marginHorizontal: 10,
   },
   cardBody: {
     flex: 1,
-    paddingVertical: 18,
-    paddingHorizontal: 16,
-    paddingLeft: 14,
+    justifyContent: 'center',
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 5,
+    gap: 6,
   },
   subjectText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 20,
+    flex: 1,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(52, 199, 89, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(52, 199, 89, 0.35)',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#34c759',
+    marginRight: 4,
+  },
+  liveText: {
+    color: '#34c759',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 5,
   },
-  infoText: {
+  teacherText: {
     color: '#8e8e93',
-    fontSize: 14,
+    fontSize: 13,
     marginLeft: 6,
+    flex: 1,
   },
   roomBadge: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    marginTop: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginTop: 2,
   },
   roomBadgeText: {
     color: '#ef4444',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     marginLeft: 4,
   },

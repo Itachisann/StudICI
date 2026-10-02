@@ -42,7 +42,7 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
           {/* Materie associate (se presenti) */}
           {subjects && subjects.length > 0 && (
             <View style={styles.subjectsContainer}>
-              <Text style={styles.subjectsTitle}>LEZIONI IN QUESTAULA:</Text>
+              <Text style={styles.subjectsTitle}>INSEGNAMENTI:</Text>
               <View style={styles.subjectTags}>
                 {subjects.slice(0, 4).map((s, idx) => (
                   <View key={idx} style={styles.subjectBadge}>
