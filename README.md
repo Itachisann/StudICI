@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/images/logo.svg" width="128" alt="StudICI logo" />
+  <img src="assets/images/icon.png" width="120" style="border-radius: 26px;" alt="StudICI logo" />
 </p>
 
 <h1 align="center">StudICI</h1>
@@ -59,7 +59,7 @@ Struttura principale:
 ```
 src/
   app/          # schermate (Expo Router): Orari, Profilo, ...
-  components/   # componenti UI (AppLogo vettoriale, selettori, onboarding, ...)
+  components/   # componenti UI (selettori, onboarding, aule, ...)
   utils/        # scraper, presenze, cloudSync, calendario Apple, export PDF
   config/       # syncConfig.ts → URL del backend di sincronizzazione
 ```

@@ -8,4 +8,4 @@
  * casuale e non indovinabile (il "Codice Dispositivo" STUD-XXXX...).
  * Vedi README.md → "Configurare la sincronizzazione Cloud".
  */
-export const SYNC_DB_URL: string = '';
+export const SYNC_DB_URL: string = 'https://icistud-default-rtdb.europe-west1.firebasedatabase.app';

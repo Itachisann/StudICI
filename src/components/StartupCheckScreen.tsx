@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ActivityIndicator, Animated
+  View, Text, StyleSheet, ActivityIndicator, Animated, Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { AppLogo } from './AppLogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 
 const SAPIENZA_RED = '#822433';
@@ -84,7 +83,11 @@ export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupC
       <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
         {/* App Logo */}
         <View style={styles.logoBadge}>
-          <AppLogo size={128} />
+          <Image
+            source={require('../../assets/images/icon.png')}
+            style={styles.logoImage}
+            resizeMode="cover"
+          />
         </View>
 
         {/* Title */}
@@ -134,17 +137,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   logoBadge: {
-    width: 128,
-    height: 128,
-    borderRadius: 29,
+    width: 104,
+    height: 104,
+    borderRadius: 26,
+    backgroundColor: SAPIENZA_RED,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 22,
     shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.45,
-    shadowRadius: 18,
+    shadowRadius: 16,
     elevation: 10,
+    overflow: 'hidden',
+  },
+  logoImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 26,
   },
   appTitle: {
     fontSize: 32,
