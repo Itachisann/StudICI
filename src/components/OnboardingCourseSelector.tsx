@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,6 +18,7 @@ import {
   fetchDegrees,
   Tab,
 } from "../utils/scraper";
+import { AppLogo } from "./AppLogo";
 import { CourseDownloadView } from "./CourseDownloadView";
 import { DefaultTabPicker } from "./DefaultTabPicker";
 
@@ -162,11 +162,7 @@ export function OnboardingCourseSelector({
       {/* Header Introduttivo */}
       <View style={styles.header}>
         <View style={styles.logoBadge}>
-          <Image
-            source={require("../../assets/images/icon.png")}
-            style={styles.logoBadgeImage}
-            resizeMode="cover"
-          />
+          <AppLogo size={96} />
         </View>
         <Text style={styles.appTitle}>Benvenuto in StudICI</Text>
         <Text style={styles.appSubtitle}>
@@ -300,24 +296,17 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   logoBadge: {
-    width: 68,
-    height: 68,
-    borderRadius: 18,
-    backgroundColor: SAPIENZA_RED,
+    width: 96,
+    height: 96,
+    borderRadius: 22,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 16,
     shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.4,
-    shadowRadius: 10,
+    shadowRadius: 12,
     elevation: 6,
-    overflow: "hidden",
-  },
-  logoBadgeImage: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 18,
   },
   appTitle: {
     fontSize: 28,

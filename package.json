@@ -1,7 +1,7 @@
 {
   "name": "studici",
   "main": "expo-router/entry",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "dependencies": {
     "@bottom-tabs/react-navigation": "^1.4.0",
     "@expo/ui": "~57.0.21",
@@ -37,6 +37,7 @@
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
+    "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1"
   },

@@ -62,11 +62,17 @@ jobs:
           PROJECT_NAME=$(basename -s .xcworkspace ios/*.xcworkspace)
           VERSION=$(node -p "require('./app.json').expo.version")
           
+          # Note di rilascio: sezione della versione corrente in CHANGELOG.md
+          awk -v v="## ${VERSION}" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Build iOS (.ipa) v${VERSION} generata in automatico." > release_notes.md
+          fi
+          
           # Delete the old 'latest' release and tag if they exist
           gh release delete latest --cleanup-tag -y || true
           
           # Create a new release and upload the IPA
           gh release create latest ${PROJECT_NAME}.ipa \
             --title "StudICI v${VERSION}" \
-            --notes "Build iOS (.ipa) v${VERSION} generata in automatico." \
+            --notes-file release_notes.md \
             --latest

@@ -1,7 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
-import { getAttendanceRecords, AttendanceRecord } from './attendance';
+import {
+  getAttendanceRecords,
+  AttendanceRecord,
+  getAttendanceTombstones,
+  setAttendanceTombstones,
+  setAttendanceChangeListener,
+} from './attendance';
+import { SYNC_DB_URL } from '../config/syncConfig';
 
 const CLOUD_SYNC_ID_KEY = 'studici_cloud_sync_id';
 const LAST_CLOUD_SYNC_KEY = 'studici_last_cloud_sync';
@@ -23,23 +30,44 @@ export interface CloudBackupPayload {
   attendanceRecords: AttendanceRecord[];
 }
 
+const SYNC_ID_REGEX = /^STUD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/;
+const SYNC_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function randomChunk(len: number): string {
+  let out = '';
+  for (let i = 0; i < len; i++) {
+    out += SYNC_ALPHABET[Math.floor(Math.random() * SYNC_ALPHABET.length)];
+  }
+  return out;
+}
+
+/** Normalizza un codice digitato dall'utente (spazi, minuscole) */
+export function normalizeSyncCode(code: string): string {
+  return code.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+export function isValidSyncCode(code: string): boolean {
+  return SYNC_ID_REGEX.test(normalizeSyncCode(code));
+}
+
 /**
- * Ottiene o genera un ID univoco Cloud StudICI (es. STUD-8492-1053)
+ * Ottiene o genera il Codice Dispositivo univoco (es. STUD-K7M2-9QXA-4TPB).
+ * 12 caratteri casuali: non indovinabile, funge da "chiave" del tuo spazio cloud.
  */
 export async function getCloudSyncId(): Promise<string> {
   try {
     let id = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
-    if (!id) {
-      const part1 = Math.floor(1000 + Math.random() * 9000);
-      const part2 = Math.floor(1000 + Math.random() * 9000);
-      id = `STUD-${part1}-${part2}`;
+    if (!id || !SYNC_ID_REGEX.test(id)) {
+      // Genera (o migra dal vecchio formato STUD-1234-5678, troppo corto e non sicuro)
+      id = `STUD-${randomChunk(4)}-${randomChunk(4)}-${randomChunk(4)}`;
       await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, id);
     }
     return id;
   } catch {
-    return 'STUD-1000-2000';
+    return 'STUD-0000-0000-0000';
   }
 }
+
 
 /**
  * Ritorna il timestamp dell'ultima sincronizzazione cloud (in ms)
@@ -79,7 +107,7 @@ export async function performCloudSync(): Promise<{
 
   const payload: CloudBackupPayload = {
     syncId,
-    version: '1.5.0',
+    version: '1.5.3',
     timestamp,
     formattedDate,
     course: {
@@ -204,66 +232,315 @@ export async function getICloudAutoSyncEnabled(): Promise<boolean> {
 }
 
 /**
- * Attiva o disattiva la sincronizzazione automatica iCloud
+ * Attiva o disattiva la sincronizzazione automatica tra dispositivi
  */
 export async function setICloudAutoSyncEnabled(enabled: boolean): Promise<void> {
   try {
     await AsyncStorage.setItem(ICLOUD_AUTO_SYNC_KEY, enabled ? 'true' : 'false');
-    if (enabled) {
-      await syncWithICloudStorage();
-    }
   } catch (err) {
-    console.error('Error saving iCloud auto sync setting:', err);
+    console.error('Error saving auto sync setting:', err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sincronizzazione reale tra dispositivi (Firebase Realtime Database via REST)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const COURSE_MODIFIED_KEY = 'studici_course_modified_at';
+const COURSE_SNAPSHOT_KEY = 'studici_course_snapshot';
+const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 8000;
+
+interface CourseData {
+  url: string | null;
+  name: string | null;
+  className: string | null;
+  defaultTabUrl: string | null;
+}
+
+interface RemoteDoc {
+  updatedAt?: number;
+  course?: Partial<CourseData>;
+  courseModified?: number;
+  attendance?: AttendanceRecord[];
+  tombstones?: Record<string, number>;
+}
+
+export interface CloudSyncResult {
+  success: boolean;
+  message: string;
+  updated: boolean;
+}
+
+/** True se il backend cloud è stato configurato in src/config/syncConfig.ts */
+export function isCloudConfigured(): boolean {
+  return SYNC_DB_URL.trim().length > 0;
+}
+
+function remoteUrl(syncId: string): string {
+  return `${SYNC_DB_URL.replace(/\/+$/, '')}/sync/${syncId}.json`;
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchRemote(syncId: string): Promise<RemoteDoc | null> {
+  const res = await fetchWithTimeout(remoteUrl(syncId));
+  if (!res.ok) {
+    throw new Error(
+      res.status === 401 || res.status === 403
+        ? 'Accesso al database negato: controlla le regole di Firebase (vedi README).'
+        : `Errore server cloud (${res.status}).`
+    );
+  }
+  const json = await res.json();
+  return json && typeof json === 'object' ? (json as RemoteDoc) : null;
+}
+
+async function pushRemote(syncId: string, doc: RemoteDoc): Promise<void> {
+  const res = await fetchWithTimeout(remoteUrl(syncId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(doc),
+  });
+  if (!res.ok) {
+    throw new Error(`Impossibile salvare sul cloud (${res.status}).`);
+  }
+}
+
+function normalizeCourse(c?: Partial<CourseData> | null): CourseData {
+  return {
+    url: c?.url ?? null,
+    name: c?.name ?? null,
+    className: c?.className ?? null,
+    defaultTabUrl: c?.defaultTabUrl ?? null,
+  };
+}
+
+async function readLocalCourse(): Promise<CourseData> {
+  const [url, name, className, defaultTabUrl] = await Promise.all([
+    AsyncStorage.getItem('selectedDegreeUrl'),
+    AsyncStorage.getItem('selectedDegreeName'),
+    AsyncStorage.getItem('selectedDegreeClassName'),
+    AsyncStorage.getItem('defaultTabUrl'),
+  ]);
+  return { url, name, className, defaultTabUrl };
+}
+
+async function writeLocalCourse(c: CourseData): Promise<void> {
+  const pairs: [string, string | null][] = [
+    ['selectedDegreeUrl', c.url],
+    ['selectedDegreeName', c.name],
+    ['selectedDegreeClassName', c.className],
+    ['defaultTabUrl', c.defaultTabUrl],
+  ];
+  for (const [key, val] of pairs) {
+    if (val) await AsyncStorage.setItem(key, val);
+    else await AsyncStorage.removeItem(key);
+  }
+}
+
+function idsKey(list: AttendanceRecord[]): string {
+  return list
+    .map((r) => `${r.id}:${r.timestamp}`)
+    .sort()
+    .join('|');
+}
+
+let syncInFlight: Promise<CloudSyncResult> | null = null;
+
+async function runSync(): Promise<CloudSyncResult> {
+  if (!isCloudConfigured()) {
+    return {
+      success: false,
+      updated: false,
+      message: 'Sincronizzazione cloud non configurata in questa build.',
+    };
+  }
+
+  try {
+    const syncId = await getCloudSyncId();
+    const remote = await fetchRemote(syncId);
+
+    // ── Corso / canale predefinito: vince la modifica più recente ──
+    const localCourse = await readLocalCourse();
+    const localSnap = await AsyncStorage.getItem(COURSE_SNAPSHOT_KEY);
+    let localMod = parseInt((await AsyncStorage.getItem(COURSE_MODIFIED_KEY)) || '0', 10) || 0;
+    if (JSON.stringify(localCourse) !== localSnap) {
+      localMod = localCourse.url ? Date.now() : 0;
+    }
+
+    const remoteMod = remote?.courseModified || 0;
+    const remoteCourse = normalizeCourse(remote?.course);
+    let finalCourse = localCourse;
+    let finalMod = localMod;
+    let courseChanged = false;
+    if (remoteCourse.url && remoteMod > localMod) {
+      courseChanged = JSON.stringify(remoteCourse) !== JSON.stringify(localCourse);
+      if (courseChanged) await writeLocalCourse(remoteCourse);
+      finalCourse = remoteCourse;
+      finalMod = remoteMod;
+    }
+    await AsyncStorage.setItem(COURSE_SNAPSHOT_KEY, JSON.stringify(finalCourse));
+    await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
+
+    // ── Presenze: unione per ID con tombstone per le cancellazioni ──
+    const localAtt = await getAttendanceRecords();
+    const remoteAtt: AttendanceRecord[] = Array.isArray(remote?.attendance)
+      ? remote!.attendance!.filter(Boolean)
+      : [];
+    const localTomb = await getAttendanceTombstones();
+    const remoteTomb = remote?.tombstones || {};
+
+    const now = Date.now();
+    const tombstones: Record<string, number> = {};
+    for (const src of [localTomb, remoteTomb]) {
+      for (const [id, ts] of Object.entries(src)) {
+        if (now - ts > TOMBSTONE_TTL_MS) continue;
+        tombstones[id] = Math.max(tombstones[id] || 0, ts);
+      }
+    }
+
+    const byId = new Map<string, AttendanceRecord>();
+    for (const r of [...remoteAtt, ...localAtt]) {
+      const prev = byId.get(r.id);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) byId.set(r.id, r);
+    }
+    const merged = Array.from(byId.values())
+      .filter((r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)))
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    const attChanged = idsKey(merged) !== idsKey(localAtt);
+    if (attChanged) {
+      await AsyncStorage.setItem('studici_attendance_records', JSON.stringify(merged));
+    }
+    await setAttendanceTombstones(tombstones);
+
+    // ── Pubblica sul cloud solo se qualcosa è cambiato ──
+    const needPush =
+      !remote ||
+      idsKey(remoteAtt) !== idsKey(merged) ||
+      Object.keys(remoteTomb).length !== Object.keys(tombstones).length ||
+      remoteMod !== finalMod ||
+      JSON.stringify(remoteCourse) !== JSON.stringify(finalCourse);
+
+    if (needPush) {
+      await pushRemote(syncId, {
+        updatedAt: now,
+        course: finalCourse,
+        courseModified: finalMod,
+        attendance: merged,
+        tombstones,
+      });
+    }
+
+    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
+    const updated = attChanged || courseChanged;
+    return {
+      success: true,
+      updated,
+      message: updated
+        ? 'Dati sincronizzati dagli altri tuoi dispositivi!'
+        : needPush
+          ? 'Cloud aggiornato con i dati di questo dispositivo.'
+          : 'Tutto già sincronizzato.',
+    };
+  } catch (err: any) {
+    const aborted = err?.name === 'AbortError';
+    return {
+      success: false,
+      updated: false,
+      message: aborted
+        ? 'Nessuna risposta dal cloud: controlla la connessione.'
+        : err?.message || 'Errore durante la sincronizzazione cloud.',
+    };
   }
 }
 
 /**
- * Esegue la sincronizzazione bidirezionale con lo storage iCloud:
- * - Se su iCloud esiste un backup più recente di quello locale, ripristina i dati.
- * - Se i dati locali sono più recenti o uguali, aggiorna il backup iCloud.
+ * Sincronizzazione bidirezionale con il cloud (merge di corso, canale e presenze).
+ * Nome storico mantenuto per compatibilità con le schermate esistenti.
  */
-export async function syncWithICloudStorage(): Promise<{
-  success: boolean;
-  message: string;
-  updated: boolean;
-}> {
-  try {
-    const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
-    const fileInfo = await FileSystem.getInfoAsync(filePath);
-    const lastLocal = await getLastCloudSync();
+export function syncWithICloudStorage(): Promise<CloudSyncResult> {
+  if (!syncInFlight) {
+    syncInFlight = runSync().finally(() => {
+      syncInFlight = null;
+    });
+  }
+  return syncInFlight;
+}
 
-    if (fileInfo.exists) {
-      const content = await FileSystem.readAsStringAsync(filePath);
-      try {
-        const data: CloudBackupPayload = JSON.parse(content);
-        if (data && data.timestamp && (!lastLocal || data.timestamp > lastLocal + 2000)) {
-          await restoreFromCloudBackup(content);
-          return {
-            success: true,
-            updated: true,
-            message: 'Configurazione e presenze sincronizzate automaticamente da iCloud!',
-          };
-        }
-      } catch {
-        // Se il file è corrotto, sovrascrivi con i dati locali
-      }
-    }
-
-    // Altrimenti esporta lo stato locale corrente verso il file iCloud
-    const res = await performCloudSync();
-    await FileSystem.writeAsStringAsync(filePath, JSON.stringify(res.payload));
-
-    return {
-      success: true,
-      updated: false,
-      message: 'iCloud aggiornato con i dati locali più recenti.',
-    };
-  } catch (err: any) {
-    console.warn('Errore sync iCloud storage:', err);
+/**
+ * Collega questo dispositivo a uno spazio cloud esistente tramite Codice Dispositivo
+ * (generato su un altro dispositivo) e scarica subito i dati.
+ */
+export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResult> {
+  if (!isCloudConfigured()) {
     return {
       success: false,
       updated: false,
-      message: err?.message || 'Errore durante la sincronizzazione con iCloud.',
+      message: 'Sincronizzazione cloud non configurata in questa build.',
+    };
+  }
+  const code = normalizeSyncCode(rawCode);
+  if (!SYNC_ID_REGEX.test(code)) {
+    return {
+      success: false,
+      updated: false,
+      message: 'Codice non valido. Formato: STUD-XXXX-XXXX-XXXX.',
+    };
+  }
+  const previousId = await getCloudSyncId();
+  try {
+    const remote = await fetchRemote(code);
+    if (!remote) {
+      return {
+        success: false,
+        updated: false,
+        message: 'Codice non trovato. Esegui prima una sincronizzazione sull\'altro dispositivo.',
+      };
+    }
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, code);
+    const res = await syncWithICloudStorage();
+    if (!res.success) {
+      await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);
+      return res;
+    }
+    return {
+      success: true,
+      updated: true,
+      message: 'Dispositivo collegato! Dati sincronizzati.',
+    };
+  } catch (err: any) {
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);
+    return {
+      success: false,
+      updated: false,
+      message:
+        err?.name === 'AbortError'
+          ? 'Nessuna risposta dal cloud: controlla la connessione.'
+          : err?.message || 'Impossibile collegare il dispositivo.',
     };
   }
 }
+
+// Invio automatico (con debounce) dopo ogni modifica locale alle presenze
+let autoPushTimer: ReturnType<typeof setTimeout> | null = null;
+setAttendanceChangeListener(() => {
+  if (autoPushTimer) clearTimeout(autoPushTimer);
+  autoPushTimer = setTimeout(async () => {
+    autoPushTimer = null;
+    try {
+      if ((await getICloudAutoSyncEnabled()) && isCloudConfigured()) {
+        await syncWithICloudStorage();
+      }
+    } catch {}
+  }, 1500);
+});

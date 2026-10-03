@@ -87,6 +87,42 @@ export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
  */
 async function saveAttendanceList(records: AttendanceRecord[]): Promise<void> {
   await AsyncStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(records));
+  notifyLocalChange();
+}
+
+const TOMBSTONES_KEY = 'studici_attendance_tombstones';
+
+/** Callback invocato dopo ogni modifica locale alle presenze (usato dalla sync cloud). */
+let localChangeListener: (() => void) | null = null;
+export function setAttendanceChangeListener(cb: (() => void) | null): void {
+  localChangeListener = cb;
+}
+function notifyLocalChange(): void {
+  try {
+    localChangeListener?.();
+  } catch {}
+}
+
+/** Elenco presenze eliminate (id → timestamp eliminazione), necessario per propagare le cancellazioni tra dispositivi */
+export async function getAttendanceTombstones(): Promise<Record<string, number>> {
+  try {
+    const raw = await AsyncStorage.getItem(TOMBSTONES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function setAttendanceTombstones(t: Record<string, number>): Promise<void> {
+  await AsyncStorage.setItem(TOMBSTONES_KEY, JSON.stringify(t));
+}
+
+async function addTombstones(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const t = await getAttendanceTombstones();
+  const now = Date.now();
+  for (const id of ids) t[id] = now;
+  await setAttendanceTombstones(t);
 }
 
 /**
@@ -122,6 +158,7 @@ export async function toggleAttendance(
   if (existingIndex >= 0) {
     // Rimuovi presenza
     currentRecords.splice(existingIndex, 1);
+    await addTombstones([id]);
     await saveAttendanceList(currentRecords);
     return { added: false, records: currentRecords };
   } else {
@@ -174,6 +211,7 @@ export async function toggleDayAttendance(
   if (allAttended) {
     // Rimuovi tutte le presenze di questo giorno
     updatedList = currentRecords.filter(r => !idsForDay.includes(r.id));
+    await addTombstones(idsForDay);
     added = false;
     count = idsForDay.length;
   } else {
@@ -216,6 +254,7 @@ export async function toggleDayAttendance(
 export async function deleteAttendanceRecord(id: string): Promise<AttendanceRecord[]> {
   const currentRecords = await getAttendanceRecords();
   const filtered = currentRecords.filter(r => r.id !== id);
+  await addTombstones([id]);
   await saveAttendanceList(filtered);
   return filtered;
 }
@@ -224,7 +263,10 @@ export async function deleteAttendanceRecord(id: string): Promise<AttendanceReco
  * Resetta l'intero registro presenze
  */
 export async function clearAllAttendance(): Promise<void> {
+  const current = await getAttendanceRecords();
+  await addTombstones(current.map(r => r.id));
   await AsyncStorage.removeItem(ATTENDANCE_STORAGE_KEY);
+  notifyLocalChange();
 }
 
 /**

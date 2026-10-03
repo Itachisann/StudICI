@@ -139,7 +139,10 @@ export default function ScheduleScreen() {
         try {
           const icloudEnabled = await getICloudAutoSyncEnabled();
           if (icloudEnabled) {
-            await syncWithICloudStorage();
+            const syncRes = await syncWithICloudStorage();
+            if (syncRes.updated) {
+              setAttendanceRecords(await getAttendanceRecords());
+            }
           }
         } catch {
           // ignore

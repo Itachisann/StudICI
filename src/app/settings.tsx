@@ -48,15 +48,18 @@ import {
   exportScheduleToPdf,
   exportAttendanceToPdf,
 } from "../utils/pdfExport";
+import * as Clipboard from "expo-clipboard";
 import {
   getCloudSyncId,
   getLastCloudSync,
-  performCloudSync,
   copyCloudSyncCodeToClipboard,
   restoreFromCloudBackup,
   getICloudAutoSyncEnabled,
   setICloudAutoSyncEnabled,
   syncWithICloudStorage,
+  linkDeviceWithCode,
+  isValidSyncCode,
+  isCloudConfigured,
 } from "../utils/cloudSync";
 
 const SAPIENZA_RED = "#822433";
@@ -432,9 +435,15 @@ export default function ProfiloScreen() {
   const handleSyncCloud = async () => {
     setIsSyncingCloud(true);
     try {
-      const res = await performCloudSync();
-      setLastCloudSyncTime(res.timestamp);
-      Alert.alert("Sincronizzazione Cloud", res.message);
+      const res = await syncWithICloudStorage();
+      if (res.success) {
+        setLastCloudSyncTime(await getLastCloudSync());
+        if (res.updated) await loadProfileData();
+      }
+      Alert.alert(
+        res.success ? "Sincronizzazione Cloud" : "Sincronizzazione non riuscita",
+        res.message,
+      );
     } catch {
       Alert.alert("Errore", "Impossibile completare la sincronizzazione cloud.");
     } finally {
@@ -521,10 +530,22 @@ export default function ProfiloScreen() {
 
   const handleCopyCloudCode = async () => {
     try {
+      if (isCloudConfigured()) {
+        // Sincronizza prima, così il codice punta a dati già presenti sul cloud
+        await syncWithICloudStorage();
+        const code = await getCloudSyncId();
+        await Clipboard.setStringAsync(code);
+        setCloudSyncId(code);
+        Alert.alert(
+          "Codice Copiato!",
+          `Il Codice Dispositivo ${code} è stato copiato. Inseriscilo nel campo "Collega un altro dispositivo" sull'altro dispositivo.`,
+        );
+        return;
+      }
       await copyCloudSyncCodeToClipboard();
       Alert.alert(
         "Codice Copiato!",
-        "Il codice di sincronizzazione cloud è stato copiato negli appunti. Incollalo su un altro dispositivo per ripristinare o sincronizzare i tuoi dati."
+        "Il codice di backup è stato copiato negli appunti. Incollalo su un altro dispositivo per ripristinare i tuoi dati.",
       );
     } catch {
       Alert.alert("Errore", "Impossibile copiare il codice.");
@@ -533,10 +554,30 @@ export default function ProfiloScreen() {
 
   const handleRestoreFromCloud = async () => {
     if (!restoreCodeInput.trim()) {
-      Alert.alert("Codice mancante", "Incolla il codice di sincronizzazione cloud nel campo di testo.");
+      Alert.alert("Codice mancante", "Incolla il codice nel campo di testo.");
       return;
     }
 
+    // Codice Dispositivo (STUD-XXXX-XXXX-XXXX): collegamento + sync automatica
+    if (isValidSyncCode(restoreCodeInput)) {
+      setIsSyncingCloud(true);
+      try {
+        const res = await linkDeviceWithCode(restoreCodeInput);
+        if (res.success) {
+          setRestoreCodeInput("");
+          await loadProfileData();
+        }
+        Alert.alert(
+          res.success ? "Dispositivo collegato" : "Collegamento non riuscito",
+          res.message,
+        );
+      } finally {
+        setIsSyncingCloud(false);
+      }
+      return;
+    }
+
+    // Codice di backup manuale (STUDICI_CLOUD:...)
     Alert.alert(
       "Ripristina Dati Cloud",
       "I dati attuali sul dispositivo verranno sostituiti con quelli presenti nel backup cloud. Continuare?",
@@ -562,12 +603,23 @@ export default function ProfiloScreen() {
   };
 
   const handleToggleICloudAutoSync = async (value: boolean) => {
+    if (value && !isCloudConfigured()) {
+      Alert.alert(
+        "Cloud non configurato",
+        "La sincronizzazione automatica non è disponibile in questa build.",
+      );
+      return;
+    }
     setICloudAutoSync(value);
     await setICloudAutoSyncEnabled(value);
     if (value) {
-      await syncWithICloudStorage();
-      const updatedTime = await getLastCloudSync();
-      setLastCloudSyncTime(updatedTime);
+      const res = await syncWithICloudStorage();
+      setLastCloudSyncTime(await getLastCloudSync());
+      if (res.success) {
+        if (res.updated) await loadProfileData();
+      } else {
+        Alert.alert("Sincronizzazione non riuscita", res.message);
+      }
     }
   };
 
@@ -1454,7 +1506,7 @@ export default function ProfiloScreen() {
                     color="#38bdf8"
                     style={{ marginRight: 4 }}
                   />
-                  <Text style={styles.cloudIdText}>ID: {cloudSyncId}</Text>
+                  <Text style={styles.cloudIdText} selectable>{cloudSyncId}</Text>
                 </View>
               ) : null}
             </View>
@@ -1465,9 +1517,9 @@ export default function ProfiloScreen() {
                 <Ionicons name="cloud" size={20} color="#34c759" />
               </View>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.cloudICloudTitle}>iCloud Sync Automatico</Text>
+                <Text style={styles.cloudICloudTitle}>Sincronizzazione Automatica</Text>
                 <Text style={styles.cloudICloudSub}>
-                  Sincronizza in background tra dispositivi con lo stesso account Apple
+                  Mantiene allineati i dispositivi collegati con lo stesso Codice Dispositivo
                 </Text>
               </View>
               <Switch
@@ -1513,46 +1565,50 @@ export default function ProfiloScreen() {
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.cloudSecondaryBtnText}>
-                Copia Codice Sincronizzazione
+                Copia Codice Dispositivo
               </Text>
             </TouchableOpacity>
 
             {/* Box Ripristino */}
             <View style={styles.cloudRestoreBox}>
               <Text style={styles.cloudRestoreTitle}>
-                Ripristina su un altro dispositivo
+                Collega un altro dispositivo
               </Text>
               <Text style={styles.cloudRestoreSub}>
-                Incolla il codice generato dall&apos;altro dispositivo per
-                importare tutte le impostazioni, materie scelte e presenze.
+                Inserisci il Codice Dispositivo mostrato sull&apos;altro
+                dispositivo: corso, canale e presenze verranno sincronizzati
+                automaticamente. (Accetta anche un codice di backup
+                STUDICI_CLOUD:...)
               </Text>
               <TextInput
                 style={styles.cloudRestoreInput}
-                placeholder="Incolla qui il codice STUDICI_CLOUD:..."
+                placeholder="STUD-XXXX-XXXX-XXXX"
                 placeholderTextColor="#71717a"
                 value={restoreCodeInput}
                 onChangeText={setRestoreCodeInput}
                 multiline
                 numberOfLines={3}
-                autoCapitalize="none"
+                autoCapitalize="characters"
                 autoCorrect={false}
               />
               <TouchableOpacity
                 style={[
                   styles.cloudRestoreBtn,
-                  !restoreCodeInput.trim() && { opacity: 0.4 },
+                  (!restoreCodeInput.trim() || isSyncingCloud) && {
+                    opacity: 0.4,
+                  },
                 ]}
                 activeOpacity={0.7}
                 onPress={handleRestoreFromCloud}
-                disabled={!restoreCodeInput.trim()}
+                disabled={!restoreCodeInput.trim() || isSyncingCloud}
               >
                 <Ionicons
-                  name="download-outline"
+                  name="link-outline"
                   size={16}
                   color="#ffffff"
                   style={{ marginRight: 6 }}
                 />
-                <Text style={styles.cloudRestoreBtnText}>Ripristina Dati</Text>
+                <Text style={styles.cloudRestoreBtnText}>Collega e Sincronizza</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
