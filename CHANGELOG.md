@@ -5,6 +5,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.5.10
+
+### Novità
+- **Risolto problema di ri-comparsa del dispositivo dissociato**: quando un dispositivo viene rimosso o dissociato, viene registrato un tombstone di dissociazione permanente nel cloud (`dissociatedDevices`). Questo impedisce al dispositivo rimosso di ri-registrarsi automaticamente tramite il poller live di sincronizzazione in background.
+- **Disaccoppiamento e isolamento immediato del dispositivo rimosso**: non appena il dispositivo escluso rileva la dissociazione (o l'assenza dal gruppo), genera un nuovo codice/ID privato e indipendente, disattiva l'auto-sync e interrompe qualsiasi connessione con il vecchio gruppo.
+- **Pulsante "Scollega" per il dispositivo corrente**: aggiunto pulsante dedicato "Scollega" sulla scheda "Questo iPhone" nelle Impostazioni per consentire all'utente di abbandonare autonomamente il gruppo di sincronizzazione con un solo tocco.
+
 ## 1.5.9
 
 ### Novità

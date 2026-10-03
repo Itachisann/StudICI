@@ -581,14 +581,22 @@ export default function ProfiloScreen() {
   };
 
   const handleDissociateDevice = (targetDeviceId?: string, deviceName?: string) => {
-    const targetName = deviceName || pairedDevices?.otherDevice?.name || "il dispositivo associato";
+    const isSelf = !targetDeviceId || targetDeviceId === pairedDevices?.myDevice?.id;
+    const targetName =
+      deviceName ||
+      (isSelf
+        ? pairedDevices?.myDevice?.name || "questo iPhone"
+        : pairedDevices?.otherDevice?.name || "il dispositivo associato");
+
     Alert.alert(
-      "Dissocia Dispositivo",
-      `Vuoi dissociare "${targetName}"? La sincronizzazione con questo dispositivo verrà interrotta finché non verrà associato nuovamente.`,
+      isSelf ? "Scollega questo Dispositivo" : "Dissocia Dispositivo",
+      isSelf
+        ? `Vuoi scollegare "${targetName}" dal gruppo di sincronizzazione? La sincronizzazione verrà disattivata e verrà generato un nuovo codice privato indipendente.`
+        : `Vuoi dissociare "${targetName}"? La sincronizzazione con questo dispositivo verrà interrotta finché non verrà associato nuovamente.`,
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Dissocia",
+          text: isSelf ? "Scollega" : "Dissocia",
           style: "destructive",
           onPress: async () => {
             setIsSyncingCloud(true);
@@ -602,7 +610,11 @@ export default function ProfiloScreen() {
               }
               await loadProfileData();
               Alert.alert(
-                res.success ? "Dispositivo Dissociato" : "Errore",
+                res.success
+                  ? isSelf
+                    ? "Dispositivo Scollegato"
+                    : "Dispositivo Dissociato"
+                  : "Errore",
                 res.message
               );
             } catch {
@@ -1697,7 +1709,7 @@ export default function ProfiloScreen() {
                 >
                   <Ionicons name="phone-portrait" size={19} color="#38bdf8" />
                 </View>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, paddingRight: 4 }}>
                   <View style={{ flexDirection: "row", alignItems: "center" }}>
                     <Text style={styles.deviceNameText} numberOfLines={1}>
                       {pairedDevices?.myDevice?.name || "Questo iPhone"}
@@ -1710,6 +1722,21 @@ export default function ProfiloScreen() {
                     {pairedDevices?.myDevice?.platform || "iOS"} • Attivo adesso
                   </Text>
                 </View>
+                {pairedDevices?.isPaired && (
+                  <TouchableOpacity
+                    style={styles.dissociateBtn}
+                    activeOpacity={0.7}
+                    onPress={() => handleDissociateDevice()}
+                  >
+                    <Ionicons
+                      name="link-outline"
+                      size={13}
+                      color="#ef4444"
+                      style={{ marginRight: 3 }}
+                    />
+                    <Text style={styles.dissociateBtnText}>Scollega</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {/* Lista Dispositivi Associati oppure Empty State */}

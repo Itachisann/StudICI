@@ -351,6 +351,7 @@ interface RemoteDoc {
   attendance?: AttendanceRecord[];
   tombstones?: Record<string, number>;
   devices?: Record<string, SyncDeviceInfo>;
+  dissociatedDevices?: Record<string, number>;
 }
 
 export interface CloudSyncResult {
@@ -487,8 +488,29 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
     const devicesMap: Record<string, SyncDeviceInfo> =
       typeof remote.devices === 'object' ? remote.devices : {};
     const registeredMy = devicesMap[myDevice.id] || myDevice;
-    const others = Object.values(devicesMap).filter((d) => d && d.id !== myDevice.id);
+    const others: SyncDeviceInfo[] = Object.entries(devicesMap)
+      .filter(([k, d]) => k !== myDevice.id && d && (d.id ? d.id !== myDevice.id : true))
+      .map(([k, d]) => ({
+        ...d,
+        id: d.id || k,
+      }));
     const otherDevice = others.length > 0 ? others[0] : null;
+
+    const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
+    const isDissociated = Boolean(remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
+
+    if (isDissociated || (!isCurrentDeviceRegistered && others.length > 0)) {
+      setTimeout(() => {
+        handleLocalDeviceWasKickedOut(myDevice).catch(() => {});
+      }, 0);
+      return {
+        myDevice,
+        otherDevices: [],
+        otherDevice: null,
+        isPaired: false,
+        totalDevices: 1,
+      };
+    }
 
     return {
       myDevice: registeredMy,
@@ -507,9 +529,55 @@ export async function isDevicePaired(): Promise<boolean> {
   return status.isPaired;
 }
 
+let isKickingOut = false;
+
+/**
+ * Gestisce l'uscita forzata o la dissociazione di questo dispositivo dal gruppo.
+ * Genera un nuovo ID privato, registra lo stato locale isolato e disattiva la sincronizzazione automatica.
+ */
+async function handleLocalDeviceWasKickedOut(myDevice: SyncDeviceInfo): Promise<void> {
+  if (isKickingOut) return;
+  isKickingOut = true;
+  try {
+    const newDeviceId = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, newDeviceId);
+    const newId = await generateUniqueInitialSyncCode();
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
+    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
+    await setICloudAutoSyncEnabled(false);
+    lastKnownDevicesHash = '';
+    lastKnownRemoteUpdatedAt = 0;
+
+    const freshMyDevice: SyncDeviceInfo = {
+      ...myDevice,
+      id: newDeviceId,
+      pairedAt: Date.now(),
+      lastActive: Date.now(),
+    };
+
+    try {
+      await pushRemote(newId, {
+        updatedAt: Date.now(),
+        course: await readLocalCourse(),
+        courseModified: Date.now(),
+        attendance: await getAttendanceRecords(),
+        tombstones: await getAttendanceTombstones(),
+        devices: {
+          [newDeviceId]: freshMyDevice,
+        },
+      });
+    } catch {}
+
+    await notifyLiveSyncListeners(true);
+  } finally {
+    isKickingOut = false;
+  }
+}
+
 /**
  * Dissocia questo dispositivo o un altro dispositivo associato.
  * Interrompe la sincronizzazione con il dispositivo specificato o resetta questo dispositivo.
+ * Registra un tombstone permanente su cloud per impedire la ri-comparsa automatica.
  */
 export async function dissociateDevice(targetDeviceId?: string): Promise<{ success: boolean; message: string }> {
   try {
@@ -519,15 +587,33 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
 
     if (remote && remote.devices) {
       const updatedDevices = { ...remote.devices };
+      const updatedDissociated: Record<string, number> = { ...(remote.dissociatedDevices || {}) };
 
       // Se rimuoviamo nello specifico l'altro dispositivo
       if (targetDeviceId && targetDeviceId !== myDevice.id) {
         delete updatedDevices[targetDeviceId];
+        for (const [k, d] of Object.entries(updatedDevices)) {
+          if (k === targetDeviceId || (d && d.id === targetDeviceId)) {
+            delete updatedDevices[k];
+          }
+        }
+
+        updatedDissociated[targetDeviceId] = Date.now();
+
         await pushRemote(syncId, {
           ...remote,
           updatedAt: Date.now(),
           devices: updatedDevices,
+          dissociatedDevices: updatedDissociated,
         });
+
+        await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
+        lastKnownDevicesHash = Object.values(updatedDevices).filter(Boolean)
+          .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
+          .sort()
+          .join('|');
+        lastKnownRemoteUpdatedAt = Date.now();
+
         const remaining = Object.values(updatedDevices).filter((d) => d && d.id !== myDevice.id);
         await notifyLiveSyncListeners(true);
         return {
@@ -541,34 +627,18 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
 
       // Altrimenti stiamo dissociando questo dispositivo
       delete updatedDevices[myDevice.id];
+      updatedDissociated[myDevice.id] = Date.now();
       await pushRemote(syncId, {
         ...remote,
         updatedAt: Date.now(),
         devices: updatedDevices,
+        dissociatedDevices: updatedDissociated,
       });
     }
 
-    // Genera un nuovo ID (formato ST+4 cifre+lettera) per questo dispositivo per scollegarlo
-    const newId = await generateUniqueInitialSyncCode();
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
+    // Genera un nuovo ID per questo dispositivo per scollegarlo definitivamente
+    await handleLocalDeviceWasKickedOut(myDevice);
 
-    // Registra questo dispositivo nel suo nuovo spazio privato non associato
-    await pushRemote(newId, {
-      updatedAt: Date.now(),
-      course: await readLocalCourse(),
-      courseModified: Date.now(),
-      attendance: await getAttendanceRecords(),
-      tombstones: await getAttendanceTombstones(),
-      devices: {
-        [myDevice.id]: {
-          ...myDevice,
-          pairedAt: Date.now(),
-          lastActive: Date.now(),
-        },
-      },
-    });
-
-    await notifyLiveSyncListeners(true);
     return {
       success: true,
       message: 'Dispositivo dissociato con successo. La sincronizzazione è ora disattivata.',
@@ -635,6 +705,23 @@ async function runSync(): Promise<CloudSyncResult> {
     const syncId = await getCloudSyncId();
     const remote = await fetchRemote(syncId);
     const myDevice = await getLocalDeviceInfo();
+
+    // Verifica se questo dispositivo è stato dissociato o rimosso dal gruppo da un altro dispositivo
+    const isDissociated = Boolean(remote?.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
+    const isAlreadyRegistered = Boolean(remote?.devices && remote.devices[myDevice.id]);
+    const otherRegisteredCount = remote?.devices
+      ? Object.keys(remote.devices).filter((k) => k !== myDevice.id).length
+      : 0;
+
+    if (isDissociated || (!isAlreadyRegistered && otherRegisteredCount > 0)) {
+      await handleLocalDeviceWasKickedOut(myDevice);
+      return {
+        success: false,
+        updated: true,
+        notPaired: true,
+        message: 'Questo dispositivo è stato rimosso dal gruppo di sincronizzazione.',
+      };
+    }
 
     // Mappa dispositivi registrati nel cloud
     const devicesMap: Record<string, SyncDeviceInfo> =
@@ -746,6 +833,7 @@ async function runSync(): Promise<CloudSyncResult> {
       attendance: merged,
       tombstones,
       devices: devicesMap,
+      dissociatedDevices: remote?.dissociatedDevices || {},
     });
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
@@ -831,6 +919,9 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       myDevice.id
     );
 
+    const updatedDissociated: Record<string, number> = { ...(remote.dissociatedDevices || {}) };
+    delete updatedDissociated[myDevice.id];
+
     const updatedDevices: Record<string, SyncDeviceInfo> = {
       ...(remote.devices || {}),
       [myDevice.id]: {
@@ -881,6 +972,7 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       attendance: merged,
       tombstones,
       devices: updatedDevices,
+      dissociatedDevices: updatedDissociated,
     });
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
@@ -984,6 +1076,18 @@ async function checkRemoteLiveChanges(): Promise<void> {
     const syncId = await getCloudSyncId();
     const remote = await fetchRemote(syncId);
     if (!remote) return;
+
+    const myDevice = await getLocalDeviceInfo();
+    const isDissociated = Boolean(remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
+    const isAlreadyRegistered = Boolean(remote.devices && remote.devices[myDevice.id]);
+    const otherDevs = remote.devices
+      ? Object.keys(remote.devices).filter((k) => k !== myDevice.id)
+      : [];
+
+    if (isDissociated || (!isAlreadyRegistered && otherDevs.length > 0)) {
+      await handleLocalDeviceWasKickedOut(myDevice);
+      return;
+    }
 
     const devices = remote.devices || {};
     const devEntries = Object.values(devices).filter(Boolean) as SyncDeviceInfo[];
