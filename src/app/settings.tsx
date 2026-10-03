@@ -578,6 +578,8 @@ export default function ProfiloScreen() {
             setIsSyncingCloud(true);
             try {
               const res = await dissociateDevice(targetDeviceId);
+              await setICloudAutoSyncEnabled(false);
+              setICloudAutoSync(false);
               await loadProfileData();
               const updatedPairs = await getPairedDevicesInfo();
               setPairedDevices(updatedPairs);
@@ -707,6 +709,15 @@ export default function ProfiloScreen() {
   };
 
   const handleToggleICloudAutoSync = async (value: boolean) => {
+    if (!pairedDevices?.isPaired) {
+      Alert.alert(
+        "Associazione Richiesta",
+        "La sincronizzazione automatica non è selezionabile finché non associ un secondo dispositivo. Usa il pulsante AirDrop o condividi il codice per associare l'altro iPhone/iPad.",
+      );
+      setICloudAutoSync(false);
+      await setICloudAutoSyncEnabled(false);
+      return;
+    }
     if (value && !isCloudConfigured()) {
       Alert.alert(
         "Cloud non configurato",
@@ -1745,25 +1756,51 @@ export default function ProfiloScreen() {
             </View>
 
             {/* Card Switch iCloud Sync Automatico */}
-            <View style={styles.cloudICloudCard}>
-              <View style={styles.cloudICloudIconBox}>
-                <Ionicons name="cloud" size={20} color="#34c759" />
+            <TouchableOpacity
+              style={[
+                styles.cloudICloudCard,
+                !pairedDevices?.isPaired && { opacity: 0.55 },
+              ]}
+              activeOpacity={pairedDevices?.isPaired ? 1 : 0.7}
+              onPress={() => {
+                if (!pairedDevices?.isPaired) {
+                  Alert.alert(
+                    "Associazione Richiesta",
+                    "La sincronizzazione automatica non è selezionabile finché non associ un secondo dispositivo. Usa il pulsante AirDrop o condividi il codice per associare l'altro iPhone/iPad.",
+                  );
+                }
+              }}
+            >
+              <View
+                style={[
+                  styles.cloudICloudIconBox,
+                  !pairedDevices?.isPaired && {
+                    backgroundColor: "rgba(142, 142, 147, 0.15)",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="cloud"
+                  size={20}
+                  color={pairedDevices?.isPaired ? "#34c759" : "#8e8e93"}
+                />
               </View>
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.cloudICloudTitle}>Sincronizzazione Automatica</Text>
                 <Text style={styles.cloudICloudSub}>
                   {pairedDevices?.isPaired && pairedDevices.otherDevice
                     ? `Mantiene sincronizzato questo dispositivo con ${pairedDevices.otherDevice.name}`
-                    : "Si attiverà automaticamente non appena associ il secondo dispositivo"}
+                    : "Non selezionabile: richiede 2 dispositivi associati"}
                 </Text>
               </View>
               <Switch
-                value={iCloudAutoSync}
+                value={pairedDevices?.isPaired ? iCloudAutoSync : false}
+                disabled={!pairedDevices?.isPaired}
                 onValueChange={handleToggleICloudAutoSync}
                 trackColor={{ false: "#39393d", true: "#34c759" }}
                 ios_backgroundColor="#39393d"
               />
-            </View>
+            </TouchableOpacity>
 
             {/* Azioni Principali */}
             <TouchableOpacity

@@ -45,6 +45,7 @@ export default function AppLayout() {
         if (typeof code === 'string' && code.trim()) {
           const res = await linkDeviceWithCode(code);
           if (res.success) {
+            await checkOnboarding();
             Alert.alert(
               "Dispositivi Associati!",
               res.message,
@@ -66,7 +67,7 @@ export default function AppLayout() {
     });
 
     return () => sub.remove();
-  }, []);
+  }, [checkOnboarding]);
 
   useEffect(() => {
     let isMounted = true;

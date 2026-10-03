@@ -5,6 +5,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.5.7
+
+### Novità
+- **Configurazione iniziale tramite Sincronizzazione o Normale**: al primo avvio dell'app (o dopo un reset), è ora possibile scegliere tra *Configurazione Normale* (seleziona corso e canale) oppure *Da Sincronizzazione* (inserisci il codice del tuo altro dispositivo o usa AirDrop per scaricare subito corso, canali e presenze).
+- **Blocco Sincronizzazione Automatica non associata**: l'interruttore della sincronizzazione automatica è ora bloccato e non selezionabile finché non sono presenti due dispositivi associati, con avviso esplicativo al tocco.
+- **Disattivazione automatica su dissociazione**: dissociando un dispositivo, la sincronizzazione automatica viene disattivata immediatamente.
+
 ## 1.5.6
 
 ### Novità

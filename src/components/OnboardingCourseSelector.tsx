@@ -1,10 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,6 +21,7 @@ import {
   fetchDegrees,
   Tab,
 } from "../utils/scraper";
+import { linkDeviceWithCode, isValidSyncCode } from "../utils/cloudSync";
 import { CourseDownloadView } from "./CourseDownloadView";
 import { DefaultTabPicker } from "./DefaultTabPicker";
 
@@ -37,6 +40,11 @@ export function OnboardingCourseSelector({
   const [downloading, setDownloading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [currentDegreeName, setCurrentDegreeName] = useState("");
+
+  // Modalità di avvio: Configurazione Normale vs Da Sincronizzazione
+  const [setupMode, setSetupMode] = useState<"normal" | "sync">("normal");
+  const [syncCodeInput, setSyncCodeInput] = useState("");
+  const [isLinkingSync, setIsLinkingSync] = useState(false);
 
   // Step 2: Selezione Anno e Canale
   const [step, setStep] = useState<"select_course" | "select_channel">(
@@ -124,6 +132,56 @@ export function OnboardingCourseSelector({
     }
   };
 
+  const handleLinkFromCloud = async () => {
+    const code = syncCodeInput.trim();
+    if (!code) {
+      Alert.alert("Codice Mancante", "Inserisci il Codice Dispositivo dell'altro iPhone o iPad.");
+      return;
+    }
+    if (!isValidSyncCode(code)) {
+      Alert.alert(
+        "Codice Non Valido",
+        "Il codice deve contenere tra 3 e 40 caratteri (es. STUD-XXXX-XXXX-XXXX o nome personalizzato)."
+      );
+      return;
+    }
+
+    setIsLinkingSync(true);
+    try {
+      const res = await linkDeviceWithCode(code);
+      if (res.success) {
+        Alert.alert(
+          "Dispositivi Associati!",
+          res.message,
+          [{ text: "Inizia", onPress: () => onComplete() }]
+        );
+      } else {
+        Alert.alert("Associazione Non Riuscita", res.message);
+      }
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile associare il dispositivo.");
+    } finally {
+      setIsLinkingSync(false);
+    }
+  };
+
+  const handlePasteSyncCode = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (text && text.trim()) {
+        const clean = text.trim();
+        if (clean.includes("code=")) {
+          const match = clean.match(/code=([^&]+)/);
+          if (match && match[1]) {
+            setSyncCodeInput(decodeURIComponent(match[1]));
+            return;
+          }
+        }
+        setSyncCodeInput(clean);
+      }
+    } catch {}
+  };
+
   const filteredDegrees = degrees.filter(
     (d) =>
       d.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -173,34 +231,168 @@ export function OnboardingCourseSelector({
           Sapienza Università di Roma · Facoltà I.C.I.
         </Text>
         <Text style={styles.instruction}>
-          Seleziona il tuo corso di laurea per iniziare. Orari e aule verranno
-          memorizzati sul telefono.
+          {setupMode === "normal"
+            ? "Seleziona il tuo corso di laurea per iniziare. Orari e aule verranno memorizzati sul telefono."
+            : "Collega un altro dispositivo per scaricare subito corso, canali e presenze già configurati."}
         </Text>
       </View>
 
-      {/* Barra di Ricerca */}
-      <View style={styles.searchContainer}>
-        <Ionicons
-          name="search"
-          size={20}
-          color="#8e8e93"
-          style={styles.searchIcon}
-        />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Cerca corso (es. Informatica, Clinica...)"
-          placeholderTextColor="#636366"
-          value={search}
-          onChangeText={setSearch}
-          clearButtonMode="while-editing"
-          autoCorrect={false}
-        />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch("")}>
-            <Ionicons name="close-circle" size={18} color="#8e8e93" />
-          </TouchableOpacity>
-        )}
+      {/* Selettore Modalità di Avvio */}
+      <View style={styles.modeSelectorContainer}>
+        <TouchableOpacity
+          style={[
+            styles.modeTab,
+            setupMode === "normal" && styles.modeTabActive,
+          ]}
+          onPress={() => setSetupMode("normal")}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name="school-outline"
+            size={16}
+            color={setupMode === "normal" ? "#ffffff" : "#a1a1aa"}
+            style={{ marginRight: 6 }}
+          />
+          <Text
+            style={[
+              styles.modeTabText,
+              setupMode === "normal" && styles.modeTabTextActive,
+            ]}
+          >
+            Configurazione Normale
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.modeTab, setupMode === "sync" && styles.modeTabActive]}
+          onPress={() => setSetupMode("sync")}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name="cloud-download-outline"
+            size={16}
+            color={setupMode === "sync" ? "#ffffff" : "#a1a1aa"}
+            style={{ marginRight: 6 }}
+          />
+          <Text
+            style={[
+              styles.modeTabText,
+              setupMode === "sync" && styles.modeTabTextActive,
+            ]}
+          >
+            Da Sincronizzazione
+          </Text>
+        </TouchableOpacity>
       </View>
+
+      {setupMode === "sync" ? (
+        <ScrollView
+          style={styles.syncContainer}
+          contentContainerStyle={{ paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.syncCard}>
+            <View style={styles.syncIconCircle}>
+              <Ionicons name="link" size={28} color="#38bdf8" />
+            </View>
+            <Text style={styles.syncCardTitle}>Collega Dispositivo Esistente</Text>
+            <Text style={styles.syncCardDesc}>
+              Se hai già configurato StudICI su un altro iPhone o iPad, inserisci il Codice Dispositivo per associare i due telefoni e scaricare subito corso, canali e presenze.
+            </Text>
+
+            <View style={styles.syncInputWrapper}>
+              <TextInput
+                style={styles.syncInput}
+                placeholder="STUD-XXXX-XXXX-XXXX o NOME"
+                placeholderTextColor="#71717a"
+                value={syncCodeInput}
+                onChangeText={setSyncCodeInput}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={styles.syncPasteBtn}
+                activeOpacity={0.7}
+                onPress={handlePasteSyncCode}
+              >
+                <Ionicons name="clipboard-outline" size={16} color="#38bdf8" />
+                <Text style={styles.syncPasteBtnText}>Incolla</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.syncSubmitBtn,
+                (!syncCodeInput.trim() || isLinkingSync) && { opacity: 0.5 },
+              ]}
+              activeOpacity={0.8}
+              onPress={handleLinkFromCloud}
+              disabled={!syncCodeInput.trim() || isLinkingSync}
+            >
+              {isLinkingSync ? (
+                <ActivityIndicator
+                  size="small"
+                  color="#ffffff"
+                  style={{ marginRight: 8 }}
+                />
+              ) : (
+                <Ionicons
+                  name="cloud-download-outline"
+                  size={18}
+                  color="#ffffff"
+                  style={{ marginRight: 8 }}
+                />
+              )}
+              <Text style={styles.syncSubmitBtnText}>
+                {isLinkingSync
+                  ? "Collegamento in corso..."
+                  : "Collega e Sincronizza Dati"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Suggerimento AirDrop */}
+          <View style={styles.airDropHintBox}>
+            <View style={styles.airDropHintIconBox}>
+              <Ionicons name="share-outline" size={20} color="#2563eb" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.airDropHintTitle}>Più rapido con AirDrop!</Text>
+              <Text style={styles.airDropHintText}>
+                Sull&apos;altro iPhone apri{" "}
+                <Text style={{ color: "#ffffff", fontWeight: "600" }}>
+                  Profilo → Sincronizzazione Cloud → Invia con AirDrop
+                </Text>
+                . Toccando la notifica o il link ricevuto qui, StudICI si configurerà da solo a 1 tocco!
+              </Text>
+            </View>
+          </View>
+        </ScrollView>
+      ) : (
+        <>
+          {/* Barra di Ricerca */}
+          <View style={styles.searchContainer}>
+            <Ionicons
+              name="search"
+              size={20}
+              color="#8e8e93"
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Cerca corso (es. Informatica, Clinica...)"
+              placeholderTextColor="#636366"
+              value={search}
+              onChangeText={setSearch}
+              clearButtonMode="while-editing"
+              autoCorrect={false}
+            />
+            {search.length > 0 && (
+              <TouchableOpacity onPress={() => setSearch("")}>
+                <Ionicons name="close-circle" size={18} color="#8e8e93" />
+              </TouchableOpacity>
+            )}
+          </View>
 
       {/* Lista Corsi */}
       {loading ? (
@@ -285,7 +477,9 @@ export function OnboardingCourseSelector({
           )}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </>
+  )}
+</SafeAreaView>
   );
 }
 
@@ -485,5 +679,156 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
     lineHeight: 18,
+  },
+  modeSelectorContainer: {
+    flexDirection: "row",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 12,
+    padding: 3,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  modeTab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 9,
+  },
+  modeTabActive: {
+    backgroundColor: SAPIENZA_RED,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  modeTabText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#a1a1aa",
+  },
+  modeTabTextActive: {
+    color: "#ffffff",
+  },
+  syncContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  syncCard: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    marginBottom: 16,
+  },
+  syncIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "rgba(56, 189, 248, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  syncCardTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  syncCardDesc: {
+    color: "#a1a1aa",
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  syncInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#2c2c2e",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    width: "100%",
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  syncInput: {
+    flex: 1,
+    height: 48,
+    color: "#ffffff",
+    fontSize: 14,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontWeight: "600",
+  },
+  syncPasteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(56, 189, 248, 0.12)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  syncPasteBtnText: {
+    color: "#38bdf8",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+  syncSubmitBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0284c7",
+    width: "100%",
+    height: 46,
+    borderRadius: 12,
+    shadowColor: "#0284c7",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  syncSubmitBtnText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  airDropHintBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  airDropHintIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(37, 99, 235, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    marginTop: 2,
+  },
+  airDropHintTitle: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  airDropHintText: {
+    color: "#a1a1aa",
+    fontSize: 12.5,
+    lineHeight: 17,
   },
 });
