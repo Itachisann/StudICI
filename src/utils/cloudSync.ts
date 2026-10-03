@@ -30,7 +30,6 @@ export interface CloudBackupPayload {
   attendanceRecords: AttendanceRecord[];
 }
 
-const SYNC_ID_REGEX = /^STUD-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const SYNC_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function randomChunk(len: number): string {
@@ -47,7 +46,8 @@ export function normalizeSyncCode(code: string): string {
 }
 
 export function isValidSyncCode(code: string): boolean {
-  return SYNC_ID_REGEX.test(normalizeSyncCode(code));
+  const norm = normalizeSyncCode(code);
+  return /^[A-Z0-9_-]{3,40}$/i.test(norm);
 }
 
 /**
@@ -57,7 +57,7 @@ export function isValidSyncCode(code: string): boolean {
 export async function getCloudSyncId(): Promise<string> {
   try {
     let id = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
-    if (!id || !SYNC_ID_REGEX.test(id)) {
+    if (!id || !isValidSyncCode(id)) {
       // Genera (o migra dal vecchio formato STUD-1234-5678, troppo corto e non sicuro)
       id = `STUD-${randomChunk(4)}-${randomChunk(4)}-${randomChunk(4)}`;
       await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, id);
@@ -66,6 +66,17 @@ export async function getCloudSyncId(): Promise<string> {
   } catch {
     return 'STUD-0000-0000-0000';
   }
+}
+
+/**
+ * Permette di impostare un codice personalizzato (es. nickname o matricola)
+ */
+export async function setCustomCloudSyncId(newId: string): Promise<boolean> {
+  const norm = normalizeSyncCode(newId);
+  if (!isValidSyncCode(norm)) return false;
+  await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, norm);
+  await syncWithICloudStorage();
+  return true;
 }
 
 
@@ -490,11 +501,11 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
     };
   }
   const code = normalizeSyncCode(rawCode);
-  if (!SYNC_ID_REGEX.test(code)) {
+  if (!isValidSyncCode(code)) {
     return {
       success: false,
       updated: false,
-      message: 'Codice non valido. Formato: STUD-XXXX-XXXX-XXXX.',
+      message: 'Codice non valido. Deve contenere da 3 a 40 caratteri alfanumerici.',
     };
   }
   const previousId = await getCloudSyncId();

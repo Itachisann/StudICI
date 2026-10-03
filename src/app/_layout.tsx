@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Platform, StyleSheet, ActivityIndicator } from 'react-native';
+import { Platform, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Tabs as ExpoTabs } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +8,8 @@ import { NativeTabs } from '@/components/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as Linking from 'expo-linking';
+import { linkDeviceWithCode } from '@/utils/cloudSync';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 
@@ -33,6 +35,37 @@ export default function AppLayout() {
       if (name) setDegreeName(name);
     } catch {}
     setIsReady(true);
+  }, []);
+
+  useEffect(() => {
+    const handleUrl = async (urlStr: string) => {
+      try {
+        const parsed = Linking.parse(urlStr);
+        const code = parsed.queryParams?.code;
+        if (typeof code === 'string' && code.trim()) {
+          const res = await linkDeviceWithCode(code);
+          if (res.success) {
+            Alert.alert(
+              "Dispositivo Collegato!",
+              "Sincronizzazione completata con successo! Questo dispositivo è ora sincronizzato con l'altro.",
+              [{ text: "OK" }]
+            );
+          } else {
+            Alert.alert("Errore Collegamento", res.message);
+          }
+        }
+      } catch {}
+    };
+
+    Linking.getInitialURL().then(initial => {
+      if (initial) handleUrl(initial);
+    });
+
+    const sub = Linking.addEventListener('url', (event) => {
+      if (event.url) handleUrl(event.url);
+    });
+
+    return () => sub.remove();
   }, []);
 
   useEffect(() => {

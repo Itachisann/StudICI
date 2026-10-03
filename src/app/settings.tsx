@@ -12,6 +12,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -60,6 +61,7 @@ import {
   linkDeviceWithCode,
   isValidSyncCode,
   isCloudConfigured,
+  setCustomCloudSyncId,
 } from "../utils/cloudSync";
 
 const SAPIENZA_RED = "#822433";
@@ -525,6 +527,58 @@ export default function ProfiloScreen() {
       Alert.alert("Errore Esportazione", err?.message || "Impossibile generare il PDF del registro presenze.");
     } finally {
       setIsExportingPdf(false);
+    }
+  };
+
+  const handleAirDrop = async () => {
+    try {
+      setIsSyncingCloud(true);
+      await syncWithICloudStorage();
+      const code = await getCloudSyncId();
+      const url = `studici://sync?code=${encodeURIComponent(code)}`;
+      await Share.share({
+        title: "Sincronizza StudICI",
+        message: `Apri questo link per sincronizzare StudICI sull'altro dispositivo:\n${url}`,
+        url: url,
+      });
+    } catch {
+      Alert.alert("Errore", "Impossibile aprire il menu di condivisione.");
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
+  const handleChangeCustomSyncCode = () => {
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Personalizza Codice Cloud",
+        "Scegli un nome semplice (es. il tuo nome o matricola). Inserendo lo stesso nome su entrambi i telefoni, si sincronizzeranno senza codici casuali.",
+        [
+          { text: "Annulla", style: "cancel" },
+          {
+            text: "Salva",
+            onPress: async (val?: string) => {
+              if (!val || !val.trim()) return;
+              const ok = await setCustomCloudSyncId(val.trim());
+              if (ok) {
+                setCloudSyncId(val.trim().toUpperCase());
+                await loadProfileData();
+                Alert.alert(
+                  "Codice Aggiornato",
+                  `Ora i tuoi dati sono salvati nello spazio "${val.trim().toUpperCase()}". Inserisci questo stesso nome sull'altro telefono per sincronizzarli.`
+                );
+              } else {
+                Alert.alert(
+                  "Errore",
+                  "Il nome deve contenere tra 3 e 40 caratteri (lettere e numeri)."
+                );
+              }
+            },
+          },
+        ],
+        "plain-text",
+        cloudSyncId,
+      );
     }
   };
 
@@ -1499,7 +1553,11 @@ export default function ProfiloScreen() {
                   : "Nessun salvataggio recente"}
               </Text>
               {cloudSyncId ? (
-                <View style={styles.cloudIdBadge}>
+                <TouchableOpacity
+                  style={styles.cloudIdBadge}
+                  activeOpacity={0.7}
+                  onPress={handleChangeCustomSyncCode}
+                >
                   <Ionicons
                     name="finger-print"
                     size={13}
@@ -1507,7 +1565,13 @@ export default function ProfiloScreen() {
                     style={{ marginRight: 4 }}
                   />
                   <Text style={styles.cloudIdText} selectable>{cloudSyncId}</Text>
-                </View>
+                  <Ionicons
+                    name="pencil"
+                    size={11}
+                    color="#38bdf8"
+                    style={{ marginLeft: 6, opacity: 0.8 }}
+                  />
+                </TouchableOpacity>
               ) : null}
             </View>
 
@@ -1550,6 +1614,23 @@ export default function ProfiloScreen() {
                 {isSyncingCloud
                   ? "Sincronizzazione in corso..."
                   : "Esegui Sincronizzazione Ora"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cloudAirDropBtn}
+              activeOpacity={0.7}
+              onPress={handleAirDrop}
+              disabled={isSyncingCloud}
+            >
+              <Ionicons
+                name="share-outline"
+                size={18}
+                color="#ffffff"
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.cloudAirDropBtnText}>
+                Invia all&apos;altro dispositivo (AirDrop)
               </Text>
             </TouchableOpacity>
 
@@ -2238,6 +2319,26 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   cloudPrimaryBtnText: {
+    color: "#ffffff",
+    fontSize: 14.5,
+    fontWeight: "600",
+    letterSpacing: -0.2,
+  },
+  cloudAirDropBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#2563eb",
+    height: 44,
+    borderRadius: 9999,
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  cloudAirDropBtnText: {
     color: "#ffffff",
     fontSize: 14.5,
     fontWeight: "600",
