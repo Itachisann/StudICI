@@ -5,6 +5,16 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.5.9
+
+### Novità
+- **Sincronizzazione Live in Tempo Reale**: ogni modifica (nuovo dispositivo associato, aggiornamento orario/corso, aggiunta o rimozione presenze, dissociazione) si riflette istantaneamente e in tempo reale su tutti i dispositivi aperti, senza dover ricaricare a mano.
+- **Formato Codice Iniziale `ST + 4 Numeri + 1 Lettera`**: il codice cloud iniziale e di generazione segue ora il nuovo formato compatto e chiaro (es. `ST4928X`).
+- **Non-conflittualità dei nomi**:
+  - Impossibile scegliere nomi/codici personalizzati già in uso da altri utenti sul cloud: l'app verifica e previene conflitti e sovrascritture accidentali.
+  - I nomi dei dispositivi all'interno dello stesso gruppo vengono disambiguati automaticamente con numerazione progressiva (es. `iPhone (2)`).
+- **Aggiornamento automatico in background per Calendario Apple**: quando l'orario o canale viene modificato tramite sincronizzazione live, se l'utente ha il Calendario Apple attivo, StudICI provvede ad aggiornare automaticamente e in live anche il Calendario Apple, pulendo vecchie lezioni ed evitando calendari o eventi duplicati.
+
 ## 1.5.8
 
 ### Novità

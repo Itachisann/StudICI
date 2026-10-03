@@ -67,7 +67,7 @@ src/
 ## ☁️ Configurare la sincronizzazione Cloud
 
 La sincronizzazione tra dispositivi usa un **Firebase Realtime Database** gratuito (piano Spark).
-Ogni utente scrive solo sotto un percorso casuale e non indovinabile (il **Codice Dispositivo**).
+Ogni utente scrive solo sotto un percorso con codice non indovinabile (nel formato `ST` + 4 numeri + 1 lettera, es. `ST4928X`, o nome personalizzato univoco).
 
 1. Vai su <https://console.firebase.google.com> → **Aggiungi progetto** (Analytics non necessario).
 2. **Build → Realtime Database → Crea database** (scegli la regione, avvia in modalità _test_).

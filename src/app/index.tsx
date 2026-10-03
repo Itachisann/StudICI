@@ -41,6 +41,7 @@ import {
 import {
   getICloudAutoSyncEnabled,
   syncWithICloudStorage,
+  subscribeToLiveSync,
 } from "../utils/cloudSync";
 import {
   ClassEvent,
@@ -216,6 +217,16 @@ export default function ScheduleScreen() {
       loadAttendance();
     }, [loadData, loadAttendance]),
   );
+
+  useEffect(() => {
+    const unsub = subscribeToLiveSync((status, updated) => {
+      if (updated) {
+        loadData(false);
+        loadAttendance();
+      }
+    });
+    return unsub;
+  }, [loadData, loadAttendance]);
 
   const handleClassLongPress = useCallback(
     async (cls: ClassEvent) => {

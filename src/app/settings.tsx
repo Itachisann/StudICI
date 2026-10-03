@@ -3,7 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -65,6 +65,7 @@ import {
   getPairedDevicesInfo,
   dissociateDevice,
   PairedDevicesStatus,
+  subscribeToLiveSync,
 } from "../utils/cloudSync";
 
 const SAPIENZA_RED = "#822433";
@@ -169,6 +170,21 @@ export default function ProfiloScreen() {
       loadProfileData();
     }, [loadProfileData]),
   );
+
+  useEffect(() => {
+    const unsubscribe = subscribeToLiveSync((status, updated) => {
+      setPairedDevices(status);
+      getCloudSyncId().then(setCloudSyncId);
+      getLastCloudSync().then(setLastCloudSyncTime);
+      getICloudAutoSyncEnabled().then(setICloudAutoSync);
+      if (updated) {
+        loadProfileData();
+      }
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [loadProfileData]);
 
   const selectDegree = async (degree: Degree) => {
     setCourseModalVisible(false);
@@ -604,26 +620,20 @@ export default function ProfiloScreen() {
     if (Platform.OS === "ios") {
       Alert.prompt(
         "Personalizza Codice Cloud",
-        "Scegli un nome semplice (es. il tuo nome o matricola). Inserendo lo stesso nome su entrambi i telefoni, si sincronizzeranno senza codici casuali.",
+        "Scegli un nome semplice non ancora in uso (es. il tuo nome o matricola). Inserendo lo stesso nome su entrambi i telefoni, si sincronizzeranno senza codici casuali.",
         [
           { text: "Annulla", style: "cancel" },
           {
             text: "Salva",
             onPress: async (val?: string) => {
               if (!val || !val.trim()) return;
-              const ok = await setCustomCloudSyncId(val.trim());
-              if (ok) {
+              const res = await setCustomCloudSyncId(val.trim());
+              if (res.success) {
                 setCloudSyncId(val.trim().toUpperCase());
                 await loadProfileData();
-                Alert.alert(
-                  "Codice Aggiornato",
-                  `Ora i tuoi dati sono salvati nello spazio "${val.trim().toUpperCase()}". Inserisci questo stesso nome sull'altro telefono per sincronizzarli.`
-                );
+                Alert.alert("Codice Aggiornato", res.message);
               } else {
-                Alert.alert(
-                  "Errore",
-                  "Il nome deve contenere tra 3 e 40 caratteri (lettere e numeri)."
-                );
+                Alert.alert("Nome Non Disponibile", res.message);
               }
             },
           },
@@ -1881,7 +1891,7 @@ export default function ProfiloScreen() {
               </Text>
               <TextInput
                 style={styles.cloudRestoreInput}
-                placeholder="STUD-XXXX-XXXX-XXXX"
+                placeholder="es. ST1234A o NOME"
                 placeholderTextColor="#71717a"
                 value={restoreCodeInput}
                 onChangeText={setRestoreCodeInput}

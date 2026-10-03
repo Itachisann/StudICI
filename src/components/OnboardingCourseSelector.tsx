@@ -325,7 +325,7 @@ export function OnboardingCourseSelector({
             <View style={styles.syncInputWrapper}>
               <TextInput
                 style={styles.syncInput}
-                placeholder="STUD-XXXX-XXXX-XXXX o NOME"
+                placeholder="es. ST1234A o NOME"
                 placeholderTextColor="#71717a"
                 value={syncCodeInput}
                 onChangeText={setSyncCodeInput}

@@ -1,7 +1,7 @@
 import * as Calendar from 'expo-calendar/legacy';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ScheduleData } from './scraper';
+import { ScheduleData, fetchScheduleData } from './scraper';
 import { resolveClassroom, formatSapienzaAddress } from './classroomLocations';
 
 const LAST_CALENDAR_SYNC_KEY = 'studici_last_calendar_sync';
@@ -52,11 +52,21 @@ export async function syncScheduleToAppleCalendar(
       };
     }
 
-    // 1. Cerca o riusa il calendario dedicato StudICI (evita cancellazione totale per non triggerare restrizioni account)
+    // 1. Cerca o riusa il calendario dedicato StudICI (evita duplicati di calendari)
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    const existingCal = calendars.find(
+    const matchingCalendars = calendars.filter(
       c => (c.name === 'studici_lessons' || c.title === 'StudICI - Lezioni Sapienza') && c.allowsModifications
     );
+    const existingCal = matchingCalendars[0] || null;
+    if (matchingCalendars.length > 1) {
+      for (let i = 1; i < matchingCalendars.length; i++) {
+        try {
+          await Calendar.deleteCalendarAsync(matchingCalendars[i].id);
+        } catch {
+          // ignora se protetto da sistema
+        }
+      }
+    }
 
     let calendarId: string | null = null;
     let isDefaultCalendarFallback = false;
@@ -245,3 +255,36 @@ export async function syncScheduleToAppleCalendar(
     };
   }
 }
+
+/**
+ * Rinfresca il Calendario Apple in background se è già stato precedentemente sincronizzato.
+ * Viene invocato in tempo reale durante le sincronizzazioni live del corso/canale.
+ */
+export async function refreshAppleCalendarIfConfigured(): Promise<boolean> {
+  try {
+    const lastSync = await getLastCalendarSync();
+    if (!lastSync) return false;
+
+    const [degreeUrl, degreeName, defaultTabUrl] = await Promise.all([
+      AsyncStorage.getItem('selectedDegreeUrl'),
+      AsyncStorage.getItem('selectedDegreeName'),
+      AsyncStorage.getItem('defaultTabUrl'),
+    ]);
+
+    if (!degreeUrl || !defaultTabUrl) return false;
+
+    const schedule = await fetchScheduleData(defaultTabUrl);
+    if (!schedule || !schedule.days || schedule.days.length === 0) return false;
+
+    const res = await syncScheduleToAppleCalendar(
+      schedule,
+      degreeName || 'Corso di Laurea',
+      undefined
+    );
+    return res.success;
+  } catch (err) {
+    console.warn('Errore auto-aggiornamento calendario Apple live:', err);
+    return false;
+  }
+}
+

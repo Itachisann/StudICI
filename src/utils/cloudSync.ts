@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { Platform, AppState, AppStateStatus } from 'react-native';
 import * as Device from 'expo-device';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
+import { refreshAppleCalendarIfConfigured } from './appleCalendar';
 import {
   getAttendanceRecords,
   AttendanceRecord,
@@ -51,16 +52,6 @@ export interface CloudBackupPayload {
   attendanceRecords: AttendanceRecord[];
 }
 
-const SYNC_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-function randomChunk(len: number): string {
-  let out = '';
-  for (let i = 0; i < len; i++) {
-    out += SYNC_ALPHABET[Math.floor(Math.random() * SYNC_ALPHABET.length)];
-  }
-  return out;
-}
-
 /** Normalizza un codice digitato dall'utente (spazi, minuscole) */
 export function normalizeSyncCode(code: string): string {
   return code.trim().toUpperCase().replace(/\s+/g, '');
@@ -72,32 +63,95 @@ export function isValidSyncCode(code: string): boolean {
 }
 
 /**
- * Ottiene o genera il Codice Dispositivo univoco (es. STUD-K7M2-9QXA-4TPB).
- * 12 caratteri casuali: non indovinabile, funge da "chiave" del tuo spazio cloud.
+ * Genera il codice iniziale nel formato richiesto:
+ * ST + 4 NUMERI + 1 LETTERA (es. ST4928X).
+ */
+export function generateInitialSyncCode(): string {
+  let digits = '';
+  for (let i = 0; i < 4; i++) {
+    digits += Math.floor(Math.random() * 10).toString();
+  }
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const letter = letters[Math.floor(Math.random() * letters.length)];
+  return `ST${digits}${letter}`;
+}
+
+export async function generateUniqueInitialSyncCode(): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateInitialSyncCode();
+    try {
+      const existing = await fetchRemote(candidate);
+      if (!existing || !existing.devices || Object.keys(existing.devices).length === 0) {
+        return candidate;
+      }
+    } catch {
+      return candidate;
+    }
+  }
+  return generateInitialSyncCode();
+}
+
+/**
+ * Ottiene o genera il Codice Dispositivo univoco (formato ST + 4 cifre + 1 lettera, es. ST7412K).
  */
 export async function getCloudSyncId(): Promise<string> {
   try {
     let id = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
-    if (!id || !isValidSyncCode(id)) {
-      // Genera (o migra dal vecchio formato STUD-1234-5678, troppo corto e non sicuro)
-      id = `STUD-${randomChunk(4)}-${randomChunk(4)}-${randomChunk(4)}`;
+    if (!id || !isValidSyncCode(id) || id.startsWith('STUD-')) {
+      id = await generateUniqueInitialSyncCode();
       await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, id);
     }
-    return id;
+    return id.toUpperCase();
   } catch {
-    return 'STUD-0000-0000-0000';
+    return 'ST1000A';
   }
 }
 
 /**
- * Permette di impostare un codice personalizzato (es. nickname o matricola)
+ * Permette di impostare un codice/nome personalizzato.
+ * Include il controllo di non-conflittualità: non si possono inserire nomi già esistenti usati da altri.
  */
-export async function setCustomCloudSyncId(newId: string): Promise<boolean> {
+export async function setCustomCloudSyncId(
+  newId: string
+): Promise<{ success: boolean; message: string }> {
   const norm = normalizeSyncCode(newId);
-  if (!isValidSyncCode(norm)) return false;
+  if (!isValidSyncCode(norm)) {
+    return {
+      success: false,
+      message: 'Il nome deve contenere tra 3 e 40 caratteri (lettere e numeri).',
+    };
+  }
+
+  const currentId = await getCloudSyncId();
+  if (norm === currentId) {
+    return { success: true, message: 'Nome già impostato.' };
+  }
+
+  // Non-conflittualità: verifica se il nome è già registrato sul cloud da altri dispositivi
+  try {
+    const existing = await fetchRemote(norm);
+    if (existing && existing.devices) {
+      const myDevice = await getLocalDeviceInfo();
+      const otherDevices = Object.values(existing.devices).filter(
+        (d) => d && d.id !== myDevice.id
+      );
+      if (otherDevices.length > 0 && !existing.devices[myDevice.id]) {
+        return {
+          success: false,
+          message: `Il nome "${norm}" è già in uso da un altro utente. Scegli un nome diverso o usa il campo "Collega" per unirti ad esso.`,
+        };
+      }
+    }
+  } catch {
+    // continua in assenza di rete o se non trovato
+  }
+
   await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, norm);
   await syncWithICloudStorage();
-  return true;
+  return {
+    success: true,
+    message: `Codice aggiornato a "${norm}". Ora i tuoi dati sono salvati in questo spazio.`,
+  };
 }
 
 
@@ -377,6 +431,31 @@ export function getFriendlyDeviceName(): string {
   return Platform.OS === 'ios' ? 'iPhone' : Platform.OS === 'android' ? 'Dispositivo Android' : 'Dispositivo';
 }
 
+/**
+ * Garantisce la non-conflittualità dei nomi dei dispositivi all'interno dello stesso gruppo.
+ * Se esiste già un dispositivo con lo stesso nome, aggiunge un suffisso progressivo (es. "iPhone (2)").
+ */
+export function ensureUniqueDeviceName(
+  candidateName: string,
+  existingDevices: SyncDeviceInfo[],
+  myDeviceId: string
+): string {
+  const otherNames = existingDevices
+    .filter((d) => d && d.id !== myDeviceId)
+    .map((d) => (d.name || '').trim().toLowerCase());
+
+  let name = candidateName.trim();
+  if (!otherNames.includes(name.toLowerCase())) {
+    return name;
+  }
+
+  let counter = 2;
+  while (otherNames.includes(`${name.toLowerCase()} (${counter})`)) {
+    counter++;
+  }
+  return `${name} (${counter})`;
+}
+
 export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
   const id = await getLocalDeviceId();
   const name = getFriendlyDeviceName();
@@ -450,6 +529,7 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
           devices: updatedDevices,
         });
         const remaining = Object.values(updatedDevices).filter((d) => d && d.id !== myDevice.id);
+        await notifyLiveSyncListeners(true);
         return {
           success: true,
           message:
@@ -468,8 +548,8 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
       });
     }
 
-    // Genera un nuovo ID per questo dispositivo per scollegarlo definitivamente
-    const newId = `STUD-${randomChunk(4)}-${randomChunk(4)}-${randomChunk(4)}`;
+    // Genera un nuovo ID (formato ST+4 cifre+lettera) per questo dispositivo per scollegarlo
+    const newId = await generateUniqueInitialSyncCode();
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
 
     // Registra questo dispositivo nel suo nuovo spazio privato non associato
@@ -488,6 +568,7 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
       },
     });
 
+    await notifyLiveSyncListeners(true);
     return {
       success: true,
       message: 'Dispositivo dissociato con successo. La sincronizzazione è ora disattivata.',
@@ -561,9 +642,15 @@ async function runSync(): Promise<CloudSyncResult> {
         ? { ...remote.devices }
         : {};
 
-    // Aggiorna lo stato e l'attività di questo dispositivo
+    // Aggiorna lo stato e l'attività di questo dispositivo con nome non in conflitto
+    const uniqueName = ensureUniqueDeviceName(
+      myDevice.name,
+      Object.values(devicesMap),
+      myDevice.id
+    );
     devicesMap[myDevice.id] = {
       ...myDevice,
+      name: uniqueName,
       pairedAt: devicesMap[myDevice.id]?.pairedAt || Date.now(),
       lastActive: Date.now(),
     };
@@ -738,10 +825,17 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
 
     const otherDevices = existingDevices.filter((d) => d.id !== myDevice.id);
 
+    const uniqueName = ensureUniqueDeviceName(
+      myDevice.name,
+      existingDevices,
+      myDevice.id
+    );
+
     const updatedDevices: Record<string, SyncDeviceInfo> = {
       ...(remote.devices || {}),
       [myDevice.id]: {
         ...myDevice,
+        name: uniqueName,
         pairedAt: Date.now(),
         lastActive: Date.now(),
       },
@@ -799,6 +893,8 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       ? `Dispositivo associato con successo a "${partner.name}"! La sincronizzazione è ora attiva tra i dispositivi.`
       : `Dispositivo associato con successo! Sincronizzazione attiva.`;
 
+    await notifyLiveSyncListeners(true);
+
     return {
       success: true,
       updated: true,
@@ -828,9 +924,121 @@ setAttendanceChangeListener(() => {
       if ((await getICloudAutoSyncEnabled()) && isCloudConfigured()) {
         const paired = await isDevicePaired();
         if (paired) {
-          await syncWithICloudStorage();
+          const res = await syncWithICloudStorage();
+          await notifyLiveSyncListeners(res.updated);
         }
       }
     } catch {}
   }, 1500);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sincronizzazione Live in Tempo Reale
+// ─────────────────────────────────────────────────────────────────────────────
+
+let livePollTimer: ReturnType<typeof setInterval> | null = null;
+let lastKnownRemoteUpdatedAt = 0;
+let lastKnownDevicesHash = '';
+let isPollingInProgress = false;
+
+export type LiveSyncCallback = (status: PairedDevicesStatus, updated: boolean) => void;
+const liveSyncListeners = new Set<LiveSyncCallback>();
+
+/**
+ * Notifica manualmente o automaticamente tutti i listener live registrati.
+ */
+export async function notifyLiveSyncListeners(updated = false): Promise<void> {
+  const currentStatus = await getPairedDevicesInfo();
+  for (const cb of liveSyncListeners) {
+    try {
+      cb(currentStatus, updated);
+    } catch {}
+  }
+}
+
+/**
+ * Registra un ascoltatore live per aggiornamenti in tempo reale (dispositivi associati, presenze, corsi).
+ * Restituisce una funzione di pulizia (unsubscribe).
+ */
+export function subscribeToLiveSync(callback: LiveSyncCallback): () => void {
+  liveSyncListeners.add(callback);
+  startLiveSyncLoop();
+  // Notifica subito lo stato corrente
+  getPairedDevicesInfo().then((status) => {
+    try {
+      callback(status, false);
+    } catch {}
+  });
+  return () => {
+    liveSyncListeners.delete(callback);
+    if (liveSyncListeners.size === 0) {
+      stopLiveSyncLoop();
+    }
+  };
+}
+
+async function checkRemoteLiveChanges(): Promise<void> {
+  if (isPollingInProgress || !isCloudConfigured()) return;
+  isPollingInProgress = true;
+  try {
+    const syncId = await getCloudSyncId();
+    const remote = await fetchRemote(syncId);
+    if (!remote) return;
+
+    const devices = remote.devices || {};
+    const devEntries = Object.values(devices).filter(Boolean) as SyncDeviceInfo[];
+    const devHash = devEntries
+      .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
+      .sort()
+      .join('|');
+
+    const remoteUpdated = remote.updatedAt || 0;
+    const localLastSync = (await getLastCloudSync()) || 0;
+
+    const hasNewDevices = devHash !== lastKnownDevicesHash;
+    const hasNewData = remoteUpdated > Math.max(localLastSync, lastKnownRemoteUpdatedAt);
+
+    if (hasNewDevices || hasNewData) {
+      lastKnownDevicesHash = devHash;
+      lastKnownRemoteUpdatedAt = remoteUpdated;
+
+      // Esegui la sincronizzazione locale e unisci i dati
+      const syncResult = await syncWithICloudStorage();
+      await notifyLiveSyncListeners(syncResult.updated);
+
+      // Se il corso o orario è cambiato e il calendario apple era attivo, aggiorna anche il calendario apple in live!
+      if (syncResult.updated) {
+        await refreshAppleCalendarIfConfigured();
+      }
+    }
+  } catch {
+    // Non interrompere il ciclo per errori di rete momentanei
+  } finally {
+    isPollingInProgress = false;
+  }
+}
+
+export function startLiveSyncLoop(): void {
+  if (livePollTimer) return;
+  // Polling a intervallo rapido (2.5s) per aggiornamento live
+  livePollTimer = setInterval(() => {
+    checkRemoteLiveChanges();
+  }, 2500);
+  checkRemoteLiveChanges();
+}
+
+export function stopLiveSyncLoop(): void {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+}
+
+// Gestione Foreground / Background con AppState
+AppState.addEventListener('change', (nextState: AppStateStatus) => {
+  if (nextState === 'active') {
+    startLiveSyncLoop();
+  } else {
+    stopLiveSyncLoop();
+  }
 });
