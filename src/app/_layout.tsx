@@ -46,8 +46,8 @@ export default function AppLayout() {
           const res = await linkDeviceWithCode(code);
           if (res.success) {
             Alert.alert(
-              "Dispositivo Collegato!",
-              "Sincronizzazione completata con successo! Questo dispositivo è ora sincronizzato con l'altro.",
+              "Dispositivi Associati!",
+              res.message,
               [{ text: "OK" }]
             );
           } else {

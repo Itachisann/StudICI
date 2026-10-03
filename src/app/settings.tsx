@@ -62,6 +62,9 @@ import {
   isValidSyncCode,
   isCloudConfigured,
   setCustomCloudSyncId,
+  getPairedDevicesInfo,
+  dissociateDevice,
+  PairedDevicesStatus,
 } from "../utils/cloudSync";
 
 const SAPIENZA_RED = "#822433";
@@ -114,6 +117,7 @@ export default function ProfiloScreen() {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
   const [iCloudAutoSync, setICloudAutoSync] = useState(false);
+  const [pairedDevices, setPairedDevices] = useState<PairedDevicesStatus | null>(null);
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -142,16 +146,18 @@ export default function ProfiloScreen() {
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
-      const [cloudId, lastCloud, lastCal, icloudEnabled] = await Promise.all([
+      const [cloudId, lastCloud, lastCal, icloudEnabled, pairs] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
         getLastCalendarSync(),
         getICloudAutoSyncEnabled(),
+        getPairedDevicesInfo(),
       ]);
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
       setICloudAutoSync(icloudEnabled);
+      setPairedDevices(pairs);
     } catch (e) {
       console.error(e);
     }
@@ -438,14 +444,22 @@ export default function ProfiloScreen() {
     setIsSyncingCloud(true);
     try {
       const res = await syncWithICloudStorage();
+      const updatedPairs = await getPairedDevicesInfo();
+      setPairedDevices(updatedPairs);
       if (res.success) {
         setLastCloudSyncTime(await getLastCloudSync());
         if (res.updated) await loadProfileData();
+        Alert.alert("Sincronizzazione Cloud", res.message);
+      } else {
+        if (res.notPaired) {
+          Alert.alert(
+            "Nessun Dispositivo Associato",
+            "La sincronizzazione tra dispositivi richiede che due dispositivi siano associati. Invia il codice con AirDrop o inseriscilo sul secondo iPhone per associarlo."
+          );
+        } else {
+          Alert.alert("Sincronizzazione non riuscita", res.message);
+        }
       }
-      Alert.alert(
-        res.success ? "Sincronizzazione Cloud" : "Sincronizzazione non riuscita",
-        res.message,
-      );
     } catch {
       Alert.alert("Errore", "Impossibile completare la sincronizzazione cloud.");
     } finally {
@@ -538,14 +552,48 @@ export default function ProfiloScreen() {
       const url = `studici://sync?code=${encodeURIComponent(code)}`;
       await Share.share({
         title: "Sincronizza StudICI",
-        message: `Apri questo link per sincronizzare StudICI sull'altro dispositivo:\n${url}`,
+        message: `Apri questo link per associare StudICI sull'altro dispositivo:\n${url}`,
         url: url,
       });
+      const updatedPairs = await getPairedDevicesInfo();
+      setPairedDevices(updatedPairs);
     } catch {
       Alert.alert("Errore", "Impossibile aprire il menu di condivisione.");
     } finally {
       setIsSyncingCloud(false);
     }
+  };
+
+  const handleDissociateDevice = (targetDeviceId?: string) => {
+    const targetName = pairedDevices?.otherDevice?.name || "il dispositivo associato";
+    Alert.alert(
+      "Dissocia Dispositivo",
+      `Vuoi dissociare "${targetName}"? La sincronizzazione tra i due dispositivi verrà interrotta finché non verranno associati nuovamente.`,
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Dissocia",
+          style: "destructive",
+          onPress: async () => {
+            setIsSyncingCloud(true);
+            try {
+              const res = await dissociateDevice(targetDeviceId);
+              await loadProfileData();
+              const updatedPairs = await getPairedDevicesInfo();
+              setPairedDevices(updatedPairs);
+              Alert.alert(
+                res.success ? "Dispositivo Dissociato" : "Errore",
+                res.message
+              );
+            } catch {
+              Alert.alert("Errore", "Impossibile dissociare il dispositivo.");
+            } finally {
+              setIsSyncingCloud(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleChangeCustomSyncCode = () => {
@@ -612,7 +660,7 @@ export default function ProfiloScreen() {
       return;
     }
 
-    // Codice Dispositivo (STUD-XXXX-XXXX-XXXX): collegamento + sync automatica
+    // Codice Dispositivo (STUD-XXXX-XXXX-XXXX o nome): collegamento + associazione
     if (isValidSyncCode(restoreCodeInput)) {
       setIsSyncingCloud(true);
       try {
@@ -620,9 +668,11 @@ export default function ProfiloScreen() {
         if (res.success) {
           setRestoreCodeInput("");
           await loadProfileData();
+          const updatedPairs = await getPairedDevicesInfo();
+          setPairedDevices(updatedPairs);
         }
         Alert.alert(
-          res.success ? "Dispositivo collegato" : "Collegamento non riuscito",
+          res.success ? "Dispositivi Associati" : "Associazione non riuscita",
           res.message,
         );
       } finally {
@@ -1019,7 +1069,9 @@ export default function ProfiloScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Sincronizzazione Cloud</Text>
               <Text style={styles.rowSubTitle}>
-                {formatSyncDate(lastCloudSyncTime)}
+                {pairedDevices?.isPaired && pairedDevices.otherDevice
+                  ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
+                  : "Non associato (richiede 2 dispositivi)"}
               </Text>
             </View>
             <TouchableOpacity
@@ -1575,6 +1627,123 @@ export default function ProfiloScreen() {
               ) : null}
             </View>
 
+            {/* Sezione Dispositivi Associati */}
+            <View style={styles.devicesSection}>
+              <View style={styles.devicesHeaderRow}>
+                <Text style={styles.devicesSectionTitle}>Dispositivi Associati (Max 2)</Text>
+                <View
+                  style={[
+                    styles.pairingStatusPill,
+                    pairedDevices?.isPaired
+                      ? styles.pairingStatusPillActive
+                      : styles.pairingStatusPillWaiting,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.pairingStatusDot,
+                      pairedDevices?.isPaired
+                        ? styles.pairingStatusDotActive
+                        : styles.pairingStatusDotWaiting,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.pairingStatusText,
+                      pairedDevices?.isPaired
+                        ? styles.pairingStatusTextActive
+                        : styles.pairingStatusTextWaiting,
+                    ]}
+                  >
+                    {pairedDevices?.isPaired ? "Associati (2/2)" : "In attesa (1/2)"}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Card 1: Questo Dispositivo */}
+              <View style={styles.deviceCard}>
+                <View
+                  style={[
+                    styles.deviceIconCircle,
+                    { backgroundColor: "rgba(2, 132, 199, 0.15)" },
+                  ]}
+                >
+                  <Ionicons name="phone-portrait" size={19} color="#38bdf8" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <Text style={styles.deviceNameText} numberOfLines={1}>
+                      {pairedDevices?.myDevice?.name || "Questo iPhone"}
+                    </Text>
+                    <View style={styles.myDeviceBadge}>
+                      <Text style={styles.myDeviceBadgeText}>Questo</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.deviceMetaText}>
+                    {pairedDevices?.myDevice?.platform || "iOS"} • Attivo adesso
+                  </Text>
+                </View>
+              </View>
+
+              {/* Card 2: Dispositivo Associato oppure Empty State */}
+              {pairedDevices?.isPaired && pairedDevices.otherDevice ? (
+                <View style={[styles.deviceCard, { marginTop: 8 }]}>
+                  <View
+                    style={[
+                      styles.deviceIconCircle,
+                      { backgroundColor: "rgba(52, 199, 89, 0.15)" },
+                    ]}
+                  >
+                    <Ionicons name="phone-portrait" size={19} color="#34c759" />
+                  </View>
+                  <View style={{ flex: 1, paddingRight: 4 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <Text style={styles.deviceNameText} numberOfLines={1}>
+                        {pairedDevices.otherDevice.name}
+                      </Text>
+                      <View style={styles.pairedDeviceBadge}>
+                        <Text style={styles.pairedDeviceBadgeText}>Associato</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.deviceMetaText}>
+                      {pairedDevices.otherDevice.platform} • Sinc:{" "}
+                      {formatSyncDate(pairedDevices.otherDevice.lastActive)}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.dissociateBtn}
+                    activeOpacity={0.7}
+                    onPress={() => handleDissociateDevice(pairedDevices.otherDevice?.id)}
+                  >
+                    <Ionicons
+                      name="link-outline"
+                      size={13}
+                      color="#ef4444"
+                      style={{ marginRight: 3 }}
+                    />
+                    <Text style={styles.dissociateBtnText}>Dissocia</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.unpairedNoticeBox}>
+                  <View style={styles.unpairedNoticeHeader}>
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={16}
+                      color="#f59e0b"
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text style={styles.unpairedNoticeTitle}>
+                      Nessun dispositivo associato
+                    </Text>
+                  </View>
+                  <Text style={styles.unpairedNoticeDesc}>
+                    La sincronizzazione si attiva solo se due dispositivi sono associati. Invia il codice con AirDrop o inseriscilo sull&apos;altro iPhone per iniziare.
+                  </Text>
+                </View>
+              )}
+            </View>
+
             {/* Card Switch iCloud Sync Automatico */}
             <View style={styles.cloudICloudCard}>
               <View style={styles.cloudICloudIconBox}>
@@ -1583,7 +1752,9 @@ export default function ProfiloScreen() {
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.cloudICloudTitle}>Sincronizzazione Automatica</Text>
                 <Text style={styles.cloudICloudSub}>
-                  Mantiene allineati i dispositivi collegati con lo stesso Codice Dispositivo
+                  {pairedDevices?.isPaired && pairedDevices.otherDevice
+                    ? `Mantiene sincronizzato questo dispositivo con ${pairedDevices.otherDevice.name}`
+                    : "Si attiverà automaticamente non appena associ il secondo dispositivo"}
                 </Text>
               </View>
               <Switch
@@ -2274,6 +2445,152 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: "600",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  devicesSection: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  devicesHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  devicesSectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#a1a1aa",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  pairingStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  pairingStatusPillActive: {
+    backgroundColor: "rgba(52, 199, 89, 0.15)",
+  },
+  pairingStatusPillWaiting: {
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+  },
+  pairingStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  pairingStatusDotActive: {
+    backgroundColor: "#34c759",
+  },
+  pairingStatusDotWaiting: {
+    backgroundColor: "#f59e0b",
+  },
+  pairingStatusText: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  pairingStatusTextActive: {
+    color: "#34c759",
+  },
+  pairingStatusTextWaiting: {
+    color: "#f59e0b",
+  },
+  deviceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#2c2c2e",
+    borderRadius: 12,
+    padding: 12,
+  },
+  deviceIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  deviceNameText: {
+    color: "#ffffff",
+    fontSize: 14.5,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  deviceMetaText: {
+    color: "#8e8e93",
+    fontSize: 11.5,
+    marginTop: 2,
+  },
+  myDeviceBadge: {
+    backgroundColor: "rgba(56, 189, 248, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  myDeviceBadgeText: {
+    color: "#38bdf8",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  pairedDeviceBadge: {
+    backgroundColor: "rgba(52, 199, 89, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  pairedDeviceBadgeText: {
+    color: "#34c759",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  dissociateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 8,
+    borderWidth: 0.5,
+    borderColor: "rgba(239, 68, 68, 0.3)",
+  },
+  dissociateBtnText: {
+    color: "#ef4444",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  unpairedNoticeBox: {
+    backgroundColor: "rgba(245, 158, 11, 0.08)",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.25)",
+    borderStyle: "dashed",
+    marginTop: 8,
+  },
+  unpairedNoticeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  unpairedNoticeTitle: {
+    color: "#f59e0b",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  unpairedNoticeDesc: {
+    color: "#d4d4d8",
+    fontSize: 12,
+    lineHeight: 16,
   },
   cloudICloudCard: {
     backgroundColor: "#1c1c1e",

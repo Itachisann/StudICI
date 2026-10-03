@@ -1,4 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import * as Device from 'expo-device';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
@@ -15,6 +17,24 @@ const LAST_CLOUD_SYNC_KEY = 'studici_last_cloud_sync';
 const CLOUD_BACKUP_DATA_KEY = 'studici_cloud_backup_data';
 const ICLOUD_AUTO_SYNC_KEY = 'studici_icloud_auto_sync_enabled';
 const ICLOUD_BACKUP_FILENAME = 'studici_icloud_sync.json';
+const LOCAL_DEVICE_ID_KEY = 'studici_local_device_instance_id';
+
+export interface SyncDeviceInfo {
+  id: string;
+  name: string;
+  model: string;
+  platform: string;
+  osVersion: string;
+  pairedAt: number;
+  lastActive: number;
+}
+
+export interface PairedDevicesStatus {
+  myDevice: SyncDeviceInfo;
+  otherDevice: SyncDeviceInfo | null;
+  isPaired: boolean;
+  totalDevices: number;
+}
 
 export interface CloudBackupPayload {
   syncId: string;
@@ -118,7 +138,7 @@ export async function performCloudSync(): Promise<{
 
   const payload: CloudBackupPayload = {
     syncId,
-    version: '1.5.3',
+    version: '1.5.6',
     timestamp,
     formattedDate,
     course: {
@@ -275,12 +295,15 @@ interface RemoteDoc {
   courseModified?: number;
   attendance?: AttendanceRecord[];
   tombstones?: Record<string, number>;
+  devices?: Record<string, SyncDeviceInfo>;
 }
 
 export interface CloudSyncResult {
   success: boolean;
   message: string;
   updated: boolean;
+  notPaired?: boolean;
+  partnerName?: string;
 }
 
 /** True se il backend cloud è stato configurato in src/config/syncConfig.ts */
@@ -323,6 +346,151 @@ async function pushRemote(syncId: string, doc: RemoteDoc): Promise<void> {
   });
   if (!res.ok) {
     throw new Error(`Impossibile salvare sul cloud (${res.status}).`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dispositivo locale & Gestione Associazione (Pairing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getLocalDeviceId(): Promise<string> {
+  try {
+    let id = await AsyncStorage.getItem(LOCAL_DEVICE_ID_KEY);
+    if (!id) {
+      id = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `dev_${Date.now().toString(36)}`;
+  }
+}
+
+export function getFriendlyDeviceName(): string {
+  if (Device.deviceName && Device.deviceName !== 'iPhone' && Device.deviceName !== 'iPad') {
+    return Device.deviceName;
+  }
+  if (Device.modelName) {
+    return Device.modelName;
+  }
+  return Platform.OS === 'ios' ? 'iPhone' : Platform.OS === 'android' ? 'Dispositivo Android' : 'Dispositivo';
+}
+
+export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
+  const id = await getLocalDeviceId();
+  const name = getFriendlyDeviceName();
+  const model = Device.modelName || (Platform.OS === 'ios' ? 'iPhone' : 'Dispositivo');
+  const platform = Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web';
+  const osVersion = Device.osVersion || '';
+  return {
+    id,
+    name,
+    model,
+    platform,
+    osVersion,
+    pairedAt: Date.now(),
+    lastActive: Date.now(),
+  };
+}
+
+export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
+  const myDevice = await getLocalDeviceInfo();
+  if (!isCloudConfigured()) {
+    return { myDevice, otherDevice: null, isPaired: false, totalDevices: 1 };
+  }
+  try {
+    const syncId = await getCloudSyncId();
+    const remote = await fetchRemote(syncId);
+    if (!remote || !remote.devices) {
+      return { myDevice, otherDevice: null, isPaired: false, totalDevices: 0 };
+    }
+    const devicesMap: Record<string, SyncDeviceInfo> =
+      typeof remote.devices === 'object' ? remote.devices : {};
+    const registeredMy = devicesMap[myDevice.id] || myDevice;
+    const others = Object.values(devicesMap).filter((d) => d && d.id !== myDevice.id);
+    const otherDevice = others.length > 0 ? others[0] : null;
+
+    return {
+      myDevice: registeredMy,
+      otherDevice,
+      isPaired: otherDevice !== null,
+      totalDevices: Object.keys(devicesMap).length,
+    };
+  } catch {
+    return { myDevice, otherDevice: null, isPaired: false, totalDevices: 1 };
+  }
+}
+
+export async function isDevicePaired(): Promise<boolean> {
+  const status = await getPairedDevicesInfo();
+  return status.isPaired;
+}
+
+/**
+ * Dissocia questo dispositivo o l'altro dispositivo associato.
+ * Interrompe la sincronizzazione tra i due dispositivi.
+ */
+export async function dissociateDevice(targetDeviceId?: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const syncId = await getCloudSyncId();
+    const myDevice = await getLocalDeviceInfo();
+    const remote = await fetchRemote(syncId);
+
+    if (remote && remote.devices) {
+      const updatedDevices = { ...remote.devices };
+
+      // Se rimuoviamo nello specifico l'altro dispositivo
+      if (targetDeviceId && targetDeviceId !== myDevice.id) {
+        delete updatedDevices[targetDeviceId];
+        await pushRemote(syncId, {
+          ...remote,
+          updatedAt: Date.now(),
+          devices: updatedDevices,
+        });
+        return {
+          success: true,
+          message: 'Dispositivo associato rimosso con successo. La sincronizzazione è ora disattivata.',
+        };
+      }
+
+      // Altrimenti stiamo dissociando questo dispositivo
+      delete updatedDevices[myDevice.id];
+      await pushRemote(syncId, {
+        ...remote,
+        updatedAt: Date.now(),
+        devices: updatedDevices,
+      });
+    }
+
+    // Genera un nuovo ID per questo dispositivo per scollegarlo definitivamente
+    const newId = `STUD-${randomChunk(4)}-${randomChunk(4)}-${randomChunk(4)}`;
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
+
+    // Registra questo dispositivo nel suo nuovo spazio privato non associato
+    await pushRemote(newId, {
+      updatedAt: Date.now(),
+      course: await readLocalCourse(),
+      courseModified: Date.now(),
+      attendance: await getAttendanceRecords(),
+      tombstones: await getAttendanceTombstones(),
+      devices: {
+        [myDevice.id]: {
+          ...myDevice,
+          pairedAt: Date.now(),
+          lastActive: Date.now(),
+        },
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Dispositivo dissociato con successo. La sincronizzazione è ora disattivata.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'Errore durante la dissociazione.',
+    };
   }
 }
 
@@ -379,6 +547,49 @@ async function runSync(): Promise<CloudSyncResult> {
   try {
     const syncId = await getCloudSyncId();
     const remote = await fetchRemote(syncId);
+    const myDevice = await getLocalDeviceInfo();
+
+    // Mappa dispositivi registrati nel cloud
+    const devicesMap: Record<string, SyncDeviceInfo> =
+      remote?.devices && typeof remote.devices === 'object'
+        ? { ...remote.devices }
+        : {};
+
+    // Aggiorna lo stato e l'attività di questo dispositivo
+    devicesMap[myDevice.id] = {
+      ...myDevice,
+      pairedAt: devicesMap[myDevice.id]?.pairedAt || Date.now(),
+      lastActive: Date.now(),
+    };
+
+    // Verifica se c'è un altro dispositivo associato
+    const otherDevices = Object.values(devicesMap).filter((d) => d && d.id !== myDevice.id);
+    const otherDevice = otherDevices.length > 0 ? otherDevices[0] : null;
+    const isPaired = otherDevice !== null;
+
+    // Regola fondamentale: la sincronizzazione tra dispositivi può avvenire SOLO se due dispositivi sono associati
+    if (!isPaired) {
+      // Salva lo snapshot iniziale e la registrazione di questo dispositivo sul cloud
+      // affinché il secondo dispositivo possa collegarsi e associarsi
+      const localCourse = await readLocalCourse();
+      const localAtt = await getAttendanceRecords();
+      const localTomb = await getAttendanceTombstones();
+      await pushRemote(syncId, {
+        updatedAt: Date.now(),
+        course: localCourse,
+        courseModified: Date.now(),
+        attendance: localAtt,
+        tombstones: localTomb,
+        devices: devicesMap,
+      });
+
+      return {
+        success: false,
+        updated: false,
+        notPaired: true,
+        message: 'Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo con AirDrop o Codice.',
+      };
+    }
 
     // ── Corso / canale predefinito: vince la modifica più recente ──
     const localCourse = await readLocalCourse();
@@ -434,34 +645,26 @@ async function runSync(): Promise<CloudSyncResult> {
     }
     await setAttendanceTombstones(tombstones);
 
-    // ── Pubblica sul cloud solo se qualcosa è cambiato ──
-    const needPush =
-      !remote ||
-      idsKey(remoteAtt) !== idsKey(merged) ||
-      Object.keys(remoteTomb).length !== Object.keys(tombstones).length ||
-      remoteMod !== finalMod ||
-      JSON.stringify(remoteCourse) !== JSON.stringify(finalCourse);
-
-    if (needPush) {
-      await pushRemote(syncId, {
-        updatedAt: now,
-        course: finalCourse,
-        courseModified: finalMod,
-        attendance: merged,
-        tombstones,
-      });
-    }
+    // ── Pubblica sempre devicesMap aggiornato e dati unificati ──
+    await pushRemote(syncId, {
+      updatedAt: now,
+      course: finalCourse,
+      courseModified: finalMod,
+      attendance: merged,
+      tombstones,
+      devices: devicesMap,
+    });
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
     const updated = attChanged || courseChanged;
     return {
       success: true,
       updated,
+      notPaired: false,
+      partnerName: otherDevice.name,
       message: updated
-        ? 'Dati sincronizzati dagli altri tuoi dispositivi!'
-        : needPush
-          ? 'Cloud aggiornato con i dati di questo dispositivo.'
-          : 'Tutto già sincronizzato.',
+        ? `Dati sincronizzati con ${otherDevice.name}!`
+        : `Tutto già sincronizzato con ${otherDevice.name}.`,
     };
   } catch (err: any) {
     const aborted = err?.name === 'AbortError';
@@ -508,26 +711,96 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       message: 'Codice non valido. Deve contenere da 3 a 40 caratteri alfanumerici.',
     };
   }
+
+  const myDevice = await getLocalDeviceInfo();
   const previousId = await getCloudSyncId();
+
   try {
     const remote = await fetchRemote(code);
     if (!remote) {
       return {
         success: false,
         updated: false,
-        message: 'Codice non trovato. Esegui prima una sincronizzazione sull\'altro dispositivo.',
+        message: 'Codice non trovato. Esegui prima una sincronizzazione o condividi da un dispositivo attivo.',
       };
     }
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, code);
-    const res = await syncWithICloudStorage();
-    if (!res.success) {
-      await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);
-      return res;
+
+    const existingDevices: SyncDeviceInfo[] =
+      remote.devices && typeof remote.devices === 'object'
+        ? Object.values(remote.devices).filter(Boolean)
+        : [];
+
+    const otherDevices = existingDevices.filter((d) => d.id !== myDevice.id);
+
+    if (otherDevices.length >= 2) {
+      return {
+        success: false,
+        updated: false,
+        message: 'Questo codice ha già 2 dispositivi associati. Dissociane uno prima di collegare questo dispositivo.',
+      };
     }
+
+    const updatedDevices: Record<string, SyncDeviceInfo> = {
+      ...(remote.devices || {}),
+      [myDevice.id]: {
+        ...myDevice,
+        pairedAt: Date.now(),
+        lastActive: Date.now(),
+      },
+    };
+
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, code);
+
+    // Merge corso
+    const localCourse = await readLocalCourse();
+    const remoteCourse = normalizeCourse(remote.course);
+    let finalCourse = localCourse;
+    let finalMod = Date.now();
+    if (remoteCourse.url) {
+      finalCourse = remoteCourse;
+      await writeLocalCourse(remoteCourse);
+    }
+    await AsyncStorage.setItem(COURSE_SNAPSHOT_KEY, JSON.stringify(finalCourse));
+    await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
+
+    // Merge presenze
+    const localAtt = await getAttendanceRecords();
+    const remoteAtt: AttendanceRecord[] = Array.isArray(remote.attendance) ? remote.attendance : [];
+    const localTomb = await getAttendanceTombstones();
+    const remoteTomb = remote.tombstones || {};
+
+    const tombstones: Record<string, number> = { ...localTomb, ...remoteTomb };
+    const byId = new Map<string, AttendanceRecord>();
+    for (const r of [...remoteAtt, ...localAtt]) {
+      const prev = byId.get(r.id);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) byId.set(r.id, r);
+    }
+    const merged = Array.from(byId.values())
+      .filter((r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)))
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    await AsyncStorage.setItem('studici_attendance_records', JSON.stringify(merged));
+    await setAttendanceTombstones(tombstones);
+
+    await pushRemote(code, {
+      updatedAt: Date.now(),
+      course: finalCourse,
+      courseModified: finalMod,
+      attendance: merged,
+      tombstones,
+      devices: updatedDevices,
+    });
+
+    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
+
+    const partner = otherDevices[0];
+    const partnerName = partner ? partner.name : "l'altro dispositivo";
+
     return {
       success: true,
       updated: true,
-      message: 'Dispositivo collegato! Dati sincronizzati.',
+      partnerName,
+      message: `Dispositivo associato con successo a "${partnerName}"! La sincronizzazione è ora attiva tra i due dispositivi.`,
     };
   } catch (err: any) {
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);
@@ -537,7 +810,7 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       message:
         err?.name === 'AbortError'
           ? 'Nessuna risposta dal cloud: controlla la connessione.'
-          : err?.message || 'Impossibile collegare il dispositivo.',
+          : err?.message || 'Impossibile associare il dispositivo.',
     };
   }
 }
@@ -550,7 +823,10 @@ setAttendanceChangeListener(() => {
     autoPushTimer = null;
     try {
       if ((await getICloudAutoSyncEnabled()) && isCloudConfigured()) {
-        await syncWithICloudStorage();
+        const paired = await isDevicePaired();
+        if (paired) {
+          await syncWithICloudStorage();
+        }
       }
     } catch {}
   }, 1500);
