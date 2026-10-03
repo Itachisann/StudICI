@@ -63,22 +63,21 @@ export async function syncScheduleToAppleCalendar(
 
     if (existingCal) {
       calendarId = existingCal.id;
-      // Rimuovi vecchi eventi delle lezioni per evitare duplicati senza cancellare il calendario
+      // Rimuovi tutti i vecchi eventi delle lezioni per eliminare gli orari vecchi
+      // e sostituirli con quelli aggiornati senza duplicati
       try {
-        const pastDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-        const futureDate = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+        const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const futureDate = new Date(Date.now() + 240 * 24 * 60 * 60 * 1000);
         const oldEvents = await Calendar.getEventsAsync([existingCal.id], pastDate, futureDate);
         for (const evt of oldEvents) {
-          if (evt.notes?.includes('StudICI') || evt.notes?.includes('Sapienza')) {
-            try {
-              await Calendar.deleteEventAsync(evt.id, { futureEvents: true });
-            } catch {
-              // ignora errore su singolo evento
-            }
+          try {
+            await Calendar.deleteEventAsync(evt.id, { futureEvents: true });
+          } catch {
+            // ignora errore se già cancellato
           }
         }
-      } catch {
-        // ignora
+      } catch (cleanErr) {
+        console.warn('Errore pulizia vecchi orari calendario:', cleanErr);
       }
     }
 
@@ -198,6 +197,7 @@ export async function syncScheduleToAppleCalendar(
           channelName ? `Canale: ${channelName}` : '',
           resolved.buildingName ? `Edificio: ${resolved.buildingName}` : '',
           resolved.campus ? `Campus: ${resolved.campus}` : '',
+          'StudICI • Sapienza Università di Roma',
         ].filter(Boolean);
 
         // Titolo con materia, aula e docente

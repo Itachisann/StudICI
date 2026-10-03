@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.5.8
+
+### Novità
+- **Associazione multi-dispositivo**: rimosso il limite di 2 dispositivi. È ora possibile associare qualsiasi numero di dispositivi (iPhone, iPad, ecc.) allo stesso account cloud; ogni dispositivo associato viene mostrato nell'elenco con possibilità di dissociazione individuale.
+- **UISegmentedControl nativo Apple su IPA all'avvio**: il selettore della modalità di onboarding tra *Configurazione Normale* e *Da Sincronizzazione* utilizza il controllo nativo iOS `UISegmentedControl` nelle build IPA.
+- **Pulizia e aggiornamento automatico orari Calendario Apple**: la sincronizzazione del calendario rileva se il calendario "StudICI - Lezioni Sapienza" esiste già e, in caso di cambi di orario o aggiornamenti, rimuove tutti i vecchi eventi dell'intervallo ricreando quelli aggiornati, azzerando duplicati e orari non più validi.
+- **Condivisione ottimizzata per AirDrop & LiveContainer**: il messaggio condiviso include sia il codice testuale semplice sia il link diretto `studici://sync`, garantendo massima compatibilità sia con l'app installata sia avviata tramite LiveContainer.
+- **Testi pulsanti semplificati**: etichette aggiornate a "Invia via AirDrop" e "Collega" sia nelle impostazioni che nella schermata di benvenuto.
+
 ## 1.5.7
 
 ### Novità

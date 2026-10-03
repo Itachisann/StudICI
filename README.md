@@ -90,8 +90,8 @@ Ogni utente scrive solo sotto un percorso casuale e non indovinabile (il **Codic
 4. Copia l'URL del database (es. `https://nome-progetto-default-rtdb.europe-west1.firebasedatabase.app`)
    in [`src/config/syncConfig.ts`](src/config/syncConfig.ts) → `SYNC_DB_URL`.
 
-**Uso:** Profilo → _Sincronizzazione Cloud_ → _Invia all'altro dispositivo (AirDrop)_ oppure copia il codice e inseriscilo in _Collega un altro dispositivo_.
-La sincronizzazione avviene **solo se due dispositivi sono associati** tra loro: nella schermata è visibile il dispositivo collegato (nome, modello e ultimo sync) e puoi **dissociarlo** in qualsiasi momento con l'apposito tasto per interrompere la sincronizzazione. Attiva _Sincronizzazione Automatica_ per tenerli sempre allineati.
+**Uso:** Profilo → _Sincronizzazione Cloud_ → _Invia via AirDrop_ oppure copia il codice e inseriscilo in _Collega_.
+La sincronizzazione avviene **solo se i dispositivi sono associati** tra loro: nella schermata è visibile l'elenco dei dispositivi collegati (nome, modello e ultimo sync) e puoi **dissociarne** uno in qualsiasi momento per interrompere la sincronizzazione. Attiva _Sincronizzazione Automatica_ per tenerli sempre allineati. Supporta configurazione rapida sia con app installata sia in LiveContainer.
 
 > ℹ️ **Perché non iCloud?** L'iCloud nativo richiede un'app firmata con un account Apple Developer a pagamento
 > (entitlement iCloud), non disponibile con installazioni SideStore / Apple ID gratuito.

@@ -31,6 +31,7 @@ export interface SyncDeviceInfo {
 
 export interface PairedDevicesStatus {
   myDevice: SyncDeviceInfo;
+  otherDevices: SyncDeviceInfo[];
   otherDevice: SyncDeviceInfo | null;
   isPaired: boolean;
   totalDevices: number;
@@ -396,13 +397,13 @@ export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
 export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
   const myDevice = await getLocalDeviceInfo();
   if (!isCloudConfigured()) {
-    return { myDevice, otherDevice: null, isPaired: false, totalDevices: 1 };
+    return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 1 };
   }
   try {
     const syncId = await getCloudSyncId();
     const remote = await fetchRemote(syncId);
     if (!remote || !remote.devices) {
-      return { myDevice, otherDevice: null, isPaired: false, totalDevices: 0 };
+      return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 0 };
     }
     const devicesMap: Record<string, SyncDeviceInfo> =
       typeof remote.devices === 'object' ? remote.devices : {};
@@ -412,12 +413,13 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
 
     return {
       myDevice: registeredMy,
+      otherDevices: others,
       otherDevice,
-      isPaired: otherDevice !== null,
+      isPaired: others.length > 0,
       totalDevices: Object.keys(devicesMap).length,
     };
   } catch {
-    return { myDevice, otherDevice: null, isPaired: false, totalDevices: 1 };
+    return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 1 };
   }
 }
 
@@ -427,8 +429,8 @@ export async function isDevicePaired(): Promise<boolean> {
 }
 
 /**
- * Dissocia questo dispositivo o l'altro dispositivo associato.
- * Interrompe la sincronizzazione tra i due dispositivi.
+ * Dissocia questo dispositivo o un altro dispositivo associato.
+ * Interrompe la sincronizzazione con il dispositivo specificato o resetta questo dispositivo.
  */
 export async function dissociateDevice(targetDeviceId?: string): Promise<{ success: boolean; message: string }> {
   try {
@@ -447,9 +449,13 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
           updatedAt: Date.now(),
           devices: updatedDevices,
         });
+        const remaining = Object.values(updatedDevices).filter((d) => d && d.id !== myDevice.id);
         return {
           success: true,
-          message: 'Dispositivo associato rimosso con successo. La sincronizzazione è ora disattivata.',
+          message:
+            remaining.length > 0
+              ? 'Dispositivo associato rimosso con successo. La sincronizzazione rimane attiva con gli altri dispositivi.'
+              : 'Dispositivo associato rimosso con successo. La sincronizzazione è ora disattivata.',
         };
       }
 
@@ -732,14 +738,6 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
 
     const otherDevices = existingDevices.filter((d) => d.id !== myDevice.id);
 
-    if (otherDevices.length >= 2) {
-      return {
-        success: false,
-        updated: false,
-        message: 'Questo codice ha già 2 dispositivi associati. Dissociane uno prima di collegare questo dispositivo.',
-      };
-    }
-
     const updatedDevices: Record<string, SyncDeviceInfo> = {
       ...(remote.devices || {}),
       [myDevice.id]: {
@@ -794,13 +792,18 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
 
     const partner = otherDevices[0];
-    const partnerName = partner ? partner.name : "l'altro dispositivo";
+    const partnerName = partner ? partner.name : "gli altri dispositivi";
+    const displayMsg = otherDevices.length > 1
+      ? `Dispositivo associato con successo al gruppo (${otherDevices.length + 1} dispositivi)! La sincronizzazione è ora attiva tra tutti i dispositivi.`
+      : partner
+      ? `Dispositivo associato con successo a "${partner.name}"! La sincronizzazione è ora attiva tra i dispositivi.`
+      : `Dispositivo associato con successo! Sincronizzazione attiva.`;
 
     return {
       success: true,
       updated: true,
       partnerName,
-      message: `Dispositivo associato con successo a "${partnerName}"! La sincronizzazione è ora attiva tra i due dispositivi.`,
+      message: displayMsg,
     };
   } catch (err: any) {
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);

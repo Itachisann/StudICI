@@ -552,7 +552,7 @@ export default function ProfiloScreen() {
       const url = `studici://sync?code=${encodeURIComponent(code)}`;
       await Share.share({
         title: "Sincronizza StudICI",
-        message: `Apri questo link per associare StudICI sull'altro dispositivo:\n${url}`,
+        message: `Codice di sincronizzazione StudICI:\n${code}\n\nSe hai l'app installata o usi LiveContainer, apri questo link:\n${url}`,
         url: url,
       });
       const updatedPairs = await getPairedDevicesInfo();
@@ -564,11 +564,11 @@ export default function ProfiloScreen() {
     }
   };
 
-  const handleDissociateDevice = (targetDeviceId?: string) => {
-    const targetName = pairedDevices?.otherDevice?.name || "il dispositivo associato";
+  const handleDissociateDevice = (targetDeviceId?: string, deviceName?: string) => {
+    const targetName = deviceName || pairedDevices?.otherDevice?.name || "il dispositivo associato";
     Alert.alert(
       "Dissocia Dispositivo",
-      `Vuoi dissociare "${targetName}"? La sincronizzazione tra i due dispositivi verrà interrotta finché non verranno associati nuovamente.`,
+      `Vuoi dissociare "${targetName}"? La sincronizzazione con questo dispositivo verrà interrotta finché non verrà associato nuovamente.`,
       [
         { text: "Annulla", style: "cancel" },
         {
@@ -578,11 +578,13 @@ export default function ProfiloScreen() {
             setIsSyncingCloud(true);
             try {
               const res = await dissociateDevice(targetDeviceId);
-              await setICloudAutoSyncEnabled(false);
-              setICloudAutoSync(false);
-              await loadProfileData();
               const updatedPairs = await getPairedDevicesInfo();
               setPairedDevices(updatedPairs);
+              if (!updatedPairs.isPaired) {
+                await setICloudAutoSyncEnabled(false);
+                setICloudAutoSync(false);
+              }
+              await loadProfileData();
               Alert.alert(
                 res.success ? "Dispositivo Dissociato" : "Errore",
                 res.message
@@ -1641,7 +1643,9 @@ export default function ProfiloScreen() {
             {/* Sezione Dispositivi Associati */}
             <View style={styles.devicesSection}>
               <View style={styles.devicesHeaderRow}>
-                <Text style={styles.devicesSectionTitle}>Dispositivi Associati (Max 2)</Text>
+                <Text style={styles.devicesSectionTitle}>
+                  Dispositivi Associati ({pairedDevices ? (pairedDevices.otherDevices?.length || 0) + 1 : 1})
+                </Text>
                 <View
                   style={[
                     styles.pairingStatusPill,
@@ -1666,7 +1670,9 @@ export default function ProfiloScreen() {
                         : styles.pairingStatusTextWaiting,
                     ]}
                   >
-                    {pairedDevices?.isPaired ? "Associati (2/2)" : "In attesa (1/2)"}
+                    {pairedDevices?.isPaired
+                      ? `Associati (${(pairedDevices.otherDevices?.length || 0) + 1})`
+                      : "In attesa"}
                   </Text>
                 </View>
               </View>
@@ -1696,45 +1702,47 @@ export default function ProfiloScreen() {
                 </View>
               </View>
 
-              {/* Card 2: Dispositivo Associato oppure Empty State */}
-              {pairedDevices?.isPaired && pairedDevices.otherDevice ? (
-                <View style={[styles.deviceCard, { marginTop: 8 }]}>
-                  <View
-                    style={[
-                      styles.deviceIconCircle,
-                      { backgroundColor: "rgba(52, 199, 89, 0.15)" },
-                    ]}
-                  >
-                    <Ionicons name="phone-portrait" size={19} color="#34c759" />
-                  </View>
-                  <View style={{ flex: 1, paddingRight: 4 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center" }}>
-                      <Text style={styles.deviceNameText} numberOfLines={1}>
-                        {pairedDevices.otherDevice.name}
-                      </Text>
-                      <View style={styles.pairedDeviceBadge}>
-                        <Text style={styles.pairedDeviceBadgeText}>Associato</Text>
-                      </View>
+              {/* Lista Dispositivi Associati oppure Empty State */}
+              {pairedDevices?.isPaired && pairedDevices.otherDevices && pairedDevices.otherDevices.length > 0 ? (
+                pairedDevices.otherDevices.map((dev) => (
+                  <View key={dev.id} style={[styles.deviceCard, { marginTop: 8 }]}>
+                    <View
+                      style={[
+                        styles.deviceIconCircle,
+                        { backgroundColor: "rgba(52, 199, 89, 0.15)" },
+                      ]}
+                    >
+                      <Ionicons name="phone-portrait" size={19} color="#34c759" />
                     </View>
-                    <Text style={styles.deviceMetaText}>
-                      {pairedDevices.otherDevice.platform} • Sinc:{" "}
-                      {formatSyncDate(pairedDevices.otherDevice.lastActive)}
-                    </Text>
+                    <View style={{ flex: 1, paddingRight: 4 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <Text style={styles.deviceNameText} numberOfLines={1}>
+                          {dev.name}
+                        </Text>
+                        <View style={styles.pairedDeviceBadge}>
+                          <Text style={styles.pairedDeviceBadgeText}>Associato</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.deviceMetaText}>
+                        {dev.platform} • Sinc:{" "}
+                        {formatSyncDate(dev.lastActive)}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.dissociateBtn}
+                      activeOpacity={0.7}
+                      onPress={() => handleDissociateDevice(dev.id, dev.name)}
+                    >
+                      <Ionicons
+                        name="link-outline"
+                        size={13}
+                        color="#ef4444"
+                        style={{ marginRight: 3 }}
+                      />
+                      <Text style={styles.dissociateBtnText}>Dissocia</Text>
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity
-                    style={styles.dissociateBtn}
-                    activeOpacity={0.7}
-                    onPress={() => handleDissociateDevice(pairedDevices.otherDevice?.id)}
-                  >
-                    <Ionicons
-                      name="link-outline"
-                      size={13}
-                      color="#ef4444"
-                      style={{ marginRight: 3 }}
-                    />
-                    <Text style={styles.dissociateBtnText}>Dissocia</Text>
-                  </TouchableOpacity>
-                </View>
+                ))
               ) : (
                 <View style={styles.unpairedNoticeBox}>
                   <View style={styles.unpairedNoticeHeader}>
@@ -1749,7 +1757,7 @@ export default function ProfiloScreen() {
                     </Text>
                   </View>
                   <Text style={styles.unpairedNoticeDesc}>
-                    La sincronizzazione si attiva solo se due dispositivi sono associati. Invia il codice con AirDrop o inseriscilo sull&apos;altro iPhone per iniziare.
+                    La sincronizzazione si attiva solo se associ altri dispositivi. Invia il codice con AirDrop o inseriscilo sull&apos;altro iPhone per iniziare.
                   </Text>
                 </View>
               )}
@@ -1788,9 +1796,11 @@ export default function ProfiloScreen() {
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.cloudICloudTitle}>Sincronizzazione Automatica</Text>
                 <Text style={styles.cloudICloudSub}>
-                  {pairedDevices?.isPaired && pairedDevices.otherDevice
-                    ? `Mantiene sincronizzato questo dispositivo con ${pairedDevices.otherDevice.name}`
-                    : "Non selezionabile: richiede 2 dispositivi associati"}
+                  {pairedDevices?.isPaired
+                    ? pairedDevices.otherDevices && pairedDevices.otherDevices.length > 1
+                      ? `Mantiene sincronizzato questo dispositivo con gli altri ${pairedDevices.otherDevices.length} dispositivi associati`
+                      : `Mantiene sincronizzato questo dispositivo con ${pairedDevices.otherDevice?.name || "l'altro dispositivo"}`
+                    : "Non selezionabile: richiede almeno un dispositivo associato"}
                 </Text>
               </View>
               <Switch
@@ -1838,7 +1848,7 @@ export default function ProfiloScreen() {
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.cloudAirDropBtnText}>
-                Invia all&apos;altro dispositivo (AirDrop)
+                Invia via AirDrop
               </Text>
             </TouchableOpacity>
 
@@ -1897,7 +1907,7 @@ export default function ProfiloScreen() {
                   color="#ffffff"
                   style={{ marginRight: 6 }}
                 />
-                <Text style={styles.cloudRestoreBtnText}>Collega e Sincronizza</Text>
+                <Text style={styles.cloudRestoreBtnText}>Collega</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>

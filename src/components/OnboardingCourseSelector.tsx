@@ -21,11 +21,15 @@ import {
   fetchDegrees,
   Tab,
 } from "../utils/scraper";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { linkDeviceWithCode, isValidSyncCode } from "../utils/cloudSync";
 import { CourseDownloadView } from "./CourseDownloadView";
 import { DefaultTabPicker } from "./DefaultTabPicker";
 
 const SAPIENZA_RED = "#822433";
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeIos = Platform.OS === "ios" && !isExpoGo;
 
 interface OnboardingCourseSelectorProps {
   onComplete: () => void;
@@ -238,52 +242,70 @@ export function OnboardingCourseSelector({
       </View>
 
       {/* Selettore Modalità di Avvio */}
-      <View style={styles.modeSelectorContainer}>
-        <TouchableOpacity
-          style={[
-            styles.modeTab,
-            setupMode === "normal" && styles.modeTabActive,
-          ]}
-          onPress={() => setSetupMode("normal")}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name="school-outline"
-            size={16}
-            color={setupMode === "normal" ? "#ffffff" : "#a1a1aa"}
-            style={{ marginRight: 6 }}
+      {isNativeIos ? (
+        <View style={styles.nativeSegmentedWrapper}>
+          <SegmentedControl
+            values={["Configurazione Normale", "Da Sincronizzazione"]}
+            selectedIndex={setupMode === "normal" ? 0 : 1}
+            onChange={(event) => {
+              const idx = event.nativeEvent.selectedSegmentIndex;
+              setSetupMode(idx === 0 ? "normal" : "sync");
+            }}
+            appearance="dark"
+            tintColor={SAPIENZA_RED}
+            fontStyle={{ fontSize: 13, fontWeight: "600", color: "#a1a1aa" }}
+            activeFontStyle={{ fontSize: 13, fontWeight: "700", color: "#ffffff" }}
+            style={styles.nativeSegmentedControl}
           />
-          <Text
+        </View>
+      ) : (
+        <View style={styles.modeSelectorContainer}>
+          <TouchableOpacity
             style={[
-              styles.modeTabText,
-              setupMode === "normal" && styles.modeTabTextActive,
+              styles.modeTab,
+              setupMode === "normal" && styles.modeTabActive,
             ]}
+            onPress={() => setSetupMode("normal")}
+            activeOpacity={0.8}
           >
-            Configurazione Normale
-          </Text>
-        </TouchableOpacity>
+            <Ionicons
+              name="school-outline"
+              size={16}
+              color={setupMode === "normal" ? "#ffffff" : "#a1a1aa"}
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              style={[
+                styles.modeTabText,
+                setupMode === "normal" && styles.modeTabTextActive,
+              ]}
+            >
+              Configurazione Normale
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.modeTab, setupMode === "sync" && styles.modeTabActive]}
-          onPress={() => setSetupMode("sync")}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name="cloud-download-outline"
-            size={16}
-            color={setupMode === "sync" ? "#ffffff" : "#a1a1aa"}
-            style={{ marginRight: 6 }}
-          />
-          <Text
-            style={[
-              styles.modeTabText,
-              setupMode === "sync" && styles.modeTabTextActive,
-            ]}
+          <TouchableOpacity
+            style={[styles.modeTab, setupMode === "sync" && styles.modeTabActive]}
+            onPress={() => setSetupMode("sync")}
+            activeOpacity={0.8}
           >
-            Da Sincronizzazione
-          </Text>
-        </TouchableOpacity>
-      </View>
+            <Ionicons
+              name="cloud-download-outline"
+              size={16}
+              color={setupMode === "sync" ? "#ffffff" : "#a1a1aa"}
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              style={[
+                styles.modeTabText,
+                setupMode === "sync" && styles.modeTabTextActive,
+              ]}
+            >
+              Da Sincronizzazione
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {setupMode === "sync" ? (
         <ScrollView
@@ -297,7 +319,7 @@ export function OnboardingCourseSelector({
             </View>
             <Text style={styles.syncCardTitle}>Collega Dispositivo Esistente</Text>
             <Text style={styles.syncCardDesc}>
-              Se hai già configurato StudICI su un altro iPhone o iPad, inserisci il Codice Dispositivo per associare i due telefoni e scaricare subito corso, canali e presenze.
+              Se hai già configurato StudICI su un altro iPhone o iPad, inserisci il Codice Dispositivo per associare i telefoni e scaricare subito corso, canali e presenze.
             </Text>
 
             <View style={styles.syncInputWrapper}>
@@ -337,16 +359,14 @@ export function OnboardingCourseSelector({
                 />
               ) : (
                 <Ionicons
-                  name="cloud-download-outline"
+                  name="link-outline"
                   size={18}
                   color="#ffffff"
                   style={{ marginRight: 8 }}
                 />
               )}
               <Text style={styles.syncSubmitBtnText}>
-                {isLinkingSync
-                  ? "Collegamento in corso..."
-                  : "Collega e Sincronizza Dati"}
+                {isLinkingSync ? "Collegamento in corso..." : "Collega"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -361,9 +381,9 @@ export function OnboardingCourseSelector({
               <Text style={styles.airDropHintText}>
                 Sull&apos;altro iPhone apri{" "}
                 <Text style={{ color: "#ffffff", fontWeight: "600" }}>
-                  Profilo → Sincronizzazione Cloud → Invia con AirDrop
+                  Profilo → Sincronizzazione Cloud → Invia via AirDrop
                 </Text>
-                . Toccando la notifica o il link ricevuto qui, StudICI si configurerà da solo a 1 tocco!
+                . Se usi LiveContainer o apri la condivisione, puoi incollare il codice ricevuto o toccare il link per associare a 1 tocco!
               </Text>
             </View>
           </View>
@@ -679,6 +699,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
     lineHeight: 18,
+  },
+  nativeSegmentedWrapper: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+  },
+  nativeSegmentedControl: {
+    height: 38,
   },
   modeSelectorContainer: {
     flexDirection: "row",
