@@ -65,6 +65,7 @@ export interface TripLeg {
     notes?: string;
     isLiveTrain?: boolean;
     mapQuery?: string;
+    mapOriginQuery?: string;
     mapCoords?: { lat: number; lng: number };
     travelMode?: 'driving' | 'transit' | 'walking';
   };

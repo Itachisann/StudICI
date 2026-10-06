@@ -285,6 +285,7 @@ async function computeOutboundItinerary(
       durationMinutes: carDuration,
       details: {
         mapQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
+        mapOriginQuery: config.originAddress,
         travelMode: 'driving',
         notes: `Guida da ${config.originAddress} alla stazione ferroviaria`,
       },
@@ -352,6 +353,7 @@ async function computeOutboundItinerary(
     durationMinutes: transitMins,
     details: {
       transitLine: transitSolution.lineName,
+      mapOriginQuery: `Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}, Roma`,
       mapQuery: targetLecture.address,
       mapCoords: targetLecture.latitude && targetLecture.longitude ? { lat: targetLecture.latitude, lng: targetLecture.longitude } : undefined,
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
@@ -495,7 +497,8 @@ async function computeReturnItinerary(
     details: {
       transitLine: transitSolution.lineName,
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
-      mapQuery: `Stazione di ${config.arrivalStation.name}`,
+      mapOriginQuery: targetLecture.address,
+      mapQuery: `Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}, Roma`,
       notes: transitSolution.routeDescription,
     },
   });
@@ -548,6 +551,7 @@ async function computeReturnItinerary(
       durationMinutes: carDuration,
       details: {
         travelMode: 'driving',
+        mapOriginQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
         mapQuery: config.originAddress,
         notes: `Guida da ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}`,
       },

@@ -242,28 +242,41 @@ export default function ViaggioScreen() {
   };
 
   const handleOpenMaps = (leg: TripLeg) => {
-    const query = leg.details?.mapQuery;
-    const mode = leg.details?.travelMode || 'driving';
+    const dest = leg.details?.mapQuery;
+    const origin = leg.details?.mapOriginQuery;
+    const mode = leg.details?.travelMode || 'transit';
 
-    if (!query) {
+    if (!dest) {
       Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
       return;
     }
 
-    const encoded = encodeURIComponent(query);
-    const appleFlag = mode === 'transit' ? 'r' : mode === 'walking' ? 'w' : 'd';
-    const appleUrl = `http://maps.apple.com/?daddr=${encoded}&dirflg=${appleFlag}`;
-    const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=${mode}`;
+    const encodedDest = encodeURIComponent(dest);
+    const encodedOrigin = origin ? encodeURIComponent(origin) : '';
 
-    Linking.canOpenURL('http://maps.apple.com/')
+    // Modalità di viaggio per Google Maps: transit | driving | walking
+    const gmapsMode = mode === 'transit' ? 'transit' : mode === 'walking' ? 'walking' : 'driving';
+
+    // 1. URL per App nativa Google Maps su iOS (comgooglemaps://)
+    const gmapsAppUrl = origin
+      ? `comgooglemaps://?saddr=${encodedOrigin}&daddr=${encodedDest}&directionsmode=${gmapsMode}`
+      : `comgooglemaps://?daddr=${encodedDest}&directionsmode=${gmapsMode}`;
+
+    // 2. URL per Google Maps Web / Universale (precisissimo con passaggi e fermate ATAC Roma)
+    const gmapsWebUrl = origin
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedDest}&travelmode=${gmapsMode}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodedDest}&travelmode=${gmapsMode}`;
+
+    // Prova ad aprire l'app Google Maps; se non installata, apre Google Maps nel browser
+    Linking.canOpenURL('comgooglemaps://')
       .then((supported) => {
-        if (supported && Platform.OS === 'ios') {
-          Linking.openURL(appleUrl);
+        if (supported) {
+          Linking.openURL(gmapsAppUrl);
         } else {
-          Linking.openURL(googleUrl);
+          Linking.openURL(gmapsWebUrl);
         }
       })
-      .catch(() => Linking.openURL(googleUrl));
+      .catch(() => Linking.openURL(gmapsWebUrl));
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -795,7 +808,7 @@ export default function ViaggioScreen() {
                         <Text style={styles.stepNotesText}>{leg.details.notes}</Text>
                       )}
 
-                      {/* Pulsante Apri Mappe */}
+                      {/* Pulsante Apri Google Maps */}
                       {leg.details?.mapQuery && (
                         <TouchableOpacity
                           style={styles.mapsBtn}
@@ -806,17 +819,27 @@ export default function ViaggioScreen() {
                             name={
                               leg.details.travelMode === 'transit'
                                 ? 'bus-outline'
+                                : leg.details.travelMode === 'walking'
+                                ? 'walk-outline'
                                 : 'navigate-outline'
                             }
                             size={13}
                             color="#38bdf8"
-                            style={{ marginRight: 4 }}
+                            style={{ marginRight: 5 }}
                           />
                           <Text style={styles.mapsBtnText}>
                             {leg.details.travelMode === 'transit'
-                              ? 'Apri Mappe Mezzi'
-                              : 'Naviga con Mappe'}
+                              ? 'Vedi Mezzi su Google Maps'
+                              : leg.details.travelMode === 'walking'
+                              ? 'Percorso su Google Maps'
+                              : 'Guida con Google Maps'}
                           </Text>
+                          <Ionicons
+                            name="open-outline"
+                            size={11}
+                            color="#38bdf8"
+                            style={{ marginLeft: 5, opacity: 0.8 }}
+                          />
                         </TouchableOpacity>
                       )}
                     </View>

@@ -22,7 +22,7 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
   - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi (es. Bus 492 diretto, Metro B diretta, passeggiata a piedi 8 min per Polo Tiburtina RM025).
   - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio), treno regionale, mezzi urbani e ingresso in aula con margine.
   - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.
-  - **Navigazione 1-Tap con Mappe**: pulsanti per aprire Apple Maps o Google Maps per ogni specifica tratta.
+  - **Integrazione Google Maps Diretta per i Mezzi Urbani**: navigazione e calcolo itinerario ottimizzati con Google Maps (sia app nativa iOS che web), con passaggio automatico di punto di partenza (stazione di arrivo Roma) e destinazione (aula/sede), fornendo tracciamento live dei bus ATAC, passaggi alle fermate e percorsi metropolitana senza dover digitare nulla.
 
 ## 1.5.10
 
