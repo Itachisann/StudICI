@@ -67,6 +67,12 @@ import {
   PairedDevicesStatus,
   subscribeToLiveSync,
 } from "../utils/cloudSync";
+import { CommuterConfigModal } from "../components/CommuterConfigModal";
+import { CommuterConfig } from "../types/commuter";
+import {
+  getCommuterConfig,
+  saveCommuterConfig,
+} from "../utils/commuterStorage";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -119,6 +125,8 @@ export default function ProfiloScreen() {
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
   const [iCloudAutoSync, setICloudAutoSync] = useState(false);
   const [pairedDevices, setPairedDevices] = useState<PairedDevicesStatus | null>(null);
+  const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(null);
+  const [commuterModalVisible, setCommuterModalVisible] = useState(false);
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -147,18 +155,20 @@ export default function ProfiloScreen() {
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
-      const [cloudId, lastCloud, lastCal, icloudEnabled, pairs] = await Promise.all([
+      const [cloudId, lastCloud, lastCal, icloudEnabled, pairs, commConfig] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
         getLastCalendarSync(),
         getICloudAutoSyncEnabled(),
         getPairedDevicesInfo(),
+        getCommuterConfig(),
       ]);
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
       setICloudAutoSync(icloudEnabled);
       setPairedDevices(pairs);
+      setCommuterConfig(commConfig);
     } catch (e) {
       console.error(e);
     }
@@ -1158,6 +1168,33 @@ export default function ProfiloScreen() {
           Sincronizza lezioni e presenze nel cloud o esportale direttamente nel Calendario Apple.
         </Text>
 
+        {/* Gruppo: ITINERARIO PENDOLARE */}
+        <Text style={styles.sectionHeader}>ITINERARIO PENDOLARE</Text>
+        <View style={styles.groupedCard}>
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setCommuterModalVisible(true)}
+          >
+            <View style={[styles.iconBox, { backgroundColor: "#fb923c" }]}>
+              <Ionicons name="train" size={17} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Impostazioni Viaggio Pendolare</Text>
+              <Text style={styles.rowSubTitle}>
+                {commuterConfig?.originAddress || "Amelia"} ➔{" "}
+                {commuterConfig?.departureStation?.shortName || "Orte"} ➔{" "}
+                {commuterConfig?.arrivalStation?.shortName || "Roma Tiburtina"}
+                {commuterConfig?.carLeg?.enabled ? " • Auto inclusa" : ""}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" style={{ marginLeft: 6 }} />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Configura partenza da casa, tragitto in auto per la stazione, stazioni Trenitalia e mezzi urbani a Roma per calcolare l&apos;itinerario migliore.
+        </Text>
+
         {/* Gruppo: ESPORTA & CONDIVIDI */}
         <Text style={styles.sectionHeader}>ESPORTAZIONE</Text>
         <View style={styles.groupedCard}>
@@ -1965,6 +2002,19 @@ export default function ProfiloScreen() {
           />
         )}
       </Modal>
+
+      {/* Modal Impostazioni Pendolare */}
+      {commuterConfig && (
+        <CommuterConfigModal
+          visible={commuterModalVisible}
+          config={commuterConfig}
+          onClose={() => setCommuterModalVisible(false)}
+          onSave={async (newCfg) => {
+            const saved = await saveCommuterConfig(newCfg);
+            setCommuterConfig(saved);
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }

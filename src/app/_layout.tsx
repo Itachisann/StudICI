@@ -147,6 +147,7 @@ export default function AppLayout() {
         <StatusBar style="light" />
         <NativeTabs screenOptions={{ tabBarActiveTintColor: SAPIENZA_RED }}>
           <NativeTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' }) }} />
+          <NativeTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: () => ({ sfSymbol: 'tram.fill' }) }} />
           <NativeTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' }) }} />
           <NativeTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: () => ({ sfSymbol: 'person.crop.circle' }) }} />
         </NativeTabs>
@@ -171,6 +172,7 @@ export default function AppLayout() {
         }}
       >
         <ExpoTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} /> }} />
+        <ExpoTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: ({ color, size }) => <Ionicons name="train-outline" size={size} color={color} /> }} />
         <ExpoTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size} color={color} /> }} />
         <ExpoTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} /> }} />
       </ExpoTabs>

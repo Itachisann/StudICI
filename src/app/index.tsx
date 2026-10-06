@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -501,6 +501,27 @@ export default function ScheduleScreen() {
           </Text>
           <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
         </View>
+
+        {/* ── Banner Rapido Pendolare ── */}
+        {todayClasses.length > 0 && (
+          <TouchableOpacity
+            style={styles.commuterQuickBanner}
+            activeOpacity={0.7}
+            onPress={() => router.push("/viaggio" as any)}
+          >
+            <View style={styles.commuterBannerIcon}>
+              <Ionicons name="train" size={15} color="#38bdf8" />
+            </View>
+            <View style={{ flex: 1, paddingRight: 6 }}>
+              <Text style={styles.commuterBannerTitle}>Itinerario Pendolare</Text>
+              <Text style={styles.commuterBannerSub} numberOfLines={1}>
+                Calcola treno, binario live e tempi per la lezione delle{" "}
+                {todayClasses[0].startTime || "08:30"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={14} color="#38bdf8" />
+          </TouchableOpacity>
+        )}
 
         {/* ── Classes List ── */}
         {loading ? (
@@ -1264,5 +1285,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     fontWeight: "400",
+  },
+  commuterQuickBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(56, 189, 248, 0.08)",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(56, 189, 248, 0.2)",
+  },
+  commuterBannerIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(56, 189, 248, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  commuterBannerTitle: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  commuterBannerSub: {
+    color: "#94a3b8",
+    fontSize: 11,
+    marginTop: 1,
   },
 });

@@ -5,6 +5,22 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.0
+
+### Novità
+- **Ottimizzatore Viaggio Pendolare (Nuova Scheda "Viaggio")**: sistema intelligente e moderno per calcolare e ottimizzare il tragitto quotidiano degli studenti pendolari della Sapienza:
+  - **Calcolo Multimodale Completo**: supporta l'intero itinerario combinato:
+    - 🚗 **Tragitto in Auto** da casa alla stazione ferroviaria (es. da Amelia a Orte FS) con tempo di guida stimato e margine per il parcheggio.
+    - 🚆 **Treno Trenitalia con Dati Live**: orario di partenza, arrivo, categoria treno (RV, REG, IC), ritardo in tempo reale e **indicazione live del binario di partenza/arrivo** tramite le API ufficiali di ViaggiaTreno/Trenitalia.
+    - 🚌 **Mezzi Pubblici Urbani a Roma**: collegamento dalla stazione di arrivo (es. Roma Tiburtina / Termini) fino all'aula/sede della lezione (Via Ariosto, San Pietro in Vincoli, Città Universitaria, Castro Laurenziano) con autobus, metropolitana o a piedi.
+  - **Doppia Modalità Andata & Ritorno**:
+    - **Andata**: calcola l'orario di sveglia e partenza esatto per essere puntuali alla prima lezione del giorno.
+    - **Ritorno**: calcola le coincidenze e il rientro a casa subito dopo il termine dell'ultima lezione.
+  - **Selettore Nativo UISegmentedControl (IPA)**: commutazione istantanea tra *Andata* e *Ritorno* con il controllo nativo iOS.
+  - **Navigazione 1-Tap con Mappe**: pulsanti diretti su ogni tappa per aprire Apple Maps o Google Maps con la modalità corretta (guida in auto o trasporto pubblico).
+  - **Impostazioni Personalizzabili nel Profilo**: sezione dedicata nelle Impostazioni per configurare indirizzo di casa, stazioni predefinite (con ricerca stazioni Trenitalia), tempi di guida, margine di anticipo e linea di mezzi pubblici preferita.
+  - **Banner Rapido nella Schermata Orario**: visualizzazione del prossimo viaggio direttamente sopra le lezioni del giorno con accesso immediato con un tocco.
+
 ## 1.5.10
 
 ### Novità
