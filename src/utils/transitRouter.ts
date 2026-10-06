@@ -31,16 +31,16 @@ export function getOptimalRomeTransit(options: {
   if (bCode === 'RM025' || bCode === 'RM158' || addr.includes('tiburtina 205')) {
     if (isTiburtina) {
       return {
-        mode: 'walk',
-        durationMinutes: 8,
-        inVehicleMinutes: 0,
-        walkingMinutes: 8,
+        mode: 'bus',
+        durationMinutes: 7,
+        inVehicleMinutes: 4,
+        walkingMinutes: 3,
         transfersCount: 0,
-        lineName: 'A Piedi (8 min - Zero mezzi)',
+        lineName: 'Pullman 448 / 492 / 71 / 163 (o a piedi 8 min)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Uscita Ovest Stazione Tiburtina ➔ A piedi dritto su Via Tiburtina 205 (8 min, zero attese mezzi)'
-            : 'A piedi da Via Tiburtina 205 alla Stazione Tiburtina (8 min)',
+            ? 'Pullman 448, 492, 71 o 163 da Stazione Tiburtina fino a fermata Tiburtina/Marrucini o Verano (~4 min), oppure 8 min a piedi dritto su Via Tiburtina 205'
+            : 'Pullman 448, 492, 71 o 163 da fermata Tiburtina/Marrucini verso Stazione Tiburtina (~4 min), oppure 8 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Tiburtina 205, Roma',
       };
@@ -51,8 +51,8 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 8,
         walkingMinutes: 3,
         transfersCount: 0,
-        lineName: 'Tram 14 / 5 Diretto',
-        routeDescription: 'Tram 14 o 5 da Termini a fermata Tiburtina/Marrucini (~8 min) + 3 min a piedi',
+        lineName: 'Tram 14 / 5 o Bus 71 / 492',
+        routeDescription: 'Tram 14, 5 o Bus 71 da Termini a fermata Tiburtina/Marrucini (~8 min) + 3 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Tiburtina 205, Roma',
       };
@@ -73,7 +73,7 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 8,
         walkingMinutes: 6,
         transfersCount: 0, // DIRETTA ZERO CAMBI
-        lineName: 'Metro B Diretta (Zero cambi)',
+        lineName: 'Metro B Diretta (Fermata Cavour - Zero cambi)',
         routeDescription:
           direction === 'to_campus'
             ? 'Metro B da Tiburtina a Cavour (4 fermate, ~8 min, zero cambi) + 6 min a piedi su Scalinata dei Borgia'
@@ -88,7 +88,7 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 2,
         walkingMinutes: 6,
         transfersCount: 0,
-        lineName: 'Metro B Diretta',
+        lineName: 'Metro B Diretta (o Bus 75)',
         routeDescription: 'Metro B da Termini a Cavour (1 fermata, 2 min) + 6 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Eudossiana 18, Roma',
@@ -109,15 +109,15 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'bus',
-        durationMinutes: 13,
-        inVehicleMinutes: 9,
+        durationMinutes: 11,
+        inVehicleMinutes: 7,
         walkingMinutes: 4,
         transfersCount: 0, // DIRETTO ZERO CAMBI
-        lineName: 'Bus 492 / 310 o Tram 3L',
+        lineName: 'Pullman 448 / 492 / 71 / 163 / 310 (o Metro B)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Bus 492 o 310 da Tiburtina FS a Regina Elena/Università (4 fermate, ~9 min, zero cambi) + 4 min a piedi'
-            : '4 min a piedi su Viale Regina Elena + Bus 492 o 310 diretto a Tiburtina FS (~9 min)',
+            ? 'Pullman 448, 492, 71 o 163 da Tiburtina FS fino a fermata Tiburtina/Castro Laurenziano o Verano (~7 min) + 3 min a piedi, oppure Metro B fino a Policlinico'
+            : '3 min a piedi + Pullman 448, 492, 71 o 163 fino a Stazione Tiburtina FS (~7 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via del Castro Laurenziano 7a, Roma',
       };
@@ -128,8 +128,8 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 8,
         walkingMinutes: 4,
         transfersCount: 0,
-        lineName: 'Bus 310 Diretto',
-        routeDescription: 'Bus 310 da Termini a Regina Elena/Università (~8 min) + 4 min a piedi',
+        lineName: 'Pullman 310 / 492 Diretto (o Metro B Policlinico)',
+        routeDescription: 'Pullman 310 o 492 da Termini a Regina Elena/Università (~8 min) + 4 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via del Castro Laurenziano 7a, Roma',
       };
@@ -146,15 +146,15 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'bus',
-        durationMinutes: 14,
-        inVehicleMinutes: 11,
+        durationMinutes: 12,
+        inVehicleMinutes: 9,
         walkingMinutes: 3,
         transfersCount: 0, // DIRETTO ZERO CAMBI
-        lineName: 'Bus 492 / 71 Diretto (Zero cambi)',
+        lineName: 'Pullman 448 / 492 / 71 / 163 (o Tram 3 / 19)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Bus 492 o 71 da Tiburtina FS a fermata De Lollis/Verano (~11 min, zero cambi) + 3 min a piedi per Varco De Lollis'
-            : 'Varco De Lollis + Bus 492 o 71 diretto a Tiburtina FS (~11 min)',
+            ? 'Pullman 448, 492 o 71 da Tiburtina FS fino a fermata Verano o De Lollis (~8-9 min) all\'ingresso del Campus Sapienza'
+            : 'Varco De Lollis o Verano + Pullman 448, 492 o 71 diretto a Tiburtina FS (~8 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Piazzale Aldo Moro 5, Roma',
       };
@@ -165,8 +165,8 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 8,
         walkingMinutes: 3,
         transfersCount: 0,
-        lineName: 'Bus 310 / 492 Diretto',
-        routeDescription: 'Bus 310 da Termini a De Lollis/Università (~8 min) + 3 min a piedi',
+        lineName: 'Pullman 310 / 492 / 71 Diretto',
+        routeDescription: 'Pullman 310 o 492 da Termini a De Lollis/Università (~8 min) + 3 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Piazzale Aldo Moro 5, Roma',
       };
@@ -229,16 +229,16 @@ export function getOptimalRomeTransit(options: {
   // Fallback generico verso centro/Sapienza
   if (isTiburtina) {
     return {
-      mode: 'mix',
-      durationMinutes: 18,
-      inVehicleMinutes: 14,
+      mode: 'bus',
+      durationMinutes: 12,
+      inVehicleMinutes: 8,
       walkingMinutes: 4,
       transfersCount: 0,
-      lineName: `Mezzi Urbani ATAC verso ${classroom.displayName || 'Aula'}`,
+      lineName: 'Pullman 448 / 492 / 71 (o Metro B)',
       routeDescription:
         direction === 'to_campus'
-          ? `Collegamenti bus e metro da Stazione Tiburtina verso ${classroom.address || 'la sede di lezione'}`
-          : `Collegamenti bus e metro verso Stazione Tiburtina`,
+          ? `Pullman 448, 492 o 71 da Stazione Tiburtina verso le sedi universitarie Sapienza (${classroom.displayName || classroom.address || 'Campus'}), oppure Metro B`
+          : `Pullman 448, 492 o 71 verso Stazione Tiburtina, oppure Metro B`,
       stationOriginName: fromStationName,
       targetAddress: classroom.address || 'Roma',
     };

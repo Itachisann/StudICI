@@ -103,7 +103,8 @@ function findDayLecture(
 
   // Se l'utente ha selezionato direttamente una lezione dall'interfaccia
   if (explicitClass) {
-    const resolved = resolveClassroom(explicitClass.room || 'Aula');
+    const context = `${explicitClass.building || ''} ${explicitClass.address || ''}`.trim();
+    const resolved = resolveClassroom(explicitClass.room || 'Aula', context);
     const bCode = (
       explicitClass.building?.match(/RM\d{3}/i)?.[1] ||
       explicitClass.address?.match(/RM\d{3}/i)?.[1] ||
@@ -169,7 +170,8 @@ function findDayLecture(
       chosenClass = direction === 'outbound' ? dayClasses[0] : dayClasses[dayClasses.length - 1];
     }
 
-    const resolved = resolveClassroom(chosenClass.room || 'Aula');
+    const context = `${chosenClass.building || ''} ${chosenClass.address || ''}`.trim();
+    const resolved = resolveClassroom(chosenClass.room || 'Aula', context);
     const bCode = (
       chosenClass.building?.match(/RM\d{3}/i)?.[1] ||
       chosenClass.address?.match(/RM\d{3}/i)?.[1] ||

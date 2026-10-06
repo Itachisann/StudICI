@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Platform,
   Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -23,7 +24,6 @@ import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage'
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
 import { parseTimeToMinutes } from '../utils/trenitaliaApi';
-import { openGoogleMaps } from '../utils/googleMapsUrl';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 
 const SAPIENZA_RED = '#822433';
@@ -256,27 +256,42 @@ export default function ViaggioScreen() {
     loadData();
   };
 
-  const handleOpenMaps = async (leg: TripLeg) => {
+  const handleOpenMaps = (leg: TripLeg) => {
     const dest = leg.details?.mapQuery;
     const origin = leg.details?.mapOriginQuery;
     const mode = leg.details?.travelMode || 'transit';
-    const targetDate = leg.details?.targetDate;
-    const targetTime = leg.details?.targetTime;
-    const timeType = leg.details?.timeType;
 
     if (!dest) {
       Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
       return;
     }
 
-    await openGoogleMaps({
-      origin,
-      destination: dest,
-      travelMode: mode,
-      targetDate,
-      targetTime,
-      timeType,
-    });
+    const encodedDest = encodeURIComponent(dest);
+    const encodedOrigin = origin ? encodeURIComponent(origin) : '';
+
+    // Modalità di viaggio per Google Maps: transit | driving | walking
+    const gmapsMode = mode === 'transit' ? 'transit' : mode === 'walking' ? 'walking' : 'driving';
+
+    // 1. URL per App nativa Google Maps su iOS / Android (comgooglemaps://)
+    const gmapsAppUrl = origin
+      ? `comgooglemaps://?saddr=${encodedOrigin}&daddr=${encodedDest}&directionsmode=${gmapsMode}`
+      : `comgooglemaps://?daddr=${encodedDest}&directionsmode=${gmapsMode}`;
+
+    // 2. URL per Google Maps Web / Universale (precisissimo con passaggi e fermate ATAC Roma)
+    const gmapsWebUrl = origin
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedDest}&travelmode=${gmapsMode}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodedDest}&travelmode=${gmapsMode}`;
+
+    // Prova ad aprire direttamente l'app Google Maps ("nel modo di prima"); se non installata, apre il browser
+    Linking.canOpenURL('comgooglemaps://')
+      .then((supported) => {
+        if (supported) {
+          Linking.openURL(gmapsAppUrl);
+        } else {
+          Linking.openURL(gmapsWebUrl);
+        }
+      })
+      .catch(() => Linking.openURL(gmapsWebUrl));
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -838,13 +853,15 @@ export default function ViaggioScreen() {
                             <View style={{ flex: 1, marginRight: 6 }}>
                               <Text style={styles.mapsBannerTitle}>
                                 {leg.details.travelMode === 'transit'
-                                  ? `Mezzi su Maps (${leg.details.timeType === 'arrive_by' ? 'Arrivo' : 'Partenza'} ore ${leg.details.targetTime || leg.startTime})`
+                                  ? 'Apri su Google Maps'
                                   : leg.details.travelMode === 'walking'
-                                  ? 'Percorso a Piedi su Maps'
-                                  : `Guida su Maps (Partenza ore ${leg.details.targetTime || leg.startTime})`}
+                                  ? 'Percorso su Google Maps'
+                                  : 'Naviga su Google Maps'}
                               </Text>
                               <Text style={styles.mapsBannerSubtitle} numberOfLines={1}>
-                                Percorso compilato con data e orario lezione
+                                {leg.details.travelMode === 'transit'
+                                  ? 'Pullman 448 e linee ATAC già compilati • Navigazione live'
+                                  : 'Percorso già compilato • Navigazione live'}
                               </Text>
                             </View>
                           </View>

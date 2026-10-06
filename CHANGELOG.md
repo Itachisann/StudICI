@@ -23,14 +23,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
   - **Supporto Indirizzo Completo di Casa (Via e Numero Civico)**:
     - Oltre al semplice comune, ora è possibile inserire l'indirizzo esatto di partenza da casa (es. `Via Amerina 15, Amelia` o `Via Roma 10, Orte`).
     - Geocoding istantaneo ad alta precisione tramite OpenStreetMap Nominatim e calcolo del percorso stradale personalizzato via OSRM, con fallback al database locale.
-  - **Correzione Linee Bus ATAC e Fermate Reali**:
-    - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: impostato il reale collegamento diretto **Bus 649** da Stazione Tiburtina con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 minuti a piedi dall'aula!), oppure **Metro A (stazione Manzoni)**. Rimossi riferimenti errati a linee non pertinenti.
-    - Tutte le altre sedi Sapienza collegate con fermate e linee reali (Metro B per S. Pietro in Vincoli a fermata Cavour, 8 min a piedi per Polo Tiburtina RM025, Bus 492/71 per Città Universitaria/De Lollis, Metro B Policlinico per Castro Laurenziano/Scarpa).
-  - **Reindirizzamento Google Maps Precompilato con Data e Orario Esatto della Lezione**:
-    - Risolto il problema del reset all'orario attuale: quando si tocca una card di viaggio per aprire Google Maps, l'itinerario viene generato impostando la **data esatta della lezione** e l'**orario di arrivo in aula** (`arrive_by`, es. arrivo entro le ore 08:30) per l'andata, oppure l'**orario di termine lezione** (`depart_at`) per il ritorno.
-    - Apertura diretta tramite browser integrato (`SFSafariViewController`) per preservare la configurazione temporale di Google Maps con tutte le linee e i passaggi ATAC attivi a quell'ora specifica del giorno.
+  - **Linee Bus/Pullman Urbani Reali da Google Maps (Pullman 448, 492, 71, 163, 649)**:
+    - Integrata espressamente la linea reale **Pullman 448** utilizzata quotidianamente per raggiungere le sedi Sapienza da Stazione Tiburtina (fermate Tiburtina/Marrucini per Polo Tiburtina RM025/RM158, Tiburtina/Castro Laurenziano per Economia e Plesso Scarpa RM018/RM004/RM014, Piazzale del Verano e De Lollis per Città Universitaria), affiancata dalle linee reali 492, 71, 163 e 310.
+    - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: confermato il collegamento diretto **Bus 649** con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 min dall'aula), oppure **Metro A (fermata Manzoni)**.
+  - **Ripristino Apertura Diretta App Google Maps ("Nel modo di prima")**:
+    - Reindirizzamento nativo immediato all'app Google Maps tramite schema iOS `comgooglemaps://` (con fallback su web maps): tocca la tratta per aprire direttamente l'app Google Maps con partenza e destinazione già compilate e navigazione live attiva.
   - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi.
-  - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio), treno regionale, mezzi urbani e ingresso in aula con margine.
+  - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio calcolato automaticamente), treno regionale, mezzi urbani e ingresso in aula con margine.
   - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.
 
 ## 1.5.10
