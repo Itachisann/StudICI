@@ -111,6 +111,16 @@ export async function getLiveStationDepartures(
     const results: LiveTrainInfo[] = [];
 
     for (const raw of rawList) {
+      const catRaw = (raw.categoriaDescrizione || raw.categoria || '').toUpperCase();
+      // STRETTO: Solo treni Regionali o Regionali Veloci (escludi AV, Frecciarossa, Italo, Intercity)
+      const isRegional =
+        catRaw.includes('REG') ||
+        catRaw.includes('RV') ||
+        catRaw === 'R' ||
+        catRaw.includes('REGIONALE');
+
+      if (!isRegional) continue;
+
       const delay = typeof raw.ritardo === 'number' ? raw.ritardo : 0;
       const progPlatform =
         raw.binarioProgrammatoPartenzaDescrizione ||
@@ -141,9 +151,11 @@ export async function getLiveStationDepartures(
         statusDescription = `Anticipo di ${Math.abs(delay)} min`;
       }
 
+      const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE');
+
       results.push({
         trainNumber: raw.compNumeroTreno || `Treno ${raw.numeroTreno}`,
-        category: raw.categoriaDescrizione || raw.categoria || 'REG',
+        category: isFast ? 'RV' : 'REG',
         destination: raw.destinazione || '',
         originStationName: raw.origine || '',
         departureTimePlanned: plannedDep,
@@ -154,6 +166,7 @@ export async function getLiveStationDepartures(
         delayMinutes: delay,
         statusDescription,
         isLive: true,
+        isFast,
       });
     }
 
@@ -214,201 +227,312 @@ function formatMillisToTime(millis: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/**
- * Database orari programmati per pendolari (Orte <-> Roma e linee regionali collegate)
- * Utilizzato per calcolare con precisione i viaggi programmati in anticipo
- * quando le partenze live di ViaggiaTreno non coprono ancora l'orario richiesto.
- */
-interface ScheduledTrainEntry {
+export interface ScheduledTrainEntry {
   trainNumber: string;
-  category: string;
-  departureTime: string; // "07:05"
-  arrivalTime: string;   // "07:50"
-  durationMinutes: number;
+  category: 'RV' | 'REG';
+  departureTime: string; // Orte departure
+  arrivalTimeTiburtina: string; // Roma Tiburtina arrival
+  arrivalTimeTermini: string; // Roma Termini arrival
+  durationMinutesTiburtina: number;
+  durationMinutesTermini: number;
   platformPlanned: string;
   destination: string;
 }
 
-const SCHEDULED_ORTE_TO_ROMA: ScheduledTrainEntry[] = [
-  { trainNumber: 'RV 4151', category: 'RV', departureTime: '06:05', arrivalTime: '06:50', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4501', category: 'REG', departureTime: '06:22', arrivalTime: '07:14', durationMinutes: 52, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4153', category: 'RV', departureTime: '06:40', arrivalTime: '07:25', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'RV 4155', category: 'RV', departureTime: '07:05', arrivalTime: '07:50', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4503', category: 'REG', departureTime: '07:18', arrivalTime: '08:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4157', category: 'RV', departureTime: '07:45', arrivalTime: '08:30', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4505', category: 'REG', departureTime: '08:15', arrivalTime: '09:05', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4159', category: 'RV', departureTime: '08:45', arrivalTime: '09:30', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4507', category: 'REG', departureTime: '09:18', arrivalTime: '10:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4161', category: 'RV', departureTime: '10:15', arrivalTime: '11:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4509', category: 'REG', departureTime: '11:15', arrivalTime: '12:05', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4163', category: 'RV', departureTime: '12:16', arrivalTime: '13:07', durationMinutes: 51, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4511', category: 'REG', departureTime: '13:18', arrivalTime: '14:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4165', category: 'RV', departureTime: '14:15', arrivalTime: '15:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4513', category: 'REG', departureTime: '15:18', arrivalTime: '16:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4167', category: 'RV', departureTime: '16:15', arrivalTime: '17:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4515', category: 'REG', departureTime: '17:18', arrivalTime: '18:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4169', category: 'RV', departureTime: '18:15', arrivalTime: '19:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'RV 4171', category: 'RV', departureTime: '19:15', arrivalTime: '20:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
-  { trainNumber: 'REG 4517', category: 'REG', departureTime: '20:18', arrivalTime: '21:08', durationMinutes: 50, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
-  { trainNumber: 'RV 4173', category: 'RV', departureTime: '21:15', arrivalTime: '22:00', durationMinutes: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
+export interface ScheduledReturnTrainEntry {
+  trainNumber: string;
+  category: 'RV' | 'REG';
+  departureTimeTiburtina: string; // Roma Tiburtina departure
+  departureTimeTermini?: string; // Roma Termini departure
+  arrivalTimeOrte: string; // Orte arrival
+  durationMinutesTiburtina: number;
+  platformPlanned: string;
+  destination: string;
+}
+
+export const SCHEDULED_ORTE_TO_ROMA: ScheduledTrainEntry[] = [
+  { trainNumber: 'RV 4151', category: 'RV', departureTime: '06:05', arrivalTimeTiburtina: '06:44', arrivalTimeTermini: '06:53', durationMinutesTiburtina: 39, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4501', category: 'REG', departureTime: '06:22', arrivalTimeTiburtina: '07:15', arrivalTimeTermini: '07:25', durationMinutesTiburtina: 53, durationMinutesTermini: 63, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4153', category: 'RV', departureTime: '06:40', arrivalTimeTiburtina: '07:19', arrivalTimeTermini: '07:28', durationMinutesTiburtina: 39, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'RV 4155', category: 'RV', departureTime: '07:05', arrivalTimeTiburtina: '07:44', arrivalTimeTermini: '07:54', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4503', category: 'REG', departureTime: '07:18', arrivalTimeTiburtina: '08:10', arrivalTimeTermini: '08:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4157', category: 'RV', departureTime: '07:45', arrivalTimeTiburtina: '08:24', arrivalTimeTermini: '08:34', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4505', category: 'REG', departureTime: '08:15', arrivalTimeTiburtina: '09:07', arrivalTimeTermini: '09:17', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4159', category: 'RV', departureTime: '08:45', arrivalTimeTiburtina: '09:24', arrivalTimeTermini: '09:34', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4507', category: 'REG', departureTime: '09:18', arrivalTimeTiburtina: '10:10', arrivalTimeTermini: '10:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4161', category: 'RV', departureTime: '10:15', arrivalTimeTiburtina: '10:54', arrivalTimeTermini: '11:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4509', category: 'REG', departureTime: '11:15', arrivalTimeTiburtina: '12:07', arrivalTimeTermini: '12:17', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4163', category: 'RV', departureTime: '12:16', arrivalTimeTiburtina: '12:57', arrivalTimeTermini: '13:07', durationMinutesTiburtina: 41, durationMinutesTermini: 51, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4511', category: 'REG', departureTime: '13:18', arrivalTimeTiburtina: '14:10', arrivalTimeTermini: '14:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4165', category: 'RV', departureTime: '14:15', arrivalTimeTiburtina: '14:54', arrivalTimeTermini: '15:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4513', category: 'REG', departureTime: '15:18', arrivalTimeTiburtina: '16:10', arrivalTimeTermini: '16:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4167', category: 'RV', departureTime: '16:15', arrivalTimeTiburtina: '16:54', arrivalTimeTermini: '17:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4515', category: 'REG', departureTime: '17:18', arrivalTimeTiburtina: '18:10', arrivalTimeTermini: '18:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4169', category: 'RV', departureTime: '18:15', arrivalTimeTiburtina: '18:54', arrivalTimeTermini: '19:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'RV 4171', category: 'RV', departureTime: '19:15', arrivalTimeTiburtina: '19:54', arrivalTimeTermini: '20:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4517', category: 'REG', departureTime: '20:18', arrivalTimeTiburtina: '21:10', arrivalTimeTermini: '21:20', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
+  { trainNumber: 'RV 4173', category: 'RV', departureTime: '21:15', arrivalTimeTiburtina: '21:54', arrivalTimeTermini: '22:04', durationMinutesTiburtina: 39, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'REG 4519', category: 'REG', departureTime: '22:15', arrivalTimeTiburtina: '23:07', arrivalTimeTermini: '23:17', durationMinutesTiburtina: 52, durationMinutesTermini: 62, platformPlanned: '2', destination: 'ROMA TIBURTINA' },
 ];
 
-const SCHEDULED_ROMA_TO_ORTE: ScheduledTrainEntry[] = [
-  { trainNumber: 'REG 4500', category: 'REG', departureTime: '06:12', arrivalTime: '07:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4150', category: 'RV', departureTime: '07:02', arrivalTime: '07:47', durationMinutes: 45, platformPlanned: '5', destination: 'FIRENZE SMN' },
-  { trainNumber: 'REG 4502', category: 'REG', departureTime: '08:12', arrivalTime: '09:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4152', category: 'RV', departureTime: '09:02', arrivalTime: '09:47', durationMinutes: 45, platformPlanned: '5', destination: 'ANCONA' },
-  { trainNumber: 'REG 4504', category: 'REG', departureTime: '10:12', arrivalTime: '11:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4154', category: 'RV', departureTime: '11:02', arrivalTime: '11:47', durationMinutes: 45, platformPlanned: '5', destination: 'PERUGIA' },
-  { trainNumber: 'REG 4506', category: 'REG', departureTime: '12:12', arrivalTime: '13:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4156', category: 'RV', departureTime: '13:02', arrivalTime: '13:47', durationMinutes: 45, platformPlanned: '5', destination: 'FIRENZE SMN' },
-  { trainNumber: 'REG 4508', category: 'REG', departureTime: '14:12', arrivalTime: '15:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4158', category: 'RV', departureTime: '15:02', arrivalTime: '15:47', durationMinutes: 45, platformPlanned: '5', destination: 'ANCONA' },
-  { trainNumber: 'REG 4510', category: 'REG', departureTime: '16:12', arrivalTime: '17:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4160', category: 'RV', departureTime: '17:02', arrivalTime: '17:47', durationMinutes: 45, platformPlanned: '5', destination: 'PERUGIA' },
-  { trainNumber: 'REG 4512', category: 'REG', departureTime: '17:35', arrivalTime: '18:28', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4162', category: 'RV', departureTime: '18:02', arrivalTime: '18:47', durationMinutes: 45, platformPlanned: '5', destination: 'FIRENZE SMN' },
-  { trainNumber: 'REG 4514', category: 'REG', departureTime: '18:35', arrivalTime: '19:28', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4164', category: 'RV', departureTime: '19:02', arrivalTime: '19:47', durationMinutes: 45, platformPlanned: '5', destination: 'FOLIGNO' },
-  { trainNumber: 'REG 4516', category: 'REG', departureTime: '19:35', arrivalTime: '20:28', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4166', category: 'RV', departureTime: '20:02', arrivalTime: '20:47', durationMinutes: 45, platformPlanned: '5', destination: 'TERNI' },
-  { trainNumber: 'REG 4518', category: 'REG', departureTime: '20:42', arrivalTime: '21:35', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
-  { trainNumber: 'RV 4168', category: 'RV', departureTime: '21:02', arrivalTime: '21:47', durationMinutes: 45, platformPlanned: '5', destination: 'FIRENZE SMN' },
-  { trainNumber: 'REG 4520', category: 'REG', departureTime: '22:12', arrivalTime: '23:05', durationMinutes: 53, platformPlanned: '1', destination: 'ORTE' },
+export const SCHEDULED_ROMA_TO_ORTE: ScheduledReturnTrainEntry[] = [
+  { trainNumber: 'REG 4500', category: 'REG', departureTimeTiburtina: '06:20', arrivalTimeOrte: '07:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4150', category: 'RV', departureTimeTiburtina: '07:13', departureTimeTermini: '07:02', arrivalTimeOrte: '07:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'FIRENZE SMN' },
+  { trainNumber: 'REG 4502', category: 'REG', departureTimeTiburtina: '08:20', arrivalTimeOrte: '09:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4152', category: 'RV', departureTimeTiburtina: '09:13', departureTimeTermini: '09:02', arrivalTimeOrte: '09:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'ANCONA' },
+  { trainNumber: 'REG 4504', category: 'REG', departureTimeTiburtina: '10:20', arrivalTimeOrte: '11:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4154', category: 'RV', departureTimeTiburtina: '11:13', departureTimeTermini: '11:02', arrivalTimeOrte: '11:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'PERUGIA' },
+  { trainNumber: 'REG 4506', category: 'REG', departureTimeTiburtina: '12:20', arrivalTimeOrte: '13:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4156', category: 'RV', departureTimeTiburtina: '13:13', departureTimeTermini: '13:02', arrivalTimeOrte: '13:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'FIRENZE SMN' },
+  { trainNumber: 'REG 4508', category: 'REG', departureTimeTiburtina: '14:20', arrivalTimeOrte: '15:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4158', category: 'RV', departureTimeTiburtina: '15:13', departureTimeTermini: '15:02', arrivalTimeOrte: '15:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'ANCONA' },
+  { trainNumber: 'REG 4510', category: 'REG', departureTimeTiburtina: '16:20', arrivalTimeOrte: '17:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4160', category: 'RV', departureTimeTiburtina: '17:13', departureTimeTermini: '17:02', arrivalTimeOrte: '17:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'PERUGIA' },
+  { trainNumber: 'REG 4512', category: 'REG', departureTimeTiburtina: '17:43', arrivalTimeOrte: '18:35', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4162', category: 'RV', departureTimeTiburtina: '18:13', departureTimeTermini: '18:02', arrivalTimeOrte: '18:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'FIRENZE SMN' },
+  { trainNumber: 'REG 4514', category: 'REG', departureTimeTiburtina: '18:43', arrivalTimeOrte: '19:35', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4164', category: 'RV', departureTimeTiburtina: '19:13', departureTimeTermini: '19:02', arrivalTimeOrte: '19:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'FOLIGNO' },
+  { trainNumber: 'REG 4516', category: 'REG', departureTimeTiburtina: '19:43', arrivalTimeOrte: '20:35', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4166', category: 'RV', departureTimeTiburtina: '20:13', departureTimeTermini: '20:02', arrivalTimeOrte: '20:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'TERNI' },
+  { trainNumber: 'REG 4518', category: 'REG', departureTimeTiburtina: '20:50', arrivalTimeOrte: '21:42', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'RV 4168', category: 'RV', departureTimeTiburtina: '21:13', departureTimeTermini: '21:02', arrivalTimeOrte: '21:54', durationMinutesTiburtina: 41, platformPlanned: '5', destination: 'FIRENZE SMN' },
+  { trainNumber: 'REG 4520', category: 'REG', departureTimeTiburtina: '22:20', arrivalTimeOrte: '23:12', durationMinutesTiburtina: 52, platformPlanned: '1', destination: 'ORTE' },
 ];
 
-/**
- * Trova il miglior treno per il tragitto pendolare in base a stazione e orario richiesto
- */
-export async function findOptimalCommuterTrain(options: {
+export interface OptimalTrainOptions {
   direction: 'outbound' | 'return';
   departureStation: StationInfo;
   arrivalStation: StationInfo;
-  targetTimeStr: string; // "08:00" per andata (arrivo prima di questo orario) o "17:30" per ritorno (partenza dopo questo orario)
+  targetTimeStr: string; // Outbound: arrivo desiderato (es. "12:30"). Return: partenza desiderata (es. "13:30").
   targetDate?: Date;
-}): Promise<LiveTrainInfo> {
-  const { direction, departureStation, arrivalStation, targetTimeStr, targetDate = new Date() } = options;
-  const isOutbound = direction === 'outbound';
+  trainOffset?: number; // 0 = consigliato, -1 = precedente, +1 = successivo
+  selectedTrainNumber?: string; // override selezione esplicita treno
+}
 
-  // 1. Prova prima a recuperare le partenze live se siamo nella finestra di oggi
+export interface OptimalTrainResult {
+  train: LiveTrainInfo;
+  availableTrains: LiveTrainInfo[];
+  selectedIndex: number;
+}
+
+/**
+ * Trova il treno regionale ottimale (privilegiando Regionale Veloce)
+ * e fornisce le alternative disponibili prima e dopo per il tragitto pendolare.
+ */
+export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Promise<OptimalTrainResult> {
+  const {
+    direction,
+    departureStation,
+    arrivalStation,
+    targetTimeStr,
+    targetDate = new Date(),
+    trainOffset = 0,
+    selectedTrainNumber,
+  } = options;
+
+  const isOutbound = direction === 'outbound';
+  const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');
+
+  // 1. Costruisci la lista base di tutti i treni regionali programmati
+  let allTrains: LiveTrainInfo[] = [];
+
+  if (isOutbound) {
+    allTrains = SCHEDULED_ORTE_TO_ROMA.map((s) => {
+      const arrTime = isTerminiArrival ? s.arrivalTimeTermini : s.arrivalTimeTiburtina;
+      const duration = isTerminiArrival ? s.durationMinutesTermini : s.durationMinutesTiburtina;
+      return {
+        trainNumber: s.trainNumber,
+        category: s.category,
+        destination: s.destination,
+        originStationName: departureStation.name,
+        departureTimePlanned: s.departureTime,
+        departureTimeActual: s.departureTime,
+        departureMillis: targetDate.getTime(),
+        arrivalTimePlanned: arrTime,
+        arrivalTimeActual: arrTime,
+        platformPlanned: s.platformPlanned,
+        platformActual: s.platformPlanned,
+        delayMinutes: 0,
+        statusDescription: 'In orario',
+        isLive: false,
+        durationMinutes: duration,
+        isFast: s.category === 'RV',
+      };
+    });
+  } else {
+    allTrains = SCHEDULED_ROMA_TO_ORTE.map((s) => {
+      const depTime = (isTerminiArrival && s.departureTimeTermini) ? s.departureTimeTermini : s.departureTimeTiburtina;
+      return {
+        trainNumber: s.trainNumber,
+        category: s.category,
+        destination: s.destination,
+        originStationName: departureStation.name,
+        departureTimePlanned: depTime,
+        departureTimeActual: depTime,
+        departureMillis: targetDate.getTime(),
+        arrivalTimePlanned: s.arrivalTimeOrte,
+        arrivalTimeActual: s.arrivalTimeOrte,
+        platformPlanned: s.platformPlanned,
+        platformActual: s.platformPlanned,
+        delayMinutes: 0,
+        statusDescription: 'In orario',
+        isLive: false,
+        durationMinutes: s.durationMinutesTiburtina,
+        isFast: s.category === 'RV',
+      };
+    });
+  }
+
+  // 2. Se è oggi, interroga ViaggiaTreno Live per arricchire con ritardi e binari in tempo reale
   const isToday =
     targetDate.getDate() === new Date().getDate() &&
     targetDate.getMonth() === new Date().getMonth();
 
   if (isToday) {
-    const liveList = await getLiveStationDepartures(departureStation.code, targetDate);
+    try {
+      const liveList = await getLiveStationDepartures(departureStation.code, targetDate);
 
-    // Filtra treni che vanno verso la destinazione
-    const candidateLive = liveList.filter((t) => {
-      const dest = t.destination.toUpperCase();
-      if (isOutbound) {
-        return (
-          dest.includes('ROMA') ||
-          dest.includes('TERMINI') ||
-          dest.includes('TIBURTINA') ||
-          dest.includes('FIUMICINO') ||
-          dest.includes('OSTIENSE')
+      for (const live of liveList) {
+        const liveNumDigits = live.trainNumber.replace(/\D/g, '');
+        if (!liveNumDigits) continue;
+
+        const matchIdx = allTrains.findIndex(
+          (t) => t.trainNumber.replace(/\D/g, '') === liveNumDigits
         );
-      } else {
-        return (
-          dest.includes(arrivalStation.name) ||
-          dest.includes('ORTE') ||
-          dest.includes('FIRENZE') ||
-          dest.includes('ANCONA') ||
-          dest.includes('PERUGIA') ||
-          dest.includes('TERNI') ||
-          dest.includes('FOLIGNO') ||
-          dest.includes('CHIUSI')
-        );
+
+        if (matchIdx !== -1) {
+          const matched = allTrains[matchIdx];
+          matched.isLive = true;
+          matched.delayMinutes = live.delayMinutes;
+          matched.statusDescription = live.statusDescription;
+          matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
+          if (live.platformActual) matched.platformActual = live.platformActual;
+          if (live.platformPlanned) matched.platformPlanned = live.platformPlanned;
+
+          // Aggiorna l'orario effettivo di arrivo in base al ritardo Trenitalia
+          if (matched.arrivalTimePlanned) {
+            const arrMins = parseTimeToMinutes(matched.arrivalTimePlanned) + live.delayMinutes;
+            matched.arrivalTimeActual = minutesToTime(arrMins);
+          }
+        } else {
+          // Treno regionale live straordinario non in tabella fissa
+          const destUpper = live.destination.toUpperCase();
+          const isEligible = isOutbound
+            ? (destUpper.includes('ROMA') || destUpper.includes('TERMINI') || destUpper.includes('TIBURTINA'))
+            : (destUpper.includes('ORTE') || destUpper.includes('FIRENZE') || destUpper.includes('ANCONA') || destUpper.includes('PERUGIA'));
+
+          if (isEligible) {
+            const depMins = parseTimeToMinutes(live.departureTimeActual || live.departureTimePlanned);
+            const duration = live.isFast ? 41 : 52;
+            const arrMins = depMins + duration;
+            live.arrivalTimePlanned = minutesToTime(parseTimeToMinutes(live.departureTimePlanned) + duration);
+            live.arrivalTimeActual = minutesToTime(arrMins);
+            live.durationMinutes = duration;
+            allTrains.push(live);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Ordina tutti i treni cronologicamente per orario di partenza
+  allTrains.sort(
+    (a, b) =>
+      parseTimeToMinutes(a.departureTimePlanned) -
+      parseTimeToMinutes(b.departureTimePlanned)
+  );
+
+  // 3. Algoritmo di selezione del treno migliore (Regionale Veloce preferito)
+  const targetMins = parseTimeToMinutes(targetTimeStr);
+  let recommendedIdx = 0;
+
+  if (isOutbound) {
+    // Cerchiamo treni che arrivano in tempo (entro targetMins + 3 di tolleranza)
+    const onTimeIndices: number[] = [];
+    allTrains.forEach((t, idx) => {
+      const arr = parseTimeToMinutes(t.arrivalTimePlanned || t.arrivalTimeActual || '');
+      if (arr <= targetMins + 3) {
+        onTimeIndices.push(idx);
       }
     });
 
-    if (candidateLive.length > 0) {
-      // Per l'andata, cerchiamo il treno più vicino che parte in tempo
-      const targetMins = parseTimeToMinutes(targetTimeStr);
-      let bestLive = candidateLive[0];
+    if (onTimeIndices.length > 0) {
+      // Nella finestra utile precedente (ultimi 75 minuti prima del target):
+      // Cerca se esiste un Regionale Veloce (RV)
+      const windowIndices = onTimeIndices.filter((idx) => {
+        const arr = parseTimeToMinutes(allTrains[idx].arrivalTimePlanned || '');
+        return arr >= targetMins - 75;
+      });
 
-      if (isOutbound) {
-        // Vogliamo arrivare prima di targetTimeStr (stimiamo ~45-50 min di viaggio)
-        const candidatesBefore = candidateLive.filter((t) => {
-          const depMins = parseTimeToMinutes(t.departureTimeActual || t.departureTimePlanned);
-          return depMins + 48 <= targetMins;
-        });
-        if (candidatesBefore.length > 0) {
-          // Prendi quello più tardo possibile ma ancora in tempo!
-          bestLive = candidatesBefore.sort(
-            (a, b) =>
-              parseTimeToMinutes(b.departureTimeActual || b.departureTimePlanned) -
-              parseTimeToMinutes(a.departureTimeActual || a.departureTimePlanned)
-          )[0];
-        }
+      const rvInWindow = windowIndices.filter((idx) => allTrains[idx].isFast);
+
+      if (rvInWindow.length > 0) {
+        // Prendi l'ultimo RV nella finestra (viaggio veloce, arriva appena prima)
+        recommendedIdx = rvInWindow[rvInWindow.length - 1];
+      } else if (windowIndices.length > 0) {
+        // Altrimenti prendi il Regionale più vicino all'orario
+        recommendedIdx = windowIndices[windowIndices.length - 1];
       } else {
-        // Ritorno: vogliamo partire DOPO l'orario di fine lezione + tragitto stazione
-        const candidatesAfter = candidateLive.filter((t) => {
-          const depMins = parseTimeToMinutes(t.departureTimeActual || t.departureTimePlanned);
-          return depMins >= targetMins;
-        });
-        if (candidatesAfter.length > 0) {
-          // Prendi il primo disponibile dopo l'orario
-          bestLive = candidatesAfter.sort(
-            (a, b) =>
-              parseTimeToMinutes(a.departureTimeActual || a.departureTimePlanned) -
-              parseTimeToMinutes(b.departureTimeActual || b.departureTimePlanned)
-          )[0];
-        }
+        recommendedIdx = onTimeIndices[onTimeIndices.length - 1];
       }
-
-      // Stima orario arrivo se non già presente
-      const depMins = parseTimeToMinutes(bestLive.departureTimeActual || bestLive.departureTimePlanned);
-      const arrMins = depMins + 48;
-      bestLive.arrivalTimePlanned = minutesToTime(depMins + 48 - bestLive.delayMinutes);
-      bestLive.arrivalTimeActual = minutesToTime(arrMins);
-
-      return bestLive;
-    }
-  }
-
-  // 2. Fallback su orario programmato
-  const db = isOutbound ? SCHEDULED_ORTE_TO_ROMA : SCHEDULED_ROMA_TO_ORTE;
-  const targetMins = parseTimeToMinutes(targetTimeStr);
-
-  let chosenEntry: ScheduledTrainEntry = db[0];
-
-  if (isOutbound) {
-    // Cerchiamo il treno che arriva prima di targetMins
-    const inTime = db.filter((t) => parseTimeToMinutes(t.arrivalTime) <= targetMins);
-    if (inTime.length > 0) {
-      // Prendi l'ultimo in tempo (massimizza il riposo/tempo di partenza)
-      chosenEntry = inTime[inTime.length - 1];
     } else {
-      // Prendi il primissimo del mattino
-      chosenEntry = db[0];
+      // Se nessun treno arriva in tempo (es. orario prima mattina), prendi il primo
+      recommendedIdx = 0;
     }
   } else {
-    // Ritorno: primo treno che parte dopo targetMins
-    const afterTime = db.filter((t) => parseTimeToMinutes(t.departureTime) >= targetMins);
-    if (afterTime.length > 0) {
-      chosenEntry = afterTime[0];
+    // Ritorno: primo treno che parte dopo l'orario di fine lezione + rientro in stazione
+    const eligibleIndices: number[] = [];
+    allTrains.forEach((t, idx) => {
+      const dep = parseTimeToMinutes(t.departureTimePlanned || t.departureTimeActual || '');
+      if (dep >= targetMins) {
+        eligibleIndices.push(idx);
+      }
+    });
+
+    if (eligibleIndices.length > 0) {
+      // Nei primi 60 minuti successivi, privilegia RV se disponibile
+      const soonIndices = eligibleIndices.filter((idx) => {
+        const dep = parseTimeToMinutes(allTrains[idx].departureTimePlanned || '');
+        return dep <= targetMins + 60;
+      });
+
+      const rvSoon = soonIndices.filter((idx) => allTrains[idx].isFast);
+      if (rvSoon.length > 0) {
+        recommendedIdx = rvSoon[0];
+      } else {
+        recommendedIdx = eligibleIndices[0];
+      }
     } else {
-      chosenEntry = db[db.length - 1];
+      recommendedIdx = Math.max(0, allTrains.length - 1);
     }
   }
 
+  // 4. Risolvi la scelta finale in base a offset o treno esplicitamente selezionato
+  let selectedIndex = recommendedIdx;
+
+  if (selectedTrainNumber) {
+    const cleanNum = selectedTrainNumber.replace(/\D/g, '');
+    const foundIdx = allTrains.findIndex((t) => t.trainNumber.replace(/\D/g, '') === cleanNum);
+    if (foundIdx !== -1) {
+      selectedIndex = foundIdx;
+    }
+  } else if (trainOffset !== 0) {
+    selectedIndex = Math.max(0, Math.min(allTrains.length - 1, recommendedIdx + trainOffset));
+  }
+
+  const chosenTrain = { ...allTrains[selectedIndex] };
+  chosenTrain.hasEarlierTrain = selectedIndex > 0;
+  chosenTrain.hasLaterTrain = selectedIndex < allTrains.length - 1;
+
+  // Sliding window per le alternative da mostrare nell'interfaccia (fino a 5 treni)
+  const sliceStart = Math.max(0, selectedIndex - 2);
+  const sliceEnd = Math.min(allTrains.length, selectedIndex + 3);
+  const availableTrains = allTrains.slice(sliceStart, sliceEnd);
+
   return {
-    trainNumber: chosenEntry.trainNumber,
-    category: chosenEntry.category,
-    destination: chosenEntry.destination,
-    originStationName: departureStation.name,
-    departureTimePlanned: chosenEntry.departureTime,
-    departureTimeActual: chosenEntry.departureTime,
-    departureMillis: Date.now(),
-    arrivalTimePlanned: chosenEntry.arrivalTime,
-    arrivalTimeActual: chosenEntry.arrivalTime,
-    platformPlanned: chosenEntry.platformPlanned,
-    platformActual: chosenEntry.platformPlanned,
-    delayMinutes: 0,
-    statusDescription: 'Orario programmato',
-    isLive: false,
+    train: chosenTrain,
+    availableTrains,
+    selectedIndex,
   };
 }
 

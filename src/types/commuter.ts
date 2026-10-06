@@ -28,20 +28,24 @@ export interface CommuterConfig {
 
 export interface LiveTrainInfo {
   trainNumber: string; // es. "RV 4153"
-  category: string; // es. "RV", "REG", "IC"
+  category: string; // es. "RV", "REG"
   destination: string; // es. "ROMA TERMINI"
   originStationName: string;
   departureTimePlanned: string; // "12:16"
   departureTimeActual?: string; // "12:18"
   departureMillis: number;
-  arrivalTimePlanned?: string; // "13:07"
-  arrivalTimeActual?: string; // "13:09"
+  arrivalTimePlanned?: string; // "12:57"
+  arrivalTimeActual?: string; // "12:59"
   arrivalMillis?: number;
   platformPlanned?: string; // "3"
   platformActual?: string; // "3"
   delayMinutes: number; // 0, 2, 5
   statusDescription: string; // "In orario", "In ritardo di 4 min", "Soppresso"
   isLive: boolean;
+  durationMinutes?: number; // es. 41
+  isFast?: boolean; // true se Regionale Veloce (RV)
+  hasEarlierTrain?: boolean;
+  hasLaterTrain?: boolean;
 }
 
 export interface TripLeg {
@@ -73,6 +77,7 @@ export interface CommuterItinerary {
     subject: string;
     room: string;
     buildingName?: string;
+    buildingCode?: string;
     address: string;
     startTime: string; // "08:30"
     endTime: string; // "10:30"
@@ -84,6 +89,8 @@ export interface CommuterItinerary {
   totalDurationMinutes: number;
   legs: TripLeg[];
   liveTrain?: LiveTrainInfo | null;
+  availableTrains?: LiveTrainInfo[];
+  selectedTrainIndex?: number;
   statusBadge: {
     text: string;
     color: string;

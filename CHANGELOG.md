@@ -9,17 +9,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ### Novità
 - **Ottimizzatore Viaggio Pendolare (Nuova Scheda "Viaggio")**: sistema intelligente e moderno per calcolare e ottimizzare il tragitto quotidiano degli studenti pendolari della Sapienza:
-  - **Calcolo Multimodale Completo**: supporta l'intero itinerario combinato:
-    - 🚗 **Tragitto in Auto** da casa alla stazione ferroviaria (es. da Amelia a Orte FS) con tempo di guida stimato e margine per il parcheggio.
-    - 🚆 **Treno Trenitalia con Dati Live**: orario di partenza, arrivo, categoria treno (RV, REG, IC), ritardo in tempo reale e **indicazione live del binario di partenza/arrivo** tramite le API ufficiali di ViaggiaTreno/Trenitalia.
-    - 🚌 **Mezzi Pubblici Urbani a Roma**: collegamento dalla stazione di arrivo (es. Roma Tiburtina / Termini) fino all'aula/sede della lezione (Via Ariosto, San Pietro in Vincoli, Città Universitaria, Castro Laurenziano) con autobus, metropolitana o a piedi.
-  - **Doppia Modalità Andata & Ritorno**:
-    - **Andata**: calcola l'orario di sveglia e partenza esatto per essere puntuali alla prima lezione del giorno.
-    - **Ritorno**: calcola le coincidenze e il rientro a casa subito dopo il termine dell'ultima lezione.
-  - **Selettore Nativo UISegmentedControl (IPA)**: commutazione istantanea tra *Andata* e *Ritorno* con il controllo nativo iOS.
-  - **Navigazione 1-Tap con Mappe**: pulsanti diretti su ogni tappa per aprire Apple Maps o Google Maps con la modalità corretta (guida in auto o trasporto pubblico).
-  - **Impostazioni Personalizzabili nel Profilo**: sezione dedicata nelle Impostazioni per configurare indirizzo di casa, stazioni predefinite (con ricerca stazioni Trenitalia), tempi di guida, margine di anticipo e linea di mezzi pubblici preferita.
-  - **Banner Rapido nella Schermata Orario**: visualizzazione del prossimo viaggio direttamente sopra le lezioni del giorno con accesso immediato con un tocco.
+  - **Risoluzione Aula e Orario Reale del Corso**: risolto il problema di fallback generico ("Aula 1 Sede Ariosto"); l'app estrae l'aula reale, l'edificio esatto (es. RM025 Tiburtina, RM031 S. Pietro in Vincoli, RM018 Castro Laurenziano, ecc.) e gli orari ufficiali direttamente dall'orario Google Sheet del canale selezionato.
+  - **Selettore Intelligente e Manuale delle Lezioni**:
+    - Mostra tutte le lezioni del giorno con materia, orario e aula esatta.
+    - Selezione intelligente: se la mattina si è rimasti a casa (es. lezioni 09:00-12:00) e ci si sposta per una lezione pomeridiana (es. ore 13:00), l'app seleziona automaticamente la prossima lezione futura!
+    - L'utente può toccare qualsiasi lezione della giornata per ricalcolare istantaneamente l'intero viaggio per quella specifica lezione.
+  - **Treni Regionali con Orari Ufficiali Trenitalia al Minuto**:
+    - Orari di partenza e arrivo allineati al minuto con il quadro orario ufficiale Trenitalia per Orte <-> Roma Tiburtina / Termini (es. RV 4163 delle 12:16 con arrivo esatto alle 12:57 a Tiburtina).
+    - Esclusione treni non regionali (Frecce/Intercity) per tutelare gli abbonamenti regionali pendolari.
+    - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~39-41 min), fornendo anche l'alternativa Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi.
+    - **Binario Live e Ritardi**: interrogazione in tempo reale delle partenze live di ViaggiaTreno/Trenitalia.
+  - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi (es. Bus 492 diretto, Metro B diretta, passeggiata a piedi 8 min per Polo Tiburtina RM025).
+  - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio), treno regionale, mezzi urbani e ingresso in aula con margine.
+  - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.
+  - **Navigazione 1-Tap con Mappe**: pulsanti per aprire Apple Maps o Google Maps per ogni specifica tratta.
 
 ## 1.5.10
 
