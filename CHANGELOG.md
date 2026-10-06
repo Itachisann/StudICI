@@ -29,9 +29,10 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: confermato il collegamento diretto **Bus 649** con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 min dall'aula), oppure **Metro A (fermata Manzoni)**.
   - **Ripristino Apertura Diretta App Google Maps ("Nel modo di prima")**:
     - Reindirizzamento nativo immediato all'app Google Maps tramite schema iOS `comgooglemaps://` (con fallback su web maps): tocca la tratta per aprire direttamente l'app Google Maps con partenza e destinazione già compilate e navigazione live attiva.
-  - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi.
-  - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio calcolato automaticamente), treno regionale, mezzi urbani e ingresso in aula con margine.
-  - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.
+  - **Motore di Routing Urbano Universale per Tutte le Stazioni di Roma**:
+    - Il calcolo dei mezzi pubblici ora è completamente **generico per qualsiasi studente pendolare**: non è più limitato a una singola tratta, ma supporta in modo nativo tutte le stazioni ferroviarie di Roma (Tiburtina, Termini, Ostiense, Tuscolana, Trastevere, San Pietro, Valle Aurelia, Prenestina, Nomentana) e tutte le sedi universitarie e aule della Sapienza (Polo Tiburtina RM025/RM158, Castro Laurenziano/Scarpa RM018/RM002-RM014, Città Universitaria/Verano, Polo Ariosto RM102, San Pietro in Vincoli RM031-RM041, Polo Salaria RM076, Polo Gianturco RM089, Palazzo Baleani RM049 o indirizzi custom).
+    - Calcola percorsi diretti a **zero cambi** (es. Metro B diretta da Ostiense a Policlinico/Cavour, Metro A diretta da Tuscolana a Manzoni/Flaminio, Tram 3 diretto da Trastevere, Bus 649 diretto da Tiburtina ad Ariosto, Pullman 448 da Tiburtina a Castro Laurenziano/Verano/Marrucini) oppure interscambi rapidi a 1 cambio a Termini con fermate, minuti a bordo e minuti a piedi.
+    - Qualsiasi tratta è collegata direttamente con l'app Google Maps precompilata con stazione di arrivo e aula esatta.
 
 ## 1.5.10
 
