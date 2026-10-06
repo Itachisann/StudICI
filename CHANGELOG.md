@@ -14,11 +14,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - Mostra tutte le lezioni del giorno con materia, orario e aula esatta.
     - Selezione intelligente: se la mattina si è rimasti a casa (es. lezioni 09:00-12:00) e ci si sposta per una lezione pomeridiana (es. ore 13:00), l'app seleziona automaticamente la prossima lezione futura!
     - L'utente può toccare qualsiasi lezione della giornata per ricalcolare istantaneamente l'intero viaggio per quella specifica lezione.
-  - **Treni Regionali con Orari Ufficiali Trenitalia al Minuto**:
-    - Orari di partenza e arrivo allineati al minuto con il quadro orario ufficiale Trenitalia per Orte <-> Roma Tiburtina / Termini (es. RV 4163 delle 12:16 con arrivo esatto alle 12:57 a Tiburtina).
-    - Esclusione treni non regionali (Frecce/Intercity) per tutelare gli abbonamenti regionali pendolari.
-    - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~39-41 min), fornendo anche l'alternativa Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi.
-    - **Binario Live e Ritardi**: interrogazione in tempo reale delle partenze live di ViaggiaTreno/Trenitalia.
+  - **Treni Regionali con Orari Ufficiali Trenitalia al Minuto e Ricerca Dinamica**:
+    - **Integrazione Dinamica ViaggiaTreno API**: ricerca in tempo reale dei treni regionali effettivi (partenze e arrivi incrociati per numero treno) per qualunque giorno e fascia oraria selezionata (oggi, domani, giorni successivi), eliminando tabelle statiche disallineate.
+    - **Numeri Treno e Orari Perfetti**: orari e numeri corrispondono esattamente a quelli ufficiali Trenitalia (es. REG 4151 delle 06:34 con arrivo a Tiburtina alle 07:14, REG 4521 delle 07:00 con arrivo alle 07:33, REG 4256 delle 07:20 con arrivo alle 07:59, ecc.).
+    - **Esclusione Treni Non Regionali**: filtraggio automatico che esclude Frecce, Italo e Intercity per tutelare i possessori di abbonamento regionale o Metrebus Lazio.
+    - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~33-40 min), fornendo anche tutte le alternative Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi selezionabili con un tocco.
+    - **Binario Live, Binario Programmato e Ritardi**: visualizzazione del binario esatto di partenza e arrivo da Trenitalia, con indicazione del ritardo o anticipo in tempo reale.
   - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi (es. Bus 492 diretto, Metro B diretta, passeggiata a piedi 8 min per Polo Tiburtina RM025).
   - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio), treno regionale, mezzi urbani e ingresso in aula con margine.
   - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.

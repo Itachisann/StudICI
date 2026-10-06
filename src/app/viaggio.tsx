@@ -133,7 +133,10 @@ export default function ViaggioScreen() {
         // Calcola data target in base al giorno selezionato
         const targetDate = new Date();
         const currentDay = targetDate.getDay();
-        const diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
+        let diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
+        if (diff < 0) {
+          diff += 7; // Se il giorno è già trascorso nella settimana corrente, proietta al prossimo giorno utile
+        }
         targetDate.setDate(targetDate.getDate() + diff);
 
         // Determina la lezione target per il calcolo
@@ -172,6 +175,18 @@ export default function ViaggioScreen() {
                 ? currentDayClasses[0]
                 : currentDayClasses[currentDayClasses.length - 1];
           }
+        }
+
+        // Imposta l'orario del viaggio su targetDate per centrare la ricerca ViaggiaTreno
+        if (targetClassForCalculation) {
+          const timeToUse =
+            direction === 'outbound'
+              ? targetClassForCalculation.startTime || '08:30'
+              : targetClassForCalculation.endTime || '16:00';
+          const [hh, mm] = timeToUse.split(':').map(Number);
+          targetDate.setHours(hh || 8, mm || 30, 0, 0);
+        } else {
+          targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
         }
 
         const itin = await computeCommuterItinerary({
