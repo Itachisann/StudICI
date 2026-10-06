@@ -203,18 +203,20 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
               <View style={styles.card}>
                 <Text style={styles.cardHeader}>1. PARTENZA DA CASA</Text>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Città o Indirizzo di Partenza</Text>
+                  <Text style={styles.inputLabel}>Indirizzo di Casa o Comune di Partenza</Text>
                   <TextInput
                     style={styles.textInput}
                     value={localConfig.originAddress}
                     onChangeText={(val) =>
                       setLocalConfig((prev) => ({ ...prev, originAddress: val }))
                     }
-                    placeholder="Es. Amelia, Orte, Terni..."
+                    placeholder="Es. Via Amerina 15, Amelia (oppure Amelia)"
                     placeholderTextColor="#666"
+                    autoCapitalize="words"
+                    autoCorrect={false}
                   />
                   <Text style={styles.inputHelp}>
-                    Punto di partenza mattutino per il calcolo dell&apos;orario di sveglia e tragitto.
+                    Puoi inserire sia il tuo indirizzo completo con via e numero civico (es. Via Amerina 15, Amelia), sia solo il comune. Il calcolo percorso e la navigazione useranno l&apos;indirizzo preciso.
                   </Text>
                 </View>
               </View>
@@ -434,10 +436,10 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                   </View>
 
                   <Text style={styles.urbanTransitDesc}>
-                    L&apos;app seleziona automaticamente il mezzo più veloce dalla stazione ({localConfig.arrivalStation.shortName || 'Roma'}) fino all&apos;aula esatta di lezione (es. Sede Ariosto RM102, Tiburtina RM025, S. Pietro in Vincoli RM031, Città Universitaria Aldo Moro).
+                    L&apos;app seleziona automaticamente il mezzo più veloce dalla stazione ({localConfig.arrivalStation.shortName || 'Roma'}) fino all&apos;aula esatta di lezione (es. Bus 649 o Metro A per Sede Ariosto RM102 alla fermata Conte Verde/Manzoni a soli 180m, Metro B per S. Pietro in Vincoli, a piedi per Polo Tiburtina RM025, Bus per Città Universitaria).
                   </Text>
                   <Text style={styles.urbanTransitDescSecondary}>
-                    Privilegia percorsi diretti con zero cambi e include i tempi effettivi di camminata pedonale e coincidenza.
+                    Toccando la card di viaggio, Google Maps si apre già precompilato con la data e l&apos;orario effettivo di inizio o fine lezione, mostrando le linee e fermate attive a quell&apos;ora.
                   </Text>
                 </View>
 

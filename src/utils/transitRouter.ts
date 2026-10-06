@@ -178,15 +178,15 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'bus',
-        durationMinutes: 22,
-        inVehicleMinutes: 18,
-        walkingMinutes: 4,
+        durationMinutes: 19,
+        inVehicleMinutes: 16,
+        walkingMinutes: 3,
         transfersCount: 0, // DIRETTO SENZA CAMBI
-        lineName: 'Bus 492 Diretto (Zero cambi)',
+        lineName: 'Bus 649 Diretto (Fermata Conte Verde/Manzoni)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Bus 492 da Tiburtina FS fino a fermata Manzoni/Merulana (~18 min a bordo, zero cambi) + 4 min a piedi per Via Ariosto 25'
-            : '4 min a piedi per fermata Manzoni + Bus 492 diretto fino a Tiburtina FS (~18 min a bordo, zero cambi)',
+            ? 'Bus 649 da Tiburtina FS fino alla fermata Conte Verde/Manzoni (a soli 180m da Via Ariosto 25, zero cambi), oppure Metro B fino a Termini + Metro A fino a Manzoni'
+            : '3 min a piedi per fermata Conte Verde/Manzoni + Bus 649 diretto fino a Tiburtina FS (~16 min), oppure Metro A da stazione Manzoni',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Ariosto 25, Roma',
       };
@@ -197,8 +197,11 @@ export function getOptimalRomeTransit(options: {
         inVehicleMinutes: 3,
         walkingMinutes: 4,
         transfersCount: 0,
-        lineName: 'Metro A Diretta',
-        routeDescription: 'Metro A da Termini a Manzoni (2 fermate, 3 min) + 4 min a piedi per Via Ariosto 25',
+        lineName: 'Metro A Diretta (Fermata Manzoni)',
+        routeDescription:
+          direction === 'to_campus'
+            ? 'Metro A da Termini a fermata Manzoni (2 fermate, 3 min) + 3 min a piedi per Via Ariosto 25 (oppure Bus diretti 714, 360, 649, 16)'
+            : '3 min a piedi per stazione Metro A Manzoni + Metro A diretta fino a Termini (3 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Ariosto 25, Roma',
       };
@@ -227,30 +230,30 @@ export function getOptimalRomeTransit(options: {
   if (isTiburtina) {
     return {
       mode: 'mix',
-      durationMinutes: 20,
-      inVehicleMinutes: 15,
-      walkingMinutes: 5,
+      durationMinutes: 18,
+      inVehicleMinutes: 14,
+      walkingMinutes: 4,
       transfersCount: 0,
-      lineName: 'Bus 492 / Metro B',
+      lineName: `Mezzi Urbani ATAC verso ${classroom.displayName || 'Aula'}`,
       routeDescription:
         direction === 'to_campus'
-          ? `Mezzi pubblici da Tiburtina verso ${classroom.address || 'Sapienza'}`
-          : `Mezzi pubblici da ${classroom.address || 'Sapienza'} verso Stazione Tiburtina`,
+          ? `Collegamenti bus e metro da Stazione Tiburtina verso ${classroom.address || 'la sede di lezione'}`
+          : `Collegamenti bus e metro verso Stazione Tiburtina`,
       stationOriginName: fromStationName,
       targetAddress: classroom.address || 'Roma',
     };
   } else {
     return {
       mode: 'mix',
-      durationMinutes: 14,
-      inVehicleMinutes: 10,
+      durationMinutes: 12,
+      inVehicleMinutes: 8,
       walkingMinutes: 4,
       transfersCount: 0,
-      lineName: 'Metro / Bus Diretto',
+      lineName: `Mezzi Urbani ATAC verso ${classroom.displayName || 'Aula'}`,
       routeDescription:
         direction === 'to_campus'
-          ? `Mezzi pubblici da Termini verso ${classroom.address || 'Sapienza'}`
-          : `Mezzi pubblici da ${classroom.address || 'Sapienza'} verso Stazione Termini`,
+          ? `Collegamenti bus e metro da Stazione Termini verso ${classroom.address || 'la sede di lezione'}`
+          : `Collegamenti bus e metro verso Stazione Termini`,
       stationOriginName: fromStationName,
       targetAddress: classroom.address || 'Roma',
     };

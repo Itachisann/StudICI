@@ -282,6 +282,8 @@ async function computeOutboundItinerary(
   // Orario di partenza da casa
   const homeDepartureMins = stationReachMins - carDuration;
 
+  const targetDateStr = targetDate.toISOString().slice(0, 10);
+
   // Calcola orari intermedi
   const legs: TripLeg[] = [];
 
@@ -299,7 +301,10 @@ async function computeOutboundItinerary(
         mapQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
         mapOriginQuery: config.originAddress,
         travelMode: 'driving',
-        notes: `Percorso calcolato automaticamente per ${config.originAddress} ➔ Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDistanceKm} km). Tocca per aprire la navigazione già pronta su Google Maps.`,
+        targetDate: targetDateStr,
+        targetTime: minutesToTime(homeDepartureMins),
+        timeType: 'depart_at',
+        notes: `Percorso calcolato automaticamente per ${config.originAddress} ➔ Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDistanceKm} km). Tocca per aprire la navigazione con orario impostato.`,
       },
     });
 
@@ -370,7 +375,10 @@ async function computeOutboundItinerary(
       mapQuery: targetLecture.address,
       mapCoords: targetLecture.latitude && targetLecture.longitude ? { lat: targetLecture.latitude, lng: targetLecture.longitude } : undefined,
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
-      notes: `${transitSolution.routeDescription}. Tocca per vedere fermate e passaggi live su Google Maps.`,
+      targetDate: targetDateStr,
+      targetTime: targetLecture.startTime,
+      timeType: 'arrive_by',
+      notes: `${transitSolution.routeDescription}. Tocca per aprire Google Maps con arrivo entro le ore ${targetLecture.startTime}.`,
     },
   });
 
@@ -508,6 +516,8 @@ async function computeReturnItinerary(
     durationMinutes: exitClassroomBuffer,
   });
 
+  const targetDateStr = targetDate.toISOString().slice(0, 10);
+
   // Leg 2: Mezzi Urbani verso Stazione
   legs.push({
     id: 'return-transit-leg',
@@ -523,7 +533,10 @@ async function computeReturnItinerary(
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
       mapOriginQuery: targetLecture.address,
       mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
-      notes: `${transitSolution.routeDescription}. Tocca per aprire le linee e passaggi live su Google Maps.`,
+      targetDate: targetDateStr,
+      targetTime: targetLecture.endTime,
+      timeType: 'depart_at',
+      notes: `${transitSolution.routeDescription}. Tocca per aprire Google Maps compilato con partenza alle ${targetLecture.endTime}.`,
     },
   });
 
@@ -577,7 +590,10 @@ async function computeReturnItinerary(
         travelMode: 'driving',
         mapOriginQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
         mapQuery: config.originAddress,
-        notes: `Rientro in auto da Stazione di ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}. Tocca per aprire la navigazione già compilata su Google Maps.`,
+        targetDate: targetDateStr,
+        targetTime: minutesToTime(trainArrMins + carWalkBuffer),
+        timeType: 'depart_at',
+        notes: `Rientro in auto da Stazione di ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}. Tocca per aprire la navigazione con orario impostato.`,
       },
     });
   }

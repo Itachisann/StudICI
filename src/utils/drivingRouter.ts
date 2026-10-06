@@ -76,14 +76,45 @@ async function resolveCoordinates(query: string): Promise<{ lat: number; lon: nu
   const clean = normalizeKey(query);
   if (!clean) return null;
 
-  // 1. Cerca nel database locale
+  const isSpecificStreet =
+    /\b(via|viale|corso|piazza|vicolo|strada|largo|contrada|localit[aà]|loc\.|frazione|fraz\.)\b/i.test(query) ||
+    /\d+/.test(query);
+
+  // 1. Se è un indirizzo con via o numero civico specifico, prova PRIMA il geocoding preciso Nominatim
+  if (isSpecificStreet) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+        query + ', Italia'
+      )}&format=json&limit=1`;
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'StudICI-App/1.6' },
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data[0]?.lat && data[0]?.lon) {
+          return {
+            lat: parseFloat(data[0].lat),
+            lon: parseFloat(data[0].lon),
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Cerca nel database locale dei comuni noti
   for (const [k, coords] of Object.entries(KNOWN_COORDINATES)) {
     if (clean.includes(k) || k.includes(clean)) {
       return { lat: coords.lat, lon: coords.lon };
     }
   }
 
-  // 2. Geocoding dinamico via Nominatim con timeout breve
+  // 3. Geocoding dinamico via Nominatim con fallback per comuni non in tabella
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
@@ -113,8 +144,8 @@ async function resolveCoordinates(query: string): Promise<{ lat: number; lon: nu
 
 /**
  * Calcola automaticamente il tempo stimato di guida e la distanza tra l'indirizzo di partenza
- * e la stazione ferroviaria. Interroga il motore di routing OSRM (Google Maps compatible)
- * con fallback immediato su modello matematico stradale.
+ * e la stazione ferroviaria. Supporta sia comuni (es. Amelia) che indirizzi completi (es. Via Amerina 15, Amelia).
+ * Interroga il motore di routing OSRM con fallback immediato su modello matematico stradale.
  */
 export async function calculateDrivingEstimate(
   originAddress: string,
@@ -123,35 +154,41 @@ export async function calculateDrivingEstimate(
   const origin = originAddress.trim() || 'Amelia';
   const station = stationName.trim() || 'Orte';
 
-  // Casi speciali comuni pre-calcolati (velocità istantanea)
+  const isSpecificStreet =
+    /\b(via|viale|corso|piazza|vicolo|strada|largo|contrada|localit[aà]|loc\.|frazione|fraz\.)\b/i.test(origin) ||
+    /\d+/.test(origin);
+
+  // Casi speciali comuni pre-calcolati (istantaneo quando si inserisce solo il comune senza via specifica)
   const normOrigin = normalizeKey(origin);
   const normStation = normalizeKey(station);
 
-  if (normOrigin.includes('amelia') && normStation.includes('orte')) {
-    return {
-      durationMinutes: 24,
-      distanceKm: 17.2,
-      isCalculated: true,
-      routeSummary: 'SP8 / SS204 (17.2 km, ~24 min)',
-    };
-  }
+  if (!isSpecificStreet) {
+    if (normOrigin === 'amelia' && normStation.includes('orte')) {
+      return {
+        durationMinutes: 24,
+        distanceKm: 17.2,
+        isCalculated: true,
+        routeSummary: 'Centro Amelia ➔ Stazione Orte FS (17.2 km, ~24 min via SP8/SS204)',
+      };
+    }
 
-  if (normOrigin.includes('narni') && normStation.includes('narni')) {
-    return {
-      durationMinutes: 8,
-      distanceKm: 5.5,
-      isCalculated: true,
-      routeSummary: 'Via Flaminia Ternana (~8 min)',
-    };
-  }
+    if (normOrigin === 'narni' && normStation.includes('narni')) {
+      return {
+        durationMinutes: 8,
+        distanceKm: 5.5,
+        isCalculated: true,
+        routeSummary: 'Centro Narni ➔ Stazione Narni-Amelia (~8 min via SS3)',
+      };
+    }
 
-  if (normOrigin.includes('terni') && normStation.includes('terni')) {
-    return {
-      durationMinutes: 6,
-      distanceKm: 2.8,
-      isCalculated: true,
-      routeSummary: 'Centro città ➔ Stazione FS (~6 min)',
-    };
+    if (normOrigin === 'terni' && normStation.includes('terni')) {
+      return {
+        durationMinutes: 6,
+        distanceKm: 2.8,
+        isCalculated: true,
+        routeSummary: 'Centro Terni ➔ Stazione FS (~6 min)',
+      };
+    }
   }
 
   try {

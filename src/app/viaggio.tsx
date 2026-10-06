@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   Platform,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,6 +23,7 @@ import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage'
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
 import { parseTimeToMinutes } from '../utils/trenitaliaApi';
+import { openGoogleMaps } from '../utils/googleMapsUrl';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 
 const SAPIENZA_RED = '#822433';
@@ -256,42 +256,27 @@ export default function ViaggioScreen() {
     loadData();
   };
 
-  const handleOpenMaps = (leg: TripLeg) => {
+  const handleOpenMaps = async (leg: TripLeg) => {
     const dest = leg.details?.mapQuery;
     const origin = leg.details?.mapOriginQuery;
     const mode = leg.details?.travelMode || 'transit';
+    const targetDate = leg.details?.targetDate;
+    const targetTime = leg.details?.targetTime;
+    const timeType = leg.details?.timeType;
 
     if (!dest) {
       Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
       return;
     }
 
-    const encodedDest = encodeURIComponent(dest);
-    const encodedOrigin = origin ? encodeURIComponent(origin) : '';
-
-    // Modalità di viaggio per Google Maps: transit | driving | walking
-    const gmapsMode = mode === 'transit' ? 'transit' : mode === 'walking' ? 'walking' : 'driving';
-
-    // 1. URL per App nativa Google Maps su iOS (comgooglemaps://)
-    const gmapsAppUrl = origin
-      ? `comgooglemaps://?saddr=${encodedOrigin}&daddr=${encodedDest}&directionsmode=${gmapsMode}`
-      : `comgooglemaps://?daddr=${encodedDest}&directionsmode=${gmapsMode}`;
-
-    // 2. URL per Google Maps Web / Universale (precisissimo con passaggi e fermate ATAC Roma)
-    const gmapsWebUrl = origin
-      ? `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedDest}&travelmode=${gmapsMode}`
-      : `https://www.google.com/maps/dir/?api=1&destination=${encodedDest}&travelmode=${gmapsMode}`;
-
-    // Prova ad aprire l'app Google Maps; se non installata, apre Google Maps nel browser
-    Linking.canOpenURL('comgooglemaps://')
-      .then((supported) => {
-        if (supported) {
-          Linking.openURL(gmapsAppUrl);
-        } else {
-          Linking.openURL(gmapsWebUrl);
-        }
-      })
-      .catch(() => Linking.openURL(gmapsWebUrl));
+    await openGoogleMaps({
+      origin,
+      destination: dest,
+      travelMode: mode,
+      targetDate,
+      targetTime,
+      timeType,
+    });
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -853,18 +838,18 @@ export default function ViaggioScreen() {
                             <View style={{ flex: 1, marginRight: 6 }}>
                               <Text style={styles.mapsBannerTitle}>
                                 {leg.details.travelMode === 'transit'
-                                  ? 'Apri Mezzi su Google Maps'
+                                  ? `Mezzi su Maps (${leg.details.timeType === 'arrive_by' ? 'Arrivo' : 'Partenza'} ore ${leg.details.targetTime || leg.startTime})`
                                   : leg.details.travelMode === 'walking'
-                                  ? 'Apri a Piedi su Google Maps'
-                                  : 'Apri Guida su Google Maps'}
+                                  ? 'Percorso a Piedi su Maps'
+                                  : `Guida su Maps (Partenza ore ${leg.details.targetTime || leg.startTime})`}
                               </Text>
                               <Text style={styles.mapsBannerSubtitle} numberOfLines={1}>
-                                Percorso già compilato • Navigazione live
+                                Percorso compilato con data e orario lezione
                               </Text>
                             </View>
                           </View>
                           <View style={styles.mapsActionBadge}>
-                            <Text style={styles.mapsActionBadgeText}>Vedi</Text>
+                            <Text style={styles.mapsActionBadgeText}>APRI MAPS</Text>
                             <Ionicons name="open-outline" size={11} color="#38bdf8" style={{ marginLeft: 3 }} />
                           </View>
                         </View>

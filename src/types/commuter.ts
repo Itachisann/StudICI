@@ -70,6 +70,10 @@ export interface TripLeg {
     mapOriginQuery?: string;
     mapCoords?: { lat: number; lng: number };
     travelMode?: 'driving' | 'transit' | 'walking';
+    targetTime?: string; // es. "08:30"
+    targetDate?: string; // es. "2026-10-07"
+    timeType?: 'arrive_by' | 'depart_at';
+    targetEpochSeconds?: number;
   };
 }
 
