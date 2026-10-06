@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -54,6 +54,37 @@ export default function ViaggioScreen() {
   const [selectedTrainOffset, setSelectedTrainOffset] = useState<number>(0);
   const [selectedTrainNumber, setSelectedTrainNumber] = useState<string | null>(null);
   const [configModalVisible, setConfigModalVisible] = useState(false);
+
+  const trainChipsScrollRef = useRef<ScrollView>(null);
+  const trainScrollWidthRef = useRef<number>(0);
+  const chipLayoutsRef = useRef<{ [key: string]: { x: number; width: number } }>({});
+
+  const centerSelectedTrain = useCallback((trainNum: string) => {
+    const cleanNum = trainNum.replace(/\D/g, '');
+    const entry = Object.entries(chipLayoutsRef.current).find(
+      ([k]) => k.replace(/\D/g, '') === cleanNum
+    );
+    if (!entry) return;
+    const layout = entry[1];
+    const containerWidth = trainScrollWidthRef.current;
+    if (layout && containerWidth > 0 && trainChipsScrollRef.current) {
+      const targetX = layout.x + layout.width / 2 - containerWidth / 2;
+      trainChipsScrollRef.current.scrollTo({
+        x: Math.max(0, targetX),
+        animated: true,
+      });
+    }
+  }, []);
+
+  const currentTrainNumber = itinerary?.liveTrain?.trainNumber;
+  useEffect(() => {
+    if (currentTrainNumber) {
+      const t = setTimeout(() => {
+        centerSelectedTrain(currentTrainNumber);
+      }, 100);
+      return () => clearTimeout(t);
+    }
+  }, [currentTrainNumber, centerSelectedTrain]);
 
   // Lezioni del giorno selezionato
   const dayClasses = useMemo(() => {
@@ -295,7 +326,7 @@ export default function ViaggioScreen() {
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
-  const directionTitles = ['Andata (Verso Aula)', 'Ritorno (Verso Casa)'];
+  const directionTitles = ['Andata', 'Ritorno'];
 
   return (
     <View style={styles.container}>
@@ -346,12 +377,13 @@ export default function ViaggioScreen() {
                   styles.customSegmentBtn,
                   direction === 'outbound' && styles.customSegmentBtnActive,
                 ]}
+                activeOpacity={0.7}
                 onPress={() => handleDirectionChange('outbound')}
               >
                 <Ionicons
                   name="school-outline"
                   size={15}
-                  color={direction === 'outbound' ? '#fff' : '#94a3b8'}
+                  color={direction === 'outbound' ? '#fff' : '#a1a1aa'}
                   style={{ marginRight: 6 }}
                 />
                 <Text
@@ -360,7 +392,7 @@ export default function ViaggioScreen() {
                     direction === 'outbound' && styles.customSegmentTextActive,
                   ]}
                 >
-                  Andata (Verso Aula)
+                  Andata
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -368,12 +400,13 @@ export default function ViaggioScreen() {
                   styles.customSegmentBtn,
                   direction === 'return' && styles.customSegmentBtnActive,
                 ]}
+                activeOpacity={0.7}
                 onPress={() => handleDirectionChange('return')}
               >
                 <Ionicons
                   name="home-outline"
                   size={15}
-                  color={direction === 'return' ? '#fff' : '#94a3b8'}
+                  color={direction === 'return' ? '#fff' : '#a1a1aa'}
                   style={{ marginRight: 6 }}
                 />
                 <Text
@@ -382,7 +415,7 @@ export default function ViaggioScreen() {
                     direction === 'return' && styles.customSegmentTextActive,
                   ]}
                 >
-                  Ritorno (Verso Casa)
+                  Ritorno
                 </Text>
               </TouchableOpacity>
             </View>
@@ -584,61 +617,24 @@ export default function ViaggioScreen() {
             {itinerary.liveTrain && (
               <View style={styles.trainHighlightCard}>
                 <View style={styles.trainHighlightHeader}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <View style={styles.trainNumberBadge}>
-                      <Ionicons name="train" size={14} color="#fff" style={{ marginRight: 4 }} />
-                      <Text style={styles.trainNumberText}>{itinerary.liveTrain.trainNumber}</Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.trainCategoryTag,
-                        itinerary.liveTrain.isFast
-                          ? styles.trainCategoryTagFast
-                          : styles.trainCategoryTagSlow,
-                      ]}
-                    >
-                      <Ionicons
-                        name={itinerary.liveTrain.isFast ? 'flash' : 'time'}
-                        size={11}
-                        color={itinerary.liveTrain.isFast ? '#38bdf8' : '#f59e0b'}
-                        style={{ marginRight: 3 }}
-                      />
-                      <Text
-                        style={[
-                          styles.trainCategoryTagText,
-                          { color: itinerary.liveTrain.isFast ? '#38bdf8' : '#f59e0b' },
-                        ]}
-                      >
-                        {itinerary.liveTrain.isFast
-                          ? 'Regionale Veloce (Consigliato)'
-                          : 'Regionale (+12 min)'}
-                      </Text>
-                    </View>
+                  <View style={styles.trainNumberBadge}>
+                    <Ionicons name="train" size={14} color="#fff" style={{ marginRight: 5 }} />
+                    <Text style={styles.trainNumberText}>{itinerary.liveTrain.trainNumber}</Text>
                   </View>
 
-                  <View
-                    style={[
-                      styles.trainDelayBadge,
-                      {
-                        backgroundColor:
-                          itinerary.liveTrain.delayMinutes > 0
-                            ? 'rgba(239, 68, 68, 0.15)'
-                            : 'rgba(52, 199, 89, 0.15)',
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.trainDelayText,
-                        {
-                          color:
-                            itinerary.liveTrain.delayMinutes > 0 ? '#ef4444' : '#34c759',
-                        },
-                      ]}
-                    >
-                      {itinerary.liveTrain.statusDescription}
-                    </Text>
-                  </View>
+                  {itinerary.liveTrain.delayMinutes > 0 ? (
+                    <View style={styles.trainDelayBadgeWarning}>
+                      <Ionicons name="alert-circle" size={12} color="#ef4444" style={{ marginRight: 4 }} />
+                      <Text style={styles.trainDelayWarningText}>
+                        +{itinerary.liveTrain.delayMinutes} min ritardo
+                      </Text>
+                    </View>
+                  ) : itinerary.liveTrain.statusDescription.toLowerCase().includes('soppresso') ? (
+                    <View style={styles.trainDelayBadgeWarning}>
+                      <Ionicons name="close-circle" size={12} color="#ef4444" style={{ marginRight: 4 }} />
+                      <Text style={styles.trainDelayWarningText}>Soppresso</Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 {/* Info Partenza / Binario / Arrivo */}
@@ -716,9 +712,16 @@ export default function ViaggioScreen() {
                 {/* Chips Treni Alternativi */}
                 {itinerary.availableTrains && itinerary.availableTrains.length > 1 && (
                   <ScrollView
+                    ref={trainChipsScrollRef}
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.trainChipsScroll}
+                    onLayout={(e) => {
+                      trainScrollWidthRef.current = e.nativeEvent.layout.width;
+                      if (itinerary.liveTrain?.trainNumber) {
+                        centerSelectedTrain(itinerary.liveTrain.trainNumber);
+                      }
+                    }}
                   >
                     {itinerary.availableTrains.map((at) => {
                       const isCurrent =
@@ -733,6 +736,15 @@ export default function ViaggioScreen() {
                             isCurrent && styles.trainChipCurrent,
                           ]}
                           activeOpacity={0.7}
+                          onLayout={(e) => {
+                            chipLayoutsRef.current[at.trainNumber] = {
+                              x: e.nativeEvent.layout.x,
+                              width: e.nativeEvent.layout.width,
+                            };
+                            if (isCurrent) {
+                              centerSelectedTrain(at.trainNumber);
+                            }
+                          }}
                           onPress={() => handleSelectTrainChip(at.trainNumber)}
                         >
                           <Ionicons
@@ -758,7 +770,7 @@ export default function ViaggioScreen() {
             )}
 
             {/* Timeline delle tappe del viaggio */}
-            <Text style={styles.timelineSectionTitle}>TAPPE DEL VIAGGIO OTTIMIZZATO</Text>
+            <Text style={styles.timelineSectionTitle}>TAPPE DEL VIAGGIO</Text>
 
             <View style={styles.timelineContainer}>
               {itinerary.legs.map((leg, index) => {
@@ -820,10 +832,12 @@ export default function ViaggioScreen() {
                       ]}
                     >
                       <View style={styles.stepTitleRow}>
-                        <Text style={styles.stepTitleText} numberOfLines={1}>
+                        <Text style={styles.stepTitleText}>
                           {leg.title}
                         </Text>
-                        <Text style={styles.stepDurationText}>{leg.durationMinutes}m</Text>
+                        <View style={styles.durationBadgeContainer}>
+                          <Text style={styles.stepDurationText}>{leg.durationMinutes}m</Text>
+                        </View>
                       </View>
 
                       <Text style={styles.stepSubtitleText}>{leg.subtitle}</Text>
@@ -858,10 +872,10 @@ export default function ViaggioScreen() {
                                   ? 'Percorso su Google Maps'
                                   : 'Naviga su Google Maps'}
                               </Text>
-                              <Text style={styles.mapsBannerSubtitle} numberOfLines={1}>
+                              <Text style={styles.mapsBannerSubtitle}>
                                 {leg.details.travelMode === 'transit'
-                                  ? 'Pullman 448 e linee ATAC già compilati • Navigazione live'
-                                  : 'Percorso già compilato • Navigazione live'}
+                                  ? 'Orari in tempo reale e fermate'
+                                  : 'Percorso con orario impostato'}
                               </Text>
                             </View>
                           </View>
@@ -949,25 +963,32 @@ const styles = StyleSheet.create({
   },
   customSegmentedControl: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 12,
-    padding: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
   },
   customSegmentBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 7,
-    borderRadius: 9,
+    backgroundColor: '#1c1c1e',
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    paddingHorizontal: 8,
   },
   customSegmentBtnActive: {
-    backgroundColor: SAPIENZA_RED,
+    backgroundColor: 'rgba(130, 36, 51, 0.45)',
+    borderColor: SAPIENZA_RED,
+    borderWidth: 1,
   },
   customSegmentText: {
     fontSize: 13,
-    color: '#94a3b8',
-    fontWeight: '500',
+    color: '#a1a1aa',
+    fontWeight: '600',
   },
   customSegmentTextActive: {
     color: '#ffffff',
@@ -1251,40 +1272,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#0284c7',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 8,
   },
   trainNumberText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
     color: '#ffffff',
   },
-  trainCategoryTag: {
+  trainDelayBadgeWarning: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  trainCategoryTagFast: {
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
-  },
-  trainCategoryTagSlow: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-  },
-  trainCategoryTagText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  trainDelayBadge: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  trainDelayText: {
+  trainDelayWarningText: {
     fontSize: 11,
     fontWeight: '700',
+    color: '#ef4444',
   },
   trainInfoRow: {
     flexDirection: 'row',
@@ -1458,16 +1466,20 @@ const styles = StyleSheet.create({
   },
   stepTitleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: 2,
+    marginBottom: 3,
   },
   stepTitleText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#ffffff',
     flex: 1,
-    marginRight: 6,
+    marginRight: 8,
+    lineHeight: 19,
+  },
+  durationBadgeContainer: {
+    paddingTop: 1,
   },
   stepDurationText: {
     fontSize: 11,
@@ -1519,9 +1531,10 @@ const styles = StyleSheet.create({
     color: '#38bdf8',
   },
   mapsBannerSubtitle: {
-    fontSize: 10,
+    fontSize: 11,
     color: '#94a3b8',
-    marginTop: 1,
+    marginTop: 2,
+    lineHeight: 15,
   },
   mapsActionBadge: {
     flexDirection: 'row',

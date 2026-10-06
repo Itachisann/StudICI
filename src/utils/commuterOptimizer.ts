@@ -306,7 +306,7 @@ async function computeOutboundItinerary(
         targetDate: targetDateStr,
         targetTime: minutesToTime(homeDepartureMins),
         timeType: 'depart_at',
-        notes: `Percorso calcolato automaticamente per ${config.originAddress} ➔ Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDistanceKm} km). Tocca per aprire la navigazione con orario impostato.`,
+        notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });
 
@@ -380,7 +380,7 @@ async function computeOutboundItinerary(
       targetDate: targetDateStr,
       targetTime: targetLecture.startTime,
       timeType: 'arrive_by',
-      notes: `${transitSolution.routeDescription}. Tocca per aprire Google Maps con arrivo entro le ore ${targetLecture.startTime}.`,
+      notes: transitSolution.routeDescription,
     },
   });
 
@@ -415,7 +415,7 @@ async function computeOutboundItinerary(
     badgeColor = '#ef4444'; // red
     isWarning = true;
   } else if (train.isLive) {
-    badgeText = 'Dati Trenitalia Live';
+    badgeText = 'Dati Trenitalia';
     badgeColor = '#38bdf8'; // blue
   }
 
@@ -538,7 +538,7 @@ async function computeReturnItinerary(
       targetDate: targetDateStr,
       targetTime: targetLecture.endTime,
       timeType: 'depart_at',
-      notes: `${transitSolution.routeDescription}. Tocca per aprire Google Maps compilato con partenza alle ${targetLecture.endTime}.`,
+      notes: transitSolution.routeDescription,
     },
   });
 
@@ -595,7 +595,7 @@ async function computeReturnItinerary(
         targetDate: targetDateStr,
         targetTime: minutesToTime(trainArrMins + carWalkBuffer),
         timeType: 'depart_at',
-        notes: `Rientro in auto da Stazione di ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}. Tocca per aprire la navigazione con orario impostato.`,
+        notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });
   }
@@ -614,8 +614,18 @@ async function computeReturnItinerary(
     availableTrains,
     selectedTrainIndex: selectedIndex,
     statusBadge: {
-      text: train.delayMinutes > 5 ? `Ritardo treno +${train.delayMinutes}m` : 'Rientro in orario',
-      color: train.delayMinutes > 5 ? '#f59e0b' : '#34c759',
+      text:
+        train.delayMinutes > 5
+          ? `Ritardo treno +${train.delayMinutes}m`
+          : train.isLive
+          ? 'Dati Trenitalia'
+          : 'Rientro in orario',
+      color:
+        train.delayMinutes > 5
+          ? '#f59e0b'
+          : train.isLive
+          ? '#38bdf8'
+          : '#34c759',
       isWarning: train.delayMinutes > 5,
     },
     summaryMessage: `Fine lezione ore ${targetLecture.endTime} ➔ Arrivo a casa a ${config.originAddress} alle ore ${minutesToTime(homeArrivalMins)}`,
