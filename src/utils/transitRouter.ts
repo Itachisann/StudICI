@@ -1,14 +1,15 @@
 import { ResolvedClassroom } from './classroomLocations';
 
 export interface TransitSolution {
-  mode: 'bus' | 'metro' | 'walk' | 'mix';
+  mode: 'bus' | 'metro' | 'tram' | 'walk' | 'mix';
   durationMinutes: number;
+  inVehicleMinutes: number;
+  walkingMinutes: number;
   transfersCount: number; // 0 = diretto senza cambi, 1 = un cambio
-  lineName: string; // es. "Bus 492 Diretto", "Metro B Diretta", "Metro B + Metro A"
+  lineName: string; // es. "Bus 492 Diretto", "Metro B Diretta", "Tram 14 / 5 Diretto"
   routeDescription: string;
   stationOriginName: string;
   targetAddress: string;
-  walkingMinutes: number;
 }
 
 /**
@@ -32,15 +33,28 @@ export function getOptimalRomeTransit(options: {
       return {
         mode: 'walk',
         durationMinutes: 8,
+        inVehicleMinutes: 0,
+        walkingMinutes: 8,
         transfersCount: 0,
-        lineName: 'A Piedi (8 min)',
+        lineName: 'A Piedi (8 min - Zero mezzi)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Uscita Ovest Stazione Tiburtina ➔ A piedi dritto su Via Tiburtina 205 (8 min, zero mezzi)'
+            ? 'Uscita Ovest Stazione Tiburtina ➔ A piedi dritto su Via Tiburtina 205 (8 min, zero attese mezzi)'
             : 'A piedi da Via Tiburtina 205 alla Stazione Tiburtina (8 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Tiburtina 205, Roma',
-        walkingMinutes: 8,
+      };
+    } else {
+      return {
+        mode: 'tram',
+        durationMinutes: 11,
+        inVehicleMinutes: 8,
+        walkingMinutes: 3,
+        transfersCount: 0,
+        lineName: 'Tram 14 / 5 Diretto',
+        routeDescription: 'Tram 14 o 5 da Termini a fermata Tiburtina/Marrucini (~8 min) + 3 min a piedi',
+        stationOriginName: fromStationName,
+        targetAddress: classroom.address || 'Via Tiburtina 205, Roma',
       };
     }
   }
@@ -55,27 +69,29 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'metro',
-        durationMinutes: 15,
+        durationMinutes: 14,
+        inVehicleMinutes: 8,
+        walkingMinutes: 6,
         transfersCount: 0, // DIRETTA ZERO CAMBI
         lineName: 'Metro B Diretta (Zero cambi)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Metro B da Tiburtina a fermata Cavour (4 fermate, ~8 min, zero cambi) + 6 min a piedi su Scalinata dei Borgia'
+            ? 'Metro B da Tiburtina a Cavour (4 fermate, ~8 min, zero cambi) + 6 min a piedi su Scalinata dei Borgia'
             : '6 min a piedi da Via Eudossiana a fermata Cavour + Metro B diretta fino a Tiburtina FS (~8 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Eudossiana 18, Roma',
-        walkingMinutes: 6,
       };
     } else {
       return {
         mode: 'metro',
-        durationMinutes: 9,
+        durationMinutes: 8,
+        inVehicleMinutes: 2,
+        walkingMinutes: 6,
         transfersCount: 0,
         lineName: 'Metro B Diretta',
         routeDescription: 'Metro B da Termini a Cavour (1 fermata, 2 min) + 6 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Eudossiana 18, Roma',
-        walkingMinutes: 6,
       };
     }
   }
@@ -93,27 +109,29 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'bus',
-        durationMinutes: 14,
+        durationMinutes: 13,
+        inVehicleMinutes: 9,
+        walkingMinutes: 4,
         transfersCount: 0, // DIRETTO ZERO CAMBI
-        lineName: 'Bus 492 / 310 Diretto (Zero cambi)',
+        lineName: 'Bus 492 / 310 o Tram 3L',
         routeDescription:
           direction === 'to_campus'
             ? 'Bus 492 o 310 da Tiburtina FS a Regina Elena/Università (4 fermate, ~9 min, zero cambi) + 4 min a piedi'
             : '4 min a piedi su Viale Regina Elena + Bus 492 o 310 diretto a Tiburtina FS (~9 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via del Castro Laurenziano 7a, Roma',
-        walkingMinutes: 4,
       };
     } else {
       return {
         mode: 'bus',
-        durationMinutes: 13,
+        durationMinutes: 12,
+        inVehicleMinutes: 8,
+        walkingMinutes: 4,
         transfersCount: 0,
         lineName: 'Bus 310 Diretto',
-        routeDescription: 'Bus 310 da Termini a Regina Elena/Università (~9 min) + 4 min a piedi',
+        routeDescription: 'Bus 310 da Termini a Regina Elena/Università (~8 min) + 4 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via del Castro Laurenziano 7a, Roma',
-        walkingMinutes: 4,
       };
     }
   }
@@ -128,7 +146,9 @@ export function getOptimalRomeTransit(options: {
     if (isTiburtina) {
       return {
         mode: 'bus',
-        durationMinutes: 15,
+        durationMinutes: 14,
+        inVehicleMinutes: 11,
+        walkingMinutes: 3,
         transfersCount: 0, // DIRETTO ZERO CAMBI
         lineName: 'Bus 492 / 71 Diretto (Zero cambi)',
         routeDescription:
@@ -137,18 +157,18 @@ export function getOptimalRomeTransit(options: {
             : 'Varco De Lollis + Bus 492 o 71 diretto a Tiburtina FS (~11 min)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Piazzale Aldo Moro 5, Roma',
-        walkingMinutes: 3,
       };
     } else {
       return {
         mode: 'bus',
-        durationMinutes: 12,
+        durationMinutes: 11,
+        inVehicleMinutes: 8,
+        walkingMinutes: 3,
         transfersCount: 0,
-        lineName: 'Bus 310 Diretto',
-        routeDescription: 'Bus 310 da Termini a De Lollis/Università (~9 min) + 3 min a piedi',
+        lineName: 'Bus 310 / 492 Diretto',
+        routeDescription: 'Bus 310 da Termini a De Lollis/Università (~8 min) + 3 min a piedi',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Piazzale Aldo Moro 5, Roma',
-        walkingMinutes: 3,
       };
     }
   }
@@ -159,28 +179,48 @@ export function getOptimalRomeTransit(options: {
       return {
         mode: 'bus',
         durationMinutes: 22,
+        inVehicleMinutes: 18,
+        walkingMinutes: 4,
         transfersCount: 0, // DIRETTO SENZA CAMBI
         lineName: 'Bus 492 Diretto (Zero cambi)',
         routeDescription:
           direction === 'to_campus'
-            ? 'Bus 492 da Tiburtina FS fino a fermata Manzoni/Merulana (~18 min, zero cambi) + 3 min a piedi per Via Ariosto 25'
-            : '3 min a piedi per fermata Manzoni + Bus 492 diretto fino a Tiburtina FS (~18 min, zero cambi)',
+            ? 'Bus 492 da Tiburtina FS fino a fermata Manzoni/Merulana (~18 min a bordo, zero cambi) + 4 min a piedi per Via Ariosto 25'
+            : '4 min a piedi per fermata Manzoni + Bus 492 diretto fino a Tiburtina FS (~18 min a bordo, zero cambi)',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Ariosto 25, Roma',
-        walkingMinutes: 4,
       };
     } else {
       return {
         mode: 'metro',
-        durationMinutes: 8,
+        durationMinutes: 7,
+        inVehicleMinutes: 3,
+        walkingMinutes: 4,
         transfersCount: 0,
         lineName: 'Metro A Diretta',
-        routeDescription: 'Metro A da Termini a Manzoni (2 fermate, 3 min) + 3 min a piedi per Via Ariosto 25',
+        routeDescription: 'Metro A da Termini a Manzoni (2 fermate, 3 min) + 4 min a piedi per Via Ariosto 25',
         stationOriginName: fromStationName,
         targetAddress: classroom.address || 'Via Ariosto 25, Roma',
-        walkingMinutes: 4,
       };
     }
+  }
+
+  // 6. Polo Salaria (RM076 - Via Salaria 851)
+  if (bCode === 'RM076' || addr.includes('salaria')) {
+    return {
+      mode: 'bus',
+      durationMinutes: 19,
+      inVehicleMinutes: 16,
+      walkingMinutes: 3,
+      transfersCount: 0,
+      lineName: 'Bus 135 Diretto',
+      routeDescription:
+        direction === 'to_campus'
+          ? 'Bus 135 da Tiburtina FS fino a Salaria/Grottazzolina (~16 min) + 3 min a piedi'
+          : '3 min a piedi per Salaria/Grottazzolina + Bus 135 diretto a Tiburtina FS (~16 min)',
+      stationOriginName: fromStationName,
+      targetAddress: classroom.address || 'Via Salaria 851, Roma',
+    };
   }
 
   // Fallback generico verso centro/Sapienza
@@ -188,6 +228,8 @@ export function getOptimalRomeTransit(options: {
     return {
       mode: 'mix',
       durationMinutes: 20,
+      inVehicleMinutes: 15,
+      walkingMinutes: 5,
       transfersCount: 0,
       lineName: 'Bus 492 / Metro B',
       routeDescription:
@@ -196,12 +238,13 @@ export function getOptimalRomeTransit(options: {
           : `Mezzi pubblici da ${classroom.address || 'Sapienza'} verso Stazione Tiburtina`,
       stationOriginName: fromStationName,
       targetAddress: classroom.address || 'Roma',
-      walkingMinutes: 5,
     };
   } else {
     return {
       mode: 'mix',
-      durationMinutes: 15,
+      durationMinutes: 14,
+      inVehicleMinutes: 10,
+      walkingMinutes: 4,
       transfersCount: 0,
       lineName: 'Metro / Bus Diretto',
       routeDescription:
@@ -210,7 +253,6 @@ export function getOptimalRomeTransit(options: {
           : `Mezzi pubblici da ${classroom.address || 'Sapienza'} verso Stazione Termini`,
       stationOriginName: fromStationName,
       targetAddress: classroom.address || 'Roma',
-      walkingMinutes: 5,
     };
   }
 }

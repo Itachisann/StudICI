@@ -20,10 +20,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - **Esclusione Treni Non Regionali**: filtraggio automatico che esclude Frecce, Italo e Intercity per tutelare i possessori di abbonamento regionale o Metrebus Lazio.
     - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~33-40 min), fornendo anche tutte le alternative Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi selezionabili con un tocco.
     - **Binario Live, Binario Programmato e Ritardi**: visualizzazione del binario esatto di partenza e arrivo da Trenitalia, con indicazione del ritardo o anticipo in tempo reale.
+  - **Auto-Calcolo del Tempo e Distanza di Guida (Auto ➔ Stazione)**:
+    - Rimosso l'inserimento manuale dei minuti di guida nelle impostazioni: il tempo stimato e la distanza chilometrica sono ora calcolati automaticamente dal motore di routing stradale (es. Amelia ➔ Stazione di Orte FS: 24 min • 17.2 km via SP8/SS204).
+    - Database geografico e geocoding istantaneo con supporto offline per i principali comuni e stazioni pendolari di Lazio e Umbria (Amelia, Orte, Narni, Terni, Viterbo, ecc.).
+    - Pulsante dedicato "Ricalcola" nelle impostazioni per aggiornare al volo i tempi se cambia la residenza o la stazione.
+  - **Ottimizzazione Dinamica e Intelligente dei Mezzi Urbani a Roma**:
+    - Rimossi i campi manuali "Tempo medio verso l'aula" e "Mezzo o linea suggerita": l'app valuta in tempo reale la soluzione più rapida (Metro B/A, Bus ATAC, Tram 3/19 o a piedi) calcolando tempi esatti a bordo, tempi effettivi di camminata pedonale e coincidenze in base all'aula della specifica lezione selezionata.
+    - Mantenuto solo lo stepper per l'anticipo di sicurezza desiderato in aula (es. 10 minuti).
+  - **Reindirizzamento Diretto su Google Maps con Percorso Pre-Compilato**:
+    - Toccando qualsiasi card della timeline (tragitto in auto, mezzi pubblici urbani, percorso a piedi), l'app reindirizza direttamente all'app Google Maps (o alla pagina web) con punto di partenza, destinazione e modalità di viaggio (`driving`, `transit`, `walking`) già interamente compilati e pronti per la navigazione.
+    - Banner dedicato ad alta leggibilità su ogni tappa interattiva ("Apri Guida su Google Maps", "Apri Mezzi su Google Maps", "Apri a Piedi su Google Maps").
+    - Configurato schema nativo iOS `comgooglemaps://` in `Info.plist` con fallback universale.
   - **Linee Urbane Roma Dirette a ZERO Cambi**: calcolo automatico della linea ottimale per raggiungere ciascun campus da Roma Tiburtina/Termini privilegiando collegamenti diretti senza cambi (es. Bus 492 diretto, Metro B diretta, passeggiata a piedi 8 min per Polo Tiburtina RM025).
   - **Calcolo Multimodale Completo**: auto da casa alla stazione (con tempo di parcheggio), treno regionale, mezzi urbani e ingresso in aula con margine.
   - **Doppia Modalità Andata & Ritorno**: commutazione immediata tra andata e ritorno con `UISegmentedControl` nativo iOS.
-  - **Integrazione Google Maps Diretta per i Mezzi Urbani**: navigazione e calcolo itinerario ottimizzati con Google Maps (sia app nativa iOS che web), con passaggio automatico di punto di partenza (stazione di arrivo Roma) e destinazione (aula/sede), fornendo tracciamento live dei bus ATAC, passaggi alle fermate e percorsi metropolitana senza dover digitare nulla.
 
 ## 1.5.10
 

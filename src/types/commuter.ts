@@ -9,14 +9,15 @@ export interface CommuterConfig {
   originAddress: string; // es. "Amelia"
   carLeg: {
     enabled: boolean;
-    durationMinutes: number; // es. 25
+    durationMinutes: number; // es. 24
     parkingBufferMinutes: number; // es. 7
     stationAddress?: string; // es. "Stazione di Orte, Piazza XXV Aprile, Orte"
+    distanceKm?: number; // es. 17.2
   };
   departureStation: StationInfo;
   arrivalStation: StationInfo;
   transitLeg: {
-    preferredMode: 'bus' | 'metro' | 'walk' | 'mix';
+    preferredMode: 'auto' | 'bus' | 'metro' | 'tram' | 'walk' | 'mix';
     durationMinutes: number; // es. 20
     lineSuggestion?: string; // es. "Bus 492 / Metro B"
   };
@@ -62,6 +63,7 @@ export interface TripLeg {
     delay?: number;
     delayMinutes?: number;
     transitLine?: string;
+    transitMode?: 'tram' | 'metro' | 'bus' | 'walk' | 'mix';
     notes?: string;
     isLiveTrain?: boolean;
     mapQuery?: string;

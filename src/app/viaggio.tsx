@@ -808,7 +808,17 @@ export default function ViaggioScreen() {
                     </View>
 
                     {/* Contenuto Tappa */}
-                    <View style={[styles.stepContentCard, isFirst && { marginTop: 0 }]}>
+                    <TouchableOpacity
+                      activeOpacity={leg.details?.mapQuery ? 0.85 : 1}
+                      onPress={() => {
+                        if (leg.details?.mapQuery) handleOpenMaps(leg);
+                      }}
+                      style={[
+                        styles.stepContentCard,
+                        isFirst && { marginTop: 0 },
+                        leg.details?.mapQuery && styles.stepContentCardInteractive,
+                      ]}
+                    >
                       <View style={styles.stepTitleRow}>
                         <Text style={styles.stepTitleText} numberOfLines={1}>
                           {leg.title}
@@ -823,41 +833,43 @@ export default function ViaggioScreen() {
                         <Text style={styles.stepNotesText}>{leg.details.notes}</Text>
                       )}
 
-                      {/* Pulsante Apri Google Maps */}
+                      {/* Banner Apri Google Maps */}
                       {leg.details?.mapQuery && (
-                        <TouchableOpacity
-                          style={styles.mapsBtn}
-                          activeOpacity={0.7}
-                          onPress={() => handleOpenMaps(leg)}
-                        >
-                          <Ionicons
-                            name={
-                              leg.details.travelMode === 'transit'
-                                ? 'bus-outline'
-                                : leg.details.travelMode === 'walking'
-                                ? 'walk-outline'
-                                : 'navigate-outline'
-                            }
-                            size={13}
-                            color="#38bdf8"
-                            style={{ marginRight: 5 }}
-                          />
-                          <Text style={styles.mapsBtnText}>
-                            {leg.details.travelMode === 'transit'
-                              ? 'Vedi Mezzi su Google Maps'
-                              : leg.details.travelMode === 'walking'
-                              ? 'Percorso su Google Maps'
-                              : 'Guida con Google Maps'}
-                          </Text>
-                          <Ionicons
-                            name="open-outline"
-                            size={11}
-                            color="#38bdf8"
-                            style={{ marginLeft: 5, opacity: 0.8 }}
-                          />
-                        </TouchableOpacity>
+                        <View style={styles.mapsBanner}>
+                          <View style={styles.mapsBannerLeft}>
+                            <View style={styles.mapsIconCircle}>
+                              <Ionicons
+                                name={
+                                  leg.details.travelMode === 'transit'
+                                    ? 'bus'
+                                    : leg.details.travelMode === 'walking'
+                                    ? 'walk'
+                                    : 'navigate'
+                                }
+                                size={14}
+                                color="#38bdf8"
+                              />
+                            </View>
+                            <View style={{ flex: 1, marginRight: 6 }}>
+                              <Text style={styles.mapsBannerTitle}>
+                                {leg.details.travelMode === 'transit'
+                                  ? 'Apri Mezzi su Google Maps'
+                                  : leg.details.travelMode === 'walking'
+                                  ? 'Apri a Piedi su Google Maps'
+                                  : 'Apri Guida su Google Maps'}
+                              </Text>
+                              <Text style={styles.mapsBannerSubtitle} numberOfLines={1}>
+                                Percorso già compilato • Navigazione live
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={styles.mapsActionBadge}>
+                            <Text style={styles.mapsActionBadgeText}>Vedi</Text>
+                            <Ionicons name="open-outline" size={11} color="#38bdf8" style={{ marginLeft: 3 }} />
+                          </View>
+                        </View>
                       )}
-                    </View>
+                    </TouchableOpacity>
                   </View>
                 );
               })}
@@ -1470,19 +1482,56 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     marginTop: 2,
   },
-  mapsBtn: {
+  stepContentCardInteractive: {
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+  },
+  mapsBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(56, 189, 248, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.2)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
     marginTop: 8,
   },
-  mapsBtnText: {
-    fontSize: 11,
-    fontWeight: '600',
+  mapsBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  mapsIconCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(56, 189, 248, 0.18)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  mapsBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#38bdf8',
+  },
+  mapsBannerSubtitle: {
+    fontSize: 10,
+    color: '#94a3b8',
+    marginTop: 1,
+  },
+  mapsActionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  mapsActionBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
     color: '#38bdf8',
   },
   summaryFooterBox: {

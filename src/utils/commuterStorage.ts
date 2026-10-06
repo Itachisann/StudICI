@@ -8,7 +8,8 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
   originAddress: 'Amelia',
   carLeg: {
     enabled: true,
-    durationMinutes: 25,
+    durationMinutes: 24,
+    distanceKm: 17.2,
     parkingBufferMinutes: 7,
     stationAddress: 'Stazione Ferroviaria di Orte, Piazza XXV Aprile, Orte',
   },
@@ -23,9 +24,9 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
     shortName: 'Roma Tiburtina',
   },
   transitLeg: {
-    preferredMode: 'bus',
-    durationMinutes: 22,
-    lineSuggestion: 'Bus 492 / Metro B',
+    preferredMode: 'auto',
+    durationMinutes: 20,
+    lineSuggestion: 'Ottimizzazione automatica (Metro / Tram / Bus ATAC)',
   },
   bufferMinutes: 10,
   destinationType: 'auto',

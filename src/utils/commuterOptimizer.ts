@@ -2,6 +2,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { ScheduleData, ClassEvent } from './scraper';
 import { resolveClassroom, formatSapienzaAddress, SAPIENZA_BUILDINGS } from './classroomLocations';
 import { getOptimalRomeTransit } from './transitRouter';
+import { calculateDrivingEstimate } from './drivingRouter';
 import {
   findOptimalCommuterTrain,
   parseTimeToMinutes,
@@ -260,9 +261,20 @@ async function computeOutboundItinerary(
   const trainDepMins = parseTimeToMinutes(train.departureTimeActual || train.departureTimePlanned || '');
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
-  // Tragitto auto
+  // Tragitto auto con calcolo automatico percorso
   const carEnabled = config.carLeg.enabled;
-  const carDuration = carEnabled ? config.carLeg.durationMinutes || 25 : 0;
+  let carDuration = 0;
+  let carDistanceKm = config.carLeg.distanceKm || 17.2;
+
+  if (carEnabled) {
+    const drivingEst = await calculateDrivingEstimate(
+      config.originAddress,
+      config.departureStation.shortName || config.departureStation.name
+    );
+    carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
+    carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+  }
+
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
 
   // Orario in cui essere in stazione per il treno
@@ -279,7 +291,7 @@ async function computeOutboundItinerary(
       id: 'car-leg',
       type: 'car',
       title: `Partenza in Auto da ${config.originAddress}`,
-      subtitle: `Tragitto verso ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min)`,
+      subtitle: `Tragitto verso Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km)`,
       startTime: minutesToTime(homeDepartureMins),
       endTime: minutesToTime(homeDepartureMins + carDuration),
       durationMinutes: carDuration,
@@ -287,7 +299,7 @@ async function computeOutboundItinerary(
         mapQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
         mapOriginQuery: config.originAddress,
         travelMode: 'driving',
-        notes: `Guida da ${config.originAddress} alla stazione ferroviaria`,
+        notes: `Percorso calcolato automaticamente per ${config.originAddress} ➔ Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDistanceKm} km). Tocca per aprire la navigazione già pronta su Google Maps.`,
       },
     });
 
@@ -341,23 +353,24 @@ async function computeOutboundItinerary(
     },
   });
 
-  // Leg 3: Mezzi Pubblici Urbani (ottimizzato per ZERO cambi)
+  // Leg 3: Mezzi Pubblici Urbani (ottimizzato dinamicamente)
   const actualClassroomArrivalMins = trainArrMins + transitMins;
   legs.push({
     id: 'transit-leg',
     type: 'transit',
     title: transitSolution.lineName,
-    subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${targetLecture.room} (${transitSolution.transfersCount === 0 ? 'Zero cambi' : '1 cambio'})`,
+    subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${targetLecture.room} (${transitSolution.inVehicleMinutes > 0 ? `${transitSolution.inVehicleMinutes}m a bordo + ` : ''}${transitSolution.walkingMinutes}m a piedi)`,
     startTime: minutesToTime(trainArrMins),
     endTime: minutesToTime(actualClassroomArrivalMins),
     durationMinutes: transitMins,
     details: {
       transitLine: transitSolution.lineName,
-      mapOriginQuery: `Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}, Roma`,
+      transitMode: transitSolution.mode,
+      mapOriginQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
       mapQuery: targetLecture.address,
       mapCoords: targetLecture.latitude && targetLecture.longitude ? { lat: targetLecture.latitude, lng: targetLecture.longitude } : undefined,
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
-      notes: transitSolution.routeDescription,
+      notes: `${transitSolution.routeDescription}. Tocca per vedere fermate e passaggi live su Google Maps.`,
     },
   });
 
@@ -467,9 +480,19 @@ async function computeReturnItinerary(
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
   const carEnabled = config.carLeg.enabled;
-  const carDuration = carEnabled ? config.carLeg.durationMinutes || 25 : 0;
-  const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
+  let carDuration = 0;
+  let carDistanceKm = config.carLeg.distanceKm || 17.2;
 
+  if (carEnabled) {
+    const drivingEst = await calculateDrivingEstimate(
+      config.originAddress,
+      config.departureStation.shortName || config.departureStation.name
+    );
+    carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
+    carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+  }
+
+  const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
 
   const legs: TripLeg[] = [];
@@ -490,16 +513,17 @@ async function computeReturnItinerary(
     id: 'return-transit-leg',
     type: 'transit',
     title: transitSolution.lineName,
-    subtitle: `${targetLecture.room} ➔ ${config.arrivalStation.shortName || config.arrivalStation.name} (~${transitMins} min, ${transitSolution.transfersCount === 0 ? 'Zero cambi' : '1 cambio'})`,
+    subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name} (${transitSolution.inVehicleMinutes > 0 ? `${transitSolution.inVehicleMinutes}m a bordo + ` : ''}${transitSolution.walkingMinutes}m a piedi)`,
     startTime: minutesToTime(lectureEndMins + exitClassroomBuffer),
     endTime: minutesToTime(stationArrivalMins),
     durationMinutes: transitMins,
     details: {
       transitLine: transitSolution.lineName,
+      transitMode: transitSolution.mode,
       travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
       mapOriginQuery: targetLecture.address,
-      mapQuery: `Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}, Roma`,
-      notes: transitSolution.routeDescription,
+      mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+      notes: `${transitSolution.routeDescription}. Tocca per aprire le linee e passaggi live su Google Maps.`,
     },
   });
 
@@ -545,7 +569,7 @@ async function computeReturnItinerary(
       id: 'return-car-leg',
       type: 'car',
       title: `Rientro in Auto verso ${config.originAddress}`,
-      subtitle: `Dalla stazione a casa (~${carDuration} min)`,
+      subtitle: `Dalla Stazione di ${config.departureStation.shortName || config.departureStation.name} a casa (~${carDuration} min • ${carDistanceKm} km)`,
       startTime: minutesToTime(trainArrMins + carWalkBuffer),
       endTime: minutesToTime(homeArrivalMins),
       durationMinutes: carDuration,
@@ -553,7 +577,7 @@ async function computeReturnItinerary(
         travelMode: 'driving',
         mapOriginQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
         mapQuery: config.originAddress,
-        notes: `Guida da ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}`,
+        notes: `Rientro in auto da Stazione di ${config.departureStation.shortName || config.departureStation.name} a ${config.originAddress}. Tocca per aprire la navigazione già compilata su Google Maps.`,
       },
     });
   }
