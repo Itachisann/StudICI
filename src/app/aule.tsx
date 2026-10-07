@@ -240,19 +240,43 @@ export default function AuleScreen() {
               roomEntries.map((entry, idx) => (
                 <TouchableOpacity
                   key={idx}
-                  style={styles.card}
+                  style={[styles.card, { borderColor: theme.border }]}
                   activeOpacity={0.8}
                   onPress={() => setSelectedRoomModal(entry)}
                 >
                   <View style={styles.cardHeader}>
-                    <View style={styles.iconCircle}>
-                      <Ionicons name="location" size={20} color="#ef4444" />
+                    <View
+                      style={[
+                        styles.iconCircle,
+                        {
+                          backgroundColor: theme.cardTint,
+                          borderColor: theme.border,
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <Ionicons name="location" size={20} color={theme.accent} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.roomName}>{entry.resolved.displayName}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <Text style={styles.roomName}>{entry.resolved.displayName}</Text>
+                        {entry.resolved.campus ? (
+                          <View
+                            style={[
+                              styles.campusBadge,
+                              { backgroundColor: theme.cardTint, borderColor: theme.border },
+                            ]}
+                          >
+                            <Ionicons name="business" size={10} color={theme.accent} style={{ marginRight: 3 }} />
+                            <Text style={[styles.campusBadgeText, { color: theme.accent }]} numberOfLines={1}>
+                              {entry.resolved.campus}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
                       <Text style={styles.buildingName}>{entry.resolved.buildingName}</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={18} color="#666" />
+                    <Ionicons name="chevron-forward" size={18} color="#666" style={{ marginLeft: 6 }} />
                   </View>
 
                   <View style={styles.addressRow}>
@@ -270,8 +294,19 @@ export default function AuleScreen() {
                         </View>
                       ))}
                       {entry.subjects.length > 3 && (
-                        <View style={styles.subBadgeMore}>
-                          <Text style={styles.subBadgeMoreText}>+{entry.subjects.length - 3}</Text>
+                        <View
+                          style={[
+                            styles.subBadgeMore,
+                            {
+                              backgroundColor: theme.cardTint,
+                              borderColor: theme.border,
+                              borderWidth: 1,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.subBadgeMoreText, { color: theme.accent }]}>
+                            +{entry.subjects.length - 3}
+                          </Text>
                         </View>
                       )}
                     </View>
@@ -381,6 +416,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -391,7 +428,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -400,6 +437,18 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 17,
     fontWeight: 'bold',
+  },
+  campusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  campusBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   buildingName: {
     color: '#8e8e93',
@@ -434,13 +483,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   subBadgeMore: {
-    backgroundColor: 'rgba(130, 36, 51, 0.25)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
   subBadgeMoreText: {
-    color: '#ef4444',
+    color: '#ffffff',
     fontSize: 11,
     fontWeight: 'bold',
   },

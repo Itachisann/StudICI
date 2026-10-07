@@ -641,18 +641,28 @@ export default function ScheduleScreen() {
                     {/* Badge Aula */}
                     {cls.room ? (
                       <TouchableOpacity
-                        style={styles.roomBadge}
+                        style={[
+                          styles.roomBadge,
+                          {
+                            backgroundColor: theme.cardTint,
+                            borderColor: theme.border,
+                            borderWidth: 1,
+                          },
+                        ]}
                         onPress={() => handleRoomClick(cls)}
                         activeOpacity={0.7}
                       >
-                        <Ionicons name="location" size={12} color="#ef4444" />
-                        <Text style={styles.roomBadgeText} numberOfLines={1}>
+                        <Ionicons name="location" size={12} color={theme.accent} />
+                        <Text
+                          style={[styles.roomBadgeText, { color: theme.accent }]}
+                          numberOfLines={1}
+                        >
                           {cls.room}
                         </Text>
                         <Ionicons
                           name="chevron-forward"
                           size={11}
-                          color="#ef4444"
+                          color={theme.accent}
                           style={{ marginLeft: 2, opacity: 0.8 }}
                         />
                       </TouchableOpacity>

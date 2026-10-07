@@ -92,9 +92,17 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
                   {classroom.displayName}
                 </Text>
                 {classroom.campus ? (
-                  <View style={styles.campusBadge}>
-                    <Ionicons name="business" size={11} color="#f43f5e" style={{ marginRight: 4 }} />
-                    <Text style={styles.campusBadgeText} numberOfLines={1}>
+                  <View
+                    style={[
+                      styles.campusBadge,
+                      { backgroundColor: theme.cardTint, borderColor: theme.border },
+                    ]}
+                  >
+                    <Ionicons name="business" size={11} color={theme.accent} style={{ marginRight: 4 }} />
+                    <Text
+                      style={[styles.campusBadgeText, { color: theme.accent }]}
+                      numberOfLines={1}
+                    >
                       {classroom.campus}
                     </Text>
                   </View>
@@ -139,8 +147,8 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
                   description={classroom.buildingName}
                 >
                   <View style={styles.markerContainer}>
-                    <View style={styles.markerPulse} />
-                    <View style={styles.markerBadge}>
+                    <View style={[styles.markerPulse, { backgroundColor: theme.bg }]} />
+                    <View style={[styles.markerBadge, { backgroundColor: theme.primary }]}>
                       <Ionicons name="school" size={16} color="#ffffff" />
                     </View>
                   </View>
@@ -162,7 +170,7 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
                 onClose();
               }}
             >
-              <Ionicons name="navigate-circle" size={20} color="#38bdf8" style={{ marginRight: 8 }} />
+              <Ionicons name="navigate-circle" size={20} color={theme.accent} style={{ marginRight: 8 }} />
               <Text style={styles.mapAddressText} numberOfLines={1}>
                 {classroom.address}
               </Text>
@@ -176,8 +184,14 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
               <Text style={styles.subjectsLabel}>{"INSEGNAMENTI IN QUEST'AULA"}</Text>
               <View style={styles.subjectsRow}>
                 {subjects.slice(0, 4).map((sub, idx) => (
-                  <View key={idx} style={styles.subjectPill}>
-                    <Ionicons name="book-outline" size={12} color="#f43f5e" style={{ marginRight: 6 }} />
+                  <View
+                    key={idx}
+                    style={[
+                      styles.subjectPill,
+                      { backgroundColor: theme.cardTint, borderColor: theme.border },
+                    ]}
+                  >
+                    <Ionicons name="book-outline" size={12} color={theme.accent} style={{ marginRight: 6 }} />
                     <Text style={styles.subjectText} numberOfLines={1}>
                       {sub}
                     </Text>

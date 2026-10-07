@@ -19,6 +19,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
   - **Pill dei Giorni in Viaggio**: formattazione uniforme e coerente con la schermata orari, con etichette in maiuscolo (`LUN` - `VEN`) e sincronizzazione dei colori attivi.
 - **Armonizzazione Cromatica delle Card e degli Sfondi in Sezione Viaggio**:
   - Estesi i bordi dinamici (`theme.border`) e gli sfondi sfumati (`theme.cardTint`, `theme.subtle`) a tutta la schermata Viaggio: Hero Card principale, target lezione, Card del treno regionale, box del binario, card interattive delle tappe del viaggio (treno e navigazione mappe) e box di riepilogo finale.
+  - Sfondo e bordi a tema (`theme.subtle`, `theme.border`) per i pulsanti di cambio treno **"Treno prima"** e **"Treno dopo"**.
+  - Nome dell'aula e icona della lezione selezionata nel carosello delle lezioni del giorno coordinati con il tema (`theme.light`).
+- **Coordinamento Cromatico Sezione Aule e Badge Luoghi**:
+  - **Pill Aula nelle Card Orari (Home)**: la pillola dell'aula (`roomBadge`) che apre la scheda dell'aula ora adotta lo sfondo (`theme.cardTint`), il bordo (`theme.border`) e l'accento cromatico del tema per testo e icone.
+  - **Badge Luoghi delle Aule (Sezione Aule)**: l'icona circolare del luogo/posizione (`iconCircle`), il badge del campus universitario (`campusBadge`), il bordo delle card aula e il contatore insegnamenti aggiuntivi (`subBadgeMore`) riflettono fedelmente il tema.
+  - **Modal Aula (`ClassroomModal`)**: icone del libro nei tag degli *"Insegnamenti in quest'aula"*, badge campus, indicatore mappa e icona dell'indirizzo allineati al tema attivo.
 - **Uniformità Cromatica nelle Impostazioni Pendolare e nella Home**:
   - Eliminata qualsiasi traccia di colore azzurrino/ciano (`#38bdf8`) residuo: il modal delle **Impostazioni Pendolare** (`CommuterConfigModal`), il banner rapido pendolare in Home e la schermata Viaggio riflettono con precisione assoluta il colore tema scelto.
   - Tasti "Salva", pulsanti "Ricalcola", box di stima stradale, indicatori di ricerca stazioni e icone sono ora 100% coordinati con la cromia dell'app.

@@ -614,11 +614,14 @@ export default function ViaggioScreen() {
                       <Ionicons
                         name="location-outline"
                         size={12}
-                        color={isSelected ? '#fecaca' : '#94a3b8'}
+                        color={isSelected ? theme.light : '#94a3b8'}
                         style={{ marginRight: 4 }}
                       />
                       <Text
-                        style={[styles.classRoomText, isSelected && styles.classRoomTextSelected]}
+                        style={[
+                          styles.classRoomText,
+                          isSelected && [styles.classRoomTextSelected, { color: theme.light }],
+                        ]}
                         numberOfLines={1}
                       >
                         {item.room || 'Aula'}{item.building ? ` • ${item.building}` : ''}
@@ -853,6 +856,7 @@ export default function ViaggioScreen() {
                   <TouchableOpacity
                     style={[
                       styles.trainNavBtn,
+                      { backgroundColor: theme.subtle, borderColor: theme.border, borderWidth: 1 },
                       itinerary.liveTrain.hasEarlierTrain === false && styles.trainNavBtnDisabled,
                     ]}
                     disabled={itinerary.liveTrain.hasEarlierTrain === false}
@@ -867,6 +871,7 @@ export default function ViaggioScreen() {
                   <TouchableOpacity
                     style={[
                       styles.trainNavBtn,
+                      { backgroundColor: theme.subtle, borderColor: theme.border, borderWidth: 1 },
                       itinerary.liveTrain.hasLaterTrain === false && styles.trainNavBtnDisabled,
                     ]}
                     disabled={itinerary.liveTrain.hasLaterTrain === false}
@@ -1778,7 +1783,7 @@ const styles = StyleSheet.create({
   trainNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(130, 36, 51, 0.22)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
@@ -1789,7 +1794,7 @@ const styles = StyleSheet.create({
   trainNavBtnText: {
     fontSize: 11,
     fontWeight: '700',
-    color: SAPIENZA_RED_ACCENT,
+    color: '#ffffff',
   },
   trainNavCenterLabel: {
     fontSize: 11,
