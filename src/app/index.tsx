@@ -139,17 +139,18 @@ export default function ScheduleScreen() {
   const loadData = useCallback(
     async (force = false) => {
       try {
-        try {
-          const icloudEnabled = await getICloudAutoSyncEnabled();
+        // Sincronizzazione cloud in background per non rallentare l'avvio immediato dell'orario
+        getICloudAutoSyncEnabled().then(async (icloudEnabled) => {
           if (icloudEnabled) {
-            const syncRes = await syncWithICloudStorage();
-            if (syncRes.updated) {
-              setAttendanceRecords(await getAttendanceRecords());
-            }
+            try {
+              const syncRes = await syncWithICloudStorage();
+              if (syncRes.updated) {
+                const recs = await getAttendanceRecords();
+                setAttendanceRecords(recs);
+              }
+            } catch {}
           }
-        } catch {
-          // ignore
-        }
+        }).catch(() => {});
 
         const storedUrl = await AsyncStorage.getItem("selectedDegreeUrl");
         const storedDefaultTab = await AsyncStorage.getItem("defaultTabUrl");

@@ -39,6 +39,7 @@ import {
   fetchAllCourseData,
   fetchDegrees,
   fetchTabs,
+  getCachedTabs,
   fetchScheduleData,
   Tab,
 } from "../utils/scraper";
@@ -102,7 +103,6 @@ export default function ProfiloScreen() {
   const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
   const [availableTabs, setAvailableTabs] = useState<Tab[]>([]);
   const [degrees, setDegrees] = useState<Degree[]>([]);
-  const [loading, setLoading] = useState(true);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
@@ -143,51 +143,74 @@ export default function ProfiloScreen() {
   );
 
   const loadProfileData = useCallback(async () => {
-    setLoading(true);
     try {
-      const storedUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-      const storedName = await AsyncStorage.getItem("selectedDegreeName");
-      const storedClassName = await AsyncStorage.getItem(
+      // 1. Lettura istantanea da memoria locale (0ms latency, zero attese di rete)
+      const storedPairs = await AsyncStorage.multiGet([
+        "selectedDegreeUrl",
+        "selectedDegreeName",
         "selectedDegreeClassName",
-      );
-      const storedDefaultTab = await AsyncStorage.getItem("defaultTabUrl");
+        "defaultTabUrl",
+      ]);
+      const storedMap = Object.fromEntries(storedPairs);
+      const storedUrl = storedMap["selectedDegreeUrl"] || null;
+      const storedName = storedMap["selectedDegreeName"] || "";
+      const storedClassName = storedMap["selectedDegreeClassName"] || "";
+      const storedDefaultTab = storedMap["defaultTabUrl"] || null;
 
       setDegreeUrl(storedUrl);
-      setDegreeName(storedName || "");
-      setDegreeClassName(storedClassName || "");
+      setDegreeName(storedName);
+      setDegreeClassName(storedClassName);
       setDefaultTabUrl(storedDefaultTab);
 
+      // 2. Canali e Tab caricati istantaneamente dalla cache locale (il canale appare al primo frame!)
+      let localTabs: Tab[] = [];
       if (storedUrl) {
-        const tabs = await fetchTabs(storedUrl);
-        setAvailableTabs(tabs);
+        localTabs = (await getCachedTabs(storedUrl)) || [];
+      }
+      if (localTabs.length > 0) {
+        setAvailableTabs(localTabs);
       }
 
-      const degList = await fetchDegrees();
-      setDegrees(degList);
-
+      // 3. Presenze e statistiche immediate da disco
       const attList = await getAttendanceRecords();
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
-      const [cloudId, lastCloud, lastCal, icloudEnabled, pairs, commConfig] = await Promise.all([
+      // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
+      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
         getLastCalendarSync(),
         getICloudAutoSyncEnabled(),
-        getPairedDevicesInfo(),
         getCommuterConfig(),
       ]);
+
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
       setICloudAutoSync(icloudEnabled);
-      setPairedDevices(pairs);
       setCommuterConfig(commConfig);
+
+      // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
+      getPairedDevicesInfo().then((pairs) => {
+        if (pairs) setPairedDevices(pairs);
+      }).catch(() => {});
+
+      if (storedUrl && localTabs.length === 0) {
+        fetchTabs(storedUrl).then((tabs) => {
+          if (tabs && tabs.length > 0) setAvailableTabs(tabs);
+        }).catch(() => {});
+      }
+
+      if (degrees.length === 0) {
+        fetchDegrees().then((degList) => {
+          if (degList && degList.length > 0) setDegrees(degList);
+        }).catch(() => {});
+      }
     } catch (e) {
-      console.error(e);
+      console.error("Errore caricamento profilo:", e);
     }
-    setLoading(false);
-  }, []);
+  }, [degrees.length]);
 
   useFocusEffect(
     useCallback(() => {
@@ -994,7 +1017,15 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={() => setCourseModalVisible(true)}
+            onPress={async () => {
+              setCourseModalVisible(true);
+              if (degrees.length === 0) {
+                try {
+                  const degList = await fetchDegrees();
+                  if (degList && degList.length > 0) setDegrees(degList);
+                } catch {}
+              }
+            }}
           >
             <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
               <Ionicons name="school" size={17} color="#ffffff" />
@@ -1477,7 +1508,7 @@ export default function ProfiloScreen() {
             )}
           </View>
 
-          {loading ? (
+          {degrees.length === 0 ? (
             <ActivityIndicator
               size="large"
               color={theme.primary}

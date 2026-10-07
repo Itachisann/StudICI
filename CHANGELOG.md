@@ -8,8 +8,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.6.0 (Major Update)
 
 ### Novità
-- **Integrazione App Trenitalia e Collegamento Diretto Ufficiale**:
-  - Dalla scheda principale del treno regionale (dove si trova il selettore per "Treno prima" e "Treno dopo"), un tocco apre direttamente l'applicazione ufficiale **Trenitalia** se installata sul dispositivo (`trenitalia://`), oppure reindirizza al sito ufficiale Trenitalia (non più ViaggiaTreno).
+- **Sincronizzazione Istantanea Profilo e Canale (Zero Latenza al Cambio Tab e Avvio)**:
+  - Eliminato qualsiasi tempo di attesa o blocco di rete all'apertura del tab Profilo: corso di laurea, classe, canale predefinito, registro presenze, statistiche e parametri cloud vengono caricati immediatamente dalla cache locale (`AsyncStorage`) a latenza zero.
+  - Le operazioni di rete (aggiornamento dispositivi accoppiati, lista completa dei corsi e sync cloud) avvengono in background in modo silente, senza bloccare l'interfaccia né ritardare l'avvio della schermata orari.
+- **Riorganizzazione Visiva delle Card nella Sezione Viaggio**:
+  - **Card delle Tappe**: sfondo grigio pulito e minimale (`#1c1c1e`), preservando fedelmente tutti i colori, avvisi ed evidenziazioni dei box traffico e rallentamenti stradali.
+  - **Card del Treno Regionale (con "Treno prima" e "Treno dopo")**: sfondo grigio scuro (`#1c1c1e`) con bordo rifinito a tema (colore primario / rosso Sapienza con spessore 1.5).
+  - **Hero Card Principale ("Parti alle...")**: mantiene lo sfondo sfumato a tema per massimo risalto dell'orario di partenza consigliato.
+- **Integrazione App Trenitalia e Collegamento Diretto al Monitoraggio Treno**:
+  - Dalla scheda principale del treno regionale (dove si trova il selettore per "Treno prima" e "Treno dopo"), un tocco apre direttamente l'applicazione ufficiale **Trenitalia** (`trenitalia://`) oppure reindirizza alla pagina ufficiale di monitoraggio e andamento treno di Trenitalia (`Infomobilita.html#gestisci-viaggio`), con il numero del convoglio copiato automaticamente negli appunti.
   - Rimossa l'interazione ridondante dalla card della tappa treno nella timeline, lasciando il controllo centralizzato nella card principale del treno.
 - **Pulizia Card Mezzi e Tratte**:
   - Rimossa la dicitura *"Orari in tempo reale e fermate"* dal banner di navigazione dei mezzi pubblici Google Maps.

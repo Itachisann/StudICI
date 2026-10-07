@@ -345,8 +345,9 @@ export default function ViaggioScreen() {
   };
 
   const handleOpenTrenitalia = async (trainNumber?: string) => {
+    let cleanNum = '';
     if (trainNumber) {
-      const cleanNum = trainNumber.replace(/\D/g, '');
+      cleanNum = trainNumber.replace(/\D/g, '');
       if (cleanNum) {
         try {
           await Clipboard.setStringAsync(cleanNum);
@@ -354,7 +355,11 @@ export default function ViaggioScreen() {
       }
     }
     const appUrl = 'trenitalia://';
-    const webUrl = 'https://www.trenitalia.com/it.html';
+    // Link diretto alla sezione ufficiale di monitoraggio e andamento treno di Trenitalia
+    const webUrl = cleanNum
+      ? `https://www.trenitalia.com/it/informazioni/Infomobilita.html#gestisci-viaggio`
+      : `https://www.trenitalia.com/it/informazioni/Infomobilita.html`;
+
     Linking.canOpenURL(appUrl)
       .then((supported) => {
         if (supported) {
@@ -735,7 +740,7 @@ export default function ViaggioScreen() {
               <TouchableOpacity
                 style={[
                   styles.trainHighlightCard,
-                  { backgroundColor: theme.cardTint, borderColor: theme.border },
+                  { backgroundColor: '#1c1c1e', borderColor: theme.primary, borderWidth: 1.5 },
                 ]}
                 activeOpacity={0.88}
                 onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
@@ -1017,19 +1022,9 @@ export default function ViaggioScreen() {
                         styles.stepContentCard,
                         isFirst && { marginTop: 0 },
                         {
-                          borderColor:
-                            isInteractive || leg.type === 'train'
-                              ? theme.border
-                              : 'rgba(255,255,255,0.08)',
-                          backgroundColor:
-                            isInteractive || leg.type === 'train'
-                              ? theme.cardTint
-                              : 'rgba(255,255,255,0.04)',
+                          borderColor: 'rgba(255, 255, 255, 0.08)',
+                          backgroundColor: '#1c1c1e',
                         },
-                        isInteractive && [
-                          styles.stepContentCardInteractive,
-                          { borderColor: theme.primary },
-                        ],
                       ]}
                     >
                       <View style={styles.stepTitleRow}>

@@ -131,7 +131,17 @@ export interface ScheduleData {
   days: ClassEvent[][]; // 5 arrays, one per day (LUN-VEN)
 }
 
-export async function fetchDegrees(): Promise<Degree[]> {
+export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
+  const cacheKey = 'cached_degrees_list_v2';
+  if (!forceRefresh) {
+    try {
+      const stored = await AsyncStorage.getItem(cacheKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+  }
   try {
     const url = 'https://ici.web.uniroma1.it/node/388';
     const res = await axios.get(url);
@@ -162,6 +172,9 @@ export async function fetchDegrees(): Promise<Degree[]> {
         degrees.push({ name, url: link, className });
       }
     }
+    if (degrees.length > 0) {
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(degrees)).catch(() => {});
+    }
     return degrees;
   } catch (error) {
     console.error('Error fetching degrees:', error);
@@ -170,6 +183,27 @@ export async function fetchDegrees(): Promise<Degree[]> {
 }
 
 
+
+/**
+ * Recupera i canali/tab salvati in locale istantaneamente (0ms latency, nessun accesso di rete).
+ */
+export async function getCachedTabs(url: string): Promise<Tab[] | null> {
+  try {
+    const schedKey = `allSchedules_v7_${url}`;
+    const schedStr = await AsyncStorage.getItem(schedKey);
+    if (schedStr) {
+      const parsed = JSON.parse(schedStr);
+      if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) return parsed.tabs;
+    }
+    const cacheKey = `tabsCache_${url}`;
+    const cachedStr = await AsyncStorage.getItem(cacheKey);
+    if (cachedStr) {
+      const cached = JSON.parse(cachedStr);
+      if (Array.isArray(cached.tabs) && cached.tabs.length > 0) return cached.tabs;
+    }
+  } catch {}
+  return null;
+}
 
 export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[]> {
   try {
