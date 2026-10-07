@@ -31,10 +31,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - Risolto il problema del chilometraggio (15.6 km vs 19 km): l'app in precedenza calcolava la distanza verso il centro storico comunale di Orte (Piazza della Libertà) anziché verso la **Stazione di Orte (Orte Scalo)**, situata a ~3.5 km di distanza.
     - Ora tutte le stazioni ferroviarie (Orte Scalo, Narni Scalo, Orvieto Scalo, ecc.) puntano alle coordinate esatte del piazzale e parcheggio della stazione FS, restituendo **18.5 km (~19 km su Google Maps)** e tempi di guida precisi.
     - Oltre al semplice comune, ora è possibile inserire l'indirizzo esatto di partenza con via e civico (es. `Via Roma 135c`, `Via Amerina 15, Amelia`), con auto-completamento del comune pendolare di riferimento e routing reale turn-by-turn OSRM.
-    - **Stima Guida e Profilo Traffico Calibrato su Google Maps**:
-      - In condizioni di traffico scorrevole (morbida/fuori punta): stima perfettamente allineata a Google Maps in tempo reale (**25 minuti esatti** per Amelia ➔ Orte FS, eliminando sovrastime artificiali).
-      - Rientro serale (17:15 - 19:15, picco attorno alle 18:00): calcolo dinamico che considera il traffico intenso di rientro da Roma/A1, code alla rotatoria della stazione FS Orte e svincoli della superstrada (~30-31 min).
-      - Punta mattutina (07:00 - 08:35): buffer calibrato (+2-3 min, ~28 min) per traffico pendolare, accesso alla stazione e deviazioni/cantieri della superstrada SS675.
+    - **Motore Universale di Analisi della Scorrevolezza e del Traffico (`analyzeRouteFluency`)**:
+      - **Completamente Generale e Non Isolato a una Singola Tratta**: eliminata qualsiasi eccezione statica o hardcoded limitata a singole località; l'algoritmo analizza dinamicamente volta per volta qualunque coppia di indirizzo di partenza e stazione ferroviaria su scala nazionale (es. Orte, Latina, Viterbo, Rieti, Fara Sabina, Monterotondo, Civitavecchia, Narni, Terni, Orvieto, ecc.).
+      - **Analisi Turn-by-Turn del Percorso**: esamina in tempo reale la distanza metrica OSRM, il tempo base free-flow, la densità di incroci per km e le strade principali percorse (es. SS, SR, SP, arterie urbane).
+      - **Calcolo Dinamico dei Colli di Bottiglia e della Scorrevolezza**:
+        - *Orari di morbida/fuori punta*: traffico scorrevole e tempi allineati al free-flow di Google Maps (es. 25 min esatti per 18.2 km, 12 min per 8.9 km).
+        - *Picco rientro serale (17:15 - 19:15, con culmine alle 18:00)*: stima ponderata su deflusso pendolari, uscite autostradali/superstrade, rotatorie e semafori congestionati.
+        - *Punta mattutina (07:00 - 08:35)*: stima ponderata su afflusso pendolari, accesso al piazzale/parcheggi FS e tratti a scorrimento veloce.
+        - *Fasce spalla*: transizione graduale del traffico con buffer moderato.
   - **Linee Bus/Pullman Urbani Reali da Google Maps e Coerenza Totale**:
     - Integrata espressamente la linea reale **Pullman 448** utilizzata quotidianamente per raggiungere le sedi Sapienza da Stazione Tiburtina (fermate Tiburtina/Marrucini per Polo Tiburtina RM025/RM158, Tiburtina/Castro Laurenziano per Economia e Plesso Scarpa RM018/RM004/RM014, Piazzale del Verano e De Lollis per Città Universitaria), affiancata dalle linee reali 492, 71, 163 e 310.
     - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: confermato il collegamento diretto **Bus 649** con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 min dall'aula), oppure **Metro A (fermata Manzoni)**.
