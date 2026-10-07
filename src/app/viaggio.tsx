@@ -23,7 +23,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
-import { parseTimeToMinutes } from '../utils/trenitaliaApi';
+import { parseTimeToMinutes, evaluateTrainStatus } from '../utils/trenitaliaApi';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 
 const SAPIENZA_RED = '#822433';
@@ -85,6 +85,18 @@ export default function ViaggioScreen() {
       return () => clearTimeout(t);
     }
   }, [currentTrainNumber, centerSelectedTrain]);
+
+  // Stato live, programmato, avvisi e capienza Trenitalia del treno
+  const liveTrain = itinerary?.liveTrain;
+  const trainStatus = useMemo(() => {
+    if (!liveTrain) return null;
+    const targetDate = new Date();
+    const currentDay = targetDate.getDay();
+    let diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
+    if (diff < 0) diff += 7;
+    targetDate.setDate(targetDate.getDate() + diff);
+    return evaluateTrainStatus(liveTrain, targetDate);
+  }, [liveTrain, selectedDayIdx]);
 
   // Lezioni del giorno selezionato
   const dayClasses = useMemo(() => {
@@ -422,24 +434,56 @@ export default function ViaggioScreen() {
           )}
         </View>
 
-        {/* Selettore Giorno della settimana */}
-        <View style={styles.daysContainer}>
-          {WEEKDAYS.map((w) => {
-            const isSelected = selectedDayIdx === w.dayIdx;
-            const isToday = new Date().getDay() === w.dayIdx;
-            return (
-              <TouchableOpacity
-                key={w.dayIdx}
-                style={[styles.dayPill, isSelected && styles.dayPillActive]}
-                onPress={() => handleDayChange(w.dayIdx)}
-              >
-                <Text style={[styles.dayPillText, isSelected && styles.dayPillTextActive]}>
-                  {w.label}
-                </Text>
-                {isToday && <View style={styles.todayIndicatorDot} />}
-              </TouchableOpacity>
-            );
-          })}
+        {/* Selettore Giorno della settimana (stile identico a Orario) */}
+        <View style={styles.daySelectorContainer}>
+          <TouchableOpacity
+            style={styles.navArrow}
+            onPress={() => handleDayChange(selectedDayIdx === 1 ? 5 : selectedDayIdx - 1)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-back" size={18} color="#ffffff" />
+          </TouchableOpacity>
+
+          <View style={styles.daysRow}>
+            {WEEKDAYS.map((w) => {
+              const isSelected = selectedDayIdx === w.dayIdx;
+              const isToday = new Date().getDay() === w.dayIdx;
+              return (
+                <TouchableOpacity
+                  key={w.dayIdx}
+                  onPress={() => handleDayChange(w.dayIdx)}
+                  style={styles.dayItem}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.dayCircle,
+                      isSelected && styles.dayCircleActive,
+                    ]}
+                  >
+                    <Text
+                      style={[styles.dayText, isSelected && styles.dayTextActive]}
+                    >
+                      {w.label}
+                    </Text>
+                  </View>
+                  {isToday && (
+                    <View
+                      style={[styles.dayDot, isSelected && styles.dayDotActive]}
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity
+            style={styles.navArrow}
+            onPress={() => handleDayChange(selectedDayIdx === 5 ? 1 : selectedDayIdx + 1)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+          </TouchableOpacity>
         </View>
 
         {/* Sezione Selettore Lezioni del Giorno */}
@@ -449,7 +493,6 @@ export default function ViaggioScreen() {
               <Ionicons name="book-outline" size={13} color="#38bdf8" style={{ marginRight: 5 }} />
               <Text style={styles.sectionTitle}>LEZIONI DEL GIORNO</Text>
             </View>
-            <Text style={styles.sectionHint}>Tocca una lezione per calcolare il viaggio</Text>
           </View>
 
           {dayClasses.length === 0 ? (
@@ -617,25 +660,56 @@ export default function ViaggioScreen() {
             {itinerary.liveTrain && (
               <View style={styles.trainHighlightCard}>
                 <View style={styles.trainHighlightHeader}>
-                  <View style={styles.trainNumberBadge}>
-                    <Ionicons name="train" size={14} color="#fff" style={{ marginRight: 5 }} />
-                    <Text style={styles.trainNumberText}>{itinerary.liveTrain.trainNumber}</Text>
-                  </View>
+                  <View style={styles.trainHighlightHeaderLeft}>
+                    <View style={styles.trainNumberBadge}>
+                      <Ionicons name="train" size={14} color="#fff" style={{ marginRight: 5 }} />
+                      <Text style={styles.trainNumberText}>{itinerary.liveTrain.trainNumber}</Text>
+                    </View>
 
-                  {itinerary.liveTrain.delayMinutes > 0 ? (
-                    <View style={styles.trainDelayBadgeWarning}>
-                      <Ionicons name="alert-circle" size={12} color="#ef4444" style={{ marginRight: 4 }} />
-                      <Text style={styles.trainDelayWarningText}>
-                        +{itinerary.liveTrain.delayMinutes} min ritardo
-                      </Text>
-                    </View>
-                  ) : itinerary.liveTrain.statusDescription.toLowerCase().includes('soppresso') ? (
-                    <View style={styles.trainDelayBadgeWarning}>
-                      <Ionicons name="close-circle" size={12} color="#ef4444" style={{ marginRight: 4 }} />
-                      <Text style={styles.trainDelayWarningText}>Soppresso</Text>
-                    </View>
-                  ) : null}
+                    {trainStatus && (
+                      <View
+                        style={[
+                          styles.trainStatusPill,
+                          {
+                            backgroundColor: trainStatus.badgeBg,
+                            borderColor: trainStatus.badgeBorder,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={trainStatus.iconName as any}
+                          size={12}
+                          color={trainStatus.badgeColor}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={[
+                            styles.trainStatusPillText,
+                            { color: trainStatus.badgeColor },
+                          ]}
+                        >
+                          {trainStatus.badgeLabel}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
+
+                {/* Eventuale Avviso / Variazione / Interruzione Trenitalia */}
+                {trainStatus?.alertMessage ? (
+                  <View style={styles.trainAlertBanner}>
+                    <Ionicons name="warning-outline" size={14} color="#f59e0b" style={{ marginRight: 6 }} />
+                    <Text style={styles.trainAlertBannerText}>{trainStatus.alertMessage}</Text>
+                  </View>
+                ) : null}
+
+                {/* Eventuale Segnalazione Capienza / Biglietti non acquistabili */}
+                {trainStatus?.capacityWarning ? (
+                  <View style={styles.trainCapacityBanner}>
+                    <Ionicons name="people-outline" size={14} color="#38bdf8" style={{ marginRight: 6 }} />
+                    <Text style={styles.trainCapacityBannerText}>{trainStatus.capacityWarning}</Text>
+                  </View>
+                ) : null}
 
                 {/* Info Partenza / Binario / Arrivo */}
                 <View style={styles.trainInfoRow}>
@@ -872,11 +946,11 @@ export default function ViaggioScreen() {
                                   ? 'Percorso su Google Maps'
                                   : 'Naviga su Google Maps'}
                               </Text>
-                              <Text style={styles.mapsBannerSubtitle}>
-                                {leg.details.travelMode === 'transit'
-                                  ? 'Orari in tempo reale e fermate'
-                                  : 'Percorso con orario impostato'}
-                              </Text>
+                              {leg.details.travelMode === 'transit' && (
+                                <Text style={styles.mapsBannerSubtitle}>
+                                  Orari in tempo reale e fermate
+                                </Text>
+                              )}
                             </View>
                           </View>
                           <View style={styles.mapsActionBadge}>
@@ -994,40 +1068,70 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
-  daysContainer: {
+  daySelectorContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 16,
-    marginBottom: 8,
+    marginBottom: 10,
+  },
+  navArrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1c1c1e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+  },
+  daysRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
     gap: 8,
   },
-  dayPill: {
-    flex: 1,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 8,
+  dayItem: {
     alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
+    height: 36,
   },
-  dayPillActive: {
-    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+  dayCircle: {
+    width: 44,
+    height: 36,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    backgroundColor: '#1c1c1e',
+  },
+  dayCircleActive: {
+    backgroundColor: 'rgba(56, 189, 248, 0.22)',
     borderWidth: 1,
     borderColor: '#38bdf8',
   },
-  dayPillText: {
+  dayText: {
+    color: '#8e8e93',
     fontSize: 12,
-    fontWeight: '600',
-    color: '#94a3b8',
-  },
-  dayPillTextActive: {
-    color: '#38bdf8',
     fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  todayIndicatorDot: {
+  dayTextActive: {
+    color: '#ffffff',
+  },
+  dayDot: {
+    position: 'absolute',
+    bottom: -7,
     width: 4,
     height: 4,
     borderRadius: 2,
+    backgroundColor: '#8e8e93',
+  },
+  dayDotActive: {
     backgroundColor: '#38bdf8',
-    marginTop: 2,
   },
   lecturesSection: {
     paddingHorizontal: 16,
@@ -1268,6 +1372,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 12,
   },
+  trainHighlightHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    flex: 1,
+  },
   trainNumberBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1281,18 +1392,53 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#ffffff',
   },
-  trainDelayBadgeWarning: {
+  trainStatusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 8,
+    borderWidth: 1,
   },
-  trainDelayWarningText: {
+  trainStatusPillText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#ef4444',
+  },
+  trainAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 10,
+  },
+  trainAlertBannerText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#f59e0b',
+    flex: 1,
+    lineHeight: 15,
+  },
+  trainCapacityBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 10,
+  },
+  trainCapacityBannerText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#38bdf8',
+    flex: 1,
+    lineHeight: 15,
   },
   trainInfoRow: {
     flexDirection: 'row',

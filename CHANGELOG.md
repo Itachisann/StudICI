@@ -20,24 +20,32 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - **Esclusione Treni Non Regionali**: filtraggio automatico che esclude Frecce, Italo e Intercity per tutelare i possessori di abbonamento regionale o Metrebus Lazio.
     - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~33-40 min), fornendo anche tutte le alternative Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi selezionabili con un tocco.
     - **Binario Live, Binario Programmato e Ritardi**: visualizzazione del binario esatto di partenza e arrivo da Trenitalia, con indicazione del ritardo o anticipo in tempo reale.
+    - **Pill di Stato Live Trenitalia e Avvisi Disservizi**:
+      - A fianco al numero del treno è presente la pill con lo stato in tempo reale (*Programmato*, *In orario*, *In viaggio*, *+X min ritardo*, *Anticipo*, *Cancellato*, *Deviato*, *Interruzione linea*).
+      - Logica temporale intelligente: se l'ora attuale rientra nella finestra di viaggio, viene mostrato lo stato reale di marcia (*In viaggio*, *In orario* o ritardo effettivo); se il treno deve ancora partire (oggi più tardi o nei giorni successivi), indica chiaramente *"Programmato"*.
+      - Monitoraggio disservizi Trenitalia: banner dedicato in caso di treno soppresso/cancellato, deviazioni di percorso, variazioni, interruzioni di linea o biglietti non disponibili.
   - **Supporto Indirizzo Completo di Casa e Correzione Chilometraggio Stazione FS**:
     - Risolto il problema del chilometraggio (15.6 km vs 19 km): l'app in precedenza calcolava la distanza verso il centro storico comunale di Orte (Piazza della Libertà) anziché verso la **Stazione di Orte (Orte Scalo)**, situata a ~3.5 km di distanza.
     - Ora tutte le stazioni ferroviarie (Orte Scalo, Narni Scalo, Orvieto Scalo, ecc.) puntano alle coordinate esatte del piazzale e parcheggio della stazione FS, restituendo **18.5 km (~19 km su Google Maps)** e tempi di guida precisi.
     - Oltre al semplice comune, ora è possibile inserire l'indirizzo esatto di partenza con via e civico (es. `Via Roma 135c`, `Via Amerina 15, Amelia`), con auto-completamento del comune pendolare di riferimento e routing reale turn-by-turn OSRM.
-  - **Linee Bus/Pullman Urbani Reali da Google Maps (Pullman 448, 492, 71, 163, 649)**:
+    - **Stima Guida con Traffico Integrato**: tempi di guida calcolati con moltiplicatori del traffico nelle ore di punta (06:45-09:15 e 16:45-19:30), perfettamente coerenti con Google Maps e validi per qualsiasi stazione d'Italia.
+  - **Linee Bus/Pullman Urbani Reali da Google Maps e Coerenza Totale**:
     - Integrata espressamente la linea reale **Pullman 448** utilizzata quotidianamente per raggiungere le sedi Sapienza da Stazione Tiburtina (fermate Tiburtina/Marrucini per Polo Tiburtina RM025/RM158, Tiburtina/Castro Laurenziano per Economia e Plesso Scarpa RM018/RM004/RM014, Piazzale del Verano e De Lollis per Città Universitaria), affiancata dalle linee reali 492, 71, 163 e 310.
     - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: confermato il collegamento diretto **Bus 649** con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 min dall'aula), oppure **Metro A (fermata Manzoni)**.
-  - **Ripristino Apertura Diretta App Google Maps ("Nel modo di prima")**:
+    - **Coerenza Titolo-Descrizione Tratte Urbane**: eliminata ogni discrepanza; la descrizione specifica punto di salita, esatta direzione del mezzo, fermata di discesa, minuti a bordo, minuti a piedi e collegamenti alternativi (es. Metro B / Tram).
+  - **Ripristino Apertura Diretta App Google Maps**:
     - Reindirizzamento nativo immediato all'app Google Maps tramite schema iOS `comgooglemaps://` (con fallback su web maps): tocca la tratta per aprire direttamente l'app Google Maps con partenza e destinazione già compilate e navigazione live attiva.
+    - Banner auto semplificato: mostra unicamente *"Naviga su Google Maps"*.
   - **Rifiniture Grafiche e Tipografiche Schermata Viaggio**:
     - Diciture selettore direzione aggiornate a **"Andata"** e **"Ritorno"**: su IPA nativo utilizza il `SegmentedControl` Apple, mentre su Expo Go / non-IPA utilizza il selettore slider a pill con gli stessi colori della barra anni/canali (`#1c1c1e`, `#2c2c2e`, accento rosso Sapienza).
+    - Selettore dei giorni nel tab Viaggio allineato a quello della schermata Orario (pill compatte con frecce cicliche prev/next, color scheme ciano `#38bdf8`).
+    - Dicitura intestazione lezioni pulita: rimossa la frase *"Tocca una lezione per calcolare il viaggio"*.
     - Badge di stato aggiornato a **"Dati Trenitalia"**.
-    - Card del treno riorganizzata ed eliminazione overflow: rimosse le diciture ridondanti *"Regionale veloce consigliato"* e *"programmato"* (che sbordavano fuori dalla card); ora il badge treno e l'eventuale ritardo (`+X min ritardo`) rimangono perfettamente all'interno dei bordi.
+    - Card del treno riorganizzata ed eliminazione overflow: rimosse le diciture ridondanti *"Regionale veloce consigliato"* e *"programmato"* (che sbordavano fuori dalla card); ora il badge treno, la pill di stato e l'eventuale ritardo rimangono perfettamente all'interno dei bordi.
     - Centratura automatica del treno selezionato nello slider orizzontale delle alternative, mantenendo la possibilità di scorrere liberamente la lista.
     - Sezione tappe rinominata in **"TAPPE DEL VIAGGIO"**.
     - Risolto il troncamento con tre puntini (`...`) nei titoli delle tappe: i testi vanno ora a capo in modo fluido e leggibile, con badge della durata allineato in alto a destra.
-    - Card auto ripulita: visualizza unicamente *"Tocca per aprire la navigazione con orario impostato"*.
-    - Banner Google Maps ottimizzato con diciture complete e leggibili (*"Orari in tempo reale e fermate"*), coerente sia per l'Andata che per il Ritorno.
+    - Modal Impostazioni Pendolare: dicitura snella e chiara nella sezione trasporto urbano (*"L’app seleziona automaticamente il mezzo più veloce dalla stazione fino all’aula, esatta direzione."*).
 
 ## 1.5.10
 

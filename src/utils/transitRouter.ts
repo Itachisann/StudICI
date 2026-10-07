@@ -160,8 +160,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Pullman 448 / 492 / 71 / 163 (o a piedi 8 min)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Pullman 448, 492, 71 o 163 da Tiburtina fino a fermata Tiburtina/Marrucini o Verano (~4 min), oppure 8 min a piedi dritto su Via Tiburtina 205'
-              : 'Pullman 448, 492, 71 o 163 da fermata Tiburtina/Marrucini verso Stazione Tiburtina (~4 min), oppure 8 min a piedi',
+              ? 'Partenza: Stazione Roma Tiburtina FS (corsia bus) • Pullman 448, 492, 71 o 163 (direzione Verano / Portonaccio) • Fermata di discesa: Tiburtina/Marrucini (~4 min a bordo) + 2 min a piedi (150m) fino a Via Tiburtina 205 (oppure 8 min a piedi dritto dalla stazione).'
+              : 'Partenza: Via Tiburtina 205 • 2 min a piedi per fermata Tiburtina/Marrucini • Pullman 448, 492, 71 o 163 (direzione Stazione Tiburtina FS, ~4 min a bordo, oppure 8 min a piedi).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -173,11 +173,11 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 7,
           walkingMinutes: 4,
           transfersCount: 0,
-          lineName: 'Pullman 448 / 492 / 71 / 163 / 310 (o Metro B)',
+          lineName: 'Pullman 448 / 492 / 71 / 163 (o Metro B)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Pullman 448, 492, 71 o 163 da Tiburtina FS fino a fermata Tiburtina/Castro Laurenziano o Verano (~7 min) + 3 min a piedi, oppure Metro B fino a Policlinico'
-              : '3 min a piedi + Pullman 448, 492, 71 o 163 fino a Stazione Tiburtina FS (~7 min)',
+              ? 'Partenza: Stazione Roma Tiburtina FS (piazzale bus) • Pullman 448, 492, 71 o 163 (direzione Verano / Castro Laurenziano) • Fermata di discesa: Tiburtina/Castro Laurenziano (~7 min a bordo) + 4 min a piedi (300m) fino all\'aula. In alternativa: Metro B (direzione Laurentina) fino a Policlinico (~4 min) + 7 min a piedi.'
+              : 'Partenza: Via Castro Laurenziano • 4 min a piedi per fermata Tiburtina/Castro Laurenziano • Pullman 448, 492, 71 o 163 (direzione Stazione Tiburtina FS, ~7 min a bordo). In alternativa: Metro B da Policlinico fino a Tiburtina FS (~4 min).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -192,8 +192,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Pullman 448 / 492 / 71 / 163 (o Tram 3 / 19)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Pullman 448, 492 o 71 da Tiburtina FS fino a fermata Verano o De Lollis (~8-9 min) all\'ingresso del Campus Sapienza'
-              : 'Varco De Lollis o Verano + Pullman 448, 492 o 71 diretto a Tiburtina FS (~8 min)',
+              ? 'Partenza: Stazione Roma Tiburtina FS • Pullman 448, 492, 71 o 163 (direzione Verano / Piazzale Aldo Moro) • Fermata di discesa: Verano o De Lollis/Tirso (~8 min a bordo) + 3 min a piedi per l\'ingresso di Città Universitaria. In alternativa: Tram 3 o 19 da Scalo San Lorenzo.'
+              : 'Partenza: Città Universitaria (Varco De Lollis o Verano) • Pullman 448, 492, 71 o 163 (direzione Stazione Tiburtina FS, ~8 min a bordo). In alternativa: Tram 3 o 19.',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -205,11 +205,11 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 16,
           walkingMinutes: 3,
           transfersCount: 0,
-          lineName: 'Bus 649 Diretto (Fermata Conte Verde/Manzoni)',
+          lineName: 'Bus 649 Diretto (o Metro B + Metro A)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Bus 649 da Tiburtina FS fino alla fermata Conte Verde/Manzoni (a soli 180m da Via Ariosto 25, zero cambi), oppure Metro B fino a Termini + Metro A fino a Manzoni'
-              : '3 min a piedi per fermata Conte Verde/Manzoni + Bus 649 diretto fino a Tiburtina FS (~16 min), oppure Metro A da stazione Manzoni',
+              ? 'Partenza: Stazione Roma Tiburtina FS (Piazzale bus) • Bus 649 (direzione Largo Don Orione) • Fermata di discesa: Conte Verde/Manzoni (~16 min a bordo) + 2 min a piedi (180m) per Via Ariosto 25 (zero cambi). In alternativa: Metro B fino a Termini + Metro A fino a Manzoni.'
+              : 'Partenza: Via Ariosto 25 • 2 min a piedi per fermata Conte Verde/Manzoni • Bus 649 (direzione Stazione Tiburtina FS, ~16 min a bordo). In alternativa: Metro A da Manzoni a Termini + Metro B fino a Tiburtina.',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -224,8 +224,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Metro B Diretta (Fermata Cavour - Zero cambi)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Metro B da Tiburtina a Cavour (4 fermate, ~8 min, zero cambi) + 6 min a piedi su Scalinata dei Borgia'
-              : '6 min a piedi da Via Eudossiana a fermata Cavour + Metro B diretta fino a Tiburtina FS (~8 min)',
+              ? 'Partenza: Stazione Roma Tiburtina (Metropolitana) • Metro B (direzione Laurentina) • Fermata di discesa: Cavour (4 fermate, ~8 min a bordo, zero cambi) + 6 min a piedi su Scalinata dei Borgia fino a Via Eudossiana 18.'
+              : 'Partenza: Via Eudossiana 18 • 6 min a piedi per fermata Cavour • Metro B (direzione Rebibbia/Jonio) diretta fino a Stazione Tiburtina (~8 min a bordo).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -240,8 +240,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Bus 135 Diretto',
           routeDescription:
             direction === 'to_campus'
-              ? 'Bus 135 da Tiburtina FS fino a Salaria/Grottazzolina (~16 min) + 3 min a piedi'
-              : '3 min a piedi per Salaria/Grottazzolina + Bus 135 diretto a Tiburtina FS (~16 min)',
+              ? 'Partenza: Stazione Roma Tiburtina FS • Bus 135 (direzione Salaria/Piombino) • Fermata di discesa: Salaria/Grottazzolina (~16 min a bordo) + 3 min a piedi fino a Via Salaria 851.'
+              : 'Partenza: Via Salaria 851 • 3 min a piedi per fermata Salaria/Grottazzolina • Bus 135 (direzione Stazione Tiburtina FS, ~16 min a bordo).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -327,8 +327,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Pullman 310 / 492 Diretto (o Metro B Policlinico)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Pullman 310 o 492 da Termini a Regina Elena/Università (~8 min) + 4 min a piedi, oppure Metro B fino a Policlinico (2 fermate, 3 min)'
-              : 'Pullman 310 o 492 da Regina Elena verso Termini (~8 min), oppure Metro B da Policlinico',
+              ? 'Partenza: Stazione Roma Termini (Piazza dei Cinquecento) • Pullman 310 o 492 (direzione Vescovio/Staz. Tiburtina) • Fermata di discesa: Regina Elena/Università (~8 min a bordo) + 4 min a piedi (350m) per Via Castro Laurenziano. In alternativa: Metro B (direzione Rebibbia) fino a Policlinico (2 fermate, ~3 min) + 7 min a piedi.'
+              : 'Partenza: Via Castro Laurenziano • 4 min a piedi per fermata Regina Elena/Università • Pullman 310 o 492 (direzione Termini, ~8 min a bordo). In alternativa: Metro B da Policlinico fino a Termini (2 fermate, ~3 min).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -343,8 +343,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Pullman 310 / 492 / 71 Diretto',
           routeDescription:
             direction === 'to_campus'
-              ? 'Pullman 310 o 492 da Termini a De Lollis/Università (~8 min) + 3 min a piedi'
-              : 'Pullman 310 o 492 da De Lollis/Università verso Termini (~8 min)',
+              ? 'Partenza: Stazione Roma Termini (Piazzale Cinquecento) • Pullman 310, 492 o 71 (direzione De Lollis / Verano) • Fermata di discesa: De Lollis/Università (~8 min a bordo) + 3 min a piedi per Città Universitaria.'
+              : 'Partenza: Città Universitaria (Varco De Lollis) • Pullman 310, 492 o 71 (direzione Termini, ~8 min a bordo).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -359,8 +359,8 @@ export function getOptimalRomeTransit(options: {
           lineName: 'Metro A Diretta (Fermata Manzoni)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Metro A da Termini a fermata Manzoni (2 fermate, 3 min) + 3 min a piedi per Via Ariosto 25 (oppure Bus diretti 714, 360, 649, 16)'
-              : '3 min a piedi per stazione Metro A Manzoni + Metro A diretta fino a Termini (3 min)',
+              ? 'Partenza: Stazione Roma Termini (Metropolitana Linea A) • Metro A (direzione Anagnina) • Fermata di discesa: Manzoni (2 fermate, ~3 min a bordo, zero cambi) + 3 min a piedi (200m) per Via Ariosto 25.'
+              : 'Partenza: Via Ariosto 25 • 3 min a piedi per stazione Metro A Manzoni • Metro A (direzione Battistini) diretta fino a Termini (~3 min a bordo).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };
@@ -372,11 +372,11 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 2,
           walkingMinutes: 6,
           transfersCount: 0,
-          lineName: 'Metro B Diretta (Fermata Cavour) o Bus 75',
+          lineName: 'Metro B Diretta (Fermata Cavour - Zero cambi)',
           routeDescription:
             direction === 'to_campus'
-              ? 'Metro B da Termini a Cavour (1 fermata, 2 min) + 6 min a piedi su Scalinata dei Borgia'
-              : '6 min a piedi per Cavour + Metro B diretta fino a Termini (2 min)',
+              ? 'Partenza: Stazione Roma Termini (Metropolitana Linea B) • Metro B (direzione Laurentina) • Fermata di discesa: Cavour (1 fermata, ~2 min a bordo) + 6 min a piedi su Scalinata dei Borgia fino a Via Eudossiana 18.'
+              : 'Partenza: Via Eudossiana 18 • 6 min a piedi per fermata Cavour • Metro B (direzione Rebibbia/Jonio) diretta fino a Termini (1 fermata, ~2 min).',
           stationOriginName: fromStationName,
           targetAddress: targetAddr,
         };

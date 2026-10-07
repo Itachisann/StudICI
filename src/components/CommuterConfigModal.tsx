@@ -436,10 +436,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                   </View>
 
                   <Text style={styles.urbanTransitDesc}>
-                    L&apos;app seleziona automaticamente il mezzo più veloce dalla stazione ({localConfig.arrivalStation.shortName || 'Roma'}) fino all&apos;aula esatta di lezione (es. Bus 649 o Metro A per Sede Ariosto RM102 alla fermata Conte Verde/Manzoni a soli 180m, Metro B per S. Pietro in Vincoli, a piedi per Polo Tiburtina RM025, Bus per Città Universitaria).
-                  </Text>
-                  <Text style={styles.urbanTransitDescSecondary}>
-                    Toccando la card di viaggio, Google Maps si apre già precompilato con la data e l&apos;orario effettivo di inizio o fine lezione, mostrando le linee e fermate attive a quell&apos;ora.
+                    L&apos;app seleziona automaticamente il mezzo più veloce dalla stazione fino all&apos;aula, esatta direzione.
                   </Text>
                 </View>
 

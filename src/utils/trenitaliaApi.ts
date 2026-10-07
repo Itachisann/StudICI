@@ -145,10 +145,33 @@ export async function getLiveStationDepartures(
         statusDescription = 'Non ancora partito';
       } else if (raw.provvedimento === 1 || raw.statoTreno === 'SOPPRESSO') {
         statusDescription = 'Soppresso';
+      } else if (raw.provvedimento === 3 || raw.statoTreno === 'DEVIATO') {
+        statusDescription = 'Deviato';
       } else if (delay > 0) {
         statusDescription = `Ritardo di ${delay} min`;
       } else if (delay < 0) {
         statusDescription = `Anticipo di ${Math.abs(delay)} min`;
+      }
+
+      let alertMessage: string | undefined = undefined;
+      const rawNotice = (raw.segnalazioni || raw.subTitle || raw.avviso || '').trim();
+      const delayReason = (raw.motivoRitardoPrevalente || '').trim();
+      if (rawNotice) {
+        alertMessage = rawNotice;
+      } else if (delayReason) {
+        alertMessage = `Causa ritardo: ${delayReason}`;
+      } else if (raw.provvedimento === 3 || raw.statoTreno === 'DEVIATO') {
+        alertMessage = 'Treno deviato su percorso alternativo da Trenitalia';
+      }
+
+      let capacityWarning: string | undefined = undefined;
+      const isNotPurchasable =
+        Boolean(raw.nonAcquistabile || raw.bigliettiNonAcquistabili) ||
+        (typeof rawNotice === 'string' &&
+          /biglietti\s+non\s+acquistabili|posti\s+esauriti/i.test(rawNotice));
+
+      if (isNotPurchasable) {
+        capacityWarning = 'Biglietti non acquistabili (Disponibilità posti limitata)';
       }
 
       const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE');
@@ -167,6 +190,9 @@ export async function getLiveStationDepartures(
         statusDescription,
         isLive: true,
         isFast,
+        alertMessage,
+        capacityWarning,
+        notPurchasable: isNotPurchasable,
       });
     }
 
@@ -452,13 +478,36 @@ export async function fetchLiveTrenitaliaTimetable(
           statusDescription = 'Non ancora partito';
         } else if (dep.provvedimento === 1 || dep.statoTreno === 'SOPPRESSO') {
           statusDescription = 'Soppresso';
+        } else if (dep.provvedimento === 3 || dep.statoTreno === 'DEVIATO') {
+          statusDescription = 'Deviato';
         } else if (delay > 0) {
           statusDescription = `Ritardo di ${delay} min`;
         } else if (delay < 0) {
           statusDescription = `Anticipo di ${Math.abs(delay)} min`;
         }
       } else {
-        statusDescription = 'Programmato Trenitalia';
+        statusDescription = 'Programmato';
+      }
+
+      let alertMessage: string | undefined = undefined;
+      const rawNotice = (dep.segnalazioni || dep.subTitle || dep.avviso || '').trim();
+      const delayReason = (dep.motivoRitardoPrevalente || '').trim();
+      if (rawNotice) {
+        alertMessage = rawNotice;
+      } else if (delayReason) {
+        alertMessage = `Causa ritardo: ${delayReason}`;
+      } else if (dep.provvedimento === 3 || dep.statoTreno === 'DEVIATO') {
+        alertMessage = 'Treno deviato su percorso alternativo da Trenitalia';
+      }
+
+      let capacityWarning: string | undefined = undefined;
+      const isNotPurchasable =
+        Boolean(dep.nonAcquistabile || dep.bigliettiNonAcquistabili) ||
+        (typeof rawNotice === 'string' &&
+          /biglietti\s+non\s+acquistabili|posti\s+esauriti/i.test(rawNotice));
+
+      if (isNotPurchasable) {
+        capacityWarning = 'Biglietti non acquistabili (Disponibilità posti limitata)';
       }
 
       const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE') || dur <= 45;
@@ -491,6 +540,9 @@ export async function fetchLiveTrenitaliaTimetable(
         isLive: true,
         durationMinutes: dur,
         isFast,
+        alertMessage,
+        capacityWarning,
+        notPurchasable: isNotPurchasable,
       });
     }
 
@@ -729,4 +781,188 @@ export function minutesToTime(mins: number): string {
   const hh = Math.floor(norm / 60);
   const mm = norm % 60;
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+export interface TrainStatusResult {
+  statusType: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
+  badgeLabel: string;
+  badgeColor: string;
+  badgeBg: string;
+  badgeBorder: string;
+  iconName: 'time-outline' | 'calendar-outline' | 'checkmark-circle-outline' | 'warning-outline' | 'flash-outline' | 'close-circle' | 'git-branch-outline' | 'alert-circle' | 'flag-outline';
+  alertMessage?: string;
+  capacityWarning?: string;
+}
+
+/**
+ * Valuta lo stato effettivo e veritiero del treno secondo la logica Trenitalia / ViaggiaTreno:
+ * 1. Se il treno ha avvisi di soppressione, deviazione o interruzione, li segnala immediatamente.
+ * 2. Se la data target non è oggi (es. domani o futuro), lo stato è "Programmato".
+ * 3. Se è oggi ma l'orario attuale è prima della partenza, è "Programmato".
+ * 4. Se l'orario attuale è tra partenza e arrivo, indica lo stato reale del viaggio (in orario, ritardo, anticipo).
+ * 5. Valuta la capienza ("Biglietti non acquistabili") senza inventare dati.
+ */
+export function evaluateTrainStatus(
+  train: LiveTrainInfo,
+  targetDate: Date = new Date()
+): TrainStatusResult {
+  const now = new Date();
+  const isToday =
+    targetDate.getDate() === now.getDate() &&
+    targetDate.getMonth() === now.getMonth() &&
+    targetDate.getFullYear() === now.getFullYear();
+
+  const descLower = (train.statusDescription || '').toLowerCase();
+  const alertLower = (train.alertMessage || '').toLowerCase();
+
+  // 1. Cancellato / Soppresso
+  if (
+    descLower.includes('soppresso') ||
+    descLower.includes('cancellat') ||
+    alertLower.includes('cancellat') ||
+    alertLower.includes('soppresso')
+  ) {
+    return {
+      statusType: 'cancelled',
+      badgeLabel: 'Cancellato',
+      badgeColor: '#ef4444',
+      badgeBg: 'rgba(239, 68, 68, 0.15)',
+      badgeBorder: 'rgba(239, 68, 68, 0.3)',
+      iconName: 'close-circle',
+      alertMessage: train.alertMessage || 'Treno soppresso da Trenitalia',
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // 2. Interruzione linea
+  if (descLower.includes('interruzi') || alertLower.includes('interruzi')) {
+    return {
+      statusType: 'interrupted',
+      badgeLabel: 'Interruzione linea',
+      badgeColor: '#ef4444',
+      badgeBg: 'rgba(239, 68, 68, 0.15)',
+      badgeBorder: 'rgba(239, 68, 68, 0.3)',
+      iconName: 'alert-circle',
+      alertMessage: train.alertMessage || 'Interruzione linea comunicata da Trenitalia',
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // 3. Deviato / Variazione di percorso
+  if (
+    descLower.includes('deviato') ||
+    alertLower.includes('deviato') ||
+    alertLower.includes('variazione')
+  ) {
+    return {
+      statusType: 'diverted',
+      badgeLabel: 'Deviato',
+      badgeColor: '#f59e0b',
+      badgeBg: 'rgba(245, 158, 11, 0.15)',
+      badgeBorder: 'rgba(245, 158, 11, 0.3)',
+      iconName: 'git-branch-outline',
+      alertMessage: train.alertMessage || 'Treno deviato su percorso alternativo da Trenitalia',
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // 4. Se la data di ricerca è futura (non oggi, es. domani o un giorno successivo):
+  if (!isToday) {
+    return {
+      statusType: 'scheduled',
+      badgeLabel: 'Programmato',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.12)',
+      badgeBorder: 'rgba(148, 163, 184, 0.25)',
+      iconName: 'calendar-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // 5. Se è oggi: verifica orario attuale rispetto alla corsa
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const actualDepMins = parseTimeToMinutes(
+    train.departureTimeActual || train.departureTimePlanned || '00:00'
+  );
+  const actualArrMins = parseTimeToMinutes(
+    train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
+  );
+
+  // Caso 5A: Treno deve ancora partire (orario attuale prima della partenza)
+  if (nowMins < actualDepMins - 1) {
+    return {
+      statusType: 'scheduled',
+      badgeLabel: 'Programmato',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.12)',
+      badgeBorder: 'rgba(148, 163, 184, 0.25)',
+      iconName: 'time-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // Caso 5B: Treno in viaggio (orario attuale tra partenza e arrivo)
+  if (nowMins >= actualDepMins - 1 && (actualArrMins === 0 || nowMins <= actualArrMins + 3)) {
+    if (train.delayMinutes > 0) {
+      return {
+        statusType: 'delayed',
+        badgeLabel: `In viaggio • +${train.delayMinutes}m ritardo`,
+        badgeColor: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
+        badgeBg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+        badgeBorder: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+        iconName: 'warning-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    } else if (train.delayMinutes < 0) {
+      return {
+        statusType: 'early',
+        badgeLabel: `In viaggio • Anticipo ${Math.abs(train.delayMinutes)}m`,
+        badgeColor: '#38bdf8',
+        badgeBg: 'rgba(56, 189, 248, 0.15)',
+        badgeBorder: 'rgba(56, 189, 248, 0.3)',
+        iconName: 'flash-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    } else {
+      return {
+        statusType: 'running',
+        badgeLabel: 'In viaggio • In orario',
+        badgeColor: '#34c759',
+        badgeBg: 'rgba(52, 199, 89, 0.15)',
+        badgeBorder: 'rgba(52, 199, 89, 0.3)',
+        iconName: 'checkmark-circle-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+  }
+
+  // Caso 5C: Treno arrivato a destinazione
+  if (train.delayMinutes > 0) {
+    return {
+      statusType: 'delayed',
+      badgeLabel: `Arrivato (+${train.delayMinutes}m)`,
+      badgeColor: '#64748b',
+      badgeBg: 'rgba(100, 116, 139, 0.15)',
+      badgeBorder: 'rgba(100, 116, 139, 0.25)',
+      iconName: 'flag-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  return {
+    statusType: 'on_time',
+    badgeLabel: 'Arrivato • In orario',
+    badgeColor: '#64748b',
+    badgeBg: 'rgba(100, 116, 139, 0.15)',
+    badgeBorder: 'rgba(100, 116, 139, 0.25)',
+    iconName: 'flag-outline',
+    alertMessage: train.alertMessage,
+    capacityWarning: train.capacityWarning,
+  };
 }

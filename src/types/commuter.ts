@@ -47,6 +47,11 @@ export interface LiveTrainInfo {
   isFast?: boolean; // true se Regionale Veloce (RV)
   hasEarlierTrain?: boolean;
   hasLaterTrain?: boolean;
+  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
+  statusBadgeLabel?: string;
+  alertMessage?: string;
+  capacityWarning?: string;
+  notPurchasable?: boolean;
 }
 
 export interface TripLeg {

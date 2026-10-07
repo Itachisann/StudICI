@@ -271,7 +271,8 @@ async function computeOutboundItinerary(
   if (carEnabled) {
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
-      config.departureStation.shortName || config.departureStation.name
+      config.departureStation.shortName || config.departureStation.name,
+      stationTargetArrivalStr
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
@@ -493,16 +494,19 @@ async function computeReturnItinerary(
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
 
+  const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
+  const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
+
   if (carEnabled) {
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
-      config.departureStation.shortName || config.departureStation.name
+      config.departureStation.shortName || config.departureStation.name,
+      returnDrivingTimeStr
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
   }
 
-  const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
 
   const legs: TripLeg[] = [];

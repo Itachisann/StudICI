@@ -296,7 +296,8 @@ async function resolveOriginCoordinates(
  */
 export async function calculateDrivingEstimate(
   originAddress: string,
-  stationName: string
+  stationName: string,
+  targetTimeStr?: string
 ): Promise<DrivingEstimate> {
   const origin = originAddress.trim() || 'Amelia';
   const station = stationName.trim() || 'Orte';
@@ -309,32 +310,50 @@ export async function calculateDrivingEstimate(
   const normOrigin = normalizeKey(origin);
   const normStation = normalizeKey(station);
 
-  // Casi speciali comuni pre-calcolati (istantaneo se si inserisce solo il nome del comune senza via specifica)
+  // Calcolo moltiplicatore del traffico coerente con Google Maps (ora di punta vs orario standard)
+  let trafficMultiplier = 1.10; // +10% base per rallentamenti reali, incroci e rotatorie
+  if (targetTimeStr && targetTimeStr.includes(':')) {
+    const [th, tm] = targetTimeStr.split(':').map(Number);
+    const totalMins = th * 60 + tm;
+    // Ora di punta mattina (06:45 - 09:15): traffico pendolare e scuole
+    if (totalMins >= 405 && totalMins <= 555) {
+      trafficMultiplier = 1.22;
+    }
+    // Ora di punta sera (16:45 - 19:30): rientro pendolare
+    else if (totalMins >= 1005 && totalMins <= 1170) {
+      trafficMultiplier = 1.18;
+    }
+  }
+
+  // Casi speciali comuni pre-calcolati (se non è una via specifica, con traffico applicato)
   if (!isSpecificStreet) {
     if (normOrigin === 'amelia' && normStation.includes('orte')) {
+      const mins = Math.round(22 * trafficMultiplier);
       return {
-        durationMinutes: 24,
-        distanceKm: 17.2,
+        durationMinutes: mins,
+        distanceKm: 18.5,
         isCalculated: true,
-        routeSummary: 'Centro Amelia ➔ Stazione Orte FS (17.2 km, ~24 min via SP8/SS204)',
+        routeSummary: `Centro Amelia ➔ Stazione Orte FS (18.5 km, ~${mins} min con traffico)`,
       };
     }
 
     if (normOrigin === 'narni' && normStation.includes('narni')) {
+      const mins = Math.round(7 * trafficMultiplier);
       return {
-        durationMinutes: 7,
+        durationMinutes: mins,
         distanceKm: 4.9,
         isCalculated: true,
-        routeSummary: 'Centro Narni ➔ Stazione Narni-Amelia (4.9 km, ~7 min via SS3)',
+        routeSummary: `Centro Narni ➔ Stazione Narni-Amelia (4.9 km, ~${mins} min)`,
       };
     }
 
     if (normOrigin === 'terni' && normStation.includes('terni')) {
+      const mins = Math.round(6 * trafficMultiplier);
       return {
-        durationMinutes: 6,
+        durationMinutes: mins,
         distanceKm: 2.8,
         isCalculated: true,
-        routeSummary: 'Centro Terni ➔ Stazione FS (~6 min)',
+        routeSummary: `Centro Terni ➔ Stazione FS (~${mins} min)`,
       };
     }
   }
@@ -346,7 +365,7 @@ export async function calculateDrivingEstimate(
     ]);
 
     if (coordsOrigin && coordsStation) {
-      // 1. Calcolo percorso stradale turn-by-turn con OSRM
+      // 1. Calcolo percorso stradale turn-by-turn con OSRM + ponderazione traffico Google Maps
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3500);
@@ -360,20 +379,21 @@ export async function calculateDrivingEstimate(
           if (json?.routes && json.routes[0]) {
             const sec = json.routes[0].duration;
             const dist = json.routes[0].distance;
-            const mins = Math.max(5, Math.round(sec / 60));
+            // Applica il coefficiente di traffico e rallentamenti reali
+            const mins = Math.max(5, Math.round((sec / 60) * trafficMultiplier));
             const km = +(dist / 1000).toFixed(1);
 
             return {
               durationMinutes: mins,
               distanceKm: km,
               isCalculated: true,
-              routeSummary: `Percorso stradale: ${km} km (~${mins} min verso ${coordsStation.name})`,
+              routeSummary: `Percorso stradale: ${km} km (~${mins} min con traffico verso ${coordsStation.name})`,
             };
           }
         }
       } catch {}
 
-      // 2. Modello matematico stradale (tortuosità 1.38x per viabilità provinciale/regionale, velocità media 42 km/h)
+      // 2. Modello matematico stradale (tortuosità 1.38x per viabilità provinciale/regionale, velocità media 40 km/h)
       const directKm = haversineDistanceKm(
         coordsOrigin.lat,
         coordsOrigin.lon,
@@ -381,7 +401,7 @@ export async function calculateDrivingEstimate(
         coordsStation.lon
       );
       const roadKm = +(directKm * 1.38).toFixed(1);
-      const estMinutes = Math.max(5, Math.round((roadKm / 42) * 60));
+      const estMinutes = Math.max(5, Math.round(((roadKm / 40) * 60) * trafficMultiplier));
 
       return {
         durationMinutes: estMinutes,
@@ -392,11 +412,11 @@ export async function calculateDrivingEstimate(
     }
   } catch {}
 
-  // Default fallback conservativo verso Stazione di Orte
+  // Default fallback conservativo verso Stazione ferroviaria
   return {
-    durationMinutes: 27,
+    durationMinutes: Math.round(24 * trafficMultiplier),
     distanceKm: 18.5,
     isCalculated: false,
-    routeSummary: 'Stima standard: ~18.5 km (~27 min)',
+    routeSummary: 'Stima standard: ~18.5 km con traffico',
   };
 }
