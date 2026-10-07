@@ -17,8 +17,7 @@ import { BlurView } from 'expo-blur';
 import { CommuterConfig, StationInfo } from '../types/commuter';
 import { POPULAR_STATIONS, searchStations } from '../utils/trenitaliaApi';
 import { calculateDrivingEstimate, DrivingEstimate } from '../utils/drivingRouter';
-
-const SAPIENZA_RED = '#822433';
+import { useTheme } from '@/context/ThemeContext';
 
 interface Props {
   visible: boolean;
@@ -28,6 +27,7 @@ interface Props {
 }
 
 export function CommuterConfigModal({ visible, config, onClose, onSave }: Props) {
+  const { theme } = useTheme();
   const [prevConfig, setPrevConfig] = useState(config);
   const [localConfig, setLocalConfig] = useState<CommuterConfig>(config);
   const [stationPickerType, setStationPickerType] = useState<'departure' | 'arrival' | null>(null);
@@ -134,7 +134,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
             </TouchableOpacity>
             <Text style={styles.title}>Impostazioni Pendolare</Text>
             <TouchableOpacity onPress={handleSave} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Text style={styles.saveText}>Salva</Text>
+              <Text style={[styles.saveText, { color: theme.accent }]}>Salva</Text>
             </TouchableOpacity>
           </View>
 
@@ -149,8 +149,8 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                     setStationSearchQuery('');
                   }}
                 >
-                  <Ionicons name="arrow-back" size={20} color="#38bdf8" />
-                  <Text style={styles.backBtnText}>Torna alle opzioni</Text>
+                  <Ionicons name="arrow-back" size={20} color={theme.accent} />
+                  <Text style={[styles.backBtnText, { color: theme.accent }]}>Torna alle opzioni</Text>
                 </TouchableOpacity>
                 <Text style={styles.pickerTitle}>
                   {stationPickerType === 'departure'
@@ -170,7 +170,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                   autoCapitalize="words"
                   autoCorrect={false}
                 />
-                {searchingStations && <ActivityIndicator size="small" color="#38bdf8" />}
+                {searchingStations && <ActivityIndicator size="small" color={theme.accent} />}
               </View>
 
               <ScrollView style={{ flex: 1 }}>
@@ -184,8 +184,8 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                     activeOpacity={0.7}
                     onPress={() => selectStation(st)}
                   >
-                    <View style={styles.stationIconCircle}>
-                      <Ionicons name="train" size={16} color="#38bdf8" />
+                    <View style={[styles.stationIconCircle, { backgroundColor: theme.subtle }]}>
+                      <Ionicons name="train" size={16} color={theme.accent} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.stationName}>{st.shortName || st.name}</Text>
@@ -238,17 +238,17 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                         carLeg: { ...prev.carLeg, enabled: val },
                       }))
                     }
-                    trackColor={{ false: '#334155', true: SAPIENZA_RED }}
+                    trackColor={{ false: '#334155', true: theme.primary }}
                   />
                 </View>
 
                 {localConfig.carLeg.enabled && (
                   <View style={{ marginTop: 12 }}>
                     {/* Box Calcolo Automatico da Mappe */}
-                    <View style={styles.autoCalcCard}>
+                    <View style={[styles.autoCalcCard, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
                       <View style={styles.autoCalcHeader}>
-                        <View style={styles.autoCalcIconBadge}>
-                          <Ionicons name="car-sport" size={16} color="#38bdf8" />
+                        <View style={[styles.autoCalcIconBadge, { backgroundColor: theme.subtle }]}>
+                          <Ionicons name="car-sport" size={16} color={theme.accent} />
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.autoCalcTitle}>Calcolo Percorso Automatico</Text>
@@ -257,10 +257,10 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                           </Text>
                         </View>
                         {calculatingDriving ? (
-                          <ActivityIndicator size="small" color="#38bdf8" />
+                          <ActivityIndicator size="small" color={theme.accent} />
                         ) : (
                           <TouchableOpacity
-                            style={styles.recalcBtn}
+                            style={[styles.recalcBtn, { backgroundColor: theme.subtle }]}
                             activeOpacity={0.7}
                             onPress={async () => {
                               setCalculatingDriving(true);
@@ -283,22 +283,22 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                               }
                             }}
                           >
-                            <Ionicons name="refresh" size={12} color="#38bdf8" style={{ marginRight: 3 }} />
-                            <Text style={styles.recalcBtnText}>Ricalcola</Text>
+                            <Ionicons name="refresh" size={12} color={theme.accent} style={{ marginRight: 3 }} />
+                            <Text style={[styles.recalcBtnText, { color: theme.accent }]}>Ricalcola</Text>
                           </TouchableOpacity>
                         )}
                       </View>
 
                       <View style={styles.autoCalcStatsRow}>
                         <View style={styles.autoCalcStat}>
-                          <Text style={styles.autoCalcStatValue}>
+                          <Text style={[styles.autoCalcStatValue, { color: theme.accent }]}>
                             {localConfig.carLeg.durationMinutes || 24} min
                           </Text>
                           <Text style={styles.autoCalcStatLabel}>Tempo Guida Stimato</Text>
                         </View>
                         <View style={styles.autoCalcStatDivider} />
                         <View style={styles.autoCalcStat}>
-                          <Text style={styles.autoCalcStatValue}>
+                          <Text style={[styles.autoCalcStatValue, { color: theme.accent }]}>
                             {localConfig.carLeg.distanceKm ? `${localConfig.carLeg.distanceKm} km` : '~17.2 km'}
                           </Text>
                           <Text style={styles.autoCalcStatLabel}>Distanza Stradale</Text>
@@ -365,13 +365,13 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.inputLabel}>Stazione di Partenza</Text>
-                    <Text style={styles.stationSelectedText}>
+                    <Text style={[styles.stationSelectedText, { color: theme.accent }]}>
                       {localConfig.departureStation.shortName || localConfig.departureStation.name}
                     </Text>
                   </View>
-                  <View style={styles.changeBadge}>
-                    <Text style={styles.changeBadgeText}>Modifica</Text>
-                    <Ionicons name="chevron-forward" size={12} color="#38bdf8" />
+                  <View style={[styles.changeBadge, { backgroundColor: theme.subtle }]}>
+                    <Text style={[styles.changeBadgeText, { color: theme.accent }]}>Modifica</Text>
+                    <Ionicons name="chevron-forward" size={12} color={theme.accent} />
                   </View>
                 </TouchableOpacity>
 
@@ -384,13 +384,13 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.inputLabel}>Stazione di Arrivo (Roma)</Text>
-                    <Text style={styles.stationSelectedText}>
+                    <Text style={[styles.stationSelectedText, { color: theme.accent }]}>
                       {localConfig.arrivalStation.shortName || localConfig.arrivalStation.name}
                     </Text>
                   </View>
-                  <View style={styles.changeBadge}>
-                    <Text style={styles.changeBadgeText}>Modifica</Text>
-                    <Ionicons name="chevron-forward" size={12} color="#38bdf8" />
+                  <View style={[styles.changeBadge, { backgroundColor: theme.subtle }]}>
+                    <Text style={[styles.changeBadgeText, { color: theme.accent }]}>Modifica</Text>
+                    <Ionicons name="chevron-forward" size={12} color={theme.accent} />
                   </View>
                 </TouchableOpacity>
               </View>
@@ -418,7 +418,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
 
                   <View style={styles.urbanModesRow}>
                     <View style={styles.urbanModePill}>
-                      <Ionicons name="subway-outline" size={12} color="#38bdf8" />
+                      <Ionicons name="subway-outline" size={12} color={theme.accent} />
                       <Text style={styles.urbanModeText}>Metro B / A</Text>
                     </View>
                     <View style={styles.urbanModePill}>
@@ -517,7 +517,7 @@ const styles = StyleSheet.create({
   saveText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: '#e05666',
   },
   body: {
     flex: 1,
@@ -615,19 +615,19 @@ const styles = StyleSheet.create({
   stationSelectedText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#38bdf8',
+    color: '#e05666',
   },
   changeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor: 'rgba(130, 36, 51, 0.2)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
   changeBadgeText: {
     fontSize: 12,
-    color: '#38bdf8',
+    color: '#e05666',
     fontWeight: '600',
     marginRight: 3,
   },
@@ -645,7 +645,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   backBtnText: {
-    color: '#38bdf8',
+    color: '#e05666',
     fontSize: 14,
     marginLeft: 4,
     fontWeight: '600',
@@ -693,7 +693,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor: 'rgba(130, 36, 51, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -709,10 +709,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   autoCalcCard: {
-    backgroundColor: 'rgba(56, 189, 248, 0.07)',
+    backgroundColor: 'rgba(130, 36, 51, 0.15)',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.22)',
+    borderColor: 'rgba(130, 36, 51, 0.4)',
     padding: 12,
     marginBottom: 10,
   },
@@ -725,7 +725,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+    backgroundColor: 'rgba(130, 36, 51, 0.25)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 9,
@@ -743,7 +743,7 @@ const styles = StyleSheet.create({
   recalcBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor: 'rgba(130, 36, 51, 0.2)',
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 6,
@@ -751,7 +751,7 @@ const styles = StyleSheet.create({
   recalcBtnText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: '#e05666',
   },
   autoCalcStatsRow: {
     flexDirection: 'row',
@@ -769,7 +769,7 @@ const styles = StyleSheet.create({
   autoCalcStatValue: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#38bdf8',
+    color: '#e05666',
   },
   autoCalcStatLabel: {
     fontSize: 10,

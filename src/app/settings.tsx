@@ -73,6 +73,7 @@ import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
+import { useTheme } from "@/context/ThemeContext";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -93,6 +94,7 @@ const formatSyncDate = (ts: number | null): string => {
 };
 
 export default function ProfiloScreen() {
+  const { theme, themeId, setThemeId, availableThemes } = useTheme();
   const [degreeName, setDegreeName] = useState<string>("");
   const [degreeClassName, setDegreeClassName] = useState<string>("");
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
@@ -904,7 +906,7 @@ export default function ProfiloScreen() {
       >
         {/* Apple ID Style Account Header Card con Metadati Corso */}
         <View style={styles.profileHeaderCard}>
-          <View style={styles.profileAvatarBox}>
+          <View style={[styles.profileAvatarBox, { backgroundColor: theme.primary, shadowColor: theme.primary }]}>
             <Ionicons name="school" size={26} color="#ffffff" />
           </View>
           <View style={styles.profileHeaderInfo}>
@@ -982,7 +984,7 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={() => setCourseModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: SAPIENZA_RED }]}>
+            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
               <Ionicons name="school" size={17} color="#ffffff" />
             </View>
             <Text style={styles.rowTitle}>Corso di Laurea</Text>
@@ -1014,6 +1016,65 @@ export default function ProfiloScreen() {
           {
             "L'app visualizzerà in automatico l'orario e le aule del canale selezionato."
           }
+        </Text>
+
+        {/* Gruppo: ASPETTO & TEMA */}
+        <Text style={styles.sectionHeader}>ASPETTO</Text>
+        <View style={styles.groupedCard}>
+          <View style={styles.themeSelectorSection}>
+            <View style={styles.themeHeaderRow}>
+              <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+                <Ionicons name="color-palette" size={17} color="#ffffff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>Colore Tema Principale</Text>
+                <Text style={styles.rowSubTitle}>Attivo: {theme.name}</Text>
+              </View>
+            </View>
+
+            <View style={styles.themeGrid}>
+              {availableThemes.map((t) => {
+                const isSelected = t.id === themeId;
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[
+                      styles.themeCardItem,
+                      isSelected && {
+                        borderColor: t.primary,
+                        backgroundColor: t.cardTint,
+                      },
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => setThemeId(t.id)}
+                  >
+                    <View
+                      style={[
+                        styles.themeColorDot,
+                        { backgroundColor: t.primary },
+                      ]}
+                    >
+                      {isSelected && (
+                        <Ionicons name="checkmark" size={13} color="#ffffff" />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.themeCardName,
+                        isSelected && { color: "#ffffff", fontWeight: "700" },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {t.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Modifica il colore tema dell&apos;intera app. I dettagli visivi e le sezioni del viaggio pendolare si adatteranno automaticamente.
         </Text>
 
         {/* Gruppo: REGISTRO PRESENZE */}
@@ -1205,7 +1266,7 @@ export default function ProfiloScreen() {
             onPress={handleExportSchedulePdf}
             disabled={isExportingPdf}
           >
-            <View style={[styles.iconBox, { backgroundColor: SAPIENZA_RED }]}>
+            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
               {isExportingPdf ? (
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
@@ -1362,7 +1423,7 @@ export default function ProfiloScreen() {
           {loading ? (
             <ActivityIndicator
               size="large"
-              color={SAPIENZA_RED}
+              color={theme.primary}
               style={{ marginTop: 40 }}
             />
           ) : (
@@ -1386,7 +1447,7 @@ export default function ProfiloScreen() {
                     key={i}
                     style={[
                       styles.modalItem,
-                      isSelected && styles.modalItemSelected,
+                      isSelected && [styles.modalItemSelected, { borderColor: theme.primary }],
                     ]}
                     activeOpacity={0.7}
                     onPress={() => selectDegree(deg)}
@@ -1394,7 +1455,7 @@ export default function ProfiloScreen() {
                     <View
                       style={[
                         styles.courseIconBox,
-                        isSelected && { backgroundColor: SAPIENZA_RED },
+                        isSelected && { backgroundColor: theme.primary },
                       ]}
                     >
                       <Ionicons name="school" size={18} color="#ffffff" />
@@ -1441,7 +1502,7 @@ export default function ProfiloScreen() {
                       <Ionicons
                         name="checkmark-circle"
                         size={22}
-                        color={SAPIENZA_RED}
+                        color={theme.primary}
                       />
                     )}
                   </TouchableOpacity>
@@ -2861,4 +2922,44 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: -0.2,
   },
+  themeSelectorSection: {
+    padding: 14,
+  },
+  themeHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  themeGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  themeCardItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    minWidth: "48%",
+    flexGrow: 1,
+    gap: 8,
+  },
+  themeColorDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  themeCardName: {
+    fontSize: 13,
+    color: "#cbd5e1",
+    fontWeight: "500",
+    flex: 1,
+  },
 });
+

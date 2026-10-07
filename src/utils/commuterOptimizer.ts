@@ -319,7 +319,6 @@ async function computeOutboundItinerary(
         trafficCondition: carTrafficNote,
         trafficFluency: carTrafficFluency,
         isTrafficPeak: carTrafficPeak,
-        notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });
 
@@ -429,7 +428,7 @@ async function computeOutboundItinerary(
     isWarning = true;
   } else if (train.isLive) {
     badgeText = 'Dati Trenitalia';
-    badgeColor = '#38bdf8'; // blue
+    badgeColor = '#e05666';
   }
 
   const summary = `Parti alle ${minutesToTime(homeDepartureMins)} da ${config.originAddress} con ${train.trainNumber} (${train.departureTimePlanned || train.departureTimeActual}) per essere in ${targetLecture.room} alle ${minutesToTime(actualClassroomArrivalMins)} (inizio lezione ${targetLecture.startTime})`;
@@ -622,7 +621,6 @@ async function computeReturnItinerary(
         trafficCondition: carTrafficNote,
         trafficFluency: carTrafficFluency,
         isTrafficPeak: carTrafficPeak,
-        notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });
   }
@@ -651,7 +649,7 @@ async function computeReturnItinerary(
         train.delayMinutes > 5
           ? '#f59e0b'
           : train.isLive
-          ? '#38bdf8'
+          ? '#e05666'
           : '#34c759',
       isWarning: train.delayMinutes > 5,
     },

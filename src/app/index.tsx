@@ -24,6 +24,7 @@ import {
 } from "react-native-safe-area-context";
 import { ClassroomModal } from "../components/ClassroomModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
+import { useTheme } from "@/context/ThemeContext";
 import { hasDateInfo } from "../utils/aiParser";
 import {
   AttendanceRecord,
@@ -97,6 +98,7 @@ function AttendanceCheckmark() {
 }
 
 export default function ScheduleScreen() {
+  const { theme } = useTheme();
   const [loading, setLoading] = useState(true);
   const [schedule, setSchedule] = useState<ScheduleData | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -387,19 +389,19 @@ export default function ScheduleScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={SAPIENZA_RED}
-            colors={[SAPIENZA_RED]}
+            tintColor={theme.primary}
+            colors={[theme.primary]}
           />
         }
       >
         {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
         {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
-          <View style={styles.semesterCard}>
-            <View style={styles.semesterIconBox}>
+          <View style={[styles.semesterCard, { borderColor: theme.border }]}>
+            <View style={[styles.semesterIconBox, { backgroundColor: theme.primary }]}>
               <Ionicons name="calendar" size={16} color="#ffffff" />
             </View>
             <View style={styles.semesterContent}>
-              <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+              <Text style={[styles.semesterTitle, { color: theme.accent }]}>CALENDARIO DIDATTICO</Text>
               <Text style={styles.semesterValue} numberOfLines={2}>
                 {schedule.info.semester}
               </Text>
@@ -505,12 +507,15 @@ export default function ScheduleScreen() {
         {/* ── Banner Rapido Pendolare ── */}
         {todayClasses.length > 0 && (
           <TouchableOpacity
-            style={styles.commuterQuickBanner}
+            style={[
+              styles.commuterQuickBanner,
+              { backgroundColor: theme.cardTint, borderColor: theme.border },
+            ]}
             activeOpacity={0.7}
             onPress={() => router.push("/viaggio" as any)}
           >
-            <View style={styles.commuterBannerIcon}>
-              <Ionicons name="train" size={15} color="#38bdf8" />
+            <View style={[styles.commuterBannerIcon, { backgroundColor: theme.subtle }]}>
+              <Ionicons name="train" size={15} color={theme.accent} />
             </View>
             <View style={{ flex: 1, paddingRight: 6 }}>
               <Text style={styles.commuterBannerTitle}>Itinerario Pendolare</Text>
@@ -519,14 +524,14 @@ export default function ScheduleScreen() {
                 {todayClasses[0].startTime || "08:30"}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={14} color="#38bdf8" />
+            <Ionicons name="chevron-forward" size={14} color={theme.accent} />
           </TouchableOpacity>
         )}
 
         {/* ── Classes List ── */}
         {loading ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={SAPIENZA_RED} />
+            <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.loadingText}>Caricamento lezioni...</Text>
           </View>
         ) : (
@@ -1289,20 +1294,20 @@ const styles = StyleSheet.create({
   commuterQuickBanner: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(56, 189, 248, 0.08)",
+    backgroundColor: "rgba(130, 36, 51, 0.12)",
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginHorizontal: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(56, 189, 248, 0.2)",
+    borderColor: "rgba(130, 36, 51, 0.3)",
   },
   commuterBannerIcon: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "rgba(56, 189, 248, 0.15)",
+    backgroundColor: "rgba(130, 36, 51, 0.2)",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 10,

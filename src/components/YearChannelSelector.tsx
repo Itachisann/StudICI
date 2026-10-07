@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from '
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
+import { useTheme } from '@/context/ThemeContext';
 
 const SAPIENZA_RED = '#822433';
 
@@ -98,6 +99,7 @@ interface YearChannelSelectorProps {
 }
 
 export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChannelSelectorProps) {
+  const { theme } = useTheme();
   const parsedTabs = useMemo(() => parseTabHierarchy(tabs), [tabs]);
 
   // Lista di tutti gli anni unici ordinati
@@ -169,7 +171,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                   onPress={() => handleSelectYear(year)}
                   style={[
                     styles.yearChipEqual,
-                    isYearActive && styles.yearChipActive,
+                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary }],
                   ]}
                   activeOpacity={0.7}
                 >
@@ -195,7 +197,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                   onPress={() => handleSelectYear(year)}
                   style={[
                     styles.yearChip,
-                    isYearActive && styles.yearChipActive,
+                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary }],
                     i === uniqueYears.length - 1 && { marginRight: 0 },
                   ]}
                   activeOpacity={0.7}
@@ -215,7 +217,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
         <View style={styles.channelContainer}>
           {isNativeIos ? (
             <SegmentedControl
-              key={`seg-${activeYear}-${channelsForActiveYear.length}`}
+              key={`seg-${activeYear}-${channelsForActiveYear.length}-${theme.primary}`}
               values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
               selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
               onChange={(event) => {
@@ -225,7 +227,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                 }
               }}
               appearance="dark"
-              tintColor={SAPIENZA_RED}
+              tintColor={theme.primary}
               fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
               activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
               style={styles.nativeSegmentedControl}
@@ -242,7 +244,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                       onPress={() => onSelectTab(item.tab)}
                       style={[
                         styles.chipEqual,
-                        isChannelActive && styles.chipActive,
+                        isChannelActive && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }],
                       ]}
                       activeOpacity={0.7}
                     >
@@ -272,7 +274,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                       onPress={() => onSelectTab(item.tab)}
                       style={[
                         styles.chipFixedEqual,
-                        isChannelActive && styles.chipActive,
+                        isChannelActive && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }],
                         i === channelsForActiveYear.length - 1 && { marginRight: 0 },
                       ]}
                       activeOpacity={0.7}

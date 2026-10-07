@@ -931,9 +931,9 @@ export function evaluateTrainStatus(
       return {
         statusType: 'early',
         badgeLabel: `In viaggio • Anticipo ${Math.abs(train.delayMinutes)}m`,
-        badgeColor: '#38bdf8',
-        badgeBg: 'rgba(56, 189, 248, 0.15)',
-        badgeBorder: 'rgba(56, 189, 248, 0.3)',
+        badgeColor: '#10b981',
+        badgeBg: 'rgba(16, 185, 129, 0.15)',
+        badgeBorder: 'rgba(16, 185, 129, 0.3)',
         iconName: 'flash-outline',
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,

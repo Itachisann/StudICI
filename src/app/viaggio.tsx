@@ -26,12 +26,12 @@ import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
 import { parseTimeToMinutes, evaluateTrainStatus } from '../utils/trenitaliaApi';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
+import { useTheme } from '@/context/ThemeContext';
 
 const SAPIENZA_RED = '#822433';
 const SAPIENZA_RED_ACCENT = '#e05666';
 const SAPIENZA_RED_LIGHT = '#f87171';
 const SAPIENZA_RED_BG = 'rgba(130, 36, 51, 0.45)';
-const SAPIENZA_RED_SUBTLE = 'rgba(130, 36, 51, 0.2)';
 const SAPIENZA_RED_BORDER = 'rgba(130, 36, 51, 0.4)';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
@@ -45,6 +45,7 @@ const WEEKDAYS = [
 ];
 
 export default function ViaggioScreen() {
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -413,7 +414,10 @@ export default function ViaggioScreen() {
                 <TouchableOpacity
                   style={[
                     styles.customSegmentBtn,
-                    direction === 'outbound' && styles.customSegmentBtnActive,
+                    direction === 'outbound' && [
+                      styles.customSegmentBtnActive,
+                      { backgroundColor: theme.bg, borderColor: theme.primary },
+                    ],
                   ]}
                   activeOpacity={0.7}
                   onPress={() => handleDirectionChange('outbound')}
@@ -436,7 +440,10 @@ export default function ViaggioScreen() {
                 <TouchableOpacity
                   style={[
                     styles.customSegmentBtn,
-                    direction === 'return' && styles.customSegmentBtnActive,
+                    direction === 'return' && [
+                      styles.customSegmentBtnActive,
+                      { backgroundColor: theme.bg, borderColor: theme.primary },
+                    ],
                   ]}
                   activeOpacity={0.7}
                   onPress={() => handleDirectionChange('return')}
@@ -484,7 +491,10 @@ export default function ViaggioScreen() {
                     <View
                       style={[
                         styles.dayCircle,
-                        isSelected && styles.dayCircleActive,
+                        isSelected && [
+                          styles.dayCircleActive,
+                          { backgroundColor: theme.bg, borderColor: theme.primary },
+                        ],
                       ]}
                     >
                       <Text
@@ -517,8 +527,8 @@ export default function ViaggioScreen() {
         <View style={styles.lecturesSection}>
           <View style={styles.sectionHeaderRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="book-outline" size={13} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 5 }} />
-              <Text style={styles.sectionTitle}>LEZIONI DEL GIORNO</Text>
+              <Ionicons name="book-outline" size={13} color={theme.accent} style={{ marginRight: 5 }} />
+              <Text style={[styles.sectionTitle, { color: theme.accent }]}>LEZIONI DEL GIORNO</Text>
             </View>
           </View>
 
@@ -542,24 +552,45 @@ export default function ViaggioScreen() {
                 return (
                   <TouchableOpacity
                     key={`${item.subject}-${item.startTime}-${idx}`}
-                    style={[styles.classCard, isSelected && styles.classCardSelected]}
+                    style={[
+                      styles.classCard,
+                      isSelected && [
+                        styles.classCardSelected,
+                        { backgroundColor: theme.cardTint, borderColor: theme.primary },
+                      ],
+                    ]}
                     activeOpacity={0.8}
                     onPress={() => handleSelectClass(idx)}
                   >
                     <View style={styles.classCardTopRow}>
-                      <View style={[styles.classTimeBadge, isSelected && styles.classTimeBadgeSelected]}>
+                      <View
+                        style={[
+                          styles.classTimeBadge,
+                          { backgroundColor: theme.subtle },
+                          isSelected && [
+                            styles.classTimeBadgeSelected,
+                            { backgroundColor: theme.primary },
+                          ],
+                        ]}
+                      >
                         <Ionicons
                           name="time-outline"
                           size={11}
-                          color={isSelected ? '#fff' : SAPIENZA_RED_ACCENT}
+                          color={isSelected ? '#fff' : theme.accent}
                           style={{ marginRight: 4 }}
                         />
-                        <Text style={[styles.classTimeText, isSelected && styles.classTimeTextSelected]}>
+                        <Text
+                          style={[
+                            styles.classTimeText,
+                            { color: theme.accent },
+                            isSelected && styles.classTimeTextSelected,
+                          ]}
+                        >
                           {item.startTime} - {item.endTime}
                         </Text>
                       </View>
                       {isSelected && (
-                        <View style={styles.targetBadge}>
+                        <View style={[styles.targetBadge, { backgroundColor: theme.primary }]}>
                           <Ionicons name="checkmark-circle" size={12} color="#fff" style={{ marginRight: 3 }} />
                           <Text style={styles.targetBadgeText}>Target</Text>
                         </View>
@@ -597,7 +628,7 @@ export default function ViaggioScreen() {
         {/* Corpo Principale Itinerario */}
         {loading ? (
           <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color={SAPIENZA_RED} />
+            <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.loadingText}>Calcolo tempi, treni regionali e linee dirette...</Text>
           </View>
         ) : !itinerary ? (
@@ -616,7 +647,7 @@ export default function ViaggioScreen() {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={() => loadData(true)}
-                tintColor={SAPIENZA_RED}
+                tintColor={theme.primary}
               />
             }
           >
@@ -665,7 +696,7 @@ export default function ViaggioScreen() {
                 <Ionicons
                   name={direction === 'outbound' ? 'school' : 'home'}
                   size={16}
-                  color={SAPIENZA_RED_ACCENT}
+                  color={theme.accent}
                   style={{ marginRight: 8 }}
                 />
                 <View style={{ flex: 1 }}>
@@ -686,13 +717,13 @@ export default function ViaggioScreen() {
             {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
             {itinerary.liveTrain && (
               <TouchableOpacity
-                style={styles.trainHighlightCard}
+                style={[styles.trainHighlightCard, { borderColor: theme.border }]}
                 activeOpacity={0.88}
                 onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
               >
                 <View style={styles.trainHighlightHeader}>
                   <View style={styles.trainHighlightHeaderLeft}>
-                    <View style={styles.trainNumberBadge}>
+                    <View style={[styles.trainNumberBadge, { backgroundColor: theme.primary }]}>
                       <Ionicons name="train" size={14} color="#fff" style={{ marginRight: 5 }} />
                       <Text style={styles.trainNumberText}>{itinerary.liveTrain.trainNumber}</Text>
                     </View>
@@ -742,9 +773,9 @@ export default function ViaggioScreen() {
 
                 {/* Eventuale Segnalazione Capienza / Biglietti non acquistabili */}
                 {trainStatus?.capacityWarning ? (
-                  <View style={styles.trainCapacityBanner}>
-                    <Ionicons name="people-outline" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 6 }} />
-                    <Text style={styles.trainCapacityBannerText}>{trainStatus.capacityWarning}</Text>
+                  <View style={[styles.trainCapacityBanner, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
+                    <Ionicons name="people-outline" size={14} color={theme.accent} style={{ marginRight: 6 }} />
+                    <Text style={[styles.trainCapacityBannerText, { color: theme.light }]}>{trainStatus.capacityWarning}</Text>
                   </View>
                 ) : null}
 
@@ -763,7 +794,7 @@ export default function ViaggioScreen() {
                   </View>
 
                   {/* Binario Risaltato */}
-                  <View style={styles.platformHighlightBox}>
+                  <View style={[styles.platformHighlightBox, { borderColor: theme.border }]}>
                     <Text style={styles.platformHighlightLabel}>BINARIO</Text>
                     <Text style={styles.platformHighlightValue}>
                       {itinerary.liveTrain.platformActual ||
@@ -818,8 +849,8 @@ export default function ViaggioScreen() {
                     disabled={itinerary.liveTrain.hasEarlierTrain === false}
                     onPress={handleTrainPrev}
                   >
-                    <Ionicons name="chevron-back" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 3 }} />
-                    <Text style={styles.trainNavBtnText}>Treno prima</Text>
+                    <Ionicons name="chevron-back" size={14} color={theme.accent} style={{ marginRight: 3 }} />
+                    <Text style={[styles.trainNavBtnText, { color: theme.accent }]}>Treno prima</Text>
                   </TouchableOpacity>
 
                   <Text style={styles.trainNavCenterLabel}>Cambia treno</Text>
@@ -832,8 +863,8 @@ export default function ViaggioScreen() {
                     disabled={itinerary.liveTrain.hasLaterTrain === false}
                     onPress={handleTrainNext}
                   >
-                    <Text style={styles.trainNavBtnText}>Treno dopo</Text>
-                    <Ionicons name="chevron-forward" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginLeft: 3 }} />
+                    <Text style={[styles.trainNavBtnText, { color: theme.accent }]}>Treno dopo</Text>
+                    <Ionicons name="chevron-forward" size={14} color={theme.accent} style={{ marginLeft: 3 }} />
                   </TouchableOpacity>
                 </View>
 
@@ -861,7 +892,10 @@ export default function ViaggioScreen() {
                           key={at.trainNumber}
                           style={[
                             styles.trainChip,
-                            isCurrent && styles.trainChipCurrent,
+                            isCurrent && [
+                              styles.trainChipCurrent,
+                              { backgroundColor: theme.bg, borderColor: theme.primary },
+                            ],
                           ]}
                           activeOpacity={0.7}
                           onLayout={(e) => {
@@ -878,7 +912,7 @@ export default function ViaggioScreen() {
                           <Ionicons
                             name={at.isFast ? 'flash' : 'train-outline'}
                             size={12}
-                            color={isCurrent ? SAPIENZA_RED_ACCENT : '#94a3b8'}
+                            color={isCurrent ? theme.accent : '#94a3b8'}
                             style={{ marginRight: 4 }}
                           />
                           <Text
@@ -906,8 +940,8 @@ export default function ViaggioScreen() {
                 const isLast = index === itinerary.legs.length - 1;
 
                 let iconName: keyof typeof Ionicons.glyphMap = 'navigate';
-                let iconColor = SAPIENZA_RED_ACCENT;
-                let circleBg = SAPIENZA_RED_SUBTLE;
+                let iconColor = theme.accent;
+                let circleBg = theme.subtle;
 
                 if (leg.type === 'car') {
                   iconName = 'car';
@@ -915,16 +949,16 @@ export default function ViaggioScreen() {
                   circleBg = 'rgba(251, 146, 60, 0.15)';
                 } else if (leg.type === 'train') {
                   iconName = 'train';
-                  iconColor = SAPIENZA_RED_ACCENT;
-                  circleBg = SAPIENZA_RED_SUBTLE;
+                  iconColor = theme.accent;
+                  circleBg = theme.subtle;
                 } else if (leg.type === 'transit') {
                   iconName = 'bus';
                   iconColor = '#a855f7';
                   circleBg = 'rgba(168, 85, 247, 0.15)';
                 } else if (leg.type === 'destination') {
                   iconName = direction === 'outbound' ? 'school' : 'home';
-                  iconColor = SAPIENZA_RED;
-                  circleBg = SAPIENZA_RED_SUBTLE;
+                  iconColor = theme.primary;
+                  circleBg = theme.subtle;
                 } else if (leg.type === 'wait') {
                   iconName = 'pause';
                   iconColor = '#94a3b8';
@@ -1060,18 +1094,21 @@ export default function ViaggioScreen() {
                       {/* Scheda Link Trenitalia per Tappa Treno */}
                       {leg.type === 'train' && (
                         <TouchableOpacity
-                          style={styles.trenitaliaTimelineBanner}
+                          style={[
+                            styles.trenitaliaTimelineBanner,
+                            { backgroundColor: theme.cardTint, borderColor: theme.border },
+                          ]}
                           activeOpacity={0.8}
                           onPress={() => handleOpenTrenitalia(leg.details?.trainNumber)}
                         >
-                          <View style={styles.trenitaliaIconCircle}>
+                          <View style={[styles.trenitaliaIconCircle, { backgroundColor: theme.primary }]}>
                             <Ionicons name="train" size={13} color="#ffffff" />
                           </View>
                           <View style={{ flex: 1, marginRight: 6 }}>
                             <Text style={styles.trenitaliaBannerTitle}>Scheda Treno Trenitalia</Text>
                             <Text style={styles.trenitaliaBannerSubtitle}>Tocca per verificare stato e fermate live</Text>
                           </View>
-                          <View style={styles.trenitaliaActionBadge}>
+                          <View style={[styles.trenitaliaActionBadge, { backgroundColor: theme.primary }]}>
                             <Text style={styles.trenitaliaActionBadgeText}>TRENO</Text>
                             <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
                           </View>
@@ -1079,15 +1116,16 @@ export default function ViaggioScreen() {
                       )}
 
                       {/* Note della tratta */}
-                      {leg.details?.notes && (
+                      {leg.details?.notes &&
+                        leg.details.notes !== 'Tocca per aprire la navigazione con orario impostato' && (
                         <Text style={styles.stepNotesText}>{leg.details.notes}</Text>
                       )}
 
                       {/* Banner Apri Google Maps */}
                       {leg.details?.mapQuery && (
-                        <View style={styles.mapsBanner}>
+                        <View style={[styles.mapsBanner, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
                           <View style={styles.mapsBannerLeft}>
-                            <View style={styles.mapsIconCircle}>
+                            <View style={[styles.mapsIconCircle, { backgroundColor: theme.subtle }]}>
                               <Ionicons
                                 name={
                                   leg.details.travelMode === 'transit'
@@ -1097,11 +1135,11 @@ export default function ViaggioScreen() {
                                     : 'navigate'
                                 }
                                 size={14}
-                                color={SAPIENZA_RED_ACCENT}
+                                color={theme.accent}
                               />
                             </View>
                             <View style={{ flex: 1, marginRight: 6 }}>
-                              <Text style={styles.mapsBannerTitle}>
+                              <Text style={[styles.mapsBannerTitle, { color: theme.accent }]}>
                                 {leg.details.travelMode === 'transit'
                                   ? 'Apri su Google Maps'
                                   : leg.details.travelMode === 'walking'
@@ -1115,7 +1153,7 @@ export default function ViaggioScreen() {
                               )}
                             </View>
                           </View>
-                          <View style={styles.mapsActionBadge}>
+                          <View style={[styles.mapsActionBadge, { backgroundColor: theme.primary }]}>
                             <Text style={styles.mapsActionBadgeText}>APRI MAPS</Text>
                             <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
                           </View>

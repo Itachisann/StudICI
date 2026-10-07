@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import * as Clipboard from 'expo-clipboard';
 import { ResolvedClassroom, openInMaps } from '../utils/classroomLocations';
+import { useTheme } from '@/context/ThemeContext';
 
 const SAPIENZA_RED = '#822433';
 
@@ -20,6 +21,7 @@ interface ClassroomModalProps {
 }
 
 export function ClassroomModal({ visible, classroom, subjects, onClose }: ClassroomModalProps) {
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const [copied, setCopied] = useState(false);
 
@@ -80,7 +82,7 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
 
           {/* Header con Titolo, Campus Badge e Tasto Chiudi Circolare */}
           <View style={styles.headerRow}>
-            <View style={styles.roomIconSquircle}>
+            <View style={[styles.roomIconSquircle, { backgroundColor: theme.primary, shadowColor: theme.primary }]}>
               <Ionicons name="location" size={24} color="#ffffff" />
             </View>
 
@@ -191,7 +193,7 @@ export function ClassroomModal({ visible, classroom, subjects, onClose }: Classr
             <View style={styles.directionRow}>
               {/* Apple Mappe */}
               <TouchableOpacity
-                style={[styles.directionButton, styles.appleButton]}
+                style={[styles.directionButton, styles.appleButton, { backgroundColor: theme.primary, shadowColor: theme.primary }]}
                 activeOpacity={0.8}
                 onPress={() => {
                   openInMaps(classroom, 'apple');

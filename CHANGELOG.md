@@ -8,6 +8,22 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.6.0
 
 ### Novità
+- **Personalizzazione Colore Tema dell'App nel Profilo**:
+  - Nuova sezione **ASPETTO** nel tab Profilo / Impostazioni che permette di selezionare con un tocco il colore tema principale dell'intera applicazione tra 7 splendide palette curate:
+    - *Rosso Sapienza* (`#822433`)
+    - *Blu Notte* (`#1d4ed8`)
+    - *Verde Smeraldo* (`#059669`)
+    - *Viola Reale* (`#7c3aed`)
+    - *Arancio Caldo* (`#d97706`)
+    - *Rosa Rubino* (`#be185d`)
+    - *Ciano Oceano* (`#0284c7`)
+  - Memorizzazione persistente della scelta su memoria locale (`AsyncStorage`).
+  - Il colore tema si propaga istantaneamente in tutta l'applicazione: barre di navigazione (sia NativeTabs che Expo Tabs), banner di refresh, selettore anni e canali, card anteprima orario, modal aule e l'intera sezione del viaggio pendolare.
+- **Uniformità Cromatica nelle Impostazioni Pendolare e nella Home**:
+  - Eliminata qualsiasi traccia di colore azzurrino/ciano (`#38bdf8`) residuo: il modal delle **Impostazioni Pendolare** (`CommuterConfigModal`), il banner rapido pendolare in Home e la schermata Viaggio riflettono con precisione assoluta il colore tema scelto.
+  - Tasti "Salva", pulsanti "Ricalcola", box di stima stradale, indicatori di ricerca stazioni e icone sono ora 100% coordinati con la cromia dell'app.
+- **Pulizia Diciture Tratte in Auto**:
+  - Rimosso il sottotitolo ridondante *"Tocca per aprire la navigazione con orario impostato"* dalle tratte in auto di andata e ritorno, lasciando una visualizzazione pulita con *"Naviga su Google Maps"*.
 - **Ottimizzatore Viaggio Pendolare (Nuova Scheda "Viaggio")**: sistema intelligente e moderno per calcolare e ottimizzare il tragitto quotidiano degli studenti pendolari della Sapienza:
   - **Risoluzione Aula e Orario Reale del Corso**: risolto il problema di fallback generico ("Aula 1 Sede Ariosto"); l'app estrae l'aula reale, l'edificio esatto (es. RM025 Tiburtina, RM031 S. Pietro in Vincoli, RM018 Castro Laurenziano, ecc.) e gli orari ufficiali direttamente dall'orario Google Sheet del canale selezionato.
   - **Selettore Intelligente e Manuale delle Lezioni**:

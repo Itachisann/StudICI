@@ -12,15 +12,15 @@ import * as Linking from 'expo-linking';
 import { linkDeviceWithCode } from '@/utils/cloudSync';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
-
-const SAPIENZA_RED = '#822433';
+import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 
 // In Expo Go i moduli nativi personalizzati non sono inclusi nel runtime condiviso.
 // Nell'IPA (standalone / development build su iOS), i native-bottom-tabs sono compilati e attivi.
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 
-export default function AppLayout() {
+function AppLayoutContent() {
+  const { theme } = useTheme();
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
   const [degreeName, setDegreeName] = useState<string>('');
   const [isReady, setIsReady] = useState(false);
@@ -112,7 +112,7 @@ export default function AppLayout() {
   if (!isReady) {
     return (
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#111111', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color={SAPIENZA_RED} />
+        <ActivityIndicator size="large" color={theme.primary} />
       </GestureHandlerRootView>
     );
   }
@@ -145,7 +145,7 @@ export default function AppLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <StatusBar style="light" />
-        <NativeTabs screenOptions={{ tabBarActiveTintColor: SAPIENZA_RED }}>
+        <NativeTabs screenOptions={{ tabBarActiveTintColor: theme.primary }}>
           <NativeTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' }) }} />
           <NativeTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: () => ({ sfSymbol: 'tram.fill' }) }} />
           <NativeTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' }) }} />
@@ -167,7 +167,7 @@ export default function AppLayout() {
             display: !degreeUrl ? 'none' : 'flex' // Nasconde la tab bar anche in /settings se in fase di onboarding
           },
           tabBarBackground: () => <BlurView tint="dark" intensity={95} style={StyleSheet.absoluteFill} />,
-          tabBarActiveTintColor: SAPIENZA_RED,
+          tabBarActiveTintColor: theme.primary,
           tabBarInactiveTintColor: '#8e8e93',
         }}
       >
@@ -177,5 +177,13 @@ export default function AppLayout() {
         <ExpoTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} /> }} />
       </ExpoTabs>
     </GestureHandlerRootView>
+  );
+}
+
+export default function AppLayout() {
+  return (
+    <ThemeProvider>
+      <AppLayoutContent />
+    </ThemeProvider>
   );
 }

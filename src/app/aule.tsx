@@ -13,6 +13,7 @@ import { resolveClassroom, ResolvedClassroom, getCanonicalRoomKey, normalizeDisp
 import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
+import { useTheme } from '@/context/ThemeContext';
 
 const SAPIENZA_RED = '#822433';
 
@@ -94,6 +95,7 @@ function extractRoomEntries(data: ScheduleData): RoomEntry[] {
 }
 
 export default function AuleScreen() {
+  const { theme } = useTheme();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
@@ -202,19 +204,19 @@ export default function AuleScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={SAPIENZA_RED}
-            colors={[SAPIENZA_RED]}
+            tintColor={theme.primary}
+            colors={[theme.primary]}
           />
         }
       >
         {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
         {currentSemester && hasDateInfo(currentSemester) ? (
-          <View style={styles.semesterCard}>
-            <View style={styles.semesterIconBox}>
+          <View style={[styles.semesterCard, { borderColor: theme.border }]}>
+            <View style={[styles.semesterIconBox, { backgroundColor: theme.primary }]}>
               <Ionicons name="calendar" size={16} color="#ffffff" />
             </View>
             <View style={styles.semesterContent}>
-              <Text style={styles.semesterTitle}>CALENDARIO DIDATTICO</Text>
+              <Text style={[styles.semesterTitle, { color: theme.accent }]}>CALENDARIO DIDATTICO</Text>
               <Text style={styles.semesterValue} numberOfLines={2}>
                 {currentSemester}
               </Text>
@@ -224,7 +226,7 @@ export default function AuleScreen() {
 
         {loading ? (
           <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color={SAPIENZA_RED} />
+            <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.loadingText}>Carico le aule...</Text>
           </View>
         ) : (

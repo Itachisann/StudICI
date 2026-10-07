@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Tab } from "../utils/scraper";
 import { parseTabHierarchy } from "./YearChannelSelector";
+import { useTheme } from "@/context/ThemeContext";
 
 const SAPIENZA_RED = "#822433";
 
@@ -33,6 +34,7 @@ export function DefaultTabPicker({
   onConfirm,
   onCancel,
 }: DefaultTabPickerProps) {
+  const { theme } = useTheme();
   const parsedTabs = useMemo(() => parseTabHierarchy(tabs), [tabs]);
 
   // Lista degli anni unici
@@ -112,7 +114,7 @@ export function DefaultTabPicker({
       >
         {/* Header Icon & Title */}
         <View style={styles.header}>
-          <View style={styles.iconCircle}>
+          <View style={[styles.iconCircle, { backgroundColor: theme.primary, shadowColor: theme.primary }]}>
             <Ionicons name="funnel" size={28} color="#ffffff" />
           </View>
           <Text style={styles.title}>{title}</Text>
@@ -134,7 +136,7 @@ export function DefaultTabPicker({
                 return (
                   <TouchableOpacity
                     key={idx}
-                    style={[styles.chip, isSelected && styles.chipActive]}
+                    style={[styles.chip, isSelected && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }]]}
                     activeOpacity={0.7}
                     onPress={() => handleSelectYear(year)}
                   >
@@ -172,7 +174,7 @@ export function DefaultTabPicker({
                 return (
                   <TouchableOpacity
                     key={idx}
-                    style={[styles.chipEqual, isSelected && styles.chipActive]}
+                    style={[styles.chipEqual, isSelected && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }]]}
                     activeOpacity={0.7}
                     onPress={() => handleSelectChannel(item.channel)}
                   >
@@ -200,8 +202,8 @@ export function DefaultTabPicker({
 
         {/* ── 3. Card Anteprima Selezione ── */}
         <View style={styles.summaryCard}>
-          <View style={styles.summaryIconBox}>
-            <Ionicons name="time" size={24} color={SAPIENZA_RED} />
+          <View style={[styles.summaryIconBox, { backgroundColor: theme.subtle }]}>
+            <Ionicons name="time" size={24} color={theme.accent} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.summaryOverline}>ORARIO PREDEFINITO</Text>
@@ -219,7 +221,7 @@ export function DefaultTabPicker({
       {/* ── Footer con Pulsante Azione ── */}
       <View style={styles.footer}>
         <TouchableOpacity
-          style={styles.confirmButton}
+          style={[styles.confirmButton, { backgroundColor: theme.primary, shadowColor: theme.primary }]}
           activeOpacity={0.8}
           onPress={handleConfirm}
         >
