@@ -353,10 +353,17 @@ export default function ViaggioScreen() {
         } catch {}
       }
     }
-    const viaggiaTrenoUrl = 'https://www.viaggiatreno.it/infomobilita/index.jsp';
-    Linking.openURL(viaggiaTrenoUrl).catch((err) => {
-      console.warn('Errore apertura Trenitalia:', err);
-    });
+    const appUrl = 'trenitalia://';
+    const webUrl = 'https://www.trenitalia.com/it.html';
+    Linking.canOpenURL(appUrl)
+      .then((supported) => {
+        if (supported) {
+          Linking.openURL(appUrl).catch(() => Linking.openURL(webUrl));
+        } else {
+          Linking.openURL(webUrl);
+        }
+      })
+      .catch(() => Linking.openURL(webUrl));
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -979,7 +986,7 @@ export default function ViaggioScreen() {
                   circleBg = 'rgba(148, 163, 184, 0.15)';
                 }
 
-                const isInteractive = Boolean(leg.details?.mapQuery || leg.type === 'train');
+                const isInteractive = Boolean(leg.details?.mapQuery);
 
                 return (
                   <View key={leg.id} style={styles.timelineStepRow}>
@@ -1000,11 +1007,10 @@ export default function ViaggioScreen() {
                     {/* Contenuto Tappa */}
                     <TouchableOpacity
                       activeOpacity={isInteractive ? 0.85 : 1}
+                      disabled={!isInteractive}
                       onPress={() => {
                         if (leg.details?.mapQuery) {
                           handleOpenMaps(leg);
-                        } else if (leg.type === 'train') {
-                          handleOpenTrenitalia(leg.details?.trainNumber);
                         }
                       }}
                       style={[
@@ -1118,30 +1124,6 @@ export default function ViaggioScreen() {
                         </View>
                       )}
 
-                      {/* Scheda Link Trenitalia per Tappa Treno */}
-                      {leg.type === 'train' && (
-                        <TouchableOpacity
-                          style={[
-                            styles.trenitaliaTimelineBanner,
-                            { backgroundColor: theme.cardTint, borderColor: theme.border },
-                          ]}
-                          activeOpacity={0.8}
-                          onPress={() => handleOpenTrenitalia(leg.details?.trainNumber)}
-                        >
-                          <View style={[styles.trenitaliaIconCircle, { backgroundColor: theme.primary }]}>
-                            <Ionicons name="train" size={13} color="#ffffff" />
-                          </View>
-                          <View style={{ flex: 1, marginRight: 6 }}>
-                            <Text style={styles.trenitaliaBannerTitle}>Scheda Treno Trenitalia</Text>
-                            <Text style={styles.trenitaliaBannerSubtitle}>Tocca per verificare stato e fermate live</Text>
-                          </View>
-                          <View style={[styles.trenitaliaActionBadge, { backgroundColor: theme.primary }]}>
-                            <Text style={styles.trenitaliaActionBadgeText}>TRENO</Text>
-                            <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
-                          </View>
-                        </TouchableOpacity>
-                      )}
-
                       {/* Note della tratta */}
                       {leg.details?.notes &&
                         leg.details.notes !== 'Tocca per aprire la navigazione con orario impostato' && (
@@ -1173,11 +1155,6 @@ export default function ViaggioScreen() {
                                   ? 'Percorso su Google Maps'
                                   : 'Naviga su Google Maps'}
                               </Text>
-                              {leg.details.travelMode === 'transit' && (
-                                <Text style={styles.mapsBannerSubtitle}>
-                                  Orari in tempo reale e fermate
-                                </Text>
-                              )}
                             </View>
                           </View>
                           <View style={[styles.mapsActionBadge, { backgroundColor: theme.primary }]}>

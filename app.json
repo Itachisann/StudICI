@@ -14,7 +14,8 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "LSApplicationQueriesSchemes": [
-          "comgooglemaps"
+          "comgooglemaps",
+          "trenitalia"
         ]
       }
     },

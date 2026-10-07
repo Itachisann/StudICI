@@ -5,9 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
-## 1.6.0
+## 1.6.0 (Major Update)
 
 ### Novità
+- **Integrazione App Trenitalia e Collegamento Diretto Ufficiale**:
+  - Dalla scheda principale del treno regionale (dove si trova il selettore per "Treno prima" e "Treno dopo"), un tocco apre direttamente l'applicazione ufficiale **Trenitalia** se installata sul dispositivo (`trenitalia://`), oppure reindirizza al sito ufficiale Trenitalia (non più ViaggiaTreno).
+  - Rimossa l'interazione ridondante dalla card della tappa treno nella timeline, lasciando il controllo centralizzato nella card principale del treno.
+- **Pulizia Card Mezzi e Tratte**:
+  - Rimossa la dicitura *"Orari in tempo reale e fermate"* dal banner di navigazione dei mezzi pubblici Google Maps.
+  - Rimosso il sottotitolo ridondante *"Tocca per aprire la navigazione con orario impostato"* dalle tratte in auto di andata e ritorno, lasciando una visualizzazione pulita con *"Naviga su Google Maps"*.
 - **Personalizzazione Colore Tema dell'App nel Profilo (Compatto e Nativo)**:
   - Nuova riga **Colore Tema** elegante e non ingombrante nel tab Profilo:
     - Su **.IPA (iOS Standalone / Nativo)**: un tocco apre il menu a discesa nativo Apple (`UIMenu` / `MenuView`) con elenco dei temi e spunta su quello attivo, integrato al 100% con il design di sistema iOS.
@@ -28,8 +34,6 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 - **Uniformità Cromatica nelle Impostazioni Pendolare e nella Home**:
   - Eliminata qualsiasi traccia di colore azzurrino/ciano (`#38bdf8`) residuo: il modal delle **Impostazioni Pendolare** (`CommuterConfigModal`), il banner rapido pendolare in Home e la schermata Viaggio riflettono con precisione assoluta il colore tema scelto.
   - Tasti "Salva", pulsanti "Ricalcola", box di stima stradale, indicatori di ricerca stazioni e icone sono ora 100% coordinati con la cromia dell'app.
-- **Pulizia Diciture Tratte in Auto**:
-  - Rimosso il sottotitolo ridondante *"Tocca per aprire la navigazione con orario impostato"* dalle tratte in auto di andata e ritorno, lasciando una visualizzazione pulita con *"Naviga su Google Maps"*.
 - **Ottimizzatore Viaggio Pendolare (Nuova Scheda "Viaggio")**: sistema intelligente e moderno per calcolare e ottimizzare il tragitto quotidiano degli studenti pendolari della Sapienza:
   - **Risoluzione Aula e Orario Reale del Corso**: risolto il problema di fallback generico ("Aula 1 Sede Ariosto"); l'app estrae l'aula reale, l'edificio esatto (es. RM025 Tiburtina, RM031 S. Pietro in Vincoli, RM018 Castro Laurenziano, ecc.) e gli orari ufficiali direttamente dall'orario Google Sheet del canale selezionato.
   - **Selettore Intelligente e Manuale delle Lezioni**:
