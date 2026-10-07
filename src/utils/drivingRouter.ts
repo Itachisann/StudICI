@@ -8,6 +8,8 @@ export interface DrivingEstimate {
   distanceKm: number;
   isCalculated: boolean;
   routeSummary: string;
+  trafficCondition?: string;
+  isPeakHour?: boolean;
 }
 
 // 1. Coordinate esatte delle STAZIONI FERROVIARIE (punto di arrivo effettivo del pendolare: piazzale e parcheggio FS)
@@ -288,6 +290,69 @@ async function resolveOriginCoordinates(
   return null;
 }
 
+export interface TrafficProfile {
+  multiplier: number;
+  conditionDescription: string;
+  isPeakHour: boolean;
+}
+
+/**
+ * Calcola il profilo di traffico reale in base all'orario del viaggio (mattina, rientro serale, morbida).
+ * Incorpora i rallentamenti abituali su raccordi/superstrade e accessi stazione (es. SS675 Orte, svincoli, cantieri).
+ */
+export function getTrafficProfile(targetTimeStr?: string): TrafficProfile {
+  let totalMins = 0;
+  if (targetTimeStr && targetTimeStr.includes(':')) {
+    const [th, tm] = targetTimeStr.split(':').map(Number);
+    totalMins = th * 60 + tm;
+  } else {
+    const now = new Date();
+    totalMins = now.getHours() * 60 + now.getMinutes();
+  }
+
+  // 1. Ora di punta rientro serale (17:15 - 19:15): picco massimo attorno alle 18:00
+  // Rientro pendolari da Roma/A1, uscite superstrada e stazione FS Orte verso Amelia/Narni/provincia
+  if (totalMins >= 1035 && totalMins <= 1155) {
+    return {
+      multiplier: 1.18, // +18% (+4-6 min, es. da 25 min base passa a 29-31 min)
+      conditionDescription: 'traffico intenso di rientro da Roma/superstrada e svincoli',
+      isPeakHour: true,
+    };
+  }
+
+  // 2. Ora di punta mattutina (07:00 - 08:35):
+  // Pendolari verso stazione, scuole, possibili deviazioni da superstrada (es. SS675 cantieri) e accesso FS
+  if (totalMins >= 420 && totalMins <= 515) {
+    return {
+      multiplier: 1.10, // +10% (+2-3 min, es. da 25 min base passa a 27-28 min)
+      conditionDescription: 'traffico pendolare e possibili deviazioni da superstrada',
+      isPeakHour: true,
+    };
+  }
+
+  // 3. Fasce spalla / pre-post punta (06:30-07:00, 08:35-09:15, 16:30-17:15, 19:15-19:50)
+  if (
+    (totalMins >= 390 && totalMins < 420) ||
+    (totalMins > 515 && totalMins <= 555) ||
+    (totalMins >= 990 && totalMins < 1035) ||
+    (totalMins > 1155 && totalMins <= 1190)
+  ) {
+    return {
+      multiplier: 1.05, // +5% (+1 min)
+      conditionDescription: 'traffico moderato',
+      isPeakHour: false,
+    };
+  }
+
+  // 4. Morbida / Orari standard (09:15 - 16:30, 20:00 - 06:30): traffico fluido free-flow
+  // Calibrato fedelmente su Google Maps in tempo reale (24-25 min)
+  return {
+    multiplier: 0.96, // calibrazione su OSRM turn-by-turn (1561s / 60 * 0.96 = 25 min)
+    conditionDescription: 'traffico scorrevole',
+    isPeakHour: false,
+  };
+}
+
 /**
  * Calcola automaticamente il tempo stimato di guida e la distanza tra l'indirizzo di partenza
  * e la stazione ferroviaria.
@@ -310,50 +375,57 @@ export async function calculateDrivingEstimate(
   const normOrigin = normalizeKey(origin);
   const normStation = normalizeKey(station);
 
-  // Calcolo moltiplicatore del traffico coerente con Google Maps (ora di punta vs orario standard)
-  let trafficMultiplier = 1.10; // +10% base per rallentamenti reali, incroci e rotatorie
-  if (targetTimeStr && targetTimeStr.includes(':')) {
-    const [th, tm] = targetTimeStr.split(':').map(Number);
-    const totalMins = th * 60 + tm;
-    // Ora di punta mattina (06:45 - 09:15): traffico pendolare e scuole
-    if (totalMins >= 405 && totalMins <= 555) {
-      trafficMultiplier = 1.22;
-    }
-    // Ora di punta sera (16:45 - 19:30): rientro pendolare
-    else if (totalMins >= 1005 && totalMins <= 1170) {
-      trafficMultiplier = 1.18;
-    }
-  }
+  // Calcolo profilo di traffico reale basato sull'orario (mattina, rientro serale, morbida)
+  const traffic = getTrafficProfile(targetTimeStr);
 
   // Casi speciali comuni pre-calcolati (se non è una via specifica, con traffico applicato)
   if (!isSpecificStreet) {
     if (normOrigin === 'amelia' && normStation.includes('orte')) {
-      const mins = Math.round(22 * trafficMultiplier);
+      const baseMins = 25; // 25 min su Google Maps in condizioni standard free-flow
+      const mins = Math.max(
+        5,
+        Math.round(
+          baseMins *
+            (traffic.isPeakHour
+              ? traffic.multiplier > 1.15
+                ? 1.20 // rientro serale (30 min)
+                : 1.12 // mattina (28 min)
+              : traffic.multiplier >= 1.0
+              ? 1.04 // spalla (26 min)
+              : 1.0) // morbida (25 min)
+        )
+      );
       return {
         durationMinutes: mins,
         distanceKm: 18.5,
         isCalculated: true,
-        routeSummary: `Centro Amelia ➔ Stazione Orte FS (18.5 km, ~${mins} min con traffico)`,
+        routeSummary: `Centro Amelia ➔ Stazione Orte FS (18.5 km • ~${mins} min • ${traffic.conditionDescription})`,
+        trafficCondition: traffic.conditionDescription,
+        isPeakHour: traffic.isPeakHour,
       };
     }
 
     if (normOrigin === 'narni' && normStation.includes('narni')) {
-      const mins = Math.round(7 * trafficMultiplier);
+      const mins = Math.round(7 * (traffic.isPeakHour ? 1.15 : 1.0));
       return {
         durationMinutes: mins,
         distanceKm: 4.9,
         isCalculated: true,
-        routeSummary: `Centro Narni ➔ Stazione Narni-Amelia (4.9 km, ~${mins} min)`,
+        routeSummary: `Centro Narni ➔ Stazione Narni-Amelia (4.9 km • ~${mins} min • ${traffic.conditionDescription})`,
+        trafficCondition: traffic.conditionDescription,
+        isPeakHour: traffic.isPeakHour,
       };
     }
 
     if (normOrigin === 'terni' && normStation.includes('terni')) {
-      const mins = Math.round(6 * trafficMultiplier);
+      const mins = Math.round(6 * (traffic.isPeakHour ? 1.20 : 1.0));
       return {
         durationMinutes: mins,
         distanceKm: 2.8,
         isCalculated: true,
-        routeSummary: `Centro Terni ➔ Stazione FS (~${mins} min)`,
+        routeSummary: `Centro Terni ➔ Stazione FS (~${mins} min • ${traffic.conditionDescription})`,
+        trafficCondition: traffic.conditionDescription,
+        isPeakHour: traffic.isPeakHour,
       };
     }
   }
@@ -365,7 +437,7 @@ export async function calculateDrivingEstimate(
     ]);
 
     if (coordsOrigin && coordsStation) {
-      // 1. Calcolo percorso stradale turn-by-turn con OSRM + ponderazione traffico Google Maps
+      // 1. Calcolo percorso stradale turn-by-turn con OSRM + calibrazione reale Google Maps
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3500);
@@ -379,21 +451,23 @@ export async function calculateDrivingEstimate(
           if (json?.routes && json.routes[0]) {
             const sec = json.routes[0].duration;
             const dist = json.routes[0].distance;
-            // Applica il coefficiente di traffico e rallentamenti reali
-            const mins = Math.max(5, Math.round((sec / 60) * trafficMultiplier));
+            // Applica la ponderazione traffico e la calibrazione reale
+            const mins = Math.max(5, Math.round((sec / 60) * traffic.multiplier));
             const km = +(dist / 1000).toFixed(1);
 
             return {
               durationMinutes: mins,
               distanceKm: km,
               isCalculated: true,
-              routeSummary: `Percorso stradale: ${km} km (~${mins} min con traffico verso ${coordsStation.name})`,
+              routeSummary: `Percorso stradale: ${km} km (~${mins} min • ${traffic.conditionDescription} verso ${coordsStation.name})`,
+              trafficCondition: traffic.conditionDescription,
+              isPeakHour: traffic.isPeakHour,
             };
           }
         }
       } catch {}
 
-      // 2. Modello matematico stradale (tortuosità 1.38x per viabilità provinciale/regionale, velocità media 40 km/h)
+      // 2. Modello matematico stradale (tortuosità 1.38x per viabilità provinciale/regionale, velocità media 44 km/h)
       const directKm = haversineDistanceKm(
         coordsOrigin.lat,
         coordsOrigin.lon,
@@ -401,22 +475,27 @@ export async function calculateDrivingEstimate(
         coordsStation.lon
       );
       const roadKm = +(directKm * 1.38).toFixed(1);
-      const estMinutes = Math.max(5, Math.round(((roadKm / 40) * 60) * trafficMultiplier));
+      const estMinutes = Math.max(5, Math.round(((roadKm / 44) * 60) * traffic.multiplier));
 
       return {
         durationMinutes: estMinutes,
         distanceKm: roadKm,
         isCalculated: true,
-        routeSummary: `Distanza stimata: ${roadKm} km (~${estMinutes} min verso ${coordsStation.name})`,
+        routeSummary: `Distanza stimata: ${roadKm} km (~${estMinutes} min • ${traffic.conditionDescription} verso ${coordsStation.name})`,
+        trafficCondition: traffic.conditionDescription,
+        isPeakHour: traffic.isPeakHour,
       };
     }
   } catch {}
 
-  // Default fallback conservativo verso Stazione ferroviaria
+  // Default fallback calibrato verso Stazione ferroviaria
+  const fallbackMins = Math.max(5, Math.round(25 * (traffic.isPeakHour ? 1.18 : 1.0)));
   return {
-    durationMinutes: Math.round(24 * trafficMultiplier),
+    durationMinutes: fallbackMins,
     distanceKm: 18.5,
     isCalculated: false,
-    routeSummary: 'Stima standard: ~18.5 km con traffico',
+    routeSummary: `Stima standard: ~18.5 km (~${fallbackMins} min • ${traffic.conditionDescription})`,
+    trafficCondition: traffic.conditionDescription,
+    isPeakHour: traffic.isPeakHour,
   };
 }

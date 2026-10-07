@@ -20,15 +20,21 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
     - **Esclusione Treni Non Regionali**: filtraggio automatico che esclude Frecce, Italo e Intercity per tutelare i possessori di abbonamento regionale o Metrebus Lazio.
     - **Priorità Regionale Veloce (RV)**: preferisce automaticamente i treni veloci (~33-40 min), fornendo anche tutte le alternative Regionale lento (REG) con pulsanti di navigazione ("< Treno prima", "Treno dopo >") e chip rapidi selezionabili con un tocco.
     - **Binario Live, Binario Programmato e Ritardi**: visualizzazione del binario esatto di partenza e arrivo da Trenitalia, con indicazione del ritardo o anticipo in tempo reale.
-    - **Pill di Stato Live Trenitalia e Avvisi Disservizi**:
+    - **Pill di Stato Live Trenitalia, Gestione Ritardi e Avvisi Disservizi**:
       - A fianco al numero del treno è presente la pill con lo stato in tempo reale (*Programmato*, *In orario*, *In viaggio*, *+X min ritardo*, *Anticipo*, *Cancellato*, *Deviato*, *Interruzione linea*).
+      - **Orari Reali di Partenza e Arrivo con Ritardo**:
+        - **Alla partenza**: l'orario di partenza da rispettare e visualizzato rimane quello ufficiale programmato da orario: il minutaggio di ritardo **non** viene sommato alla partenza, per evitare che lo studente ritardi l'uscita da casa rischiando di perdere il treno se questo recupera tempo o anticipa.
+        - **All'arrivo**: il ritardo si applica unicamente all'arrivo a destinazione (es. Roma Tiburtina), indicando l'ora reale di arrivo e ricalcolando le coincidenze con i mezzi urbani per l'aula.
       - Logica temporale intelligente: se l'ora attuale rientra nella finestra di viaggio, viene mostrato lo stato reale di marcia (*In viaggio*, *In orario* o ritardo effettivo); se il treno deve ancora partire (oggi più tardi o nei giorni successivi), indica chiaramente *"Programmato"*.
       - Monitoraggio disservizi Trenitalia: banner dedicato in caso di treno soppresso/cancellato, deviazioni di percorso, variazioni, interruzioni di linea o biglietti non disponibili.
   - **Supporto Indirizzo Completo di Casa e Correzione Chilometraggio Stazione FS**:
     - Risolto il problema del chilometraggio (15.6 km vs 19 km): l'app in precedenza calcolava la distanza verso il centro storico comunale di Orte (Piazza della Libertà) anziché verso la **Stazione di Orte (Orte Scalo)**, situata a ~3.5 km di distanza.
     - Ora tutte le stazioni ferroviarie (Orte Scalo, Narni Scalo, Orvieto Scalo, ecc.) puntano alle coordinate esatte del piazzale e parcheggio della stazione FS, restituendo **18.5 km (~19 km su Google Maps)** e tempi di guida precisi.
     - Oltre al semplice comune, ora è possibile inserire l'indirizzo esatto di partenza con via e civico (es. `Via Roma 135c`, `Via Amerina 15, Amelia`), con auto-completamento del comune pendolare di riferimento e routing reale turn-by-turn OSRM.
-    - **Stima Guida con Traffico Integrato**: tempi di guida calcolati con moltiplicatori del traffico nelle ore di punta (06:45-09:15 e 16:45-19:30), perfettamente coerenti con Google Maps e validi per qualsiasi stazione d'Italia.
+    - **Stima Guida e Profilo Traffico Calibrato su Google Maps**:
+      - In condizioni di traffico scorrevole (morbida/fuori punta): stima perfettamente allineata a Google Maps in tempo reale (**25 minuti esatti** per Amelia ➔ Orte FS, eliminando sovrastime artificiali).
+      - Rientro serale (17:15 - 19:15, picco attorno alle 18:00): calcolo dinamico che considera il traffico intenso di rientro da Roma/A1, code alla rotatoria della stazione FS Orte e svincoli della superstrada (~30-31 min).
+      - Punta mattutina (07:00 - 08:35): buffer calibrato (+2-3 min, ~28 min) per traffico pendolare, accesso alla stazione e deviazioni/cantieri della superstrada SS675.
   - **Linee Bus/Pullman Urbani Reali da Google Maps e Coerenza Totale**:
     - Integrata espressamente la linea reale **Pullman 448** utilizzata quotidianamente per raggiungere le sedi Sapienza da Stazione Tiburtina (fermate Tiburtina/Marrucini per Polo Tiburtina RM025/RM158, Tiburtina/Castro Laurenziano per Economia e Plesso Scarpa RM018/RM004/RM014, Piazzale del Verano e De Lollis per Città Universitaria), affiancata dalle linee reali 492, 71, 163 e 310.
     - Per la **Sede Ariosto (RM102 - Via Ariosto 25)**: confermato il collegamento diretto **Bus 649** con discesa alla fermata **Conte Verde/Manzoni** (a soli 180 metri / 2 min dall'aula), oppure **Metro A (fermata Manzoni)**.

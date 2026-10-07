@@ -721,7 +721,7 @@ export default function ViaggioScreen() {
                         : config?.arrivalStation.shortName || config?.arrivalStation.name}
                     </Text>
                     <Text style={styles.trainTimeText}>
-                      {itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned}
+                      {itinerary.liveTrain.departureTimePlanned || itinerary.liveTrain.departureTimeActual}
                     </Text>
                   </View>
 
@@ -740,17 +740,34 @@ export default function ViaggioScreen() {
                     )}
                   </View>
 
-                  <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    <Text style={styles.trainStationLabel}>Arrivo</Text>
-                    <Text style={styles.trainStationName}>
-                      {direction === 'outbound'
-                        ? config?.arrivalStation.shortName || config?.arrivalStation.name
-                        : config?.departureStation.shortName || config?.departureStation.name}
-                    </Text>
-                    <Text style={styles.trainTimeText}>
-                      {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
-                    </Text>
-                  </View>
+                    <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                      <Text style={styles.trainStationLabel}>Arrivo</Text>
+                      <Text style={styles.trainStationName}>
+                        {direction === 'outbound'
+                          ? config?.arrivalStation.shortName || config?.arrivalStation.name
+                          : config?.departureStation.shortName || config?.departureStation.name}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.trainTimeText,
+                          Boolean(itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) && {
+                            color: '#fb923c',
+                          },
+                        ]}
+                      >
+                        {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
+                      </Text>
+                      {Boolean(
+                        itinerary.liveTrain.delayMinutes &&
+                          itinerary.liveTrain.delayMinutes > 0 &&
+                          itinerary.liveTrain.arrivalTimePlanned &&
+                          itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
+                      ) && (
+                        <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
+                          prog. {itinerary.liveTrain.arrivalTimePlanned}
+                        </Text>
+                      )}
+                    </View>
                 </View>
 
                 {/* Selettore Alternative Treni (Treno prima / dopo & chips) */}
@@ -833,7 +850,7 @@ export default function ViaggioScreen() {
                               isCurrent && styles.trainChipTextCurrent,
                             ]}
                           >
-                            {at.trainNumber} • {at.departureTimeActual || at.departureTimePlanned}
+                            {at.trainNumber} • {at.departureTimePlanned || at.departureTimeActual}
                           </Text>
                         </TouchableOpacity>
                       );

@@ -132,13 +132,9 @@ export async function getLiveStationDepartures(
         null;
 
       const plannedDep = raw.compOrarioPartenza || '00:00';
-      let actualDep = plannedDep;
-      if (delay !== 0 && plannedDep.includes(':')) {
-        const [hh, mm] = plannedDep.split(':').map(Number);
-        const actualDate = new Date();
-        actualDate.setHours(hh, mm + delay, 0, 0);
-        actualDep = `${String(actualDate.getHours()).padStart(2, '0')}:${String(actualDate.getMinutes()).padStart(2, '0')}`;
-      }
+      // Se il treno ha ritardo, la partenza da prendere per recarsi in stazione rimane
+      // quella programmata (non si aggiunge il ritardo alla partenza, ma solo all'arrivo a destinazione)
+      const actualDep = plannedDep;
 
       let statusDescription = 'In orario';
       if (raw.nonPartito) {
@@ -251,6 +247,16 @@ export async function getLiveTrainDetails(
 function formatMillisToTime(millis: number): string {
   const d = new Date(millis);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Pulisce eventuali stringhe d'orario di ViaggiaTreno che contengono markup o percorsi di icone
+ * (es. "/vt_static/img/legenda/icone_legenda/regolare.png13:39" -> "13:39")
+ */
+export function cleanViaggiaTrenoTime(rawStr?: string | null): string | null {
+  if (!rawStr) return null;
+  const match = String(rawStr).match(/(\d{1,2}:\d{2})/);
+  return match ? match[1] : null;
 }
 
 export interface ScheduledTrainEntry {
@@ -464,11 +470,16 @@ export async function fetchLiveTrenitaliaTimetable(
       if (dur < 15 || dur > 150) continue;
 
       const delay = isToday && typeof dep.ritardo === 'number' ? dep.ritardo : 0;
-      let depActual = depPlanned;
+      // Alla partenza NON si aggiunge il ritardo: l'orario di partenza da rispettare
+      // rimane sempre quello programmato ufficiale.
+      const depActual = depPlanned;
       let arrActual = arrPlanned;
 
-      if (delay !== 0) {
-        depActual = minutesToTime(dh * 60 + dm + delay);
+      // Il ritardo si applica unicamente sull'arrivo effettivo a destinazione
+      const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
+      if (cleanLiveArr) {
+        arrActual = cleanLiveArr;
+      } else if (delay !== 0) {
         arrActual = minutesToTime(ah * 60 + am + delay);
       }
 
@@ -655,7 +666,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             matched.isLive = true;
             matched.delayMinutes = live.delayMinutes;
             matched.statusDescription = live.statusDescription;
-            matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
+            matched.departureTimeActual = matched.departureTimePlanned;
             if (live.platformActual) matched.platformActual = live.platformActual;
             if (live.platformPlanned) matched.platformPlanned = live.platformPlanned;
 

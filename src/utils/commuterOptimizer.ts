@@ -260,13 +260,17 @@ async function computeOutboundItinerary(
     selectedTrainNumber,
   });
 
-  const trainDepMins = parseTimeToMinutes(train.departureTimeActual || train.departureTimePlanned || '');
+  // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
+  // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
+  // L'arrivo effettivo a destinazione incorpora invece il ritardo reale (arrivalTimeActual).
+  const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
-  // Tragitto auto con calcolo automatico percorso
+  // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
   const carEnabled = config.carLeg.enabled;
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
+  let carTrafficNote: string | undefined = undefined;
 
   if (carEnabled) {
     const drivingEst = await calculateDrivingEstimate(
@@ -276,6 +280,7 @@ async function computeOutboundItinerary(
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+    carTrafficNote = drivingEst.trafficCondition;
   }
 
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
@@ -296,7 +301,7 @@ async function computeOutboundItinerary(
       id: 'car-leg',
       type: 'car',
       title: `Partenza in Auto da ${config.originAddress}`,
-      subtitle: `Tragitto verso Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km)`,
+      subtitle: `Tragitto verso Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km${carTrafficNote ? ` • ${carTrafficNote}` : ''})`,
       startTime: minutesToTime(homeDepartureMins),
       endTime: minutesToTime(homeDepartureMins + carDuration),
       durationMinutes: carDuration,
@@ -349,8 +354,8 @@ async function computeOutboundItinerary(
     type: 'train',
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
     subtitle: `${config.departureStation.shortName || config.departureStation.name} ➔ ${config.arrivalStation.shortName || config.arrivalStation.name}`,
-    startTime: minutesToTime(trainDepMins),
-    endTime: minutesToTime(trainArrMins),
+    startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
+    endTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,
@@ -420,7 +425,7 @@ async function computeOutboundItinerary(
     badgeColor = '#38bdf8'; // blue
   }
 
-  const summary = `Parti alle ${minutesToTime(homeDepartureMins)} da ${config.originAddress} con ${train.trainNumber} (${train.departureTimeActual || train.departureTimePlanned}) per essere in ${targetLecture.room} alle ${minutesToTime(actualClassroomArrivalMins)} (inizio lezione ${targetLecture.startTime})`;
+  const summary = `Parti alle ${minutesToTime(homeDepartureMins)} da ${config.originAddress} con ${train.trainNumber} (${train.departureTimePlanned || train.departureTimeActual}) per essere in ${targetLecture.room} alle ${minutesToTime(actualClassroomArrivalMins)} (inizio lezione ${targetLecture.startTime})`;
 
   return {
     direction: 'outbound',
@@ -487,12 +492,15 @@ async function computeReturnItinerary(
     selectedTrainNumber,
   });
 
-  const trainDepMins = parseTimeToMinutes(train.departureTimeActual || train.departureTimePlanned || '');
+  // NOTA COMMUTER: La partenza del treno a cui ancorare il rientro da Roma
+  // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora invece il ritardo reale.
+  const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
   const carEnabled = config.carLeg.enabled;
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
+  let carTrafficNote: string | undefined = undefined;
 
   const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
   const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
@@ -505,6 +513,7 @@ async function computeReturnItinerary(
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+    carTrafficNote = drivingEst.trafficCondition;
   }
 
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
@@ -570,8 +579,8 @@ async function computeReturnItinerary(
     type: 'train',
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
     subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${config.departureStation.shortName || config.departureStation.name}`,
-    startTime: minutesToTime(trainDepMins),
-    endTime: minutesToTime(trainArrMins),
+    startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
+    endTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,
@@ -588,7 +597,7 @@ async function computeReturnItinerary(
       id: 'return-car-leg',
       type: 'car',
       title: `Rientro in Auto verso ${config.originAddress}`,
-      subtitle: `Dalla Stazione di ${config.departureStation.shortName || config.departureStation.name} a casa (~${carDuration} min • ${carDistanceKm} km)`,
+      subtitle: `Dalla Stazione di ${config.departureStation.shortName || config.departureStation.name} a casa (~${carDuration} min • ${carDistanceKm} km${carTrafficNote ? ` • ${carTrafficNote}` : ''})`,
       startTime: minutesToTime(trainArrMins + carWalkBuffer),
       endTime: minutesToTime(homeArrivalMins),
       durationMinutes: carDuration,
