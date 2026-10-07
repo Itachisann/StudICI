@@ -740,7 +740,7 @@ export default function ViaggioScreen() {
               <TouchableOpacity
                 style={[
                   styles.trainHighlightCard,
-                  { backgroundColor: '#1c1c1e', borderColor: theme.primary, borderWidth: 1.5 },
+                  { backgroundColor: '#1c1c1e', borderColor: theme.border, borderWidth: 1 },
                 ]}
                 activeOpacity={0.88}
                 onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
