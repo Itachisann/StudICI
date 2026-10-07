@@ -466,7 +466,13 @@ export default function ScheduleScreen() {
                   <View
                     style={[
                       styles.dayCircle,
-                      isActive && styles.dayCircleActive,
+                      isActive && [
+                        styles.dayCircleActive,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
+                        },
+                      ],
                     ]}
                   >
                     <Text
@@ -476,10 +482,21 @@ export default function ScheduleScreen() {
                     </Text>
                   </View>
                   {hasAttendance ? (
-                    <View style={styles.attendanceDayDot} />
+                    <View
+                      style={[
+                        styles.attendanceDayDot,
+                        { backgroundColor: theme.primary },
+                      ]}
+                    />
                   ) : isToday ? (
                     <View
-                      style={[styles.dayDot, isActive && styles.dayDotActive]}
+                      style={[
+                        styles.dayDot,
+                        isActive && [
+                          styles.dayDotActive,
+                          { backgroundColor: theme.primary },
+                        ],
+                      ]}
                     />
                   ) : null}
                 </TouchableOpacity>

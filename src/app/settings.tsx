@@ -1,3 +1,4 @@
+import { MenuView } from "@expo/ui/community/menu";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants, { ExecutionEnvironment } from "expo-constants";
@@ -129,6 +130,17 @@ export default function ProfiloScreen() {
   const [pairedDevices, setPairedDevices] = useState<PairedDevicesStatus | null>(null);
   const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(null);
   const [commuterModalVisible, setCommuterModalVisible] = useState(false);
+  const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
+
+  const themeMenuActions = useMemo(
+    () =>
+      availableThemes.map((t) => ({
+        id: t.id,
+        title: t.name,
+        state: (t.id === themeId ? "on" : "off") as "on" | "off",
+      })),
+    [availableThemes, themeId],
+  );
 
   const loadProfileData = useCallback(async () => {
     setLoading(true);
@@ -1021,57 +1033,102 @@ export default function ProfiloScreen() {
         {/* Gruppo: ASPETTO & TEMA */}
         <Text style={styles.sectionHeader}>ASPETTO</Text>
         <View style={styles.groupedCard}>
-          <View style={styles.themeSelectorSection}>
-            <View style={styles.themeHeaderRow}>
-              <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
-                <Ionicons name="color-palette" size={17} color="#ffffff" />
+          {isNativeComponentAvailable ? (
+            <MenuView
+              title="Colore Tema"
+              actions={themeMenuActions}
+              onPressAction={({ nativeEvent }) => {
+                setThemeId(nativeEvent.event);
+              }}
+            >
+              <View style={styles.tableRow}>
+                <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+                  <Ionicons name="color-palette" size={17} color="#ffffff" />
+                </View>
+                <Text style={styles.rowTitle}>Colore Tema</Text>
+                <View style={styles.themeRowPreview}>
+                  <View
+                    style={[styles.themeRowDot, { backgroundColor: theme.primary }]}
+                  />
+                  <Text style={styles.rowDetail} numberOfLines={1}>
+                    {theme.name}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-expand" size={15} color="#8e8e93" />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowTitle}>Colore Tema Principale</Text>
-                <Text style={styles.rowSubTitle}>Attivo: {theme.name}</Text>
-              </View>
-            </View>
+            </MenuView>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.tableRow}
+                activeOpacity={0.7}
+                onPress={() => setThemeSectionExpanded((prev) => !prev)}
+              >
+                <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+                  <Ionicons name="color-palette" size={17} color="#ffffff" />
+                </View>
+                <Text style={styles.rowTitle}>Colore Tema</Text>
+                <View style={styles.themeRowPreview}>
+                  <View
+                    style={[styles.themeRowDot, { backgroundColor: theme.primary }]}
+                  />
+                  <Text style={styles.rowDetail} numberOfLines={1}>
+                    {theme.name}
+                  </Text>
+                </View>
+                <Ionicons
+                  name={themeSectionExpanded ? "chevron-up" : "chevron-down"}
+                  size={15}
+                  color="#8e8e93"
+                />
+              </TouchableOpacity>
 
-            <View style={styles.themeGrid}>
-              {availableThemes.map((t) => {
-                const isSelected = t.id === themeId;
-                return (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[
-                      styles.themeCardItem,
-                      isSelected && {
-                        borderColor: t.primary,
-                        backgroundColor: t.cardTint,
-                      },
-                    ]}
-                    activeOpacity={0.7}
-                    onPress={() => setThemeId(t.id)}
-                  >
-                    <View
-                      style={[
-                        styles.themeColorDot,
-                        { backgroundColor: t.primary },
-                      ]}
-                    >
-                      {isSelected && (
-                        <Ionicons name="checkmark" size={13} color="#ffffff" />
-                      )}
-                    </View>
-                    <Text
-                      style={[
-                        styles.themeCardName,
-                        isSelected && { color: "#ffffff", fontWeight: "700" },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {t.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
+              {themeSectionExpanded && (
+                <View style={styles.themeDropdownContainer}>
+                  <View style={styles.separator} />
+                  <View style={styles.themeGrid}>
+                    {availableThemes.map((t) => {
+                      const isSelected = t.id === themeId;
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          style={[
+                            styles.themeCardItem,
+                            isSelected && {
+                              borderColor: t.primary,
+                              backgroundColor: t.cardTint,
+                            },
+                          ]}
+                          activeOpacity={0.7}
+                          onPress={() => setThemeId(t.id)}
+                        >
+                          <View
+                            style={[
+                              styles.themeColorDot,
+                              { backgroundColor: t.primary },
+                            ]}
+                          >
+                            {isSelected && (
+                              <Ionicons name="checkmark" size={13} color="#ffffff" />
+                            )}
+                          </View>
+                          <Text
+                            style={[
+                              styles.themeCardName,
+                              isSelected && { color: "#ffffff", fontWeight: "700" },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {t.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </>
+          )}
         </View>
         <Text style={styles.sectionFooter}>
           Modifica il colore tema dell&apos;intera app. I dettagli visivi e le sezioni del viaggio pendolare si adatteranno automaticamente.
@@ -2922,18 +2979,26 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: -0.2,
   },
-  themeSelectorSection: {
-    padding: 14,
-  },
-  themeHeaderRow: {
+  themeRowPreview: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+    marginRight: 6,
+  },
+  themeRowDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 7,
+  },
+  themeDropdownContainer: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
   },
   themeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+    marginTop: 12,
   },
   themeCardItem: {
     flexDirection: "row",
@@ -2949,9 +3014,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   themeColorDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
   },

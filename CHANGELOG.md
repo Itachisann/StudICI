@@ -8,17 +8,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.6.0
 
 ### Novità
-- **Personalizzazione Colore Tema dell'App nel Profilo**:
-  - Nuova sezione **ASPETTO** nel tab Profilo / Impostazioni che permette di selezionare con un tocco il colore tema principale dell'intera applicazione tra 7 splendide palette curate:
-    - *Rosso Sapienza* (`#822433`)
-    - *Blu Notte* (`#1d4ed8`)
-    - *Verde Smeraldo* (`#059669`)
-    - *Viola Reale* (`#7c3aed`)
-    - *Arancio Caldo* (`#d97706`)
-    - *Rosa Rubino* (`#be185d`)
-    - *Ciano Oceano* (`#0284c7`)
-  - Memorizzazione persistente della scelta su memoria locale (`AsyncStorage`).
-  - Il colore tema si propaga istantaneamente in tutta l'applicazione: barre di navigazione (sia NativeTabs che Expo Tabs), banner di refresh, selettore anni e canali, card anteprima orario, modal aule e l'intera sezione del viaggio pendolare.
+- **Personalizzazione Colore Tema dell'App nel Profilo (Compatto e Nativo)**:
+  - Nuova riga **Colore Tema** elegante e non ingombrante nel tab Profilo:
+    - Su **.IPA (iOS Standalone / Nativo)**: un tocco apre il menu a discesa nativo Apple (`UIMenu` / `MenuView`) con elenco dei temi e spunta su quello attivo, integrato al 100% con il design di sistema iOS.
+    - Su **Expo Go / non-IPA**: la riga è compatta e al tocco si espande dinamicamente rivelando la griglia delle palette colori, richiudibile con un secondo tocco.
+  - 7 palette curate: *Rosso Sapienza* (`#822433`), *Blu Notte* (`#1d4ed8`), *Verde Smeraldo* (`#059669`), *Viola Reale* (`#7c3aed`), *Arancio Caldo* (`#d97706`), *Rosa Rubino* (`#be185d`), *Ciano Oceano* (`#0284c7`).
+  - Memorizzazione persistente su memoria locale (`AsyncStorage`).
+- **Coordinamento Cromatico Completo dei Giorni della Settimana**:
+  - **Pill dei Giorni in Orari (`Home`)**: le pill dei giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`) e i relativi indicatori/puntini di presenza ora recepiscono istantaneamente lo sfondo e i bordi del colore tema attivo.
+  - **Pill dei Giorni in Viaggio**: formattazione uniforme e coerente con la schermata orari, con etichette in maiuscolo (`LUN` - `VEN`) e sincronizzazione dei colori attivi.
+- **Armonizzazione Cromatica delle Card e degli Sfondi in Sezione Viaggio**:
+  - Estesi i bordi dinamici (`theme.border`) e gli sfondi sfumati (`theme.cardTint`, `theme.subtle`) a tutta la schermata Viaggio: Hero Card principale, target lezione, Card del treno regionale, box del binario, card interattive delle tappe del viaggio (treno e navigazione mappe) e box di riepilogo finale.
 - **Uniformità Cromatica nelle Impostazioni Pendolare e nella Home**:
   - Eliminata qualsiasi traccia di colore azzurrino/ciano (`#38bdf8`) residuo: il modal delle **Impostazioni Pendolare** (`CommuterConfigModal`), il banner rapido pendolare in Home e la schermata Viaggio riflettono con precisione assoluta il colore tema scelto.
   - Tasti "Salva", pulsanti "Ricalcola", box di stima stradale, indicatori di ricerca stazioni e icone sono ora 100% coordinati con la cromia dell'app.

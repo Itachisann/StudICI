@@ -37,11 +37,11 @@ const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreCl
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
 const WEEKDAYS = [
-  { label: 'Lun', dayIdx: 1 },
-  { label: 'Mar', dayIdx: 2 },
-  { label: 'Mer', dayIdx: 3 },
-  { label: 'Gio', dayIdx: 4 },
-  { label: 'Ven', dayIdx: 5 },
+  { label: 'LUN', dayIdx: 1 },
+  { label: 'MAR', dayIdx: 2 },
+  { label: 'MER', dayIdx: 3 },
+  { label: 'GIO', dayIdx: 4 },
+  { label: 'VEN', dayIdx: 5 },
 ];
 
 export default function ViaggioScreen() {
@@ -505,7 +505,13 @@ export default function ViaggioScreen() {
                     </View>
                     {isToday && (
                       <View
-                        style={[styles.dayDot, isSelected && styles.dayDotActive]}
+                        style={[
+                          styles.dayDot,
+                          isSelected && [
+                            styles.dayDotActive,
+                            { backgroundColor: theme.primary },
+                          ],
+                        ]}
                       />
                     )}
                   </TouchableOpacity>
@@ -533,7 +539,7 @@ export default function ViaggioScreen() {
           </View>
 
           {dayClasses.length === 0 ? (
-            <View style={styles.noClassesCard}>
+            <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
               <Ionicons name="sunny-outline" size={18} color="#94a3b8" style={{ marginRight: 8 }} />
               <Text style={styles.noClassesText}>Nessuna lezione in programma per questo giorno</Text>
             </View>
@@ -652,7 +658,7 @@ export default function ViaggioScreen() {
             }
           >
             {/* Hero Card */}
-            <View style={styles.heroCard}>
+            <View style={[styles.heroCard, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
               <View style={styles.heroTopRow}>
                 <View
                   style={[
@@ -692,7 +698,7 @@ export default function ViaggioScreen() {
                 {direction === 'outbound' ? itinerary.departureTime : itinerary.arrivalTime}
               </Text>
 
-              <View style={styles.heroTargetLectureBox}>
+              <View style={[styles.heroTargetLectureBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
                 <Ionicons
                   name={direction === 'outbound' ? 'school' : 'home'}
                   size={16}
@@ -717,7 +723,10 @@ export default function ViaggioScreen() {
             {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
             {itinerary.liveTrain && (
               <TouchableOpacity
-                style={[styles.trainHighlightCard, { borderColor: theme.border }]}
+                style={[
+                  styles.trainHighlightCard,
+                  { backgroundColor: theme.cardTint, borderColor: theme.border },
+                ]}
                 activeOpacity={0.88}
                 onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
               >
@@ -794,7 +803,7 @@ export default function ViaggioScreen() {
                   </View>
 
                   {/* Binario Risaltato */}
-                  <View style={[styles.platformHighlightBox, { borderColor: theme.border }]}>
+                  <View style={[styles.platformHighlightBox, { borderColor: theme.border, backgroundColor: theme.subtle }]}>
                     <Text style={styles.platformHighlightLabel}>BINARIO</Text>
                     <Text style={styles.platformHighlightValue}>
                       {itinerary.liveTrain.platformActual ||
@@ -996,7 +1005,20 @@ export default function ViaggioScreen() {
                       style={[
                         styles.stepContentCard,
                         isFirst && { marginTop: 0 },
-                        isInteractive && styles.stepContentCardInteractive,
+                        {
+                          borderColor:
+                            isInteractive || leg.type === 'train'
+                              ? theme.border
+                              : 'rgba(255,255,255,0.08)',
+                          backgroundColor:
+                            isInteractive || leg.type === 'train'
+                              ? theme.cardTint
+                              : 'rgba(255,255,255,0.04)',
+                        },
+                        isInteractive && [
+                          styles.stepContentCardInteractive,
+                          { borderColor: theme.primary },
+                        ],
                       ]}
                     >
                       <View style={styles.stepTitleRow}>
@@ -1166,7 +1188,7 @@ export default function ViaggioScreen() {
             </View>
 
             {/* Messaggio Riepilogo */}
-            <View style={styles.summaryFooterBox}>
+            <View style={[styles.summaryFooterBox, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
               <Ionicons
                 name="information-circle-outline"
                 size={16}
