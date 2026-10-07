@@ -267,10 +267,12 @@ async function computeOutboundItinerary(
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
   // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
-  const carEnabled = config.carLeg.enabled;
+  let carEnabled = config.carLeg.enabled;
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
   let carTrafficNote: string | undefined = undefined;
+  let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
+  let carTrafficPeak = false;
 
   if (carEnabled) {
     const drivingEst = await calculateDrivingEstimate(
@@ -281,6 +283,8 @@ async function computeOutboundItinerary(
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
+    carTrafficFluency = drivingEst.fluencyStatus;
+    carTrafficPeak = Boolean(drivingEst.isPeakHour);
   }
 
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
@@ -312,6 +316,9 @@ async function computeOutboundItinerary(
         targetDate: targetDateStr,
         targetTime: minutesToTime(homeDepartureMins),
         timeType: 'depart_at',
+        trafficCondition: carTrafficNote,
+        trafficFluency: carTrafficFluency,
+        isTrafficPeak: carTrafficPeak,
         notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });
@@ -501,6 +508,8 @@ async function computeReturnItinerary(
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
   let carTrafficNote: string | undefined = undefined;
+  let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
+  let carTrafficPeak = false;
 
   const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
   const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
@@ -514,6 +523,8 @@ async function computeReturnItinerary(
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
+    carTrafficFluency = drivingEst.fluencyStatus;
+    carTrafficPeak = Boolean(drivingEst.isPeakHour);
   }
 
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
@@ -608,6 +619,9 @@ async function computeReturnItinerary(
         targetDate: targetDateStr,
         targetTime: minutesToTime(trainArrMins + carWalkBuffer),
         timeType: 'depart_at',
+        trafficCondition: carTrafficNote,
+        trafficFluency: carTrafficFluency,
+        isTrafficPeak: carTrafficPeak,
         notes: 'Tocca per aprire la navigazione con orario impostato',
       },
     });

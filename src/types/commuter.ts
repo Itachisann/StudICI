@@ -79,6 +79,9 @@ export interface TripLeg {
     targetDate?: string; // es. "2026-10-07"
     timeType?: 'arrive_by' | 'depart_at';
     targetEpochSeconds?: number;
+    trafficCondition?: string;
+    trafficFluency?: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
+    isTrafficPeak?: boolean;
   };
 }
 

@@ -18,6 +18,7 @@ import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import * as Clipboard from 'expo-clipboard';
 
 import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
@@ -27,6 +28,11 @@ import { parseTimeToMinutes, evaluateTrainStatus } from '../utils/trenitaliaApi'
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 
 const SAPIENZA_RED = '#822433';
+const SAPIENZA_RED_ACCENT = '#e05666';
+const SAPIENZA_RED_LIGHT = '#f87171';
+const SAPIENZA_RED_BG = 'rgba(130, 36, 51, 0.45)';
+const SAPIENZA_RED_SUBTLE = 'rgba(130, 36, 51, 0.2)';
+const SAPIENZA_RED_BORDER = 'rgba(130, 36, 51, 0.4)';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
@@ -337,160 +343,181 @@ export default function ViaggioScreen() {
       .catch(() => Linking.openURL(gmapsWebUrl));
   };
 
+  const handleOpenTrenitalia = async (trainNumber?: string) => {
+    if (trainNumber) {
+      const cleanNum = trainNumber.replace(/\D/g, '');
+      if (cleanNum) {
+        try {
+          await Clipboard.setStringAsync(cleanNum);
+        } catch {}
+      }
+    }
+    const viaggiaTrenoUrl = 'https://www.viaggiatreno.it/infomobilita/index.jsp';
+    Linking.openURL(viaggiaTrenoUrl).catch((err) => {
+      console.warn('Errore apertura Trenitalia:', err);
+    });
+  };
+
   const directionIndex = direction === 'outbound' ? 0 : 1;
   const directionTitles = ['Andata', 'Ritorno'];
 
   return (
     <View style={styles.container}>
       <BlurView tint="dark" intensity={80} style={StyleSheet.absoluteFill} />
-      <SafeAreaView edges={['top']} style={{ flex: 1 }}>
-        {/* Top Header */}
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>Viaggio Pendolare</Text>
-            <Text style={styles.headerSubtitle}>
-              {config?.originAddress || 'Partenza'} ➔ Sapienza ({config?.departureStation.shortName || 'Orte'} ➔ {config?.arrivalStation.shortName || 'Roma'})
-            </Text>
-          </View>
-          <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              activeOpacity={0.7}
-              onPress={() => loadData(true)}
-            >
-              <Ionicons name="refresh" size={19} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.headerIconBtn, { marginLeft: 8 }]}
-              activeOpacity={0.7}
-              onPress={() => setConfigModalVisible(true)}
-            >
-              <Ionicons name="options-outline" size={20} color="#38bdf8" />
-            </TouchableOpacity>
-          </View>
-        </View>
+      <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
+        {/* ── Liquid Glass Header: Titolo "Viaggio" + Segmented Control + Giorni della Settimana ── */}
+        <View
+          style={[
+            styles.liquidGlassHeader,
+            { paddingTop: insets.top > 0 ? insets.top + 6 : 14 },
+          ]}
+        >
+          <BlurView tint="dark" intensity={65} style={StyleSheet.absoluteFill} />
+          <View style={styles.liquidGlassOverlay} />
 
-        {/* Segmented Control Andata / Ritorno */}
-        <View style={styles.switcherContainer}>
-          {isNativeIos ? (
-            <SegmentedControl
-              values={directionTitles}
-              selectedIndex={directionIndex}
-              onChange={(event) => {
-                const idx = event.nativeEvent.selectedSegmentIndex;
-                handleDirectionChange(idx === 0 ? 'outbound' : 'return');
-              }}
-              style={styles.nativeSegmentedControl}
-            />
-          ) : (
-            <View style={styles.customSegmentedControl}>
+          {/* Titolo iOS Large Title "Viaggio" */}
+          <View style={styles.liquidGlassTitleRow}>
+            <Text style={styles.liquidGlassTitle}>Viaggio</Text>
+            <View style={styles.headerActions}>
               <TouchableOpacity
-                style={[
-                  styles.customSegmentBtn,
-                  direction === 'outbound' && styles.customSegmentBtnActive,
-                ]}
+                style={styles.headerIconBtn}
                 activeOpacity={0.7}
-                onPress={() => handleDirectionChange('outbound')}
+                onPress={() => loadData(true)}
               >
-                <Ionicons
-                  name="school-outline"
-                  size={15}
-                  color={direction === 'outbound' ? '#fff' : '#a1a1aa'}
-                  style={{ marginRight: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.customSegmentText,
-                    direction === 'outbound' && styles.customSegmentTextActive,
-                  ]}
-                >
-                  Andata
-                </Text>
+                <Ionicons name="refresh" size={19} color="#fff" />
               </TouchableOpacity>
               <TouchableOpacity
-                style={[
-                  styles.customSegmentBtn,
-                  direction === 'return' && styles.customSegmentBtnActive,
-                ]}
+                style={[styles.headerIconBtn, { marginLeft: 8 }]}
                 activeOpacity={0.7}
-                onPress={() => handleDirectionChange('return')}
+                onPress={() => setConfigModalVisible(true)}
               >
-                <Ionicons
-                  name="home-outline"
-                  size={15}
-                  color={direction === 'return' ? '#fff' : '#a1a1aa'}
-                  style={{ marginRight: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.customSegmentText,
-                    direction === 'return' && styles.customSegmentTextActive,
-                  ]}
-                >
-                  Ritorno
-                </Text>
+                <Ionicons name="options-outline" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
-          )}
-        </View>
-
-        {/* Selettore Giorno della settimana (stile identico a Orario) */}
-        <View style={styles.daySelectorContainer}>
-          <TouchableOpacity
-            style={styles.navArrow}
-            onPress={() => handleDayChange(selectedDayIdx === 1 ? 5 : selectedDayIdx - 1)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="chevron-back" size={18} color="#ffffff" />
-          </TouchableOpacity>
-
-          <View style={styles.daysRow}>
-            {WEEKDAYS.map((w) => {
-              const isSelected = selectedDayIdx === w.dayIdx;
-              const isToday = new Date().getDay() === w.dayIdx;
-              return (
-                <TouchableOpacity
-                  key={w.dayIdx}
-                  onPress={() => handleDayChange(w.dayIdx)}
-                  style={styles.dayItem}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.dayCircle,
-                      isSelected && styles.dayCircleActive,
-                    ]}
-                  >
-                    <Text
-                      style={[styles.dayText, isSelected && styles.dayTextActive]}
-                    >
-                      {w.label}
-                    </Text>
-                  </View>
-                  {isToday && (
-                    <View
-                      style={[styles.dayDot, isSelected && styles.dayDotActive]}
-                    />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
           </View>
 
-          <TouchableOpacity
-            style={styles.navArrow}
-            onPress={() => handleDayChange(selectedDayIdx === 5 ? 1 : selectedDayIdx + 1)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
-          </TouchableOpacity>
+          {/* Segmented Control Andata / Ritorno */}
+          <View style={styles.switcherContainer}>
+            {isNativeIos ? (
+              <SegmentedControl
+                values={directionTitles}
+                selectedIndex={directionIndex}
+                onChange={(event) => {
+                  const idx = event.nativeEvent.selectedSegmentIndex;
+                  handleDirectionChange(idx === 0 ? 'outbound' : 'return');
+                }}
+                style={styles.nativeSegmentedControl}
+              />
+            ) : (
+              <View style={styles.customSegmentedControl}>
+                <TouchableOpacity
+                  style={[
+                    styles.customSegmentBtn,
+                    direction === 'outbound' && styles.customSegmentBtnActive,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => handleDirectionChange('outbound')}
+                >
+                  <Ionicons
+                    name="school-outline"
+                    size={15}
+                    color={direction === 'outbound' ? '#fff' : '#a1a1aa'}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.customSegmentText,
+                      direction === 'outbound' && styles.customSegmentTextActive,
+                    ]}
+                  >
+                    Andata
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.customSegmentBtn,
+                    direction === 'return' && styles.customSegmentBtnActive,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => handleDirectionChange('return')}
+                >
+                  <Ionicons
+                    name="home-outline"
+                    size={15}
+                    color={direction === 'return' ? '#fff' : '#a1a1aa'}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.customSegmentText,
+                      direction === 'return' && styles.customSegmentTextActive,
+                    ]}
+                  >
+                    Ritorno
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Selettore Giorno della settimana (finisce qui lo sfondo arrotondato) */}
+          <View style={styles.daySelectorContainer}>
+            <TouchableOpacity
+              style={styles.navArrow}
+              onPress={() => handleDayChange(selectedDayIdx === 1 ? 5 : selectedDayIdx - 1)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="chevron-back" size={18} color="#ffffff" />
+            </TouchableOpacity>
+
+            <View style={styles.daysRow}>
+              {WEEKDAYS.map((w) => {
+                const isSelected = selectedDayIdx === w.dayIdx;
+                const isToday = new Date().getDay() === w.dayIdx;
+                return (
+                  <TouchableOpacity
+                    key={w.dayIdx}
+                    onPress={() => handleDayChange(w.dayIdx)}
+                    style={styles.dayItem}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        styles.dayCircle,
+                        isSelected && styles.dayCircleActive,
+                      ]}
+                    >
+                      <Text
+                        style={[styles.dayText, isSelected && styles.dayTextActive]}
+                      >
+                        {w.label}
+                      </Text>
+                    </View>
+                    {isToday && (
+                      <View
+                        style={[styles.dayDot, isSelected && styles.dayDotActive]}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              style={styles.navArrow}
+              onPress={() => handleDayChange(selectedDayIdx === 5 ? 1 : selectedDayIdx + 1)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Sezione Selettore Lezioni del Giorno */}
         <View style={styles.lecturesSection}>
           <View style={styles.sectionHeaderRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="book-outline" size={13} color="#38bdf8" style={{ marginRight: 5 }} />
+              <Ionicons name="book-outline" size={13} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 5 }} />
               <Text style={styles.sectionTitle}>LEZIONI DEL GIORNO</Text>
             </View>
           </View>
@@ -524,7 +551,7 @@ export default function ViaggioScreen() {
                         <Ionicons
                           name="time-outline"
                           size={11}
-                          color={isSelected ? '#fff' : '#38bdf8'}
+                          color={isSelected ? '#fff' : SAPIENZA_RED_ACCENT}
                           style={{ marginRight: 4 }}
                         />
                         <Text style={[styles.classTimeText, isSelected && styles.classTimeTextSelected]}>
@@ -638,7 +665,7 @@ export default function ViaggioScreen() {
                 <Ionicons
                   name={direction === 'outbound' ? 'school' : 'home'}
                   size={16}
-                  color="#38bdf8"
+                  color={SAPIENZA_RED_ACCENT}
                   style={{ marginRight: 8 }}
                 />
                 <View style={{ flex: 1 }}>
@@ -656,9 +683,13 @@ export default function ViaggioScreen() {
               </View>
             </View>
 
-            {/* Dettaglio Treno Regionale e Switcher Alternative */}
+            {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
             {itinerary.liveTrain && (
-              <View style={styles.trainHighlightCard}>
+              <TouchableOpacity
+                style={styles.trainHighlightCard}
+                activeOpacity={0.88}
+                onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
+              >
                 <View style={styles.trainHighlightHeader}>
                   <View style={styles.trainHighlightHeaderLeft}>
                     <View style={styles.trainNumberBadge}>
@@ -693,6 +724,12 @@ export default function ViaggioScreen() {
                       </View>
                     )}
                   </View>
+
+                  {/* Badge Link Trenitalia */}
+                  <View style={styles.trainTrenitaliaLinkBadge}>
+                    <Text style={styles.trainTrenitaliaLinkText}>Trenitalia</Text>
+                    <Ionicons name="open-outline" size={12} color="#ffffff" style={{ marginLeft: 3 }} />
+                  </View>
                 </View>
 
                 {/* Eventuale Avviso / Variazione / Interruzione Trenitalia */}
@@ -706,7 +743,7 @@ export default function ViaggioScreen() {
                 {/* Eventuale Segnalazione Capienza / Biglietti non acquistabili */}
                 {trainStatus?.capacityWarning ? (
                   <View style={styles.trainCapacityBanner}>
-                    <Ionicons name="people-outline" size={14} color="#38bdf8" style={{ marginRight: 6 }} />
+                    <Ionicons name="people-outline" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 6 }} />
                     <Text style={styles.trainCapacityBannerText}>{trainStatus.capacityWarning}</Text>
                   </View>
                 ) : null}
@@ -781,7 +818,7 @@ export default function ViaggioScreen() {
                     disabled={itinerary.liveTrain.hasEarlierTrain === false}
                     onPress={handleTrainPrev}
                   >
-                    <Ionicons name="chevron-back" size={14} color="#38bdf8" style={{ marginRight: 3 }} />
+                    <Ionicons name="chevron-back" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginRight: 3 }} />
                     <Text style={styles.trainNavBtnText}>Treno prima</Text>
                   </TouchableOpacity>
 
@@ -796,7 +833,7 @@ export default function ViaggioScreen() {
                     onPress={handleTrainNext}
                   >
                     <Text style={styles.trainNavBtnText}>Treno dopo</Text>
-                    <Ionicons name="chevron-forward" size={14} color="#38bdf8" style={{ marginLeft: 3 }} />
+                    <Ionicons name="chevron-forward" size={14} color={SAPIENZA_RED_ACCENT} style={{ marginLeft: 3 }} />
                   </TouchableOpacity>
                 </View>
 
@@ -841,7 +878,7 @@ export default function ViaggioScreen() {
                           <Ionicons
                             name={at.isFast ? 'flash' : 'train-outline'}
                             size={12}
-                            color={isCurrent ? '#38bdf8' : '#94a3b8'}
+                            color={isCurrent ? SAPIENZA_RED_ACCENT : '#94a3b8'}
                             style={{ marginRight: 4 }}
                           />
                           <Text
@@ -857,7 +894,7 @@ export default function ViaggioScreen() {
                     })}
                   </ScrollView>
                 )}
-              </View>
+              </TouchableOpacity>
             )}
 
             {/* Timeline delle tappe del viaggio */}
@@ -869,8 +906,8 @@ export default function ViaggioScreen() {
                 const isLast = index === itinerary.legs.length - 1;
 
                 let iconName: keyof typeof Ionicons.glyphMap = 'navigate';
-                let iconColor = '#38bdf8';
-                let circleBg = 'rgba(56, 189, 248, 0.15)';
+                let iconColor = SAPIENZA_RED_ACCENT;
+                let circleBg = SAPIENZA_RED_SUBTLE;
 
                 if (leg.type === 'car') {
                   iconName = 'car';
@@ -878,8 +915,8 @@ export default function ViaggioScreen() {
                   circleBg = 'rgba(251, 146, 60, 0.15)';
                 } else if (leg.type === 'train') {
                   iconName = 'train';
-                  iconColor = '#38bdf8';
-                  circleBg = 'rgba(56, 189, 248, 0.2)';
+                  iconColor = SAPIENZA_RED_ACCENT;
+                  circleBg = SAPIENZA_RED_SUBTLE;
                 } else if (leg.type === 'transit') {
                   iconName = 'bus';
                   iconColor = '#a855f7';
@@ -887,12 +924,14 @@ export default function ViaggioScreen() {
                 } else if (leg.type === 'destination') {
                   iconName = direction === 'outbound' ? 'school' : 'home';
                   iconColor = SAPIENZA_RED;
-                  circleBg = 'rgba(130, 36, 51, 0.2)';
+                  circleBg = SAPIENZA_RED_SUBTLE;
                 } else if (leg.type === 'wait') {
                   iconName = 'pause';
                   iconColor = '#94a3b8';
                   circleBg = 'rgba(148, 163, 184, 0.15)';
                 }
+
+                const isInteractive = Boolean(leg.details?.mapQuery || leg.type === 'train');
 
                 return (
                   <View key={leg.id} style={styles.timelineStepRow}>
@@ -912,14 +951,18 @@ export default function ViaggioScreen() {
 
                     {/* Contenuto Tappa */}
                     <TouchableOpacity
-                      activeOpacity={leg.details?.mapQuery ? 0.85 : 1}
+                      activeOpacity={isInteractive ? 0.85 : 1}
                       onPress={() => {
-                        if (leg.details?.mapQuery) handleOpenMaps(leg);
+                        if (leg.details?.mapQuery) {
+                          handleOpenMaps(leg);
+                        } else if (leg.type === 'train') {
+                          handleOpenTrenitalia(leg.details?.trainNumber);
+                        }
                       }}
                       style={[
                         styles.stepContentCard,
                         isFirst && { marginTop: 0 },
-                        leg.details?.mapQuery && styles.stepContentCardInteractive,
+                        isInteractive && styles.stepContentCardInteractive,
                       ]}
                     >
                       <View style={styles.stepTitleRow}>
@@ -932,6 +975,108 @@ export default function ViaggioScreen() {
                       </View>
 
                       <Text style={styles.stepSubtitleText}>{leg.subtitle}</Text>
+
+                      {/* Avviso Evidente Traffico Stradale */}
+                      {leg.type === 'car' && (leg.details?.trafficFluency || leg.details?.trafficCondition) && (
+                        <View
+                          style={[
+                            styles.trafficAlertBox,
+                            (leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak)
+                              ? styles.trafficAlertBoxWarning
+                              : styles.trafficAlertBoxSmooth,
+                          ]}
+                        >
+                          <View style={styles.trafficAlertHeader}>
+                            <View
+                              style={[
+                                styles.trafficAlertIconBox,
+                                {
+                                  backgroundColor:
+                                    leg.details.trafficFluency === 'intenso'
+                                      ? 'rgba(239, 68, 68, 0.2)'
+                                      : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                      ? 'rgba(245, 158, 11, 0.2)'
+                                      : 'rgba(16, 185, 129, 0.2)',
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  leg.details.trafficFluency === 'intenso'
+                                    ? 'flame'
+                                    : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                    ? 'warning'
+                                    : 'checkmark-circle'
+                                }
+                                size={16}
+                                color={
+                                  leg.details.trafficFluency === 'intenso'
+                                    ? '#ef4444'
+                                    : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                    ? '#f59e0b'
+                                    : '#10b981'
+                                }
+                              />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text
+                                style={[
+                                  styles.trafficAlertTitle,
+                                  {
+                                    color:
+                                      leg.details.trafficFluency === 'intenso'
+                                        ? '#fca5a5'
+                                        : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                        ? '#fcd34d'
+                                        : '#6ee7b7',
+                                  },
+                                ]}
+                              >
+                                {leg.details.trafficFluency === 'intenso'
+                                  ? 'TRAFFICO MOLTO INTENSO'
+                                  : leg.details.trafficFluency === 'rallentamenti'
+                                  ? 'RALLENTAMENTI SU STRADA'
+                                  : leg.details.isTrafficPeak
+                                  ? 'ORA DI PUNTA • TRAFFICO PREVISTO'
+                                  : 'TRAFFICO SCORREVOLE'}
+                              </Text>
+                              <Text style={styles.trafficAlertDescription}>
+                                {leg.details.trafficCondition ||
+                                  (leg.details.isTrafficPeak
+                                    ? 'Possibili rallentamenti nei pressi della stazione o viabilità extraurbana'
+                                    : 'Scorrevolezza stimata ottimale')}
+                              </Text>
+                            </View>
+                            {(leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak) && (
+                              <View style={styles.trafficDelayPill}>
+                                <Ionicons name="time" size={11} color="#ffedd5" style={{ marginRight: 3 }} />
+                                <Text style={styles.trafficDelayPillText}>RITARDO</Text>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Scheda Link Trenitalia per Tappa Treno */}
+                      {leg.type === 'train' && (
+                        <TouchableOpacity
+                          style={styles.trenitaliaTimelineBanner}
+                          activeOpacity={0.8}
+                          onPress={() => handleOpenTrenitalia(leg.details?.trainNumber)}
+                        >
+                          <View style={styles.trenitaliaIconCircle}>
+                            <Ionicons name="train" size={13} color="#ffffff" />
+                          </View>
+                          <View style={{ flex: 1, marginRight: 6 }}>
+                            <Text style={styles.trenitaliaBannerTitle}>Scheda Treno Trenitalia</Text>
+                            <Text style={styles.trenitaliaBannerSubtitle}>Tocca per verificare stato e fermate live</Text>
+                          </View>
+                          <View style={styles.trenitaliaActionBadge}>
+                            <Text style={styles.trenitaliaActionBadgeText}>TRENO</Text>
+                            <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
+                          </View>
+                        </TouchableOpacity>
+                      )}
 
                       {/* Note della tratta */}
                       {leg.details?.notes && (
@@ -952,7 +1097,7 @@ export default function ViaggioScreen() {
                                     : 'navigate'
                                 }
                                 size={14}
-                                color="#38bdf8"
+                                color={SAPIENZA_RED_ACCENT}
                               />
                             </View>
                             <View style={{ flex: 1, marginRight: 6 }}>
@@ -972,7 +1117,7 @@ export default function ViaggioScreen() {
                           </View>
                           <View style={styles.mapsActionBadge}>
                             <Text style={styles.mapsActionBadgeText}>APRI MAPS</Text>
-                            <Ionicons name="open-outline" size={11} color="#38bdf8" style={{ marginLeft: 3 }} />
+                            <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
                           </View>
                         </View>
                       )}
@@ -1014,24 +1159,44 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0c0e12',
   },
-  header: {
+  safeArea: {
+    flex: 1,
+  },
+
+  /* Liquid Glass Header */
+  liquidGlassHeader: {
+    overflow: 'hidden',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.12)',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 8,
+    marginBottom: 8,
+  },
+  liquidGlassOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(24, 24, 26, 0.65)',
+  },
+  liquidGlassTitleRow: {
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    paddingBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingTop: 8,
-    paddingBottom: 10,
   },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '800',
+  liquidGlassTitle: {
+    fontSize: 34,
+    fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: -0.3,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 2,
+    letterSpacing: 0.35,
   },
   headerActions: {
     flexDirection: 'row',
@@ -1045,9 +1210,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+
+  /* Switcher Andata / Ritorno */
   switcherContainer: {
     paddingHorizontal: 16,
-    marginBottom: 8,
+    marginBottom: 10,
   },
   nativeSegmentedControl: {
     height: 36,
@@ -1072,7 +1239,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   customSegmentBtnActive: {
-    backgroundColor: 'rgba(130, 36, 51, 0.45)',
+    backgroundColor: SAPIENZA_RED_BG,
     borderColor: SAPIENZA_RED,
     borderWidth: 1,
   },
@@ -1085,12 +1252,14 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
+
+  /* Selettore Giorno della settimana */
   daySelectorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
-    marginBottom: 10,
+    paddingBottom: 14,
   },
   navArrow: {
     width: 36,
@@ -1126,9 +1295,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#1c1c1e',
   },
   dayCircleActive: {
-    backgroundColor: 'rgba(56, 189, 248, 0.22)',
+    backgroundColor: SAPIENZA_RED_BG,
     borderWidth: 1,
-    borderColor: '#38bdf8',
+    borderColor: SAPIENZA_RED,
   },
   dayText: {
     color: '#8e8e93',
@@ -1148,8 +1317,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#8e8e93',
   },
   dayDotActive: {
-    backgroundColor: '#38bdf8',
+    backgroundColor: '#ffffff',
   },
+
+  /* Lezioni del Giorno */
   lecturesSection: {
     paddingHorizontal: 16,
     marginBottom: 10,
@@ -1163,7 +1334,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#38bdf8',
+    color: SAPIENZA_RED_ACCENT,
     letterSpacing: 0.6,
   },
   sectionHint: {
@@ -1209,7 +1380,7 @@ const styles = StyleSheet.create({
   classTimeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor: 'rgba(130, 36, 51, 0.25)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -1220,7 +1391,7 @@ const styles = StyleSheet.create({
   classTimeText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: SAPIENZA_RED_ACCENT,
   },
   classTimeTextSelected: {
     color: '#ffffff',
@@ -1262,6 +1433,8 @@ const styles = StyleSheet.create({
     color: '#fca5a5',
     fontWeight: '600',
   },
+
+  /* Empty / Loading */
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -1291,6 +1464,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
   },
+
+  /* Scroll Body */
   scrollBody: {
     flex: 1,
   },
@@ -1298,6 +1473,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 4,
   },
+
+  /* Hero Card */
   heroCard: {
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 18,
@@ -1358,12 +1535,12 @@ const styles = StyleSheet.create({
   heroTargetLectureBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    backgroundColor: 'rgba(130, 36, 51, 0.15)',
     borderRadius: 12,
     padding: 10,
     marginTop: 6,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.15)',
+    borderColor: 'rgba(130, 36, 51, 0.3)',
   },
   heroLectureSubject: {
     fontSize: 14,
@@ -1375,11 +1552,13 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     marginTop: 2,
   },
+
+  /* Card Treno Risaltato */
   trainHighlightCard: {
-    backgroundColor: 'rgba(2, 132, 199, 0.12)',
+    backgroundColor: 'rgba(130, 36, 51, 0.16)',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.25)',
+    borderColor: 'rgba(130, 36, 51, 0.35)',
     padding: 14,
     marginBottom: 14,
   },
@@ -1399,7 +1578,7 @@ const styles = StyleSheet.create({
   trainNumberBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0284c7',
+    backgroundColor: SAPIENZA_RED,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
@@ -1420,6 +1599,21 @@ const styles = StyleSheet.create({
   trainStatusPillText: {
     fontSize: 11,
     fontWeight: '700',
+  },
+  trainTrenitaliaLinkBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+  },
+  trainTrenitaliaLinkText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   trainAlertBanner: {
     flexDirection: 'row',
@@ -1442,10 +1636,10 @@ const styles = StyleSheet.create({
   trainCapacityBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+    backgroundColor: 'rgba(130, 36, 51, 0.2)',
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.25)',
+    borderColor: 'rgba(130, 36, 51, 0.35)',
     paddingHorizontal: 10,
     paddingVertical: 7,
     marginBottom: 10,
@@ -1453,7 +1647,7 @@ const styles = StyleSheet.create({
   trainCapacityBannerText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#38bdf8',
+    color: SAPIENZA_RED_LIGHT,
     flex: 1,
     lineHeight: 15,
   },
@@ -1475,7 +1669,7 @@ const styles = StyleSheet.create({
   trainTimeText: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#38bdf8',
+    color: '#ffffff',
     marginTop: 2,
   },
   platformHighlightBox: {
@@ -1485,7 +1679,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.3)',
+    borderColor: SAPIENZA_RED_BORDER,
   },
   platformHighlightLabel: {
     fontSize: 10,
@@ -1512,7 +1706,7 @@ const styles = StyleSheet.create({
   },
   trainAlternativesDivider: {
     height: 1,
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
     marginVertical: 10,
   },
   trainNavButtonsRow: {
@@ -1524,7 +1718,7 @@ const styles = StyleSheet.create({
   trainNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor: 'rgba(130, 36, 51, 0.22)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
@@ -1535,7 +1729,7 @@ const styles = StyleSheet.create({
   trainNavBtnText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: SAPIENZA_RED_ACCENT,
   },
   trainNavCenterLabel: {
     fontSize: 11,
@@ -1557,8 +1751,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   trainChipCurrent: {
-    backgroundColor: 'rgba(56, 189, 248, 0.25)',
-    borderColor: '#38bdf8',
+    backgroundColor: SAPIENZA_RED_BG,
+    borderColor: SAPIENZA_RED,
   },
   trainChipText: {
     fontSize: 11,
@@ -1569,6 +1763,8 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
+
+  /* Timeline */
   timelineSectionTitle: {
     fontSize: 12,
     fontWeight: '800',
@@ -1627,6 +1823,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
   },
+  stepContentCardInteractive: {
+    borderColor: SAPIENZA_RED_BORDER,
+  },
   stepTitleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1659,17 +1858,118 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     marginTop: 2,
   },
-  stepContentCardInteractive: {
-    borderColor: 'rgba(56, 189, 248, 0.25)',
+
+  /* Avviso Traffico Prominente */
+  trafficAlertBox: {
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
+    borderWidth: 1,
   },
+  trafficAlertBoxWarning: {
+    backgroundColor: 'rgba(245, 158, 11, 0.14)',
+    borderColor: 'rgba(245, 158, 11, 0.4)',
+  },
+  trafficAlertBoxSmooth: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.28)',
+  },
+  trafficAlertHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  trafficAlertIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 9,
+  },
+  trafficAlertTitle: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  trafficAlertDescription: {
+    fontSize: 11,
+    color: '#cbd5e1',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  trafficDelayPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginLeft: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.5)',
+  },
+  trafficDelayPillText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#ffedd5',
+    letterSpacing: 0.4,
+  },
+
+  /* Scheda Link Trenitalia Timeline */
+  trenitaliaTimelineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(130, 36, 51, 0.2)',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(130, 36, 51, 0.35)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    marginTop: 8,
+  },
+  trenitaliaIconCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: SAPIENZA_RED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  trenitaliaBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  trenitaliaBannerSubtitle: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginTop: 2,
+  },
+  trenitaliaActionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: SAPIENZA_RED,
+    paddingHorizontal: 7,
+    paddingVertical: 3.5,
+    borderRadius: 6,
+  },
+  trenitaliaActionBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+
+  /* Banner Google Maps */
   mapsBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    backgroundColor: 'rgba(130, 36, 51, 0.14)',
     borderRadius: 9,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.2)',
+    borderColor: 'rgba(130, 36, 51, 0.3)',
     paddingHorizontal: 9,
     paddingVertical: 7,
     marginTop: 8,
@@ -1683,7 +1983,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: 'rgba(56, 189, 248, 0.18)',
+    backgroundColor: 'rgba(130, 36, 51, 0.28)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
@@ -1691,7 +1991,7 @@ const styles = StyleSheet.create({
   mapsBannerTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: SAPIENZA_RED_ACCENT,
   },
   mapsBannerSubtitle: {
     fontSize: 11,
@@ -1702,16 +2002,18 @@ const styles = StyleSheet.create({
   mapsActionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
+    backgroundColor: SAPIENZA_RED,
+    paddingHorizontal: 7,
+    paddingVertical: 3.5,
     borderRadius: 6,
   },
   mapsActionBadgeText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#38bdf8',
+    color: '#ffffff',
   },
+
+  /* Footer Riepilogo */
   summaryFooterBox: {
     flexDirection: 'row',
     alignItems: 'center',
