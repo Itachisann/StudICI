@@ -353,14 +353,21 @@ export default function ViaggioScreen() {
       } catch {}
     }
 
-    const base = 'https://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp';
-    let targetUrl = `${base}?treno=${cleanNum}`;
+    let targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum || ''}`;
     if (cleanNum && train?.originStationCode && train?.departureMillis) {
-      // ViaggiaTreno richiede la mezzanotte (locale) del giorno di partenza, non l'orario del treno
-      const midnight = new Date(train.departureMillis);
-      midnight.setHours(0, 0, 0, 0);
-      targetUrl = `${base}?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${midnight.getTime()}`;
+      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${train.departureMillis}`;
     }
+
+    // Trenitalia non espone un deep link pubblico per singolo treno: se l'app è
+    // installata la apriamo (il numero treno è già negli appunti), altrimenti
+    // ripieghiamo sulla scheda ViaggiaTreno di quel treno.
+    try {
+      const appInstalled = await Linking.canOpenURL('trenitalia://');
+      if (appInstalled) {
+        await Linking.openURL('trenitalia://');
+        return;
+      }
+    } catch {}
 
     Linking.openURL(targetUrl).catch((err) => {
       console.warn('Errore apertura link treno:', err);
