@@ -18,9 +18,8 @@ import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import * as Clipboard from 'expo-clipboard';
 
-import { CommuterConfig, CommuterItinerary, TripLeg, LiveTrainInfo } from '../types/commuter';
+import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
@@ -342,41 +341,6 @@ export default function ViaggioScreen() {
         }
       })
       .catch(() => Linking.openURL(gmapsWebUrl));
-  };
-
-  const handleOpenTrainLive = async (train?: LiveTrainInfo | null) => {
-    const rawNum = train?.trainNumber || '';
-    const cleanNum = rawNum.replace(/\D/g, '');
-    if (cleanNum) {
-      try {
-        await Clipboard.setStringAsync(cleanNum);
-      } catch {}
-    }
-
-    let targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum || ''}`;
-    if (cleanNum && train?.originStationCode && train?.departureMillis) {
-      // ViaggiaTreno vuole la mezzanotte (ora di Roma) del giorno di servizio, non l'ora di partenza.
-      const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Europe/Rome',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hourCycle: 'h23',
-      }).formatToParts(new Date(train.departureMillis));
-      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
-      const sinceMidnightMs =
-        ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 +
-        (train.departureMillis % 1000);
-      const midnightMillis = train.departureMillis - sinceMidnightMs;
-      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${midnightMillis}`;
-    }
-
-    Linking.openURL(targetUrl).catch((err) => {
-      console.warn('Errore apertura link treno:', err);
-    });
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -750,13 +714,11 @@ export default function ViaggioScreen() {
 
             {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
             {itinerary.liveTrain && (
-              <TouchableOpacity
+              <View
                 style={[
                   styles.trainHighlightCard,
                   { backgroundColor: '#1c1c1e', borderColor: theme.border, borderWidth: 1 },
                 ]}
-                activeOpacity={0.88}
-                onPress={() => handleOpenTrainLive(itinerary.liveTrain)}
               >
                 <View style={styles.trainHighlightHeader}>
                   <View style={styles.trainHighlightHeaderLeft}>
@@ -791,12 +753,6 @@ export default function ViaggioScreen() {
                         </Text>
                       </View>
                     )}
-                  </View>
-
-                  {/* Badge Link ViaggiaTreno */}
-                  <View style={styles.trainTrenitaliaLinkBadge}>
-                    <Text style={styles.trainTrenitaliaLinkText}>ViaggiaTreno</Text>
-                    <Ionicons name="open-outline" size={12} color="#ffffff" style={{ marginLeft: 3 }} />
                   </View>
                 </View>
 
@@ -967,7 +923,7 @@ export default function ViaggioScreen() {
                     })}
                   </ScrollView>
                 )}
-              </TouchableOpacity>
+              </View>
             )}
 
             {/* Timeline delle tappe del viaggio */}
