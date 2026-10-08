@@ -358,17 +358,6 @@ export default function ViaggioScreen() {
       targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${train.departureMillis}`;
     }
 
-    // Trenitalia non espone un deep link pubblico per singolo treno: se l'app è
-    // installata la apriamo (il numero treno è già negli appunti), altrimenti
-    // ripieghiamo sulla scheda ViaggiaTreno di quel treno.
-    try {
-      const appInstalled = await Linking.canOpenURL('trenitalia://');
-      if (appInstalled) {
-        await Linking.openURL('trenitalia://');
-        return;
-      }
-    } catch {}
-
     Linking.openURL(targetUrl).catch((err) => {
       console.warn('Errore apertura link treno:', err);
     });
