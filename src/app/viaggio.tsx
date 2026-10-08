@@ -353,9 +353,13 @@ export default function ViaggioScreen() {
       } catch {}
     }
 
-    let targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum || ''}`;
+    const base = 'https://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp';
+    let targetUrl = `${base}?treno=${cleanNum}`;
     if (cleanNum && train?.originStationCode && train?.departureMillis) {
-      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${train.departureMillis}`;
+      // ViaggiaTreno richiede la mezzanotte (locale) del giorno di partenza, non l'orario del treno
+      const midnight = new Date(train.departureMillis);
+      midnight.setHours(0, 0, 0, 0);
+      targetUrl = `${base}?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${midnight.getTime()}`;
     }
 
     Linking.openURL(targetUrl).catch((err) => {
