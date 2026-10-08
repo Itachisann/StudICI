@@ -355,7 +355,23 @@ export default function ViaggioScreen() {
 
     let targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum || ''}`;
     if (cleanNum && train?.originStationCode && train?.departureMillis) {
-      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${train.departureMillis}`;
+      // ViaggiaTreno vuole la mezzanotte (ora di Roma) del giorno di servizio, non l'ora di partenza.
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Rome',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(new Date(train.departureMillis));
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+      const sinceMidnightMs =
+        ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 +
+        (train.departureMillis % 1000);
+      const midnightMillis = train.departureMillis - sinceMidnightMs;
+      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${midnightMillis}`;
     }
 
     Linking.openURL(targetUrl).catch((err) => {
