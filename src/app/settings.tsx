@@ -95,6 +95,16 @@ const formatSyncDate = (ts: number | null): string => {
   return `${d.toLocaleDateString("it-IT", { day: "numeric", month: "short" })} alle ${timeStr}`;
 };
 
+const THEME_DOT_EMOJIS: Record<string, string> = {
+  sapienza: '🔴',
+  cobalt: '🔵',
+  emerald: '🟢',
+  royal: '🟣',
+  amber: '🟠',
+  ruby: '🌸',
+  cyan: '🩵',
+};
+
 export default function ProfiloScreen() {
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
   const [degreeName, setDegreeName] = useState<string>("");
@@ -134,11 +144,14 @@ export default function ProfiloScreen() {
 
   const themeMenuActions = useMemo(
     () =>
-      availableThemes.map((t) => ({
-        id: t.id,
-        title: t.name,
-        state: (t.id === themeId ? "on" : "off") as "on" | "off",
-      })),
+      availableThemes.map((t) => {
+        const dot = THEME_DOT_EMOJIS[t.id] || '⚪';
+        return {
+          id: t.id,
+          title: `${dot}  ${t.name}`,
+          state: (t.id === themeId ? "on" : "off") as "on" | "off",
+        };
+      }),
     [availableThemes, themeId],
   );
 
@@ -1071,6 +1084,7 @@ export default function ProfiloScreen() {
               onPressAction={({ nativeEvent }) => {
                 setThemeId(nativeEvent.event);
               }}
+              style={{ width: '100%' }}
             >
               <View style={styles.tableRow}>
                 <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
@@ -1084,8 +1098,8 @@ export default function ProfiloScreen() {
                   <Text style={styles.rowDetail} numberOfLines={1}>
                     {theme.name}
                   </Text>
+                  <Ionicons name="chevron-forward" size={15} color="#48484a" />
                 </View>
-                <Ionicons name="chevron-expand" size={15} color="#8e8e93" />
               </View>
             </MenuView>
           ) : (
@@ -1106,12 +1120,12 @@ export default function ProfiloScreen() {
                   <Text style={styles.rowDetail} numberOfLines={1}>
                     {theme.name}
                   </Text>
+                  <Ionicons
+                    name={themeSectionExpanded ? "chevron-up" : "chevron-down"}
+                    size={15}
+                    color="#48484a"
+                  />
                 </View>
-                <Ionicons
-                  name={themeSectionExpanded ? "chevron-up" : "chevron-down"}
-                  size={15}
-                  color="#8e8e93"
-                />
               </TouchableOpacity>
 
               {themeSectionExpanded && (
@@ -3013,13 +3027,13 @@ const styles = StyleSheet.create({
   themeRowPreview: {
     flexDirection: "row",
     alignItems: "center",
-    marginRight: 6,
+    justifyContent: "flex-end",
   },
   themeRowDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 7,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
   },
   themeDropdownContainer: {
     paddingHorizontal: 14,

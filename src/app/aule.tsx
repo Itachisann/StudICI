@@ -240,7 +240,7 @@ export default function AuleScreen() {
               roomEntries.map((entry, idx) => (
                 <TouchableOpacity
                   key={idx}
-                  style={[styles.card, { borderColor: theme.border }]}
+                  style={styles.card}
                   activeOpacity={0.8}
                   onPress={() => setSelectedRoomModal(entry)}
                 >

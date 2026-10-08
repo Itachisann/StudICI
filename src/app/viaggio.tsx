@@ -20,7 +20,7 @@ import SegmentedControl from '@react-native-segmented-control/segmented-control'
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Clipboard from 'expo-clipboard';
 
-import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
+import { CommuterConfig, CommuterItinerary, TripLeg, LiveTrainInfo } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
@@ -344,31 +344,23 @@ export default function ViaggioScreen() {
       .catch(() => Linking.openURL(gmapsWebUrl));
   };
 
-  const handleOpenTrenitalia = async (trainNumber?: string) => {
-    let cleanNum = '';
-    if (trainNumber) {
-      cleanNum = trainNumber.replace(/\D/g, '');
-      if (cleanNum) {
-        try {
-          await Clipboard.setStringAsync(cleanNum);
-        } catch {}
-      }
+  const handleOpenTrainLive = async (train?: LiveTrainInfo | null) => {
+    const rawNum = train?.trainNumber || '';
+    const cleanNum = rawNum.replace(/\D/g, '');
+    if (cleanNum) {
+      try {
+        await Clipboard.setStringAsync(cleanNum);
+      } catch {}
     }
-    const appUrl = 'trenitalia://';
-    // Link diretto alla sezione ufficiale di monitoraggio e andamento treno di Trenitalia
-    const webUrl = cleanNum
-      ? `https://www.trenitalia.com/it/informazioni/Infomobilita.html#gestisci-viaggio`
-      : `https://www.trenitalia.com/it/informazioni/Infomobilita.html`;
 
-    Linking.canOpenURL(appUrl)
-      .then((supported) => {
-        if (supported) {
-          Linking.openURL(appUrl).catch(() => Linking.openURL(webUrl));
-        } else {
-          Linking.openURL(webUrl);
-        }
-      })
-      .catch(() => Linking.openURL(webUrl));
+    let targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum || ''}`;
+    if (cleanNum && train?.originStationCode && train?.departureMillis) {
+      targetUrl = `http://www.viaggiatreno.it/infomobilitamobile/pages/cercaTreno/cercaTreno.jsp?treno=${cleanNum}&origine=${train.originStationCode}&datapartenza=${train.departureMillis}`;
+    }
+
+    Linking.openURL(targetUrl).catch((err) => {
+      console.warn('Errore apertura link treno:', err);
+    });
   };
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
@@ -413,12 +405,17 @@ export default function ViaggioScreen() {
           <View style={styles.switcherContainer}>
             {isNativeIos ? (
               <SegmentedControl
+                key={`seg-viaggio-${directionIndex}-${theme.primary}`}
                 values={directionTitles}
                 selectedIndex={directionIndex}
                 onChange={(event) => {
                   const idx = event.nativeEvent.selectedSegmentIndex;
                   handleDirectionChange(idx === 0 ? 'outbound' : 'return');
                 }}
+                appearance="dark"
+                tintColor={theme.primary}
+                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
                 style={styles.nativeSegmentedControl}
               />
             ) : (
@@ -743,7 +740,7 @@ export default function ViaggioScreen() {
                   { backgroundColor: '#1c1c1e', borderColor: theme.border, borderWidth: 1 },
                 ]}
                 activeOpacity={0.88}
-                onPress={() => handleOpenTrenitalia(itinerary.liveTrain?.trainNumber)}
+                onPress={() => handleOpenTrainLive(itinerary.liveTrain)}
               >
                 <View style={styles.trainHighlightHeader}>
                   <View style={styles.trainHighlightHeaderLeft}>
@@ -780,9 +777,9 @@ export default function ViaggioScreen() {
                     )}
                   </View>
 
-                  {/* Badge Link Trenitalia */}
+                  {/* Badge Link ViaggiaTreno */}
                   <View style={styles.trainTrenitaliaLinkBadge}>
-                    <Text style={styles.trainTrenitaliaLinkText}>Trenitalia</Text>
+                    <Text style={styles.trainTrenitaliaLinkText}>ViaggiaTreno</Text>
                     <Ionicons name="open-outline" size={12} color="#ffffff" style={{ marginLeft: 3 }} />
                   </View>
                 </View>

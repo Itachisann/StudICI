@@ -510,7 +510,7 @@ async function computeReturnItinerary(
   let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
   let carTrafficPeak = false;
 
-  const carWalkBuffer = carEnabled ? 5 : 0; // recupero auto dal parcheggio
+  const carWalkBuffer = carEnabled ? 3 : 0; // recupero auto dal parcheggio (3 min dall'arrivo del treno alla partenza in auto)
   const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
 
   if (carEnabled) {

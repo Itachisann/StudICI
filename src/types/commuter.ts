@@ -32,6 +32,7 @@ export interface LiveTrainInfo {
   category: string; // es. "RV", "REG"
   destination: string; // es. "ROMA TERMINI"
   originStationName: string;
+  originStationCode?: string; // es. "S08304"
   departureTimePlanned: string; // "12:16"
   departureTimeActual?: string; // "12:18"
   departureMillis: number;
