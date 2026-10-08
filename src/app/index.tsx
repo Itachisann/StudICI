@@ -538,8 +538,7 @@ export default function ScheduleScreen() {
             <View style={{ flex: 1, paddingRight: 6 }}>
               <Text style={styles.commuterBannerTitle}>Itinerario Pendolare</Text>
               <Text style={styles.commuterBannerSub} numberOfLines={1}>
-                Calcola treno, binario live e tempi per la lezione delle{" "}
-                {todayClasses[0].startTime || "08:30"}
+                Calcola tempi di trasporto
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={14} color={theme.accent} />
