@@ -297,6 +297,7 @@ export default function ScheduleScreen() {
 
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
+    AsyncStorage.setItem("defaultTabUrl", tab.url).catch(() => {});
     if (schedulesMap[tab.url]) {
       // Istantaneo da memoria: zero caricamento e zero rete!
       setSchedule(schedulesMap[tab.url]);

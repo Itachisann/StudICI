@@ -25,7 +25,10 @@ async function renamePdf(uri: string, fileName: string): Promise<string> {
   try {
     const source = new File(uri);
     const target = new File(Paths.cache, fileName);
-    await source.move(target, { overwrite: true });
+    if (target.exists) {
+      await target.delete();
+    }
+    await source.copy(target);
     return target.uri;
   } catch {
     return uri;
@@ -84,7 +87,31 @@ export async function exportScheduleToPdf(
   }).join('');
 
   const columnsHtml = DAYS_NAMES.map((dayName, dayIdx) => {
-    const dayClasses = [...(schedule.days[dayIdx] || [])]
+    // Unione difensiva di slot contigui della stessa materia (es. 15-18 e 18-19 accorpati in 15-19)
+    const rawSorted = [...(schedule.days[dayIdx] || [])]
+      .filter((c) => c.startTime && c.endTime && c.subject)
+      .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+
+    const normalizedDayClasses: typeof rawSorted = [];
+    for (const item of rawSorted) {
+      const prev = normalizedDayClasses[normalizedDayClasses.length - 1];
+      const prevEnd = prev ? timeToMinutes(prev.endTime) : -1;
+      const curStart = timeToMinutes(item.startTime);
+      const sameSubj =
+        prev &&
+        (prev.subject || '').toUpperCase().trim() === (item.subject || '').toUpperCase().trim();
+
+      if (prev && sameSubj && prevEnd === curStart) {
+        prev.endTime = item.endTime;
+        prev.duration = (prev.duration || 1) + (item.duration || 1);
+        if (!prev.teacher && item.teacher) prev.teacher = item.teacher;
+        if (!prev.room && item.room) prev.room = item.room;
+      } else {
+        normalizedDayClasses.push({ ...item });
+      }
+    }
+
+    const dayClasses = normalizedDayClasses
       .map((c) => ({ c, s: timeToMinutes(c.startTime), e: timeToMinutes(c.endTime) }))
       .sort((a, b) => a.s - b.s || a.e - b.e);
 

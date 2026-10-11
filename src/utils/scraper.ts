@@ -189,7 +189,7 @@ export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
  */
 export async function getCachedTabs(url: string): Promise<Tab[] | null> {
   try {
-    const schedKey = `allSchedules_v7_${url}`;
+    const schedKey = `allSchedules_v8_${url}`;
     const schedStr = await AsyncStorage.getItem(schedKey);
     if (schedStr) {
       const parsed = JSON.parse(schedStr);
@@ -307,8 +307,8 @@ export async function fetchScheduleData(
 
     // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
     const contentFingerprint = extractSheetContentFingerprint(html);
-    const cacheKey = `scheduleCache_v7_${tabUrl}`;
-    const fpKey = `tabFingerprint_v7_${tabUrl}`;
+    const cacheKey = `scheduleCache_v8_${tabUrl}`;
+    const fpKey = `tabFingerprint_v8_${tabUrl}`;
     if (!forceRefresh) {
       try {
         const cachedStr = await AsyncStorage.getItem(cacheKey);
@@ -588,20 +588,26 @@ export async function fetchScheduleData(
           }
 
           const cleanSubject = (p.subject || '').toUpperCase().trim();
+          const cleanTeacher = (p.teacher || '').replace(/non\s*specificato/i, '').trim();
+          const curTeacher = (currentEvent?.teacher || '').replace(/non\s*specificato/i, '').trim();
+          const teacherMatches = !curTeacher || !cleanTeacher || curTeacher.toLowerCase() === cleanTeacher.toLowerCase();
+
           if (
             currentEvent &&
             currentEvent.subject === cleanSubject &&
-            currentEvent.teacher === p.teacher
+            teacherMatches
           ) {
             // Estendi la durata
             currentEvent.endTime = slot.time.split('-')[1] || slot.time;
             currentEvent.duration += 1;
+            if (!currentEvent.teacher && cleanTeacher) currentEvent.teacher = cleanTeacher;
+            if (!currentEvent.room && roomLabel) currentEvent.room = roomLabel;
           } else {
             if (currentEvent) events.push(currentEvent);
             const times = slot.time.split('-');
             currentEvent = {
               subject: cleanSubject,
-              teacher: p.teacher,
+              teacher: cleanTeacher,
               room: roomLabel,
               building: finalBuilding,
               address: finalAddress,
@@ -625,7 +631,7 @@ export async function fetchScheduleData(
     
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify({ hash: contentFingerprint, data }));
-      await AsyncStorage.setItem(`tabFingerprint_v7_${tabUrl}`, contentFingerprint);
+      await AsyncStorage.setItem(`tabFingerprint_v8_${tabUrl}`, contentFingerprint);
     } catch {}
 
     return data;
@@ -644,7 +650,7 @@ export async function fetchAllCourseData(
   forceRefresh = false,
   onProgress?: (step: string, current: number, total: number) => void
 ): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
-  const cacheKey = `allSchedules_v7_${degreeUrl}`;
+  const cacheKey = `allSchedules_v8_${degreeUrl}`;
 
   // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
   if (!forceRefresh) {
@@ -697,13 +703,13 @@ export async function fetchAllCourseData(
 
   // Calcola e memorizza il fingerprint complessivo dei canali
   // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
-  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v7_${t.url}`)));
+  const tabFpList = await Promise.all(tabs.map(t => AsyncStorage.getItem(`tabFingerprint_v8_${t.url}`)));
   const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${tabFpList[idx] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
   try {
     await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
-    await AsyncStorage.setItem(`courseFingerprint_v7_${degreeUrl}`, combinedFingerprint);
+    await AsyncStorage.setItem(`courseFingerprint_v8_${degreeUrl}`, combinedFingerprint);
     await AsyncStorage.setItem(`lastCheckTime_${degreeUrl}`, Date.now().toString());
   } catch {}
 
@@ -722,7 +728,7 @@ export interface UpdateCheckResult {
  */
 export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
   try {
-    const cacheKey = `allSchedules_v7_${degreeUrl}`;
+    const cacheKey = `allSchedules_v8_${degreeUrl}`;
     const stored = await AsyncStorage.getItem(cacheKey);
     if (!stored) {
       return { hasChanges: true, reason: 'Nessun dato locale trovato' };
@@ -761,11 +767,11 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       const liveFp = currentFps[tab.url];
       if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
 
-      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v7_${tab.url}`);
+      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v8_${tab.url}`);
 
       // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
       if (!storedTabFp) {
-        await AsyncStorage.setItem(`tabFingerprint_v7_${tab.url}`, liveFp);
+        await AsyncStorage.setItem(`tabFingerprint_v8_${tab.url}`, liveFp);
         continue;
       }
 

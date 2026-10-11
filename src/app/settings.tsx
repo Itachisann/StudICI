@@ -589,7 +589,7 @@ export default function ProfiloScreen() {
 
     setIsExportingPdf(true);
     try {
-      const schedule = await fetchScheduleData(tabUrl);
+      const schedule = await fetchScheduleData(tabUrl, true);
       await exportScheduleToPdf(schedule, courseMetadata.cleanCourseTitle, defaultTabLabel);
     } catch (err: any) {
       Alert.alert("Errore Esportazione", err?.message || "Impossibile generare il PDF dell'orario.");

@@ -151,7 +151,7 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
 
   // 1. Controlla la cache per ogni cella unica
   for (const text of uniqueTexts) {
-    const hashKey = `cell_gemini_v7_${hashString(text)}`;
+    const hashKey = `cell_gemini_v8_${hashString(text)}`;
     try {
       const cached = await AsyncStorage.getItem(hashKey);
       if (cached) {
@@ -235,7 +235,7 @@ ${JSON.stringify(toFetch)}`;
           if (parsed[i]) {
             const item = validateAndCleanClass(parsed[i], rawText);
             map.set(rawText, item);
-            AsyncStorage.setItem(`cell_gemini_v7_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
+            AsyncStorage.setItem(`cell_gemini_v8_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
           }
         }
       }
