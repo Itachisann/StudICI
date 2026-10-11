@@ -553,48 +553,89 @@ export interface PlaceSuggestion {
   lon: number;
 }
 
+async function nominatimSearch(q: string, signal?: AbortSignal): Promise<any[]> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      q
+    )}&format=jsonv2&addressdetails=1&limit=8&countrycodes=it&accept-language=it&dedupe=1`;
+    const res = await fetch(url, { signal, headers: { 'User-Agent': 'StudICI-App/1.6' } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data.filter((d: any) => d?.lat && d?.lon) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Ricerca luoghi/indirizzi in stile Mappe (autocompletamento) tramite Nominatim.
+ * - Prima cerca l'indirizzo esatto (via + civico).
+ * - Se OpenStreetMap non conosce quel civico, cerca la via senza numero e propone la via
+ *   con il civico digitato (posizione approssimata sulla via), senza risultati duplicati.
  */
 export async function searchPlaces(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   const q = query.trim();
   if (q.length < 3) return [];
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-      q
-    )}&format=jsonv2&addressdetails=1&limit=6&countrycodes=it&accept-language=it`;
-    const res = await fetch(url, {
-      signal,
-      headers: { 'User-Agent': 'StudICI-App/1.6' },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!Array.isArray(data)) return [];
 
-    return data
-      .filter((d: any) => d?.lat && d?.lon)
-      .map((d: any) => {
-        const a = d.address || {};
-        const road = a.road || a.pedestrian || a.footway || '';
-        const street = road ? `${road}${a.house_number ? ' ' + a.house_number : ''}` : '';
-        const title = d.name || street || a.hamlet || a.village || a.town || a.city || String(d.display_name).split(',')[0];
-        const locality = a.city || a.town || a.village || a.municipality || a.hamlet || '';
-        const province = a.county || a.state_district || '';
-        const region = a.state || '';
-        const subtitleParts = [street && d.name && street !== d.name ? street : '', locality, province, region].filter(
-          (p, i, arr) => p && p !== title && arr.indexOf(p) === i
-        );
-        const label = [title, locality].filter((p, i, arr) => p && arr.indexOf(p) === i).join(', ');
-        return {
-          id: String(d.place_id),
-          title,
-          subtitle: subtitleParts.join(', '),
-          label,
-          lat: parseFloat(d.lat),
-          lon: parseFloat(d.lon),
-        };
-      });
-  } catch {
-    return [];
+  const numberMatch = q.match(/(?:^|[\s,])(\d{1,4}\s?[a-zA-Z]?)(?=$|[\s,])/);
+  const houseNumber = numberMatch ? numberMatch[1].replace(/\s+/g, '') : '';
+  const baseQuery = numberMatch
+    ? q.replace(numberMatch[0], ' ').replace(/\s*,\s*,/g, ',').replace(/\s+/g, ' ').replace(/^,|,$/g, '').trim()
+    : q;
+
+  let raw = await nominatimSearch(q, signal);
+  let approximate = false;
+
+  const hasExactNumber = raw.some((d) => d?.address?.house_number);
+  if (houseNumber && !hasExactNumber && baseQuery.length >= 3) {
+    const byStreet = await nominatimSearch(baseQuery, signal);
+    if (byStreet.length > 0) {
+      raw = byStreet;
+      approximate = true;
+    }
   }
+
+  const seen = new Set<string>();
+  const results: PlaceSuggestion[] = [];
+
+  for (const d of raw) {
+    const a = d.address || {};
+    const road = a.road || a.pedestrian || a.footway || a.path || '';
+    const locality = a.city || a.town || a.village || a.municipality || a.hamlet || '';
+    const province = a.county || a.state_district || '';
+    const region = a.state || '';
+
+    let title: string;
+    if (approximate && road) {
+      title = `${road} ${houseNumber}`;
+    } else if (road) {
+      title = `${road}${a.house_number ? ' ' + a.house_number : ''}`;
+    } else {
+      title = d.name || locality || String(d.display_name).split(',')[0];
+    }
+    if (d.name && d.name !== road && !approximate && d.category !== 'highway') {
+      title = d.name;
+    }
+
+    const key = `${title}|${locality}|${province}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const subtitleParts = [locality, province, region].filter(
+      (p, i, arr) => p && p !== title && arr.indexOf(p) === i
+    );
+    if (approximate) subtitleParts.unshift('Posizione approssimata sulla via');
+
+    results.push({
+      id: String(d.place_id),
+      title,
+      subtitle: subtitleParts.join(' · '),
+      label: [title, locality].filter((p, i, arr) => p && arr.indexOf(p) === i).join(', '),
+      lat: parseFloat(d.lat),
+      lon: parseFloat(d.lon),
+    });
+    if (results.length >= 6) break;
+  }
+
+  return results;
 }

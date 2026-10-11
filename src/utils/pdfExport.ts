@@ -53,8 +53,9 @@ export async function exportScheduleToPdf(
   const gridStart = allClasses.length ? Math.min(8 * 60, Math.floor(Math.min(...starts) / 60) * 60) : 8 * 60;
   const gridEnd = allClasses.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
   const hours = Math.max(1, (gridEnd - gridStart) / 60);
-  const hourH = Math.max(36, Math.min(64, Math.floor(470 / hours)));
+  const hourH = Math.max(36, Math.min(64, Math.floor(450 / hours)));
   const gridHeight = hours * hourH;
+  const BOTTOM_PAD = 22; // spazio sotto l'ultima fascia oraria
 
   // Colore stabile per materia
   const subjectColors = new Map<string, string>();
@@ -65,7 +66,7 @@ export async function exportScheduleToPdf(
     }
   });
 
-  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 13}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
+  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 5}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
 
   const hourLabelsHtml =
     Array.from({ length: hours }, (_, i) => {
@@ -127,7 +128,7 @@ export async function exportScheduleToPdf(
     return `
       <div class="day-col">
         <div class="day-head">${dayName.toUpperCase()}</div>
-        <div class="day-body" style="height:${gridHeight}px;">
+        <div class="day-body" style="height:${gridHeight + BOTTOM_PAD}px;">
           ${hourLinesHtml}
           ${lessonsHtml}
         </div>
@@ -232,7 +233,7 @@ export async function exportScheduleToPdf(
           }
           .time-body {
             position: relative;
-            height: ${gridHeight}px;
+            height: ${gridHeight + BOTTOM_PAD}px;
           }
           .hour-label {
             position: absolute;
