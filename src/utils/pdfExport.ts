@@ -53,9 +53,8 @@ export async function exportScheduleToPdf(
   const gridStart = allClasses.length ? Math.min(8 * 60, Math.floor(Math.min(...starts) / 60) * 60) : 8 * 60;
   const gridEnd = allClasses.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
   const hours = Math.max(1, (gridEnd - gridStart) / 60);
-  const hourH = Math.max(36, Math.min(64, Math.floor(450 / hours)));
+  const hourH = Math.max(36, Math.min(60, Math.floor(430 / hours)));
   const gridHeight = hours * hourH;
-  const BOTTOM_PAD = 22; // spazio sotto l'ultima fascia oraria
 
   // Colore stabile per materia
   const subjectColors = new Map<string, string>();
@@ -66,18 +65,21 @@ export async function exportScheduleToPdf(
     }
   });
 
-  // Le etichette sono centrate sulla riga della propria ora: una lezione 15-19 inizia
-  // esattamente a "15:00" e finisce esattamente a "19:00".
-  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 6}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
+  // Fasce orarie complete (es. 08:00 - 09:00 ... 18:00 - 19:00) così ogni lezione
+  // (es. 15:00 - 19:00) riempie esattamente le sue fasce fino alla fine della tabella senza righe vuote.
+  const timeSlotsHtml = Array.from({ length: hours }, (_, i) => {
+    const startH = gridStart / 60 + i;
+    const endH = startH + 1;
+    const label = `${String(startH).padStart(2, '0')}:00 - ${String(endH).padStart(2, '0')}:00`;
+    return `
+      <div class="time-slot" style="top:${i * hourH}px; height:${hourH}px;">
+        <span>${label}</span>
+      </div>
+    `;
+  }).join('');
 
-  const hourLabelsHtml =
-    Array.from({ length: hours }, (_, i) => {
-      const h = gridStart / 60 + i;
-      const top = i === 0 ? 1 : i * hourH - 6;
-      return `<div class="hour-label" style="top:${top}px;">${String(h).padStart(2, '0')}:00</div>`;
-    }).join('') + endLabelHtml;
-
-  const hourLinesHtml = Array.from({ length: hours + 1 }, (_, i) => {
+  const hourLinesHtml = Array.from({ length: hours }, (_, i) => {
+    if (i === 0) return '';
     return `<div class="hour-line" style="top:${i * hourH}px;"></div>`;
   }).join('');
 
@@ -131,7 +133,7 @@ export async function exportScheduleToPdf(
     return `
       <div class="day-col">
         <div class="day-head">${dayName.toUpperCase()}</div>
-        <div class="day-body" style="height:${gridHeight + BOTTOM_PAD}px;">
+        <div class="day-body" style="height:${gridHeight}px;">
           ${hourLinesHtml}
           ${lessonsHtml}
         </div>
@@ -218,7 +220,7 @@ export async function exportScheduleToPdf(
             overflow: hidden;
           }
           .time-col {
-            width: 48px;
+            width: 82px;
             flex: none;
             background: #f9f9fb;
             border-right: 1px solid #d1d1d6;
@@ -236,17 +238,22 @@ export async function exportScheduleToPdf(
           }
           .time-body {
             position: relative;
-            height: ${gridHeight + BOTTOM_PAD}px;
+            height: ${gridHeight}px;
+            background: #f9f9fb;
           }
-          .hour-label {
+          .time-slot {
             position: absolute;
             left: 0;
             right: 0;
-            text-align: center;
-            font-size: 9px;
-            font-weight: 600;
-            color: #8e8e93;
-            padding-top: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8.5px;
+            font-weight: 700;
+            color: #636366;
+            letter-spacing: 0.2px;
+            border-bottom: 1px solid #e5e5ea;
+            box-sizing: border-box;
           }
           .day-col {
             flex: 1;
@@ -322,7 +329,7 @@ export async function exportScheduleToPdf(
         <div class="calendar">
           <div class="time-col">
             <div class="time-head">ORA</div>
-            <div class="time-body">${hourLabelsHtml}</div>
+            <div class="time-body">${timeSlotsHtml}</div>
           </div>
           ${columnsHtml}
         </div>
