@@ -7,6 +7,7 @@ export interface StationInfo {
 export interface CommuterConfig {
   enabled: boolean;
   originAddress: string; // es. "Amelia"
+  originCoords?: { lat: number; lon: number }; // coordinate esatte se il luogo è stato scelto dalla ricerca
   carLeg: {
     enabled: boolean;
     durationMinutes: number; // es. 24

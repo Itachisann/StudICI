@@ -436,14 +436,17 @@ export function analyzeRouteFluency(options: {
 export async function calculateDrivingEstimate(
   originAddress: string,
   stationName: string,
-  targetTimeStr?: string
+  targetTimeStr?: string,
+  originCoords?: { lat: number; lon: number }
 ): Promise<DrivingEstimate> {
   const origin = originAddress.trim() || 'Amelia';
   const station = stationName.trim() || 'Orte';
 
   try {
     const [coordsOrigin, coordsStation] = await Promise.all([
-      resolveOriginCoordinates(origin, station),
+      originCoords
+        ? Promise.resolve({ lat: originCoords.lat, lon: originCoords.lon, name: origin })
+        : resolveOriginCoordinates(origin, station),
       resolveStationCoordinates(station),
     ]);
 
@@ -539,4 +542,59 @@ export async function calculateDrivingEstimate(
     isPeakHour: fallbackFluency.isPeakHour,
     fluencyStatus: fallbackFluency.status,
   };
+}
+
+export interface PlaceSuggestion {
+  id: string;
+  title: string; // es. "Via Amerina 15"
+  subtitle: string; // es. "Amelia, Terni, Umbria"
+  label: string; // etichetta compatta salvata come indirizzo di partenza
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Ricerca luoghi/indirizzi in stile Mappe (autocompletamento) tramite Nominatim.
+ */
+export async function searchPlaces(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
+  const q = query.trim();
+  if (q.length < 3) return [];
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      q
+    )}&format=jsonv2&addressdetails=1&limit=6&countrycodes=it&accept-language=it`;
+    const res = await fetch(url, {
+      signal,
+      headers: { 'User-Agent': 'StudICI-App/1.6' },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    return data
+      .filter((d: any) => d?.lat && d?.lon)
+      .map((d: any) => {
+        const a = d.address || {};
+        const road = a.road || a.pedestrian || a.footway || '';
+        const street = road ? `${road}${a.house_number ? ' ' + a.house_number : ''}` : '';
+        const title = d.name || street || a.hamlet || a.village || a.town || a.city || String(d.display_name).split(',')[0];
+        const locality = a.city || a.town || a.village || a.municipality || a.hamlet || '';
+        const province = a.county || a.state_district || '';
+        const region = a.state || '';
+        const subtitleParts = [street && d.name && street !== d.name ? street : '', locality, province, region].filter(
+          (p, i, arr) => p && p !== title && arr.indexOf(p) === i
+        );
+        const label = [title, locality].filter((p, i, arr) => p && arr.indexOf(p) === i).join(', ');
+        return {
+          id: String(d.place_id),
+          title,
+          subtitle: subtitleParts.join(', '),
+          label,
+          lat: parseFloat(d.lat),
+          lon: parseFloat(d.lon),
+        };
+      });
+  } catch {
+    return [];
+  }
 }

@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { CommuterConfig, StationInfo } from '../types/commuter';
 import { POPULAR_STATIONS, searchStations } from '../utils/trenitaliaApi';
-import { calculateDrivingEstimate, DrivingEstimate } from '../utils/drivingRouter';
+import { calculateDrivingEstimate, DrivingEstimate, searchPlaces, PlaceSuggestion } from '../utils/drivingRouter';
 import { useTheme } from '@/context/ThemeContext';
 
 interface Props {
@@ -36,6 +36,9 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
   const [searchingStations, setSearchingStations] = useState(false);
   const [drivingEstimate, setDrivingEstimate] = useState<DrivingEstimate | null>(null);
   const [calculatingDriving, setCalculatingDriving] = useState(false);
+  const [placeSuggestions, setPlaceSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const [placeSearchActive, setPlaceSearchActive] = useState(false);
 
   if (config !== prevConfig) {
     setPrevConfig(config);
@@ -43,6 +46,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
   }
 
   // Calcolo automatico della stima di guida all'apertura o modifica indirizzo / stazione
+  const originCoords = localConfig.originCoords;
   useEffect(() => {
     let cancelled = false;
     const fetchDriveEstimate = async () => {
@@ -51,7 +55,9 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
       try {
         const est = await calculateDrivingEstimate(
           localConfig.originAddress,
-          localConfig.departureStation.shortName || localConfig.departureStation.name
+          localConfig.departureStation.shortName || localConfig.departureStation.name,
+          undefined,
+          originCoords
         );
         if (!cancelled) {
           setDrivingEstimate(est);
@@ -78,10 +84,40 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
     };
   }, [
     localConfig.originAddress,
+    originCoords,
     localConfig.departureStation.shortName,
     localConfig.departureStation.name,
     localConfig.carLeg.enabled,
   ]);
+
+  // Ricerca luoghi in stile Mappe: suggerimenti mentre si digita l'indirizzo di partenza
+  const originQuery = localConfig.originAddress;
+  useEffect(() => {
+    if (!placeSearchActive || originQuery.trim().length < 3) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setSearchingPlaces(true);
+      const results = await searchPlaces(originQuery, controller.signal);
+      if (!controller.signal.aborted) {
+        setPlaceSuggestions(results);
+        setSearchingPlaces(false);
+      }
+    }, 450);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [originQuery, placeSearchActive]);
+
+  const selectPlace = (place: PlaceSuggestion) => {
+    setPlaceSearchActive(false);
+    setPlaceSuggestions([]);
+    setLocalConfig((prev) => ({
+      ...prev,
+      originAddress: place.label,
+      originCoords: { lat: place.lat, lon: place.lon },
+    }));
+  };
 
   const handleSearchChange = (text: string) => {
     setStationSearchQuery(text);
@@ -198,25 +234,70 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
             </View>
           ) : (
             /* Form Configurazione */
-            <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 40 }}>
+            <ScrollView style={styles.body} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 40 }}>
               {/* Partenza da casa */}
               <View style={styles.card}>
                 <Text style={styles.cardHeader}>1. PARTENZA DA CASA</Text>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Indirizzo di Casa o Comune di Partenza</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={localConfig.originAddress}
-                    onChangeText={(val) =>
-                      setLocalConfig((prev) => ({ ...prev, originAddress: val }))
-                    }
-                    placeholder="Es. Via Amerina 15, Amelia (oppure Amelia)"
-                    placeholderTextColor="#666"
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                  />
+                  <Text style={styles.inputLabel}>Cerca indirizzo o luogo di partenza</Text>
+                  <View style={styles.placeInputRow}>
+                    <Ionicons name="search" size={16} color="#8e8e93" style={{ marginRight: 8 }} />
+                    <TextInput
+                      style={styles.placeInput}
+                      value={localConfig.originAddress}
+                      onFocus={() => setPlaceSearchActive(true)}
+                      onBlur={() => setTimeout(() => setPlaceSearchActive(false), 250)}
+                      onChangeText={(val) => {
+                        setPlaceSearchActive(true);
+                        setLocalConfig((prev) => ({
+                          ...prev,
+                          originAddress: val,
+                          originCoords: undefined,
+                        }));
+                      }}
+                      placeholder="Cerca come su Mappe (es. Via Amerina 15, Amelia)"
+                      placeholderTextColor="#666"
+                      autoCapitalize="words"
+                      autoCorrect={false}
+                      returnKeyType="search"
+                    />
+                    {searchingPlaces && <ActivityIndicator size="small" color={theme.accent} />}
+                    {!searchingPlaces && localConfig.originCoords && (
+                      <Ionicons name="checkmark-circle" size={18} color={theme.accent} />
+                    )}
+                  </View>
+
+                  {placeSearchActive && localConfig.originAddress.trim().length >= 3 && placeSuggestions.length > 0 && (
+                    <View style={styles.suggestionsBox}>
+                      {placeSuggestions.map((place, idx) => (
+                        <TouchableOpacity
+                          key={place.id}
+                          style={[
+                            styles.suggestionRow,
+                            idx < placeSuggestions.length - 1 && styles.suggestionRowBorder,
+                          ]}
+                          activeOpacity={0.7}
+                          onPress={() => selectPlace(place)}
+                        >
+                          <View style={[styles.suggestionIcon, { backgroundColor: theme.subtle }]}>
+                            <Ionicons name="location" size={15} color={theme.accent} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.suggestionTitle} numberOfLines={1}>
+                              {place.title}
+                            </Text>
+                            {!!place.subtitle && (
+                              <Text style={styles.suggestionSubtitle} numberOfLines={1}>
+                                {place.subtitle}
+                              </Text>
+                            )}
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                   <Text style={styles.inputHelp}>
-                    Puoi inserire sia il tuo indirizzo completo con via e numero civico (es. Via Amerina 15, Amelia), sia solo il comune. Il calcolo percorso e la navigazione useranno l&apos;indirizzo preciso.
+                    Cerca un indirizzo, una via o un comune e scegli il risultato corretto: il percorso verrà calcolato dalla posizione esatta.
                   </Text>
                 </View>
               </View>
@@ -527,6 +608,57 @@ const styles = StyleSheet.create({
     fontSize: 15,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  placeInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingHorizontal: 12,
+  },
+  placeInput: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 15,
+    paddingVertical: 10,
+  },
+  suggestionsBox: {
+    marginTop: 8,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  suggestionRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  suggestionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suggestionTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  suggestionSubtitle: {
+    color: '#8e8e93',
+    fontSize: 12,
+    marginTop: 1,
   },
   inputHelp: {
     fontSize: 11,

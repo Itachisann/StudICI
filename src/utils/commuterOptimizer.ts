@@ -278,7 +278,8 @@ async function computeOutboundItinerary(
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
       config.departureStation.shortName || config.departureStation.name,
-      stationTargetArrivalStr
+      stationTargetArrivalStr,
+      config.originCoords
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
@@ -517,7 +518,8 @@ async function computeReturnItinerary(
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
       config.departureStation.shortName || config.departureStation.name,
-      returnDrivingTimeStr
+      returnDrivingTimeStr,
+      config.originCoords
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
