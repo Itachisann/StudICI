@@ -66,12 +66,15 @@ export async function exportScheduleToPdf(
     }
   });
 
-  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 5}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
+  // Le etichette sono centrate sulla riga della propria ora: una lezione 15-19 inizia
+  // esattamente a "15:00" e finisce esattamente a "19:00".
+  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 6}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
 
   const hourLabelsHtml =
     Array.from({ length: hours }, (_, i) => {
       const h = gridStart / 60 + i;
-      return `<div class="hour-label" style="top:${i * hourH}px;">${String(h).padStart(2, '0')}:00</div>`;
+      const top = i === 0 ? 1 : i * hourH - 6;
+      return `<div class="hour-label" style="top:${top}px;">${String(h).padStart(2, '0')}:00</div>`;
     }).join('') + endLabelHtml;
 
   const hourLinesHtml = Array.from({ length: hours + 1 }, (_, i) => {
