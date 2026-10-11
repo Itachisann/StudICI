@@ -19,6 +19,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
@@ -131,6 +132,10 @@ export default function ProfiloScreen() {
   const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(null);
   const [commuterModalVisible, setCommuterModalVisible] = useState(false);
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
+  const { width: windowWidth } = useWindowDimensions();
+  const [measuredCardWidth, setMeasuredCardWidth] = useState<number>(0);
+  const themeCardWidth =
+    measuredCardWidth > 0 ? measuredCardWidth : Math.max(windowWidth - 32, 280);
 
   const themeMenuActions = useMemo(
     () =>
@@ -1065,10 +1070,26 @@ export default function ProfiloScreen() {
 
         {/* Gruppo: ASPETTO & TEMA */}
         <Text style={styles.sectionHeader}>ASPETTO</Text>
-        <View style={styles.groupedCard}>
+        <View
+          style={styles.groupedCard}
+          onLayout={(e) => {
+            const w = e.nativeEvent.layout.width;
+            if (w > 0 && Math.abs(w - measuredCardWidth) > 1) {
+              setMeasuredCardWidth(w);
+            }
+          }}
+        >
           {isNativeComponentAvailable ? (
-            <View>
-              <View style={styles.tableRow}>
+            <MenuView
+              title="Colore Tema"
+              actions={themeMenuActions}
+              shouldOpenOnLongPress={false}
+              onPressAction={({ nativeEvent }) => {
+                setThemeId(nativeEvent.event);
+              }}
+              style={{ width: themeCardWidth }}
+            >
+              <View style={[styles.tableRow, { width: themeCardWidth }]}>
                 <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
                   <Ionicons name="color-palette" size={17} color="#ffffff" />
                 </View>
@@ -1083,17 +1104,7 @@ export default function ProfiloScreen() {
                   <Ionicons name="chevron-forward" size={15} color="#48484a" />
                 </View>
               </View>
-              <MenuView
-                title="Colore Tema"
-                actions={themeMenuActions}
-                onPressAction={({ nativeEvent }) => {
-                  setThemeId(nativeEvent.event);
-                }}
-                style={StyleSheet.absoluteFill}
-              >
-                <View style={{ width: '100%', height: '100%' }} />
-              </MenuView>
-            </View>
+            </MenuView>
           ) : (
             <>
               <TouchableOpacity
