@@ -50,10 +50,10 @@ export async function exportScheduleToPdf(
   const allClasses = schedule.days.flat();
   const starts = allClasses.map((c) => timeToMinutes(c.startTime));
   const ends = allClasses.map((c) => timeToMinutes(c.endTime));
-  const gridStart = allClasses.length ? Math.floor(Math.min(...starts) / 60) * 60 : 8 * 60;
+  const gridStart = allClasses.length ? Math.min(8 * 60, Math.floor(Math.min(...starts) / 60) * 60) : 8 * 60;
   const gridEnd = allClasses.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
   const hours = Math.max(1, (gridEnd - gridStart) / 60);
-  const hourH = Math.max(36, Math.min(64, Math.floor(500 / hours)));
+  const hourH = Math.max(36, Math.min(64, Math.floor(470 / hours)));
   const gridHeight = hours * hourH;
 
   // Colore stabile per materia
@@ -111,7 +111,7 @@ export async function exportScheduleToPdf(
         const height = ((p.e - p.s) / 60) * hourH - 2;
         const width = 100 / p.lanes;
         return `
-          <div class="lesson" style="top:${top}px; height:${height}px; left:calc(${p.lane * width}% + 1px); width:calc(${width}% - 2px); border-left:3px solid ${color}; background:${color}22;">
+          <div class="lesson" style="top:${top}px; height:${height}px; left:calc(${p.lane * width}% + 1px); width:calc(${width}% - 2px); border-left:3px solid ${color}; background:linear-gradient(${color}22, ${color}22), #ffffff;">
             <div class="lesson-time">${escapeHtml(p.c.startTime)} - ${escapeHtml(p.c.endTime)}</div>
             <div class="lesson-title">${escapeHtml((p.c.subject || '').toUpperCase())}</div>
             ${p.c.teacher ? `<div class="lesson-meta">${escapeHtml(p.c.teacher)}</div>` : ''}
@@ -153,7 +153,7 @@ export async function exportScheduleToPdf(
             background-color: #ffffff;
             color: #1c1c1e;
             margin: 0;
-            padding: 0;
+            padding: 32px 0 0 0;
           }
           .header {
             display: flex;
@@ -441,7 +441,7 @@ export async function exportAttendanceToPdf(
             background-color: #ffffff;
             color: #1c1c1e;
             margin: 0;
-            padding: 0;
+            padding: 32px 0 0 0;
           }
           .header {
             display: flex;
