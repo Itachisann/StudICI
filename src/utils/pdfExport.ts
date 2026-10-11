@@ -1,5 +1,6 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { File, Paths } from 'expo-file-system';
 import { ScheduleData } from './scraper';
 import { AttendanceRecord, AttendanceStats } from './attendance';
 
@@ -7,8 +8,33 @@ const SAPIENZA_RED = '#822433';
 const DAYS_NAMES = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì'];
 const ACCENT_COLORS = ['#3b82f6', '#a855f7', '#f59e0b', '#10b981', '#ef4444', '#6366f1'];
 
+
+const escapeHtml = (s?: string) =>
+  (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const timeToMinutes = (t: string) => {
+  const [h, m] = (t || '0:0').split(':').map((n) => parseInt(n, 10));
+  return (h || 0) * 60 + (m || 0);
+};
+
 /**
- * Genera ed esporta il PDF dell'orario delle lezioni settimanali strutturato a calendario.
+ * Rinomina il PDF generato (nome casuale) con un nome leggibile, es. "Orario.pdf".
+ * In caso di errore ripiega sull'URI originale.
+ */
+async function renamePdf(uri: string, fileName: string): Promise<string> {
+  try {
+    const source = new File(uri);
+    const target = new File(Paths.cache, fileName);
+    await source.move(target, { overwrite: true });
+    return target.uri;
+  } catch {
+    return uri;
+  }
+}
+
+/**
+ * Genera ed esporta il PDF dell'orario delle lezioni settimanali strutturato a calendario:
+ * colonne = giorni, righe = fasce orarie; ogni lezione è posizionata nella fascia corretta.
  */
 export async function exportScheduleToPdf(
   schedule: ScheduleData,
@@ -21,57 +47,97 @@ export async function exportScheduleToPdf(
     year: 'numeric',
   });
 
-  const columnsHtml = schedule.days
-    .map((dayClasses, dayIdx) => {
-      const dayName = DAYS_NAMES[dayIdx];
-      const classesHtml =
-        dayClasses.length === 0
-          ? `<div class="empty-day">Nessuna lezione</div>`
-          : dayClasses
-              .map((cls, i) => {
-                const color = ACCENT_COLORS[i % ACCENT_COLORS.length];
-                return `
-                  <div class="class-card" style="border-left: 4px solid ${color};">
-                    <div class="class-time-row">
-                      <span class="class-time">${cls.startTime} - ${cls.endTime}</span>
-                      <span class="class-duration">${cls.duration}h</span>
-                    </div>
-                    <div class="class-title">${cls.subject?.toUpperCase()}</div>
-                    ${
-                      cls.teacher
-                        ? `<div class="class-teacher">👤 ${cls.teacher}</div>`
-                        : ''
-                    }
-                    ${
-                      cls.room
-                        ? `<div class="class-room">📍 ${cls.room}</div>`
-                        : ''
-                    }
-                  </div>
-                `;
-              })
-              .join('');
+  const allClasses = schedule.days.flat();
+  const starts = allClasses.map((c) => timeToMinutes(c.startTime));
+  const ends = allClasses.map((c) => timeToMinutes(c.endTime));
+  const gridStart = allClasses.length ? Math.floor(Math.min(...starts) / 60) * 60 : 8 * 60;
+  const gridEnd = allClasses.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
+  const hours = Math.max(1, (gridEnd - gridStart) / 60);
+  const hourH = Math.max(36, Math.min(64, Math.floor(500 / hours)));
+  const gridHeight = hours * hourH;
 
-      return `
-        <div class="calendar-day-col">
-          <div class="day-col-header">
-            <span class="day-col-title">${dayName.toUpperCase()}</span>
-            <span class="day-col-count">${dayClasses.length} ${dayClasses.length === 1 ? 'lezione' : 'lezioni'}</span>
+  // Colore stabile per materia
+  const subjectColors = new Map<string, string>();
+  allClasses.forEach((c) => {
+    const key = (c.subject || '').toUpperCase();
+    if (!subjectColors.has(key)) {
+      subjectColors.set(key, ACCENT_COLORS[subjectColors.size % ACCENT_COLORS.length]);
+    }
+  });
+
+  const hourLabelsHtml = Array.from({ length: hours }, (_, i) => {
+    const h = gridStart / 60 + i;
+    return `<div class="hour-label" style="top:${i * hourH}px;">${String(h).padStart(2, '0')}:00</div>`;
+  }).join('');
+
+  const hourLinesHtml = Array.from({ length: hours + 1 }, (_, i) => {
+    return `<div class="hour-line" style="top:${i * hourH}px;"></div>`;
+  }).join('');
+
+  const columnsHtml = DAYS_NAMES.map((dayName, dayIdx) => {
+    const dayClasses = [...(schedule.days[dayIdx] || [])]
+      .map((c) => ({ c, s: timeToMinutes(c.startTime), e: timeToMinutes(c.endTime) }))
+      .sort((a, b) => a.s - b.s || a.e - b.e);
+
+    // Gestione lezioni sovrapposte: assegna corsie dentro a ogni gruppo di sovrapposizione
+    const placed: { c: (typeof dayClasses)[number]['c']; s: number; e: number; lane: number; lanes: number }[] = [];
+    let cluster: typeof placed = [];
+    let laneEnds: number[] = [];
+    let clusterEnd = -1;
+    const flush = () => {
+      cluster.forEach((p) => (p.lanes = laneEnds.length));
+      placed.push(...cluster);
+      cluster = [];
+      laneEnds = [];
+    };
+    dayClasses.forEach((item) => {
+      if (cluster.length && item.s >= clusterEnd) flush();
+      let lane = laneEnds.findIndex((end) => end <= item.s);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(item.e);
+      } else {
+        laneEnds[lane] = item.e;
+      }
+      clusterEnd = Math.max(clusterEnd, item.e);
+      cluster.push({ ...item, lane, lanes: 1 });
+    });
+    flush();
+
+    const lessonsHtml = placed
+      .map((p) => {
+        const color = subjectColors.get((p.c.subject || '').toUpperCase()) || ACCENT_COLORS[0];
+        const top = ((p.s - gridStart) / 60) * hourH + 1;
+        const height = ((p.e - p.s) / 60) * hourH - 2;
+        const width = 100 / p.lanes;
+        return `
+          <div class="lesson" style="top:${top}px; height:${height}px; left:calc(${p.lane * width}% + 1px); width:calc(${width}% - 2px); border-left:3px solid ${color}; background:${color}22;">
+            <div class="lesson-time">${escapeHtml(p.c.startTime)} - ${escapeHtml(p.c.endTime)}</div>
+            <div class="lesson-title">${escapeHtml((p.c.subject || '').toUpperCase())}</div>
+            ${p.c.teacher ? `<div class="lesson-meta">${escapeHtml(p.c.teacher)}</div>` : ''}
+            ${p.c.room ? `<div class="lesson-room">Aula ${escapeHtml(p.c.room)}</div>` : ''}
           </div>
-          <div class="day-col-content">
-            ${classesHtml}
-          </div>
+        `;
+      })
+      .join('');
+
+    return `
+      <div class="day-col">
+        <div class="day-head">${dayName.toUpperCase()}</div>
+        <div class="day-body" style="height:${gridHeight}px;">
+          ${hourLinesHtml}
+          ${lessonsHtml}
         </div>
-      `;
-    })
-    .join('');
+      </div>
+    `;
+  }).join('');
 
   const html = `
     <!DOCTYPE html>
     <html lang="it">
       <head>
         <meta charset="utf-8" />
-        <title>Orario Lezioni - ${courseName}</title>
+        <title>Orario</title>
         <style>
           @page {
             size: A4 landscape;
@@ -94,8 +160,8 @@ export async function exportScheduleToPdf(
             justify-content: space-between;
             align-items: flex-start;
             border-bottom: 2px solid ${SAPIENZA_RED};
-            padding-bottom: 12px;
-            margin-bottom: 16px;
+            padding-bottom: 10px;
+            margin-bottom: 12px;
           }
           .logo-box {
             display: flex;
@@ -138,95 +204,91 @@ export async function exportScheduleToPdf(
             color: #3a3a3c;
             margin-top: 4px;
           }
-          /* Calendar 5-Column Grid */
-          .calendar-grid {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 10px;
-          }
-          .calendar-day-col {
-            background: #f9f9fb;
-            border-radius: 10px;
-            border: 1px solid #e5e5ea;
+          .calendar {
+            display: flex;
+            border: 1px solid #d1d1d6;
+            border-radius: 8px;
             overflow: hidden;
-            display: flex;
-            flex-direction: column;
           }
-          .day-col-header {
+          .time-col {
+            width: 48px;
+            flex: none;
+            background: #f9f9fb;
+            border-right: 1px solid #d1d1d6;
+          }
+          .time-head, .day-head {
+            height: 26px;
+            line-height: 26px;
             background: #ebebf0;
-            padding: 8px 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #e5e5ea;
-          }
-          .day-col-title {
-            font-size: 12px;
+            border-bottom: 1px solid #d1d1d6;
+            text-align: center;
+            font-size: 11px;
             font-weight: 800;
-            color: #1c1c1e;
             letter-spacing: 0.5px;
+            color: #1c1c1e;
           }
-          .day-col-count {
-            font-size: 10px;
+          .time-body {
+            position: relative;
+            height: ${gridHeight}px;
+          }
+          .hour-label {
+            position: absolute;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 9px;
             font-weight: 600;
             color: #8e8e93;
+            padding-top: 2px;
           }
-          .day-col-content {
-            padding: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+          .day-col {
             flex: 1;
+            min-width: 0;
+            border-right: 1px solid #d1d1d6;
           }
-          .class-card {
+          .day-col:last-child {
+            border-right: none;
+          }
+          .day-body {
+            position: relative;
             background: #ffffff;
-            border-radius: 8px;
-            padding: 8px 10px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-            border: 1px solid #e5e5ea;
           }
-          .class-time-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 4px;
+          .hour-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 0;
+            border-top: 1px solid #e5e5ea;
           }
-          .class-time {
-            font-size: 11px;
+          .lesson {
+            position: absolute;
+            border-radius: 5px;
+            padding: 3px 5px;
+            overflow: hidden;
+          }
+          .lesson-time {
+            font-size: 8.5px;
             font-weight: 800;
             color: ${SAPIENZA_RED};
           }
-          .class-duration {
+          .lesson-title {
             font-size: 9.5px;
-            background: #f2f2f7;
-            padding: 2px 5px;
-            border-radius: 4px;
-            font-weight: 700;
-            color: #636366;
-          }
-          .class-title {
-            font-size: 11.5px;
-            font-weight: 700;
-            line-height: 14px;
+            font-weight: 800;
+            line-height: 11px;
             color: #1c1c1e;
-            margin-bottom: 4px;
+            margin-top: 1px;
           }
-          .class-teacher, .class-room {
-            font-size: 10px;
-            color: #636366;
-            margin-top: 2px;
+          .lesson-meta, .lesson-room {
+            font-size: 8.5px;
+            line-height: 10px;
+            color: #48484a;
+            margin-top: 1px;
           }
-          .empty-day {
-            text-align: center;
-            padding: 24px 8px;
-            color: #aeaeb2;
-            font-size: 11px;
-            font-style: italic;
+          .lesson-room {
+            font-weight: 700;
           }
           .footer {
-            margin-top: 14px;
-            border-top: 1px solid #e5e5ea;
-            padding-top: 6px;
+            margin-top: 8px;
             display: flex;
             justify-content: space-between;
             font-size: 9.5px;
@@ -240,38 +302,44 @@ export async function exportScheduleToPdf(
             <span class="badge-sapienza">SAPIENZA</span>
             <div>
               <p class="university-title">Facoltà di Ingegneria Civile e Industriale</p>
-              <h1 class="course-title">${courseName}</h1>
+              <h1 class="course-title">${escapeHtml(courseName)}</h1>
             </div>
           </div>
           <div class="header-meta">
-            ${channelName ? `<div>Canale / Anno: <strong>${channelName}</strong></div>` : ''}
-            ${schedule?.info?.semester ? `<div>Periodo: <strong>${schedule.info.semester}</strong></div>` : ''}
+            ${channelName ? `<div>Canale / Anno: <strong>${escapeHtml(channelName)}</strong></div>` : ''}
+            ${schedule?.info?.semester ? `<div>Periodo: <strong>${escapeHtml(schedule.info.semester)}</strong></div>` : ''}
             <div class="meta-pill">Aggiornato al: ${currentDateFormatted}</div>
           </div>
         </div>
 
-        <div class="calendar-grid">
+        <div class="calendar">
+          <div class="time-col">
+            <div class="time-head">ORA</div>
+            <div class="time-body">${hourLabelsHtml}</div>
+          </div>
           ${columnsHtml}
         </div>
 
         <div class="footer">
           <span>Generato dall'app mobile <strong>StudICI</strong> per Sapienza Università di Roma</span>
-          <span>Orario Ufficiale Didattica ICI · Pagina 1 di 1</span>
+          <span>Orario Ufficiale Didattica ICI</span>
         </div>
       </body>
     </html>
   `;
 
-  const { uri } = await Print.printToFileAsync({ html });
+  const { uri: rawUri } = await Print.printToFileAsync({ html });
+  const uri = await renamePdf(rawUri, 'Orario.pdf');
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, {
       UTI: '.pdf',
       mimeType: 'application/pdf',
-      dialogTitle: `Orario Lezioni - ${courseName}`,
+      dialogTitle: 'Orario',
     });
   }
   return uri;
 }
+
 
 /**
  * Genera ed esporta il PDF del Registro Presenze con frequenza lezioni e dettaglio calendario.

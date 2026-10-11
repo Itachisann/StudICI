@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.1
+
+### Novità
+- **Esportazione PDF dell'orario a calendario**: il file si chiama ora `Orario.pdf` e la griglia è organizzata per fasce orarie (righe) e giorni (colonne); ogni lezione (materia, docente, aula, senza emoji) occupa la fascia oraria corretta e le lezioni sovrapposte vengono affiancate. Rimossa la numerazione delle pagine.
+- **Impostazioni Pendolare**: rimosso il pulsante *Ricalcola*, il tempo di guida si aggiorna sempre in automatico.
+
+### Correzioni
+- **Colore Tema (iOS nativo)**: la riga occupa tutta la larghezza con nome del tema e freccia allineati a destra (anche su iPad); il menu mostra un pallino con il colore del tema al posto delle emoji.
+- **Card del treno in Viaggio**: rimosso il collegamento a ViaggiaTreno.
+- **Orari**: il sottotitolo del banner Itinerario Pendolare è ora "Calcola tempi di trasporto".
+
 ## 1.6.0 (Major Update)
 
 ### Novità

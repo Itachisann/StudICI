@@ -256,36 +256,8 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                             {localConfig.originAddress || 'Partenza'} ➔ Stazione {localConfig.departureStation.shortName || localConfig.departureStation.name}
                           </Text>
                         </View>
-                        {calculatingDriving ? (
+                        {calculatingDriving && (
                           <ActivityIndicator size="small" color={theme.accent} />
-                        ) : (
-                          <TouchableOpacity
-                            style={[styles.recalcBtn, { backgroundColor: theme.subtle }]}
-                            activeOpacity={0.7}
-                            onPress={async () => {
-                              setCalculatingDriving(true);
-                              try {
-                                const est = await calculateDrivingEstimate(
-                                  localConfig.originAddress,
-                                  localConfig.departureStation.shortName || localConfig.departureStation.name
-                                );
-                                setDrivingEstimate(est);
-                                setLocalConfig((prev) => ({
-                                  ...prev,
-                                  carLeg: {
-                                    ...prev.carLeg,
-                                    durationMinutes: est.durationMinutes,
-                                    distanceKm: est.distanceKm,
-                                  },
-                                }));
-                              } finally {
-                                setCalculatingDriving(false);
-                              }
-                            }}
-                          >
-                            <Ionicons name="refresh" size={12} color={theme.accent} style={{ marginRight: 3 }} />
-                            <Text style={[styles.recalcBtnText, { color: theme.accent }]}>Ricalcola</Text>
-                          </TouchableOpacity>
                         )}
                       </View>
 

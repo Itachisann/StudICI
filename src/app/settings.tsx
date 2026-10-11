@@ -95,16 +95,6 @@ const formatSyncDate = (ts: number | null): string => {
   return `${d.toLocaleDateString("it-IT", { day: "numeric", month: "short" })} alle ${timeStr}`;
 };
 
-const THEME_DOT_EMOJIS: Record<string, string> = {
-  sapienza: '🔴',
-  cobalt: '🔵',
-  emerald: '🟢',
-  royal: '🟣',
-  amber: '🟠',
-  ruby: '🌸',
-  cyan: '🩵',
-};
-
 export default function ProfiloScreen() {
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
   const [degreeName, setDegreeName] = useState<string>("");
@@ -144,14 +134,13 @@ export default function ProfiloScreen() {
 
   const themeMenuActions = useMemo(
     () =>
-      availableThemes.map((t) => {
-        const dot = THEME_DOT_EMOJIS[t.id] || '⚪';
-        return {
-          id: t.id,
-          title: `${dot}  ${t.name}`,
-          state: (t.id === themeId ? "on" : "off") as "on" | "off",
-        };
-      }),
+      availableThemes.map((t) => ({
+        id: t.id,
+        title: t.name,
+        image: "circle.fill" as const,
+        imageColor: t.primary,
+        state: (t.id === themeId ? "on" : "off") as "on" | "off",
+      })),
     [availableThemes, themeId],
   );
 
@@ -1078,14 +1067,7 @@ export default function ProfiloScreen() {
         <Text style={styles.sectionHeader}>ASPETTO</Text>
         <View style={styles.groupedCard}>
           {isNativeComponentAvailable ? (
-            <MenuView
-              title="Colore Tema"
-              actions={themeMenuActions}
-              onPressAction={({ nativeEvent }) => {
-                setThemeId(nativeEvent.event);
-              }}
-              style={{ width: '100%' }}
-            >
+            <View>
               <View style={styles.tableRow}>
                 <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
                   <Ionicons name="color-palette" size={17} color="#ffffff" />
@@ -1101,7 +1083,17 @@ export default function ProfiloScreen() {
                   <Ionicons name="chevron-forward" size={15} color="#48484a" />
                 </View>
               </View>
-            </MenuView>
+              <MenuView
+                title="Colore Tema"
+                actions={themeMenuActions}
+                onPressAction={({ nativeEvent }) => {
+                  setThemeId(nativeEvent.event);
+                }}
+                style={StyleSheet.absoluteFill}
+              >
+                <View style={{ width: '100%', height: '100%' }} />
+              </MenuView>
+            </View>
           ) : (
             <>
               <TouchableOpacity
