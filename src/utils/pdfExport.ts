@@ -65,10 +65,13 @@ export async function exportScheduleToPdf(
     }
   });
 
-  const hourLabelsHtml = Array.from({ length: hours }, (_, i) => {
-    const h = gridStart / 60 + i;
-    return `<div class="hour-label" style="top:${i * hourH}px;">${String(h).padStart(2, '0')}:00</div>`;
-  }).join('');
+  const endLabelHtml = `<div class="hour-label" style="top:${gridHeight - 13}px;">${String(gridEnd / 60).padStart(2, '0')}:00</div>`;
+
+  const hourLabelsHtml =
+    Array.from({ length: hours }, (_, i) => {
+      const h = gridStart / 60 + i;
+      return `<div class="hour-label" style="top:${i * hourH}px;">${String(h).padStart(2, '0')}:00</div>`;
+    }).join('') + endLabelHtml;
 
   const hourLinesHtml = Array.from({ length: hours + 1 }, (_, i) => {
     return `<div class="hour-line" style="top:${i * hourH}px;"></div>`;
