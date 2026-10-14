@@ -1,6 +1,9 @@
 import { StationInfo, LiveTrainInfo } from '../types/commuter';
 
-const VIAGGIATRENO_BASE_URL = 'http://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno';
+// HTTPS obbligatorio: nelle build iOS standalone (IPA) l'App Transport Security blocca http://
+// e su Android release il traffico cleartext è vietato, quindi con http:// ogni richiesta falliva
+// e l'app ripiegava sempre sugli orari statici.
+const VIAGGIATRENO_BASE_URL = 'https://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -490,7 +493,14 @@ export async function fetchLiveTrenitaliaTimetable(
       // Durata ragionevole tra stazioni nella stessa direzione (tra 15 e 150 min)
       if (dur < 15 || dur > 150) continue;
 
-      const delay = isToday && typeof dep.ritardo === 'number' ? dep.ritardo : 0;
+      // Ritardo reale: preferisce quello alla partenza, altrimenti quello riportato sull'arrivo
+      const liveDelay =
+        typeof dep.ritardo === 'number'
+          ? dep.ritardo
+          : typeof arr.ritardo === 'number'
+            ? arr.ritardo
+            : 0;
+      const delay = isToday ? liveDelay : 0;
       // Alla partenza NON si aggiunge il ritardo: l'orario di partenza da rispettare
       // rimane sempre quello programmato ufficiale.
       const depActual = depPlanned;
