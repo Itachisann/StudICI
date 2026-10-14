@@ -200,6 +200,21 @@ export async function getLiveStationDepartures(
         catRaw.includes('REGIONALE');
 
       if (!isRegional) continue;
+      if (raw.provvedimento === 1 || raw.statoTreno === 'SOPPRESSO') continue;
+
+      const plannedDep = raw.compOrarioPartenza || '00:00';
+      const plannedDepM = parseTimeToMinutes(plannedDep);
+      const now = new Date();
+      const nowMins = now.getHours() * 60 + now.getMinutes();
+
+      // FILTRO N.D. TRENITALIA:
+      // Se l'orario di partenza programmato è già passato e Trenitalia riporta N.D. (ritardo null, non in stazione, o NON_DISPONIBILE):
+      // il treno è N.D. e non deve uscire proprio!
+      const isND =
+        nowMins > plannedDepM &&
+        (raw.ritardo === null || raw.ritardo === undefined || raw.statoTreno === 'NON_DISPONIBILE') &&
+        raw.inStazione !== true;
+      if (isND) continue;
 
       const delay = typeof raw.ritardo === 'number' ? raw.ritardo : 0;
       const progPlatform =
@@ -211,7 +226,6 @@ export async function getLiveStationDepartures(
         raw.binarioEffettivoPartenzaCodice ||
         null;
 
-      const plannedDep = raw.compOrarioPartenza || '00:00';
       const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
       let actualDep = plannedDep;
       // NON scalare anticipo (delay <= 0) perché il treno rispetta l'orario programmato
@@ -230,8 +244,6 @@ export async function getLiveStationDepartures(
       // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
       const isDeparted = Boolean(raw.nonPartito === false);
 
-      const now = new Date();
-      const nowMins = now.getHours() * 60 + now.getMinutes();
       const depMins = parseTimeToMinutes(actualDep);
       // Un treno non è MAI partito dalla stazione di riferimento se nonPartito è true (oppure se è fermo al binario inStazione === true)
       const isDepartedFromStation = Boolean(
@@ -645,6 +657,7 @@ export async function fetchLiveTrenitaliaTimetable(
         catRaw.includes('REGIONALE');
 
       if (!isRegional) continue;
+      if (dep.provvedimento === 1 || dep.statoTreno === 'SOPPRESSO') continue;
 
       const arr = arrMap.get(num);
       if (!arr) continue;
@@ -652,6 +665,17 @@ export async function fetchLiveTrenitaliaTimetable(
       const depPlanned = dep.compOrarioPartenza;
       const arrPlanned = arr.compOrarioArrivo;
       if (!depPlanned || !arrPlanned) continue;
+
+      const depPlannedM = parseTimeToMinutes(depPlanned);
+      // FILTRO N.D. TRENITALIA:
+      // Se l'orario di partenza è già passato e Trenitalia non ha dati live (ritardo null, non in stazione, o NON_DISPONIBILE):
+      // il treno è N.D. e non deve uscire proprio!
+      const isND =
+        isToday &&
+        nowMins > depPlannedM &&
+        (dep.ritardo === null || dep.ritardo === undefined || dep.statoTreno === 'NON_DISPONIBILE') &&
+        dep.inStazione !== true;
+      if (isND) continue;
 
       const [dh, dm] = depPlanned.split(':').map(Number);
       const [ah, am] = arrPlanned.split(':').map(Number);
@@ -697,8 +721,6 @@ export async function fetchLiveTrenitaliaTimetable(
       // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
       const isDeparted = Boolean(dep.nonPartito === false);
 
-      const now = new Date();
-      const nowMins = now.getHours() * 60 + now.getMinutes();
       const depMinsActual = parseTimeToMinutes(depActual);
       // Un treno non è MAI partito dalla stazione di riferimento se nonPartito è true (oppure se è fermo al binario inStazione === true)
       const isDepartedFromStation = Boolean(
@@ -969,6 +991,17 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   // 3. Algoritmo di selezione del treno migliore (Regionale Veloce preferito)
   const targetMins = parseTimeToMinutes(targetTimeStr);
   const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  // Se è oggi, scarta i treni N.D. o senza riscontro live passati da oltre 5 minuti
+  if (isToday) {
+    allTrains = allTrains.filter((t) => {
+      const depM = parseTimeToMinutes(t.departureTimePlanned || '00:00');
+      if (nowMins > depM + 5 && !t.delayMinutes && !t.isDepartedFromStation && !t.isLive) {
+        return false;
+      }
+      return true;
+    });
+  }
 
   // Se è oggi, per treni live che hanno problemi REALI alla partenza (origine corsa non ancora partita):
   if (isToday) {

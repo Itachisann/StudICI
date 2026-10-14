@@ -211,14 +211,15 @@ export default function ViaggioScreen() {
               )
             : [];
 
+        const now = new Date();
+        const isToday = now.getDay() === selectedDayIdx;
+        const nowMins = now.getHours() * 60 + now.getMinutes();
+
         let targetClassForCalculation: ClassEvent | null = null;
         if (selectedClassIndex !== null && currentDayClasses[selectedClassIndex]) {
           targetClassForCalculation = currentDayClasses[selectedClassIndex];
         } else if (currentDayClasses.length > 0) {
-          const now = new Date();
-          const isToday = now.getDay() === selectedDayIdx;
           if (isToday) {
-            const nowMins = now.getHours() * 60 + now.getMinutes();
             if (direction === 'outbound') {
               const upcoming = currentDayClasses.find(
                 (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
@@ -238,8 +239,16 @@ export default function ViaggioScreen() {
           }
         }
 
+        const isTargetClassFinished = Boolean(
+          isToday &&
+          targetClassForCalculation &&
+          (direction === 'outbound'
+            ? nowMins > parseTimeToMinutes(targetClassForCalculation.startTime || '08:30')
+            : nowMins > parseTimeToMinutes(targetClassForCalculation.endTime || '18:00'))
+        );
+
         // Imposta l'orario del viaggio su targetDate per centrare la ricerca ViaggiaTreno
-        if (targetClassForCalculation) {
+        if (targetClassForCalculation && !isTargetClassFinished) {
           const timeToUse =
             direction === 'outbound'
               ? targetClassForCalculation.startTime || '08:30'
@@ -247,8 +256,7 @@ export default function ViaggioScreen() {
           const [hh, mm] = timeToUse.split(':').map(Number);
           targetDate.setHours(hh || 8, mm || 30, 0, 0);
         } else {
-          const now = new Date();
-          if (now.getDay() === selectedDayIdx) {
+          if (isToday) {
             targetDate.setHours(now.getHours(), now.getMinutes(), 0, 0);
           } else {
             targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
@@ -372,6 +380,18 @@ export default function ViaggioScreen() {
 
   const directionIndex = direction === 'outbound' ? 0 : 1;
   const directionTitles = ['Andata', 'Ritorno'];
+
+  const now = new Date();
+  const isSelectedDayToday = now.getDay() === selectedDayIdx;
+  const currentNowMins = now.getHours() * 60 + now.getMinutes();
+  const isTargetLectureFinished = Boolean(
+    isSelectedDayToday &&
+    itinerary?.targetLecture &&
+    (itinerary.targetLecture.subject === 'Lezioni di oggi terminate' ||
+      (direction === 'outbound'
+        ? currentNowMins > parseTimeToMinutes(itinerary.targetLecture.startTime || '08:30')
+        : currentNowMins > parseTimeToMinutes(itinerary.targetLecture.endTime || '18:00')))
+  );
 
   return (
     <View style={styles.container}>
@@ -729,7 +749,7 @@ export default function ViaggioScreen() {
               </View>
 
               <Text style={styles.heroHeadline}>
-                {itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                {isTargetLectureFinished
                   ? 'Prossima partenza'
                   : direction === 'outbound'
                   ? 'Parti da casa alle'
@@ -742,7 +762,7 @@ export default function ViaggioScreen() {
               <View style={[styles.heroTargetLectureBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
                 <Ionicons
                   name={
-                    itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                    isTargetLectureFinished
                       ? 'checkmark-circle-outline'
                       : direction === 'outbound'
                       ? 'school'
@@ -750,7 +770,7 @@ export default function ViaggioScreen() {
                   }
                   size={16}
                   color={
-                    itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                    isTargetLectureFinished
                       ? '#10b981'
                       : theme.accent
                   }
@@ -763,8 +783,10 @@ export default function ViaggioScreen() {
                       : `Rientro ad ${config?.originAddress}`}
                   </Text>
                   <Text style={styles.heroLectureDetails} numberOfLines={1}>
-                    {itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
-                      ? 'Treni in tempo reale da adesso'
+                    {isTargetLectureFinished
+                      ? (direction === 'outbound'
+                          ? `${itinerary.targetLecture?.subject || 'Lezione'} • Terminata (Treni da adesso)`
+                          : 'Lezioni terminate • Treni in tempo reale da adesso')
                       : direction === 'outbound'
                       ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
                       : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
