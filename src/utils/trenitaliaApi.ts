@@ -441,15 +441,23 @@ export async function fetchLiveTrenitaliaTimetable(
       targetDate.getFullYear() === new Date().getFullYear();
 
     const targetMins = parseTimeToMinutes(targetTimeStr);
-    const targetDepMins =
+    let targetDepMins =
       direction === 'outbound'
         ? Math.max(0, targetMins - 60)
         : targetMins;
 
-    // Ogni risposta di ViaggiaTreno copre circa 1h40-2h di treni: bastano 5 campioni a distanza
-    // di un'ora per coprire ~5 ore, senza sovraccaricare la rete del telefono.
-    const depOffsets = [-120, -60, 0, 60, 120];
-    const arrOffsets = [-60, 0, 60, 120, 180];
+    // Se è oggi e l'orario richiesto è già trascorso (es. lezioni della mattina quando si consulta l'app nel pomeriggio),
+    // ViaggiaTreno non conserva partenze già effettuate: ancorare la ricerca su adesso (now - 30m)
+    // per visualizzare i treni in circolazione e quelli pomeridiani/serali.
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    if (isToday && targetDepMins < nowMins - 30) {
+      targetDepMins = Math.max(0, nowMins - 30);
+    }
+
+    // Finestre di campionamento ad ampio raggio per coprire tutto il flusso di viaggio
+    const depOffsets = [-60, 0, 60, 120, 180, 240];
+    const arrOffsets = [0, 60, 120, 180, 240, 300];
 
     const buildTimes = (offsets: number[]) =>
       offsets.map((off) => {
@@ -689,8 +697,11 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
           platformPlanned: s.platformPlanned,
           platformActual: s.platformPlanned,
           delayMinutes: 0,
-          statusDescription: 'Orario non verificato',
-          alertMessage: `Dati Trenitalia non disponibili (${getViaggiaTrenoDiagnostics()}). Orario indicativo non verificato.`,
+          statusDescription: 'Programmato',
+          alertMessage:
+            fetchTotal > 0 && fetchOk === 0
+              ? 'Connessione a Trenitalia non riuscita. Visualizzazione orari ufficiali programmati.'
+              : undefined,
           isLive: false,
           durationMinutes: duration,
           isFast: s.category === 'RV',
@@ -713,8 +724,11 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
           platformPlanned: s.platformPlanned,
           platformActual: s.platformPlanned,
           delayMinutes: 0,
-          statusDescription: 'Orario non verificato',
-          alertMessage: `Dati Trenitalia non disponibili (${getViaggiaTrenoDiagnostics()}). Orario indicativo non verificato.`,
+          statusDescription: 'Programmato',
+          alertMessage:
+            fetchTotal > 0 && fetchOk === 0
+              ? 'Connessione a Trenitalia non riuscita. Visualizzazione orari ufficiali programmati.'
+              : undefined,
           isLive: false,
           durationMinutes: s.durationMinutesTiburtina,
           isFast: s.category === 'RV',
@@ -728,7 +742,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
     if (isToday) {
       try {
-        const liveList = await getLiveStationDepartures(departureStation.code, targetDate);
+        const liveList = await getLiveStationDepartures(departureStation.code, new Date());
         for (const live of liveList) {
           const liveNumDigits = live.trainNumber.replace(/\D/g, '');
           if (!liveNumDigits) continue;
@@ -745,6 +759,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             matched.departureTimeActual = matched.departureTimePlanned;
             if (live.platformActual) matched.platformActual = live.platformActual;
             if (live.platformPlanned) matched.platformPlanned = live.platformPlanned;
+            matched.alertMessage = live.alertMessage;
 
             if (matched.arrivalTimePlanned) {
               const arrMins = parseTimeToMinutes(matched.arrivalTimePlanned) + live.delayMinutes;
@@ -978,6 +993,41 @@ export function evaluateTrainStatus(
 
   // Caso 5A: Treno deve ancora partire (orario attuale prima della partenza)
   if (nowMins < actualDepMins - 1) {
+    if (train.delayMinutes > 0) {
+      return {
+        statusType: 'delayed',
+        badgeLabel: `+${train.delayMinutes}m ritardo`,
+        badgeColor: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
+        badgeBg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+        badgeBorder: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+        iconName: 'warning-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    } else if (train.delayMinutes < 0) {
+      return {
+        statusType: 'early',
+        badgeLabel: `Anticipo ${Math.abs(train.delayMinutes)}m`,
+        badgeColor: '#10b981',
+        badgeBg: 'rgba(16, 185, 129, 0.15)',
+        badgeBorder: 'rgba(16, 185, 129, 0.3)',
+        iconName: 'flash-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    } else if (train.isLive) {
+      return {
+        statusType: 'on_time',
+        badgeLabel: 'In orario',
+        badgeColor: '#34c759',
+        badgeBg: 'rgba(52, 199, 89, 0.15)',
+        badgeBorder: 'rgba(52, 199, 89, 0.3)',
+        iconName: 'checkmark-circle-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
     return {
       statusType: 'scheduled',
       badgeLabel: 'Programmato',

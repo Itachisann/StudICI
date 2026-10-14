@@ -213,7 +213,7 @@ export default function ViaggioScreen() {
               const upcoming = currentDayClasses.find(
                 (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
               );
-              targetClassForCalculation = upcoming || currentDayClasses[currentDayClasses.length - 1];
+              targetClassForCalculation = upcoming || null;
             } else {
               const pastOrActive = [...currentDayClasses].reverse().find(
                 (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
@@ -237,7 +237,12 @@ export default function ViaggioScreen() {
           const [hh, mm] = timeToUse.split(':').map(Number);
           targetDate.setHours(hh || 8, mm || 30, 0, 0);
         } else {
-          targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
+          const now = new Date();
+          if (now.getDay() === selectedDayIdx) {
+            targetDate.setHours(now.getHours(), now.getMinutes(), 0, 0);
+          } else {
+            targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
+          }
         }
 
         const itin = await computeCommuterItinerary({
