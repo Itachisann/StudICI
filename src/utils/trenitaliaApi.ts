@@ -263,8 +263,8 @@ export async function getLiveStationDepartures(
         departureTimePlanned: plannedDep,
         departureTimeActual: actualDep,
         departureMillis: raw.orarioPartenza || targetDate.getTime(),
-        platformPlanned: progPlatform ? String(progPlatform).trim() : undefined,
-        platformActual: actualPlatform ? String(actualPlatform).trim() : undefined,
+        platformPlanned: cleanPlatform(progPlatform),
+        platformActual: cleanPlatform(actualPlatform),
         delayMinutes: delay,
         statusDescription,
         isLive: true,
@@ -342,6 +342,50 @@ export function cleanViaggiaTrenoTime(rawStr?: string | null): string | null {
   if (!rawStr) return null;
   const match = String(rawStr).match(/(\d{1,2}:\d{2})/);
   return match ? match[1] : null;
+}
+
+/**
+ * Pulisce e converte i binari espressi in numeri romani (es. "IV" -> "4", "III" -> "3", "2 EST" -> "2 EST")
+ * in modo da visualizzare sempre numeri arabi standard.
+ */
+export function cleanPlatform(raw?: string | number | null): string | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  let s = String(raw).trim();
+  if (!s || s === '-' || s === '--') return undefined;
+
+  // Tabella di conversione numeri romani tipici delle stazioni italiane
+  const romanMap: { [key: string]: string } = {
+    I: '1',
+    II: '2',
+    III: '3',
+    IV: '4',
+    V: '5',
+    VI: '6',
+    VII: '7',
+    VIII: '8',
+    IX: '9',
+    X: '10',
+    XI: '11',
+    XII: '12',
+    XIII: '13',
+    XIV: '14',
+    XV: '15',
+    XVI: '16',
+    XVII: '17',
+    XVIII: '18',
+    XIX: '19',
+    XX: '20',
+  };
+
+  // Se è un numero romano esatto
+  const upper = s.toUpperCase();
+  if (romanMap[upper]) {
+    return romanMap[upper];
+  }
+
+  // Se contiene prefissi/suffissi (es. "BIN. IV" o "IV OVEST")
+  const converted = upper.replace(/\b([IVXLCDM]+)\b/g, (match) => romanMap[match] || match);
+  return converted;
 }
 
 export interface ScheduledTrainEntry {
@@ -652,8 +696,8 @@ export async function fetchLiveTrenitaliaTimetable(
         departureMillis: dep.orarioPartenza || targetDate.getTime(),
         arrivalTimePlanned: arrPlanned,
         arrivalTimeActual: arrActual,
-        platformPlanned: platformPlanned ? String(platformPlanned).trim() : undefined,
-        platformActual: platformActual ? String(platformActual).trim() : undefined,
+        platformPlanned: cleanPlatform(platformPlanned),
+        platformActual: cleanPlatform(platformActual),
         delayMinutes: delay,
         statusDescription,
         isLive: true,
@@ -786,9 +830,11 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             matched.isLive = true;
             matched.delayMinutes = live.delayMinutes;
             matched.statusDescription = live.statusDescription;
-            matched.departureTimeActual = matched.departureTimePlanned;
-            if (live.platformActual) matched.platformActual = live.platformActual;
-            if (live.platformPlanned) matched.platformPlanned = live.platformPlanned;
+            matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
+            matched.isOriginStation = live.isOriginStation;
+            matched.isDeparted = live.isDeparted;
+            if (live.platformActual) matched.platformActual = cleanPlatform(live.platformActual);
+            if (live.platformPlanned) matched.platformPlanned = cleanPlatform(live.platformPlanned);
             matched.alertMessage = live.alertMessage;
 
             if (matched.arrivalTimePlanned) {

@@ -23,7 +23,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
-import { parseTimeToMinutes, evaluateTrainStatus } from '../utils/trenitaliaApi';
+import { parseTimeToMinutes, evaluateTrainStatus, cleanPlatform } from '../utils/trenitaliaApi';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -820,8 +820,8 @@ export default function ViaggioScreen() {
                   <View style={[styles.platformHighlightBox, { borderColor: theme.border, backgroundColor: theme.subtle }]}>
                     <Text style={styles.platformHighlightLabel}>BINARIO</Text>
                     <Text style={styles.platformHighlightValue}>
-                      {itinerary.liveTrain.platformActual ||
-                        itinerary.liveTrain.platformPlanned ||
+                      {cleanPlatform(itinerary.liveTrain.platformActual) ||
+                        cleanPlatform(itinerary.liveTrain.platformPlanned) ||
                         '-'}
                     </Text>
                     {itinerary.liveTrain.isLive && (
