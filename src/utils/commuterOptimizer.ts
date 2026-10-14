@@ -414,16 +414,12 @@ async function computeOutboundItinerary(
 
   const totalTripDuration = actualClassroomArrivalMins - homeDepartureMins;
 
-  // Status badge
+  // Status badge dell'itinerario globale
   let badgeText = 'Tutto regolare';
   let badgeColor = '#34c759'; // green
   let isWarning = false;
 
-  if (train.delayMinutes > 5) {
-    badgeText = `Ritardo treno +${train.delayMinutes}m`;
-    badgeColor = '#f59e0b'; // orange
-    isWarning = true;
-  } else if (train.statusDescription.toLowerCase().includes('soppresso')) {
+  if (train.statusDescription.toLowerCase().includes('soppresso')) {
     badgeText = 'Treno Soppresso';
     badgeColor = '#ef4444'; // red
     isWarning = true;
@@ -642,18 +638,18 @@ async function computeReturnItinerary(
     selectedTrainIndex: selectedIndex,
     statusBadge: {
       text:
-        train.delayMinutes > 5
-          ? `Ritardo treno +${train.delayMinutes}m`
+        train.statusDescription.toLowerCase().includes('soppresso')
+          ? 'Treno Soppresso'
           : train.isLive
           ? 'Dati Trenitalia'
           : 'Rientro in orario',
       color:
-        train.delayMinutes > 5
-          ? '#f59e0b'
+        train.statusDescription.toLowerCase().includes('soppresso')
+          ? '#ef4444'
           : train.isLive
           ? '#e05666'
           : '#34c759',
-      isWarning: train.delayMinutes > 5,
+      isWarning: train.statusDescription.toLowerCase().includes('soppresso'),
     },
     summaryMessage: `Fine lezione ore ${targetLecture.endTime} ➔ Arrivo a casa a ${config.originAddress} alle ore ${minutesToTime(homeArrivalMins)}`,
   };

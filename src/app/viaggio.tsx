@@ -824,11 +824,6 @@ export default function ViaggioScreen() {
                         cleanPlatform(itinerary.liveTrain.platformPlanned) ||
                         '-'}
                     </Text>
-                    {itinerary.liveTrain.isLive && (
-                      <View style={styles.liveTag}>
-                        <Text style={styles.liveTagText}>LIVE</Text>
-                      </View>
-                    )}
                   </View>
 
                     <View style={{ flex: 1, alignItems: 'flex-end' }}>
