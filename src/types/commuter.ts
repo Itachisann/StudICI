@@ -48,7 +48,8 @@ export interface LiveTrainInfo {
   durationMinutes?: number; // es. 41
   isFast?: boolean; // true se Regionale Veloce (RV)
   isOriginStation?: boolean; // true se il treno ha origine da questa stazione (senza fermate precedenti)
-  isDeparted?: boolean; // true se il treno è già effettivamente partito dalla stazione
+  isDeparted?: boolean; // true se il treno è già effettivamente partito dall'origine
+  isDepartedFromStation?: boolean; // true se il treno è già partito dalla stazione di riferimento del pendolare
   hasEarlierTrain?: boolean;
   hasLaterTrain?: boolean;
   trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';

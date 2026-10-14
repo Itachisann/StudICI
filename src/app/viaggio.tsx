@@ -910,6 +910,7 @@ export default function ViaggioScreen() {
                       const isCurrent =
                         at.trainNumber.replace(/\D/g, '') ===
                         itinerary.liveTrain?.trainNumber.replace(/\D/g, '');
+                      const isDeparted = Boolean(at.isDepartedFromStation);
 
                       return (
                         <TouchableOpacity
@@ -920,6 +921,7 @@ export default function ViaggioScreen() {
                               styles.trainChipCurrent,
                               { backgroundColor: theme.bg, borderColor: theme.primary },
                             ],
+                            isDeparted && !isCurrent && { opacity: 0.65 },
                           ]}
                           activeOpacity={0.7}
                           onLayout={(e) => {
@@ -936,16 +938,18 @@ export default function ViaggioScreen() {
                           <Ionicons
                             name={at.isFast ? 'flash' : 'train-outline'}
                             size={12}
-                            color={isCurrent ? theme.accent : '#94a3b8'}
+                            color={isCurrent ? theme.accent : isDeparted ? '#64748b' : '#94a3b8'}
                             style={{ marginRight: 4 }}
                           />
                           <Text
                             style={[
                               styles.trainChipText,
                               isCurrent && styles.trainChipTextCurrent,
+                              isDeparted && !isCurrent && { color: '#64748b' },
                             ]}
                           >
                             {at.trainNumber} • {at.departureTimePlanned || at.departureTimeActual}
+                            {isDeparted ? ' (Partito)' : ''}
                           </Text>
                         </TouchableOpacity>
                       );

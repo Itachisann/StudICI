@@ -214,9 +214,10 @@ export async function getLiveStationDepartures(
       const plannedDep = raw.compOrarioPartenza || '00:00';
       const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
       let actualDep = plannedDep;
-      if (cleanLiveDep) {
+      // NON scalare anticipo (delay <= 0) perché il treno rispetta l'orario programmato
+      if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(plannedDep)) {
         actualDep = cleanLiveDep;
-      } else if (delay !== 0) {
+      } else if (delay > 0) {
         const [ph, pm] = plannedDep.split(':').map(Number);
         actualDep = minutesToTime(ph * 60 + pm + delay);
       }
@@ -227,6 +228,14 @@ export async function getLiveStationDepartures(
         (typeof raw.origine === 'string' && raw.origine.trim().length === 0)
       );
       const isDeparted = Boolean(raw.nonPartito === false && (raw.circolante === true || raw.inStazione === false));
+
+      const now = new Date();
+      const nowMins = now.getHours() * 60 + now.getMinutes();
+      const depMins = parseTimeToMinutes(actualDep);
+      const isDepartedFromStation =
+        Boolean(cleanLiveDep && nowMins >= depMins) ||
+        (nowMins > depMins + 1 && (raw.nonPartito === false || nowMins > depMins + 3)) ||
+        (nowMins >= depMins && raw.inStazione === false && raw.nonPartito === false);
 
       let statusDescription = 'In orario';
       if (raw.provvedimento === 1 || raw.statoTreno === 'SOPPRESSO') {
@@ -281,6 +290,7 @@ export async function getLiveStationDepartures(
         isFast,
         isOriginStation,
         isDeparted,
+        isDepartedFromStation,
         alertMessage,
         capacityWarning,
         notPurchasable: isNotPurchasable,
@@ -639,22 +649,22 @@ export async function fetchLiveTrenitaliaTimetable(
             : 0;
       const delay = isToday ? liveDelay : 0;
 
-      // Partenza effettiva con ritardo applicato
+      // Partenza effettiva: NON scalare anticipo (delay <= 0) perché il treno aspetta l'orario programmato
       const cleanLiveDep = cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
       let depActual = depPlanned;
-      if (cleanLiveDep) {
+      if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
         depActual = cleanLiveDep;
-      } else if (delay !== 0) {
+      } else if (delay > 0) {
         depActual = minutesToTime(dh * 60 + dm + delay);
       }
 
       let arrActual = arrPlanned;
 
-      // Il ritardo si applica sull'arrivo effettivo a destinazione
+      // Arrivo effettivo: NON scalare anticipo (delay <= 0), ogni fermata è a sé
       const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-      if (cleanLiveArr) {
+      if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
         arrActual = cleanLiveArr;
-      } else if (delay !== 0) {
+      } else if (delay > 0) {
         arrActual = minutesToTime(ah * 60 + am + delay);
       }
 
@@ -664,6 +674,17 @@ export async function fetchLiveTrenitaliaTimetable(
         (typeof dep.origine === 'string' && dep.origine.trim().length === 0)
       );
       const isDeparted = Boolean(dep.nonPartito === false && (dep.circolante === true || dep.inStazione === false));
+
+      const now = new Date();
+      const nowMins = now.getHours() * 60 + now.getMinutes();
+      const depMinsActual = parseTimeToMinutes(depActual);
+      const isDepartedFromStation = Boolean(
+        isToday && (
+          (cleanLiveDep && nowMins >= depMinsActual) ||
+          (nowMins > depMinsActual + 1 && (dep.nonPartito === false || nowMins > depMinsActual + 3)) ||
+          (nowMins >= depMinsActual && dep.inStazione === false && dep.nonPartito === false)
+        )
+      );
 
       let statusDescription = 'In orario';
       if (isToday) {
@@ -736,6 +757,7 @@ export async function fetchLiveTrenitaliaTimetable(
         isFast,
         isOriginStation,
         isDeparted,
+        isDepartedFromStation,
         alertMessage,
         capacityWarning,
         notPurchasable: isNotPurchasable,
@@ -780,6 +802,11 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
   const isOutbound = direction === 'outbound';
   const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');
+  const now = new Date();
+  const isToday =
+    targetDate.getDate() === now.getDate() &&
+    targetDate.getMonth() === now.getMonth() &&
+    targetDate.getFullYear() === now.getFullYear();
 
   // 1. Interroga ViaggiaTreno in tempo reale per trovare i treni reali programmati/circolanti
   let allTrains: LiveTrainInfo[] = await fetchLiveTrenitaliaTimetable(
@@ -850,10 +877,6 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       });
     }
 
-    const isToday =
-      targetDate.getDate() === new Date().getDate() &&
-      targetDate.getMonth() === new Date().getMonth();
-
     if (isToday) {
       try {
         const liveList = await getLiveStationDepartures(departureStation.code, new Date());
@@ -870,15 +893,23 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             matched.isLive = true;
             matched.delayMinutes = live.delayMinutes;
             matched.statusDescription = live.statusDescription;
-            matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
+            matched.departureTimeActual =
+              live.delayMinutes > 0
+                ? live.departureTimeActual || matched.departureTimePlanned
+                : matched.departureTimePlanned;
             matched.isOriginStation = live.isOriginStation;
             matched.isDeparted = live.isDeparted;
+            if (live.isDepartedFromStation !== undefined) {
+              matched.isDepartedFromStation = live.isDepartedFromStation;
+            }
             if (live.platformActual) matched.platformActual = cleanPlatform(live.platformActual);
             if (live.platformPlanned) matched.platformPlanned = cleanPlatform(live.platformPlanned);
             matched.alertMessage = live.alertMessage;
 
             if (matched.arrivalTimePlanned) {
-              const arrMins = parseTimeToMinutes(matched.arrivalTimePlanned) + live.delayMinutes;
+              const arrMins =
+                parseTimeToMinutes(matched.arrivalTimePlanned) +
+                (live.delayMinutes > 0 ? live.delayMinutes : 0);
               matched.arrivalTimeActual = minutesToTime(arrMins);
             }
           }
@@ -896,14 +927,25 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
   // 3. Algoritmo di selezione del treno migliore (Regionale Veloce preferito)
   const targetMins = parseTimeToMinutes(targetTimeStr);
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  // Verifica se un treno è prendibile dal viaggiatore:
+  // se è oggi, esclude treni già partiti dalla stazione di riferimento
+  const isTrainCatchable = (t: LiveTrainInfo) => {
+    if (!isToday) return true;
+    if (t.isDepartedFromStation) return false;
+    const depM = parseTimeToMinutes(t.departureTimeActual || t.departureTimePlanned);
+    return depM >= nowMins - 1;
+  };
+
   let recommendedIdx = 0;
 
   if (isOutbound) {
-    // Cerchiamo treni che arrivano in tempo (entro targetMins + 3 di tolleranza)
+    // Cerchiamo treni che arrivano in tempo (entro targetMins + 3 di tolleranza) e prendibili
     const onTimeIndices: number[] = [];
     allTrains.forEach((t, idx) => {
       const arr = parseTimeToMinutes(t.arrivalTimePlanned || t.arrivalTimeActual || '');
-      if (arr <= targetMins + 3) {
+      if (arr <= targetMins + 3 && isTrainCatchable(t)) {
         onTimeIndices.push(idx);
       }
     });
@@ -928,15 +970,25 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
         recommendedIdx = onTimeIndices[onTimeIndices.length - 1];
       }
     } else {
-      // Se nessun treno arriva prima (es. prima mattina presto), prendi il primo treno della giornata
-      recommendedIdx = 0;
+      // Se nessun treno prendibile arriva prima della lezione (es. treni prima già partiti):
+      // Targetta il PROSSIMO treno in partenza dalla stazione di riferimento
+      if (isToday) {
+        const nextCatchableIdx = allTrains.findIndex((t) => isTrainCatchable(t));
+        if (nextCatchableIdx !== -1) {
+          recommendedIdx = nextCatchableIdx;
+        } else {
+          recommendedIdx = Math.max(0, allTrains.length - 1);
+        }
+      } else {
+        recommendedIdx = 0;
+      }
     }
   } else {
     // Ritorno: primo treno che parte dopo l'orario di fine lezione + rientro in stazione
     const eligibleIndices: number[] = [];
     allTrains.forEach((t, idx) => {
       const dep = parseTimeToMinutes(t.departureTimePlanned || t.departureTimeActual || '');
-      if (dep >= targetMins) {
+      if (dep >= targetMins && isTrainCatchable(t)) {
         eligibleIndices.push(idx);
       }
     });
@@ -954,6 +1006,9 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       } else {
         recommendedIdx = eligibleIndices[0];
       }
+    } else if (isToday) {
+      const nextCatchableIdx = allTrains.findIndex((t) => isTrainCatchable(t));
+      recommendedIdx = nextCatchableIdx !== -1 ? nextCatchableIdx : Math.max(0, allTrains.length - 1);
     } else {
       recommendedIdx = Math.max(0, allTrains.length - 1);
     }
@@ -1107,6 +1162,35 @@ export function evaluateTrainStatus(
     train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
   );
 
+  // Se il treno è già partito dalla stazione di riferimento del pendolare:
+  if (train.isDepartedFromStation) {
+    if (actualArrMins > 0 && nowMins > actualArrMins + 3) {
+      return {
+        statusType: train.delayMinutes > 0 ? 'delayed' : 'on_time',
+        badgeLabel: train.delayMinutes > 0 ? `Arrivato (+${train.delayMinutes}m)` : 'Arrivato • In orario',
+        badgeColor: '#64748b',
+        badgeBg: 'rgba(100, 116, 139, 0.15)',
+        badgeBorder: 'rgba(100, 116, 139, 0.25)',
+        iconName: 'flag-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
+    const depTime = train.departureTimePlanned || train.departureTimeActual;
+    const delayInfo = train.delayMinutes > 0 ? ` (+${train.delayMinutes}m)` : '';
+    return {
+      statusType: 'running',
+      badgeLabel: `Già partito ${depTime ? `(${depTime})` : ''}${delayInfo}`.trim(),
+      badgeColor: '#64748b',
+      badgeBg: 'rgba(100, 116, 139, 0.15)',
+      badgeBorder: 'rgba(100, 116, 139, 0.25)',
+      iconName: 'flag-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
   // Caso 5A: Treno deve ancora partire da questa stazione (orario attuale prima della partenza programmata/effettiva)
   if (nowMins < actualDepMins - 1) {
     // 1. Ha già un ritardo calcolato/comunicato da Trenitalia
@@ -1123,11 +1207,11 @@ export function evaluateTrainStatus(
       };
     }
 
-    // 2. È in anticipo
+    // 2. È in anticipo rispetto alla marcia prevista
     if (train.delayMinutes < 0) {
       return {
         statusType: 'early',
-        badgeLabel: `Anticipo ${Math.abs(train.delayMinutes)}m`,
+        badgeLabel: `In orario • Anticipo ${Math.abs(train.delayMinutes)}m`,
         badgeColor: '#10b981',
         badgeBg: 'rgba(16, 185, 129, 0.15)',
         badgeBorder: 'rgba(16, 185, 129, 0.3)',
