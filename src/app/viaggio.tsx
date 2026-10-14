@@ -144,9 +144,11 @@ export default function ViaggioScreen() {
   }, [dayClasses, selectedClassIndex, selectedDayIdx, direction]);
 
   const loadData = useCallback(
-    async (isRefresh = false) => {
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
+    async (isRefresh = false, silent = false) => {
+      if (!silent) {
+        if (isRefresh) setRefreshing(true);
+        else setLoading(true);
+      }
 
       try {
         const currentConfig = await getCommuterConfig();
@@ -262,6 +264,11 @@ export default function ViaggioScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
+      // Aggiornamento automatico silenzioso di treni, ritardi e stato ogni 60 secondi
+      const id = setInterval(() => {
+        loadData(true, true);
+      }, 60000);
+      return () => clearInterval(id);
     }, [loadData])
   );
 
