@@ -5,6 +5,8 @@
 
 export interface DrivingEstimate {
   durationMinutes: number;
+  baseDurationMinutes?: number;
+  trafficDelayMinutes?: number;
   distanceKm: number;
   isCalculated: boolean;
   routeSummary: string;
@@ -294,6 +296,8 @@ async function resolveOriginCoordinates(
 
 export interface RouteFluencyResult {
   finalMinutes: number;
+  baseMinutes: number;
+  delayMinutes: number;
   status: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
   conditionDescription: string;
   routeSummary: string;
@@ -303,25 +307,26 @@ export interface RouteFluencyResult {
 }
 
 /**
- * Analizzatore universale delle condizioni di scorrevolezza e traffico per qualsiasi percorso stradale
+ * Analizzatore universale e DINAMICO delle condizioni di scorrevolezza e traffico per qualsiasi percorso stradale
  * da qualsiasi indirizzo/località verso qualsiasi stazione ferroviaria in Italia.
  *
- * Parametri analizzati dinamicamente:
- * 1. Distanza chilometrica effettiva e tempo di percorrenza free-flow calcolato dal motore stradale OSRM
- * 2. Densità di incroci, rotatorie e manovre sul tracciato stradale (urbanità vs viabilità extraurbana)
- * 3. Strade principali percorse (es. SS, SR, SP, arterie urbane)
- * 4. Finestra oraria del viaggio (picco mattutino pendolari, morbida, picco rientro serale, fasce spalla)
- * 5. Collo di bottiglia terminale di stazione (convergenza pendolari, piazzale FS, parcheggi di scambio)
+ * Implementa un modello analogo a Google Maps:
+ * - Tempo base di percorrenza free-flow (senza rallentamenti artificiali fissi)
+ * - Curva dinamica continua di congestione (Gaussiana centrata nei momenti di reale afflusso pendolare)
+ * - Distinzione netta tra feriale e weekend (sabato/domenica sempre scorrevole, 0 ritardi)
+ * - Nessun falso allarme: se il ritardo fisiologico è <= 1 min, il traffico è classificato come "scorrevole"
+ *   senza imporre penalità arbitrarie.
  */
 export function analyzeRouteFluency(options: {
   distanceKm: number;
   durationSec: number;
   steps?: any[];
   targetTimeStr?: string;
+  targetDate?: Date;
   stationName?: string;
   originName?: string;
 }): RouteFluencyResult {
-  const { distanceKm, durationSec, steps, targetTimeStr, stationName, originName } = options;
+  const { distanceKm, durationSec, steps, targetTimeStr, targetDate, stationName, originName } = options;
 
   let totalMins = 0;
   if (targetTimeStr && targetTimeStr.includes(':')) {
@@ -332,10 +337,11 @@ export function analyzeRouteFluency(options: {
     totalMins = now.getHours() * 60 + now.getMinutes();
   }
 
-  const baseMinutes = Math.max(1, durationSec / 60);
+  // Base free-flow duration (tempo a strada libera, punto di riferimento analogo al baseline Google Maps)
+  const baseMinutes = Math.max(1, Math.round(durationSec / 60));
   const speedKmh = Math.round(distanceKm / (baseMinutes / 60));
 
-  // 1. Estrazione strade principali e complessità degli incroci dal percorso
+  // 1. Estrazione strade principali e complessità degli incroci dal percorso OSRM
   let totalIntersections = 0;
   const roadNames = new Set<string>();
 
@@ -356,69 +362,85 @@ export function analyzeRouteFluency(options: {
   const mainRoadsList = Array.from(roadNames).slice(0, 2);
   const mainRoadsText = mainRoadsList.length > 0 ? ` via ${mainRoadsList.join(' e ')}` : '';
 
-  // 2. Analisi oraria e determinazione del profilo di scorrevolezza
-  let timeFactor = 1.0;
+  // 2. Analisi giorno della settimana e contesto orario dinamico (curva continua stile Google Maps)
+  const dateObj = targetDate || new Date();
+  const dayOfWeek = dateObj.getDay(); // 0 = Domenica, 6 = Sabato
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  let delayMinutes = 0;
   let status: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' = 'scorrevole';
-  let conditionDescription = 'traffico scorrevole';
+  let conditionDescription = 'traffico scorrevole (in linea con i tempi ottimali)';
   let isPeakHour = false;
-  let terminalStationDelay = 0;
 
-  // A. ORA DI PUNTA RIENTRO SERALE (17:15 - 19:15, picco attorno alle 18:00)
-  // Rientro massiccio pendolari da Roma/linee regionali, uscita parcheggi FS, incroci e svincoli principali
-  if (totalMins >= 1035 && totalMins <= 1155) {
-    status = 'intenso';
-    isPeakHour = true;
-    const densityBonus = intersectionsPerKm > 1.2 ? 0.06 : 0.02;
-    timeFactor = 1.14 + densityBonus;
-    terminalStationDelay = distanceKm > 4 ? 3 : 1.5;
-    conditionDescription = 'traffico intenso di rientro pendolare e nodi di scambio';
-  }
-  // B. ORA DI PUNTA MATTUTINA (07:00 - 08:35)
-  // Afflusso pendolari verso la stazione, scuole, accesso parcheggi FS
-  else if (totalMins >= 420 && totalMins <= 515) {
-    status = 'rallentamenti';
-    isPeakHour = true;
-    const densityBonus = intersectionsPerKm > 1.2 ? 0.04 : 0.02;
-    timeFactor = 1.08 + densityBonus;
-    terminalStationDelay = distanceKm > 4 ? 2 : 1;
-    conditionDescription = 'traffico pendolare e rallentamenti in avvicinamento alla stazione';
-  }
-  // C. FASCE SPALLA (06:30-07:00, 08:35-09:15, 16:30-17:15, 19:15-19:50)
-  else if (
-    (totalMins >= 390 && totalMins < 420) ||
-    (totalMins > 515 && totalMins <= 555) ||
-    (totalMins >= 990 && totalMins < 1035) ||
-    (totalMins > 1155 && totalMins <= 1190)
-  ) {
-    status = 'moderato';
-    isPeakHour = false;
-    timeFactor = 1.03;
-    terminalStationDelay = 1;
-    conditionDescription = 'traffico moderato';
-  }
-  // D. MORBIDA / NOTTE (09:15 - 16:30, 20:00 - 06:30)
-  // Condizioni fluide: perfettamente allineato al free-flow di Google Maps
-  else {
+  if (isWeekend) {
+    // Nel fine settimana il traffico pendolare lavorativo/scolastico è azzerato
     status = 'scorrevole';
+    conditionDescription = 'viabilità del fine settimana: traffico scorrevole';
+    delayMinutes = 0;
     isPeakHour = false;
-    timeFactor = 0.96; // Calibrazione fedele a Google Maps in tempo reale
-    terminalStationDelay = 0;
-    conditionDescription = 'traffico scorrevole (tempo ottimale)';
+  } else {
+    // Giorni feriali: curva continua di densità di traffico (senza gradini rigidi)
+    // Picco mattutino pendolari centrato alle 07:50 (470 min) con dispersione naturale
+    const morningDiff = totalMins - 470;
+    const morningIntensity = Math.exp(-(morningDiff * morningDiff) / (2 * 25 * 25));
+
+    // Picco serale rientro pendolare centrato alle 18:00 (1080 min)
+    const eveningDiff = totalMins - 1080;
+    const eveningIntensity = Math.exp(-(eveningDiff * eveningDiff) / (2 * 30 * 30));
+
+    // Ponderazione feriale: Martedì-Giovedì picco massimo (1.0), Lunedì e Venerdì mattina più diluiti
+    let dayWeight = 1.0;
+    if (dayOfWeek === 1) dayWeight = 0.85; // Lunedì
+    else if (dayOfWeek === 5) dayWeight = 0.8; // Venerdì mattina
+
+    const effectiveIntensity = Math.max(morningIntensity, eveningIntensity) * dayWeight;
+    isPeakHour = effectiveIntensity > 0.45;
+
+    // Se la velocità di crociera è elevata (> 65 km/h, superstrada/strada statale aperta),
+    // la tratta assorbe molto meglio il traffico rispetto a vie urbane strette
+    const speedFactor = speedKmh > 65 ? 0.75 : 1.0;
+    const urbanDensityFactor = intersectionsPerKm > 1.3 ? 1.2 : 1.0;
+
+    // Margine massimo di ritardo fisiologico stimabile (tipicamente 2-5 min per percorsi pendolari extraurbani)
+    const maxCongestionDelay = Math.min(6, Math.max(2, Math.round(baseMinutes * 0.18 * speedFactor * urbanDensityFactor)));
+
+    // Calcolo del ritardo dinamico effettivo
+    const rawDelay = maxCongestionDelay * effectiveIntensity;
+    delayMinutes = Math.round(rawDelay);
+
+    // Classificazione dello stato (ispirata alla logica di Google Maps)
+    if (delayMinutes <= 1) {
+      // Traffico in linea con il tempo free-flow: NESSUN ritardo forzato o allarmismo
+      delayMinutes = 0;
+      status = 'scorrevole';
+      conditionDescription = isPeakHour
+        ? 'ora di punta regolare: viabilità fluida senza intoppi'
+        : 'traffico scorrevole (in linea con i tempi ottimali)';
+    } else if (delayMinutes === 2) {
+      status = 'moderato';
+      conditionDescription = `traffico moderato (+${delayMinutes} min rispetto al tempo base)`;
+    } else if (delayMinutes <= 4) {
+      status = 'rallentamenti';
+      conditionDescription = `rallentamenti verso la stazione (+${delayMinutes} min rispetto al tempo base)`;
+    } else {
+      status = 'intenso';
+      conditionDescription = `traffico intenso di rientro (+${delayMinutes} min rispetto al tempo base)`;
+    }
   }
 
-  const calculatedMinutes = Math.max(
-    3,
-    Math.round(baseMinutes * timeFactor + terminalStationDelay)
-  );
+  const finalMinutes = Math.max(3, baseMinutes + delayMinutes);
 
   const destName = stationName || 'Stazione FS';
   const startName = originName || 'Partenza';
   const kmFormatted = +(distanceKm).toFixed(1);
 
-  const routeSummary = `${startName} ➔ ${destName} (${kmFormatted} km${mainRoadsText} • ~${calculatedMinutes} min • ${conditionDescription})`;
+  const delayText = delayMinutes > 0 ? ` • +${delayMinutes}m ritardo` : ' • scorrevole';
+  const routeSummary = `${startName} ➔ ${destName} (${kmFormatted} km${mainRoadsText} • ~${finalMinutes} min${delayText})`;
 
   return {
-    finalMinutes: calculatedMinutes,
+    finalMinutes,
+    baseMinutes,
+    delayMinutes,
     status,
     conditionDescription,
     routeSummary,
@@ -437,7 +459,8 @@ export async function calculateDrivingEstimate(
   originAddress: string,
   stationName: string,
   targetTimeStr?: string,
-  originCoords?: { lat: number; lon: number }
+  originCoords?: { lat: number; lon: number },
+  targetDate?: Date
 ): Promise<DrivingEstimate> {
   const origin = originAddress.trim() || 'Amelia';
   const station = stationName.trim() || 'Orte';
@@ -474,12 +497,15 @@ export async function calculateDrivingEstimate(
               durationSec: sec,
               steps,
               targetTimeStr,
+              targetDate,
               stationName: coordsStation.name,
               originName: origin,
             });
 
             return {
               durationMinutes: fluency.finalMinutes,
+              baseDurationMinutes: fluency.baseMinutes,
+              trafficDelayMinutes: fluency.delayMinutes,
               distanceKm: km,
               isCalculated: true,
               routeSummary: fluency.routeSummary,
@@ -506,12 +532,15 @@ export async function calculateDrivingEstimate(
         distanceKm: roadKm,
         durationSec: estimatedSec,
         targetTimeStr,
+        targetDate,
         stationName: coordsStation.name,
         originName: origin,
       });
 
       return {
         durationMinutes: fluency.finalMinutes,
+        baseDurationMinutes: fluency.baseMinutes,
+        trafficDelayMinutes: fluency.delayMinutes,
         distanceKm: roadKm,
         isCalculated: true,
         routeSummary: fluency.routeSummary,
@@ -529,12 +558,15 @@ export async function calculateDrivingEstimate(
     distanceKm: fallbackKm,
     durationSec: fallbackSec,
     targetTimeStr,
+    targetDate,
     stationName: station,
     originName: origin,
   });
 
   return {
     durationMinutes: fallbackFluency.finalMinutes,
+    baseDurationMinutes: fallbackFluency.baseMinutes,
+    trafficDelayMinutes: fallbackFluency.delayMinutes,
     distanceKm: fallbackKm,
     isCalculated: false,
     routeSummary: fallbackFluency.routeSummary,

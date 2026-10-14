@@ -86,6 +86,8 @@ export interface TripLeg {
     trafficCondition?: string;
     trafficFluency?: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
     isTrafficPeak?: boolean;
+    trafficBaselineMinutes?: number;
+    trafficDelayMinutes?: number;
   };
 }
 

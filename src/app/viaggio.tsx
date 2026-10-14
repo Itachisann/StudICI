@@ -319,8 +319,11 @@ export default function ViaggioScreen() {
 
   const handleOpenMaps = (leg: TripLeg) => {
     const dest = leg.details?.mapQuery;
-    const origin = leg.details?.mapOriginQuery;
-    const mode = leg.details?.travelMode || 'transit';
+    const isTransit = leg.type === 'transit';
+    // Per i mezzi pubblici, non specifichiamo alcuna origine:
+    // Google Maps aprirà automaticamente l'itinerario partendo dalla "Posizione attuale" (GPS live)
+    const origin = isTransit ? undefined : leg.details?.mapOriginQuery;
+    const mode = isTransit ? 'transit' : leg.details?.travelMode || 'driving';
 
     if (!dest) {
       Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
@@ -338,12 +341,12 @@ export default function ViaggioScreen() {
       ? `comgooglemaps://?saddr=${encodedOrigin}&daddr=${encodedDest}&directionsmode=${gmapsMode}`
       : `comgooglemaps://?daddr=${encodedDest}&directionsmode=${gmapsMode}`;
 
-    // 2. URL per Google Maps Web / Universale (precisissimo con passaggi e fermate ATAC Roma)
+    // 2. URL per Google Maps Web / Universale (senza origin usa la posizione GPS corrente)
     const gmapsWebUrl = origin
       ? `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedDest}&travelmode=${gmapsMode}`
       : `https://www.google.com/maps/dir/?api=1&destination=${encodedDest}&travelmode=${gmapsMode}`;
 
-    // Prova ad aprire direttamente l'app Google Maps ("nel modo di prima"); se non installata, apre il browser
+    // Prova ad aprire direttamente l'app Google Maps; se non installata, apre il browser
     Linking.canOpenURL('comgooglemaps://')
       .then((supported) => {
         if (supported) {
@@ -1033,12 +1036,15 @@ export default function ViaggioScreen() {
                       <Text style={styles.stepSubtitleText}>{leg.subtitle}</Text>
 
                       {/* Avviso Evidente Traffico Stradale */}
+                      {/* Avviso Dinamico Traffico Stradale */}
                       {leg.type === 'car' && (leg.details?.trafficFluency || leg.details?.trafficCondition) && (
                         <View
                           style={[
                             styles.trafficAlertBox,
-                            (leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak)
+                            (leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti')
                               ? styles.trafficAlertBoxWarning
+                              : leg.details.trafficFluency === 'moderato'
+                              ? styles.trafficAlertBoxModerate
                               : styles.trafficAlertBoxSmooth,
                           ]}
                         >
@@ -1050,8 +1056,10 @@ export default function ViaggioScreen() {
                                   backgroundColor:
                                     leg.details.trafficFluency === 'intenso'
                                       ? 'rgba(239, 68, 68, 0.2)'
-                                      : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                      : leg.details.trafficFluency === 'rallentamenti'
                                       ? 'rgba(245, 158, 11, 0.2)'
+                                      : leg.details.trafficFluency === 'moderato'
+                                      ? 'rgba(59, 130, 246, 0.2)'
                                       : 'rgba(16, 185, 129, 0.2)',
                                 },
                               ]}
@@ -1060,16 +1068,20 @@ export default function ViaggioScreen() {
                                 name={
                                   leg.details.trafficFluency === 'intenso'
                                     ? 'flame'
-                                    : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                    : leg.details.trafficFluency === 'rallentamenti'
                                     ? 'warning'
+                                    : leg.details.trafficFluency === 'moderato'
+                                    ? 'speedometer-outline'
                                     : 'checkmark-circle'
                                 }
                                 size={16}
                                 color={
                                   leg.details.trafficFluency === 'intenso'
                                     ? '#ef4444'
-                                    : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                    : leg.details.trafficFluency === 'rallentamenti'
                                     ? '#f59e0b'
+                                    : leg.details.trafficFluency === 'moderato'
+                                    ? '#60a5fa'
                                     : '#10b981'
                                 }
                               />
@@ -1082,8 +1094,10 @@ export default function ViaggioScreen() {
                                     color:
                                       leg.details.trafficFluency === 'intenso'
                                         ? '#fca5a5'
-                                        : leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak
+                                        : leg.details.trafficFluency === 'rallentamenti'
                                         ? '#fcd34d'
+                                        : leg.details.trafficFluency === 'moderato'
+                                        ? '#93c5fd'
                                         : '#6ee7b7',
                                   },
                                 ]}
@@ -1092,29 +1106,32 @@ export default function ViaggioScreen() {
                                   ? 'TRAFFICO MOLTO INTENSO'
                                   : leg.details.trafficFluency === 'rallentamenti'
                                   ? 'RALLENTAMENTI SU STRADA'
-                                  : leg.details.isTrafficPeak
-                                  ? 'ORA DI PUNTA • TRAFFICO PREVISTO'
+                                  : leg.details.trafficFluency === 'moderato'
+                                  ? 'TRAFFICO MODERATO'
                                   : 'TRAFFICO SCORREVOLE'}
                               </Text>
                               <Text style={styles.trafficAlertDescription}>
                                 {leg.details.trafficCondition ||
-                                  (leg.details.isTrafficPeak
-                                    ? 'Possibili rallentamenti nei pressi della stazione o viabilità extraurbana'
-                                    : 'Scorrevolezza stimata ottimale')}
+                                  (leg.details.trafficFluency === 'scorrevole'
+                                    ? 'Tempo ottimale senza rallentamenti'
+                                    : 'Viabilità regolare')}
                               </Text>
                             </View>
-                            {(leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti' || leg.details.isTrafficPeak) && (
+                            {(leg.details.trafficFluency === 'intenso' || leg.details.trafficFluency === 'rallentamenti') && (
                               <View style={styles.trafficDelayPill}>
                                 <Ionicons name="time" size={11} color="#ffedd5" style={{ marginRight: 3 }} />
-                                <Text style={styles.trafficDelayPillText}>RITARDO</Text>
+                                <Text style={styles.trafficDelayPillText}>
+                                  {leg.details.trafficDelayMinutes ? `+${leg.details.trafficDelayMinutes}m RITARDO` : 'RITARDO'}
+                                </Text>
                               </View>
                             )}
                           </View>
                         </View>
                       )}
 
-                      {/* Note della tratta */}
+                      {/* Note della tratta (omesse per i mezzi pubblici per reindirizzare direttamente a Maps da posizione attuale) */}
                       {leg.details?.notes &&
+                        leg.type !== 'transit' &&
                         leg.details.notes !== 'Tocca per aprire la navigazione con orario impostato' && (
                         <Text style={styles.stepNotesText}>{leg.details.notes}</Text>
                       )}
@@ -1126,7 +1143,7 @@ export default function ViaggioScreen() {
                             <View style={[styles.mapsIconCircle, { backgroundColor: theme.subtle }]}>
                               <Ionicons
                                 name={
-                                  leg.details.travelMode === 'transit'
+                                  leg.type === 'transit' || leg.details.travelMode === 'transit'
                                     ? 'bus'
                                     : leg.details.travelMode === 'walking'
                                     ? 'walk'
@@ -1138,7 +1155,9 @@ export default function ViaggioScreen() {
                             </View>
                             <View style={{ flex: 1, marginRight: 6 }}>
                               <Text style={[styles.mapsBannerTitle, { color: theme.accent }]}>
-                                {leg.details.travelMode === 'transit'
+                                {leg.type === 'transit'
+                                  ? 'Apri su Maps dalla posizione attuale'
+                                  : leg.details.travelMode === 'transit'
                                   ? 'Apri su Google Maps'
                                   : leg.details.travelMode === 'walking'
                                   ? 'Percorso su Google Maps'
@@ -1900,6 +1919,10 @@ const styles = StyleSheet.create({
   trafficAlertBoxWarning: {
     backgroundColor: 'rgba(245, 158, 11, 0.14)',
     borderColor: 'rgba(245, 158, 11, 0.4)',
+  },
+  trafficAlertBoxModerate: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderColor: 'rgba(59, 130, 246, 0.3)',
   },
   trafficAlertBoxSmooth: {
     backgroundColor: 'rgba(16, 185, 129, 0.1)',

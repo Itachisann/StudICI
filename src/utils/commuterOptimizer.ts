@@ -273,19 +273,26 @@ async function computeOutboundItinerary(
   let carTrafficNote: string | undefined = undefined;
   let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
   let carTrafficPeak = false;
+  let carTrafficBaseline = 0;
+  let carTrafficDelay = 0;
 
   if (carEnabled) {
+    // Il viaggio in auto si svolge in avvicinamento alla partenza del treno (~30m prima)
+    const approxDrivingTimeStr = minutesToTime(Math.max(0, trainDepMins - 30));
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
       config.departureStation.shortName || config.departureStation.name,
-      stationTargetArrivalStr,
-      config.originCoords
+      approxDrivingTimeStr,
+      config.originCoords,
+      targetDate
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
+    carTrafficBaseline = drivingEst.baseDurationMinutes || carDuration;
+    carTrafficDelay = drivingEst.trafficDelayMinutes || 0;
   }
 
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
@@ -320,6 +327,8 @@ async function computeOutboundItinerary(
         trafficCondition: carTrafficNote,
         trafficFluency: carTrafficFluency,
         isTrafficPeak: carTrafficPeak,
+        trafficBaselineMinutes: carTrafficBaseline,
+        trafficDelayMinutes: carTrafficDelay,
       },
     });
 
@@ -510,18 +519,24 @@ async function computeReturnItinerary(
   const carWalkBuffer = carEnabled ? 3 : 0; // recupero auto dal parcheggio (3 min dall'arrivo del treno alla partenza in auto)
   const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
 
+  let carTrafficBaseline = 0;
+  let carTrafficDelay = 0;
+
   if (carEnabled) {
     const drivingEst = await calculateDrivingEstimate(
       config.originAddress,
       config.departureStation.shortName || config.departureStation.name,
       returnDrivingTimeStr,
-      config.originCoords
+      config.originCoords,
+      targetDate
     );
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
+    carTrafficBaseline = drivingEst.baseDurationMinutes || carDuration;
+    carTrafficDelay = drivingEst.trafficDelayMinutes || 0;
   }
 
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
@@ -619,6 +634,8 @@ async function computeReturnItinerary(
         trafficCondition: carTrafficNote,
         trafficFluency: carTrafficFluency,
         isTrafficPeak: carTrafficPeak,
+        trafficBaselineMinutes: carTrafficBaseline,
+        trafficDelayMinutes: carTrafficDelay,
       },
     });
   }
