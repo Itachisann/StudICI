@@ -779,14 +779,18 @@ export default function ViaggioScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.heroLectureSubject} numberOfLines={1}>
                     {direction === 'outbound'
-                      ? itinerary.targetLecture?.subject || 'Lezione'
-                      : `Rientro ad ${config?.originAddress}`}
+                      ? (itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                          ? 'Lezioni di oggi'
+                          : itinerary.targetLecture?.subject || 'Lezione')
+                      : (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
+                          ? itinerary.targetLecture.subject
+                          : `Rientro ad ${config?.originAddress}`)}
                   </Text>
                   <Text style={styles.heroLectureDetails} numberOfLines={1}>
                     {isTargetLectureFinished
-                      ? (direction === 'outbound'
-                          ? `${itinerary.targetLecture?.subject || 'Lezione'} • Terminata (Treni da adesso)`
-                          : 'Lezioni terminate • Treni in tempo reale da adesso')
+                      ? (itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                          ? 'Terminate • Treni da adesso'
+                          : 'Terminata • Treni da adesso')
                       : direction === 'outbound'
                       ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
                       : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
