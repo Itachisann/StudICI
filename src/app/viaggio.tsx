@@ -864,7 +864,11 @@ export default function ViaggioScreen() {
                       <Text
                         style={[
                           styles.trainTimeText,
-                          Boolean(itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) && {
+                          Boolean(
+                            itinerary.liveTrain.delayMinutes &&
+                              itinerary.liveTrain.delayMinutes > 0 &&
+                              !itinerary.liveTrain.isOriginStation
+                          ) && {
                             color: '#fb923c',
                           },
                         ]}
@@ -874,6 +878,7 @@ export default function ViaggioScreen() {
                       {Boolean(
                         itinerary.liveTrain.delayMinutes &&
                           itinerary.liveTrain.delayMinutes > 0 &&
+                          !itinerary.liveTrain.isOriginStation &&
                           itinerary.liveTrain.arrivalTimePlanned &&
                           itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
                       ) && (

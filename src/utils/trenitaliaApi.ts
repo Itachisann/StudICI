@@ -211,22 +211,28 @@ export async function getLiveStationDepartures(
         raw.binarioEffettivoPartenzaCodice ||
         null;
 
-      const plannedDep = raw.compOrarioPartenza || '00:00';
-      const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
-      let actualDep = plannedDep;
-      // NON scalare anticipo (delay <= 0) perché il treno rispetta l'orario programmato
-      if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(plannedDep)) {
-        actualDep = cleanLiveDep;
-      } else if (delay > 0) {
-        const [ph, pm] = plannedDep.split(':').map(Number);
-        actualDep = minutesToTime(ph * 60 + pm + delay);
-      }
-
       const isOriginStation = Boolean(
         raw.codOrigine === stationCode ||
         raw.idOrigine === stationCode ||
         (typeof raw.origine === 'string' && raw.origine.trim().length === 0)
       );
+
+      const plannedDep = raw.compOrarioPartenza || '00:00';
+      const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
+      let actualDep = plannedDep;
+
+      // Se il treno proviene da un'altra stazione (!isOriginStation) e ha ritardo (> 0),
+      // aggiorna l'orario effettivo di partenza.
+      // Se proviene dalla stazione di riferimento (isOriginStation), gli orari programmati non si modificano.
+      if (!isOriginStation) {
+        if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(plannedDep)) {
+          actualDep = cleanLiveDep;
+        } else if (delay > 0) {
+          const [ph, pm] = plannedDep.split(':').map(Number);
+          actualDep = minutesToTime(ph * 60 + pm + delay);
+        }
+      }
+
       // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
       const isDeparted = Boolean(raw.nonPartito === false);
 
@@ -653,30 +659,36 @@ export async function fetchLiveTrenitaliaTimetable(
             : 0;
       const delay = isToday ? liveDelay : 0;
 
-      // Partenza effettiva: NON scalare anticipo (delay <= 0) perché il treno aspetta l'orario programmato
-      const cleanLiveDep = cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
-      let depActual = depPlanned;
-      if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
-        depActual = cleanLiveDep;
-      } else if (delay > 0) {
-        depActual = minutesToTime(dh * 60 + dm + delay);
-      }
-
-      let arrActual = arrPlanned;
-
-      // Arrivo effettivo: NON scalare anticipo (delay <= 0), ogni fermata è a sé
-      const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-      if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
-        arrActual = cleanLiveArr;
-      } else if (delay > 0) {
-        arrActual = minutesToTime(ah * 60 + am + delay);
-      }
-
       const isOriginStation = Boolean(
         dep.codOrigine === depCode ||
         dep.idOrigine === depCode ||
         (typeof dep.origine === 'string' && dep.origine.trim().length === 0)
       );
+
+      // Partenza effettiva:
+      // Se il treno proviene da un'altra stazione (!isOriginStation) e ha ritardo, calcola il nuovo orario.
+      // Se proviene dalla stazione di riferimento (isOriginStation), gli orari programmati non si modificano.
+      const cleanLiveDep = cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
+      let depActual = depPlanned;
+      if (!isOriginStation) {
+        if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
+          depActual = cleanLiveDep;
+        } else if (delay > 0) {
+          depActual = minutesToTime(dh * 60 + dm + delay);
+        }
+      }
+
+      let arrActual = arrPlanned;
+
+      // Arrivo effettivo: solo se non proviene dalla stazione di riferimento trasliamo l'orario di arrivo
+      const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
+      if (!isOriginStation) {
+        if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
+          arrActual = cleanLiveArr;
+        } else if (delay > 0) {
+          arrActual = minutesToTime(ah * 60 + am + delay);
+        }
+      }
       // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
       const isDeparted = Boolean(dep.nonPartito === false);
 
@@ -898,25 +910,26 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             matched.isLive = true;
             matched.delayMinutes = live.delayMinutes;
             matched.statusDescription = live.statusDescription;
-            matched.departureTimeActual =
-              live.delayMinutes > 0
-                ? live.departureTimeActual || matched.departureTimePlanned
-                : matched.departureTimePlanned;
             matched.isOriginStation = live.isOriginStation;
             matched.isDeparted = live.isDeparted;
             if (live.isDepartedFromStation !== undefined) {
               matched.isDepartedFromStation = live.isDepartedFromStation;
             }
+
+            // Solo se il treno NON ha origine dalla stazione di riferimento aggiorniamo gli orari effettivi
+            if (!live.isOriginStation && live.delayMinutes > 0) {
+              matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
+              if (matched.arrivalTimePlanned) {
+                const arrMins = parseTimeToMinutes(matched.arrivalTimePlanned) + live.delayMinutes;
+                matched.arrivalTimeActual = minutesToTime(arrMins);
+              }
+            } else {
+              matched.departureTimeActual = matched.departureTimePlanned;
+              matched.arrivalTimeActual = matched.arrivalTimePlanned;
+            }
             if (live.platformActual) matched.platformActual = cleanPlatform(live.platformActual);
             if (live.platformPlanned) matched.platformPlanned = cleanPlatform(live.platformPlanned);
             matched.alertMessage = live.alertMessage;
-
-            if (matched.arrivalTimePlanned) {
-              const arrMins =
-                parseTimeToMinutes(matched.arrivalTimePlanned) +
-                (live.delayMinutes > 0 ? live.delayMinutes : 0);
-              matched.arrivalTimeActual = minutesToTime(arrMins);
-            }
           }
         }
       } catch {}
