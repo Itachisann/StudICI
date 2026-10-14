@@ -793,9 +793,27 @@ export default function ViaggioScreen() {
                         ? config?.departureStation.shortName || config?.departureStation.name
                         : config?.arrivalStation.shortName || config?.arrivalStation.name}
                     </Text>
-                    <Text style={styles.trainTimeText}>
-                      {itinerary.liveTrain.departureTimePlanned || itinerary.liveTrain.departureTimeActual}
+                    <Text
+                      style={[
+                        styles.trainTimeText,
+                        Boolean(itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0 && !itinerary.liveTrain.isOriginStation) && {
+                          color: '#fb923c',
+                        },
+                      ]}
+                    >
+                      {itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned}
                     </Text>
+                    {Boolean(
+                      itinerary.liveTrain.delayMinutes &&
+                        itinerary.liveTrain.delayMinutes > 0 &&
+                        !itinerary.liveTrain.isOriginStation &&
+                        itinerary.liveTrain.departureTimePlanned &&
+                        itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
+                    ) && (
+                      <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
+                        prog. {itinerary.liveTrain.departureTimePlanned}
+                      </Text>
+                    )}
                   </View>
 
                   {/* Binario Risaltato */}
