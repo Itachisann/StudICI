@@ -18,6 +18,7 @@ export interface OptimizeOptions {
   selectedClass?: ClassEvent | null; // lezione esplicitamente selezionata dall'utente
   selectedTrainOffset?: number; // -1 = treno prima, 0 = consigliato, +1 = treno dopo
   selectedTrainNumber?: string; // override selezione treno specifico
+  forceRefresh?: boolean;
 }
 
 export interface DayLectureTarget {
@@ -47,6 +48,7 @@ export async function computeCommuterItinerary(
     selectedClass,
     selectedTrainOffset = 0,
     selectedTrainNumber,
+    forceRefresh = false,
   } = options;
   const isOutbound = direction === 'outbound';
 
@@ -66,7 +68,8 @@ export async function computeCommuterItinerary(
       targetLecture,
       targetDate,
       selectedTrainOffset,
-      selectedTrainNumber
+      selectedTrainNumber,
+      forceRefresh
     );
   } else {
     return computeReturnItinerary(
@@ -74,7 +77,8 @@ export async function computeCommuterItinerary(
       targetLecture,
       targetDate,
       selectedTrainOffset,
-      selectedTrainNumber
+      selectedTrainNumber,
+      forceRefresh
     );
   }
 }
@@ -221,7 +225,8 @@ async function computeOutboundItinerary(
   targetLecture: DayLectureTarget,
   targetDate: Date,
   selectedTrainOffset = 0,
-  selectedTrainNumber?: string
+  selectedTrainNumber?: string,
+  forceRefresh = false
 ): Promise<CommuterItinerary> {
   const lectureStartMins = parseTimeToMinutes(targetLecture.startTime);
   const bufferMins = config.bufferMinutes || 10;
@@ -249,16 +254,34 @@ async function computeOutboundItinerary(
   const stationTargetArrivalMins = classroomArrivalMins - transitMins;
   const stationTargetArrivalStr = minutesToTime(stationTargetArrivalMins);
 
-  // Trova il treno regionale ottimale (privilegiando RV) e le alternative disponibili
-  const { train, availableTrains, selectedIndex } = await findOptimalCommuterTrain({
-    direction: 'outbound',
-    departureStation: config.departureStation,
-    arrivalStation: config.arrivalStation,
-    targetTimeStr: stationTargetArrivalStr,
-    targetDate,
-    trainOffset: selectedTrainOffset,
-    selectedTrainNumber,
-  });
+  const carEnabled = config.carLeg.enabled;
+  // Stima preliminare orario partenza in auto (circa 50 min prima dell'arrivo a Roma)
+  const approxCarDepartureTimeStr = minutesToTime(Math.max(0, stationTargetArrivalMins - 50));
+
+  // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
+  const [optimalTrainResult, drivingEst] = await Promise.all([
+    findOptimalCommuterTrain({
+      direction: 'outbound',
+      departureStation: config.departureStation,
+      arrivalStation: config.arrivalStation,
+      targetTimeStr: stationTargetArrivalStr,
+      targetDate,
+      trainOffset: selectedTrainOffset,
+      selectedTrainNumber,
+      forceRefresh,
+    }),
+    carEnabled
+      ? calculateDrivingEstimate(
+          config.originAddress,
+          config.departureStation.shortName || config.departureStation.name,
+          approxCarDepartureTimeStr,
+          config.originCoords,
+          targetDate
+        )
+      : Promise.resolve(null),
+  ]);
+
+  const { train, availableTrains, selectedIndex } = optimalTrainResult;
 
   // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
   // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
@@ -267,7 +290,6 @@ async function computeOutboundItinerary(
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
   // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
-  let carEnabled = config.carLeg.enabled;
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
   let carTrafficNote: string | undefined = undefined;
@@ -276,16 +298,7 @@ async function computeOutboundItinerary(
   let carTrafficBaseline = 0;
   let carTrafficDelay = 0;
 
-  if (carEnabled) {
-    // Il viaggio in auto si svolge in avvicinamento alla partenza del treno (~30m prima)
-    const approxDrivingTimeStr = minutesToTime(Math.max(0, trainDepMins - 30));
-    const drivingEst = await calculateDrivingEstimate(
-      config.originAddress,
-      config.departureStation.shortName || config.departureStation.name,
-      approxDrivingTimeStr,
-      config.originCoords,
-      targetDate
-    );
+  if (drivingEst) {
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
@@ -467,7 +480,8 @@ async function computeReturnItinerary(
   targetLecture: DayLectureTarget,
   targetDate: Date,
   selectedTrainOffset = 0,
-  selectedTrainNumber?: string
+  selectedTrainNumber?: string,
+  forceRefresh = false
 ): Promise<CommuterItinerary> {
   const lectureEndMins = parseTimeToMinutes(targetLecture.endTime);
   const exitClassroomBuffer = 7; // minuti per uscire e raggiungere fermata
@@ -493,43 +507,50 @@ async function computeReturnItinerary(
   const stationArrivalMins = lectureEndMins + exitClassroomBuffer + transitMins;
   const stationArrivalStr = minutesToTime(stationArrivalMins);
 
-  // Trova il treno regionale di ritorno ottimale e alternative
-  const { train, availableTrains, selectedIndex } = await findOptimalCommuterTrain({
-    direction: 'return',
-    departureStation: config.arrivalStation, // da Roma Tiburtina
-    arrivalStation: config.departureStation, // verso Orte
-    targetTimeStr: stationArrivalStr,
-    targetDate,
-    trainOffset: selectedTrainOffset,
-    selectedTrainNumber,
-  });
+  const carEnabled = config.carLeg.enabled;
+  const carWalkBuffer = carEnabled ? 3 : 0; // recupero auto dal parcheggio (3 min dall'arrivo del treno alla partenza in auto)
+  // Stima preliminare orario arrivo in stazione di rientro (~45m di treno)
+  const approxReturnDrivingTimeStr = minutesToTime(stationArrivalMins + 45 + carWalkBuffer);
+
+  // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
+  const [optimalTrainResult, drivingEst] = await Promise.all([
+    findOptimalCommuterTrain({
+      direction: 'return',
+      departureStation: config.arrivalStation, // da Roma Tiburtina
+      arrivalStation: config.departureStation, // verso Orte
+      targetTimeStr: stationArrivalStr,
+      targetDate,
+      trainOffset: selectedTrainOffset,
+      selectedTrainNumber,
+      forceRefresh,
+    }),
+    carEnabled
+      ? calculateDrivingEstimate(
+          config.originAddress,
+          config.departureStation.shortName || config.departureStation.name,
+          approxReturnDrivingTimeStr,
+          config.originCoords,
+          targetDate
+        )
+      : Promise.resolve(null),
+  ]);
+
+  const { train, availableTrains, selectedIndex } = optimalTrainResult;
 
   // NOTA COMMUTER: La partenza del treno a cui ancorare il rientro da Roma
   // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora invece il ritardo reale.
   const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
   const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
 
-  const carEnabled = config.carLeg.enabled;
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
   let carTrafficNote: string | undefined = undefined;
   let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
   let carTrafficPeak = false;
-
-  const carWalkBuffer = carEnabled ? 3 : 0; // recupero auto dal parcheggio (3 min dall'arrivo del treno alla partenza in auto)
-  const returnDrivingTimeStr = minutesToTime(trainArrMins + carWalkBuffer);
-
   let carTrafficBaseline = 0;
   let carTrafficDelay = 0;
 
-  if (carEnabled) {
-    const drivingEst = await calculateDrivingEstimate(
-      config.originAddress,
-      config.departureStation.shortName || config.departureStation.name,
-      returnDrivingTimeStr,
-      config.originCoords,
-      targetDate
-    );
+  if (drivingEst) {
     carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;

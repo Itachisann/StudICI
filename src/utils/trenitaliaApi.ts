@@ -31,11 +31,21 @@ export function getViaggiaTrenoDiagnostics(): string {
   return `${fetchOk}/${fetchTotal} richieste ok${lastFetchError ? `, ultimo errore: ${lastFetchError}` : ''}`;
 }
 
+interface TimetableCacheEntry {
+  timestamp: number;
+  trains: LiveTrainInfo[];
+}
+const timetableCache = new Map<string, TimetableCacheEntry>();
+
+export function clearTrenitaliaCache(): void {
+  timetableCache.clear();
+}
+
 /**
- * Fetch JSON con timeout PER RICHIESTA (non condiviso), nessuna cache e un tentativo di retry.
+ * Fetch JSON con timeout snello (4.5s) per singola richiesta.
  * Ritorna null se la richiesta fallisce definitivamente (diverso da lista vuota valida).
  */
-async function fetchViaggiaTrenoJson(url: string, timeoutMs = 10000, retries = 1): Promise<any | null> {
+async function fetchViaggiaTrenoJson(url: string, timeoutMs = 4500, retries = 1): Promise<any | null> {
   fetchTotal++;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -66,8 +76,8 @@ async function fetchViaggiaTrenoJson(url: string, timeoutMs = 10000, retries = 1
   return null;
 }
 
-/** Esegue i task con un numero massimo di richieste simultanee (evita code e timeout falsi su mobile). */
-async function runLimited<T>(tasks: (() => Promise<T>)[], limit = 4): Promise<T[]> {
+/** Esegue i task con un numero massimo di richieste simultanee (8 parallele per saturare subito il download). */
+async function runLimited<T>(tasks: (() => Promise<T>)[], limit = 8): Promise<T[]> {
   const results: T[] = new Array(tasks.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
@@ -473,6 +483,7 @@ export interface OptimalTrainOptions {
   targetDate?: Date;
   trainOffset?: number; // 0 = consigliato, -1 = precedente, +1 = successivo
   selectedTrainNumber?: string; // override selezione esplicita treno
+  forceRefresh?: boolean; // true per forzare chiamata diretta a Trenitalia bypassando la cache
 }
 
 export interface OptimalTrainResult {
@@ -484,13 +495,15 @@ export interface OptimalTrainResult {
 /**
  * Interroga ViaggiaTreno API in tempo reale per ottenere tutti i treni regionali
  * effettivi in circolazione o programmati tra due stazioni per qualsiasi data/orario.
+ * Utilizza cache in memoria dinamica (45s live, 10m futuro) e 8 chiamate concorrenti.
  */
 export async function fetchLiveTrenitaliaTimetable(
   depCode: string,
   arrCode: string,
   targetDate: Date,
   targetTimeStr: string,
-  direction: 'outbound' | 'return'
+  direction: 'outbound' | 'return',
+  forceRefresh = false
 ): Promise<LiveTrainInfo[]> {
   try {
     const isToday =
@@ -504,18 +517,36 @@ export async function fetchLiveTrenitaliaTimetable(
         ? Math.max(0, targetMins - 60)
         : targetMins;
 
-    // Se è oggi e l'orario richiesto è già trascorso (es. lezioni della mattina quando si consulta l'app nel pomeriggio),
-    // ViaggiaTreno non conserva partenze già effettuate: ancorare la ricerca su adesso (now - 30m)
-    // per visualizzare i treni in circolazione e quelli pomeridiani/serali.
+    // Se è oggi e l'orario richiesto è già trascorso, ancorare la ricerca su adesso (now - 30m)
     const now = new Date();
     const nowMins = now.getHours() * 60 + now.getMinutes();
     if (isToday && targetDepMins < nowMins - 30) {
       targetDepMins = Math.max(0, nowMins - 30);
     }
 
-    // Finestre di campionamento ad ampio raggio per coprire tutto il flusso di viaggio
-    const depOffsets = [-60, 0, 60, 120, 180, 240];
-    const arrOffsets = [0, 60, 120, 180, 240, 300];
+    // Verifica Cache in Memoria ad alte prestazioni
+    const dateKey = `${targetDate.getFullYear()}-${targetDate.getMonth() + 1}-${targetDate.getDate()}`;
+    const timeBucket = Math.floor(targetDepMins / 30);
+    const cacheKey = `${depCode}_${arrCode}_${dateKey}_${timeBucket}_${direction}`;
+
+    if (!forceRefresh) {
+      const cached = timetableCache.get(cacheKey);
+      if (cached && cached.trains.length > 0) {
+        const ttl = isToday ? 45000 : 600000; // 45s oggi per ritardi live, 10m per giorni futuri
+        if (Date.now() - cached.timestamp < ttl) {
+          return cached.trains;
+        }
+      }
+    }
+
+    // Finestre di campionamento calibrate per la massima copertura con il minimo numero di richieste:
+    // 4 partenze + 4 arrivi = 8 richieste in parallelo (invece di 12 sequenziali a blocchi di 4)
+    // -45m: copre da -45m a +105m
+    // +45m: copre da +45m a +195m
+    // +135m: copre da +135m a +285m
+    // +225m: copre da +225m a +375m (7 ore consecutive con sovrapposizione continua)
+    const depOffsets = [-45, 45, 135, 225];
+    const arrOffsets = [15, 105, 195, 285];
 
     const buildTimes = (offsets: number[]) =>
       offsets.map((off) => {
@@ -717,6 +748,13 @@ export async function fetchLiveTrenitaliaTimetable(
         parseTimeToMinutes(b.departureTimePlanned)
     );
 
+    if (trains.length > 0) {
+      timetableCache.set(cacheKey, {
+        timestamp: Date.now(),
+        trains,
+      });
+    }
+
     return trains;
   } catch (err) {
     console.warn('Errore fetchLiveTrenitaliaTimetable:', err);
@@ -737,6 +775,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     targetDate = new Date(),
     trainOffset = 0,
     selectedTrainNumber,
+    forceRefresh = false,
   } = options;
 
   const isOutbound = direction === 'outbound';
@@ -748,7 +787,8 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     arrivalStation.code,
     targetDate,
     targetTimeStr,
-    direction
+    direction,
+    forceRefresh
   );
 
   // 2. Se l'API non risponde (es. offline), usa i dati di fallback aggiornati

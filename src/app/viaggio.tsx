@@ -253,6 +253,7 @@ export default function ViaggioScreen() {
           selectedClass: targetClassForCalculation,
           selectedTrainOffset,
           selectedTrainNumber: selectedTrainNumber || undefined,
+          forceRefresh: isRefresh,
         });
 
         setItinerary(itin);

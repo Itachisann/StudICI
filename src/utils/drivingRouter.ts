@@ -127,6 +127,10 @@ function haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: num
   return R * c;
 }
 
+const stationCoordsCache = new Map<string, { lat: number; lon: number; name: string }>();
+const originCoordsCache = new Map<string, { lat: number; lon: number; name: string }>();
+const osrmRouteCache = new Map<string, { durationSec: number; distanceKm: number; steps: any[] }>();
+
 /**
  * Risolve con precisione le coordinate della STAZIONE ferroviaria (FS / Piazzale / Parcheggio)
  * garantendo che NON si punti al centro storico comunale.
@@ -139,9 +143,15 @@ async function resolveStationCoordinates(stationQuery: string): Promise<{ lat: n
     .replace(/\bdi\b/gi, '')
     .trim();
 
+  if (stationCoordsCache.has(clean)) {
+    return stationCoordsCache.get(clean)!;
+  }
+
   // 1. Cerca prima corrispondenza esatta nella tabella delle stazioni ferroviarie
   if (KNOWN_STATION_COORDINATES[clean]) {
-    return KNOWN_STATION_COORDINATES[clean];
+    const found = KNOWN_STATION_COORDINATES[clean];
+    stationCoordsCache.set(clean, found);
+    return found;
   }
 
   // 2. Cerca per inclusione del nome stazione nella tabella stazioni
@@ -191,6 +201,10 @@ async function resolveOriginCoordinates(
 ): Promise<{ lat: number; lon: number; name: string } | null> {
   const clean = normalizeKey(originQuery);
   if (!clean) return null;
+
+  if (originCoordsCache.has(clean)) {
+    return originCoordsCache.get(clean)!;
+  }
 
   const isSpecificStreet =
     /\b(via|viale|corso|piazza|vicolo|strada|largo|contrada|localit[aà]|loc\.|frazione|fraz\.|voc\.|vocabolo)\b/i.test(
@@ -474,49 +488,58 @@ export async function calculateDrivingEstimate(
     ]);
 
     if (coordsOrigin && coordsStation) {
-      // 1. Calcolo percorso stradale turn-by-turn con OSRM ed estrazione manovre/strade
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3500);
+      const routeKey = `${coordsOrigin.lat.toFixed(4)},${coordsOrigin.lon.toFixed(4)}_${coordsStation.lat.toFixed(4)},${coordsStation.lon.toFixed(4)}`;
+      let routeData = osrmRouteCache.get(routeKey);
 
-        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordsOrigin.lon},${coordsOrigin.lat};${coordsStation.lon},${coordsStation.lat}?steps=true&overview=false`;
-        const res = await fetch(osrmUrl, { signal: controller.signal });
-        clearTimeout(timeout);
+      if (!routeData) {
+        // 1. Calcolo percorso stradale turn-by-turn con OSRM ed estrazione manovre/strade
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 3500);
 
-        if (res.ok) {
-          const json = await res.json();
-          if (json?.routes && json.routes[0]) {
-            const sec = json.routes[0].duration;
-            const distM = json.routes[0].distance;
-            const km = +(distM / 1000).toFixed(1);
-            const steps = json.routes[0].legs?.[0]?.steps || [];
+          const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordsOrigin.lon},${coordsOrigin.lat};${coordsStation.lon},${coordsStation.lat}?steps=true&overview=false`;
+          const res = await fetch(osrmUrl, { signal: controller.signal });
+          clearTimeout(timeout);
 
-            // Analisi dinamica universale della scorrevolezza
-            const fluency = analyzeRouteFluency({
-              distanceKm: km,
-              durationSec: sec,
-              steps,
-              targetTimeStr,
-              targetDate,
-              stationName: coordsStation.name,
-              originName: origin,
-            });
-
-            return {
-              durationMinutes: fluency.finalMinutes,
-              baseDurationMinutes: fluency.baseMinutes,
-              trafficDelayMinutes: fluency.delayMinutes,
-              distanceKm: km,
-              isCalculated: true,
-              routeSummary: fluency.routeSummary,
-              trafficCondition: fluency.conditionDescription,
-              isPeakHour: fluency.isPeakHour,
-              mainRoads: fluency.mainRoads,
-              fluencyStatus: fluency.status,
-            };
+          if (res.ok) {
+            const json = await res.json();
+            if (json?.routes && json.routes[0]) {
+              routeData = {
+                durationSec: json.routes[0].duration,
+                distanceKm: +(json.routes[0].distance / 1000).toFixed(1),
+                steps: json.routes[0].legs?.[0]?.steps || [],
+              };
+              osrmRouteCache.set(routeKey, routeData);
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
+
+      if (routeData) {
+        // Analisi dinamica universale della scorrevolezza (0ms CPU)
+        const fluency = analyzeRouteFluency({
+          distanceKm: routeData.distanceKm,
+          durationSec: routeData.durationSec,
+          steps: routeData.steps,
+          targetTimeStr,
+          targetDate,
+          stationName: coordsStation.name,
+          originName: origin,
+        });
+
+        return {
+          durationMinutes: fluency.finalMinutes,
+          baseDurationMinutes: fluency.baseMinutes,
+          trafficDelayMinutes: fluency.delayMinutes,
+          distanceKm: routeData.distanceKm,
+          isCalculated: true,
+          routeSummary: fluency.routeSummary,
+          trafficCondition: fluency.conditionDescription,
+          isPeakHour: fluency.isPeakHour,
+          mainRoads: fluency.mainRoads,
+          fluencyStatus: fluency.status,
+        };
+      }
 
       // 2. Modello matematico stradale (tortuosità 1.38x per viabilità provinciale/regionale, velocità media 44 km/h)
       const directKm = haversineDistanceKm(
