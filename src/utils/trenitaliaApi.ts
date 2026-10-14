@@ -1003,6 +1003,58 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     });
   }
 
+  // Se tutti i treni odierni sono passati o non disponibili da API, ripristina la tabella programmata con avviso
+  if (allTrains.length === 0) {
+    if (isOutbound) {
+      allTrains = SCHEDULED_ORTE_TO_ROMA.map((s) => {
+        const arrTime = isTerminiArrival ? s.arrivalTimeTermini : s.arrivalTimeTiburtina;
+        const duration = isTerminiArrival ? s.durationMinutesTermini : s.durationMinutesTiburtina;
+        return {
+          trainNumber: s.trainNumber,
+          category: s.category,
+          destination: s.destination,
+          originStationName: departureStation.name,
+          originStationCode: departureStation.code,
+          departureTimePlanned: s.departureTime,
+          departureTimeActual: s.departureTime,
+          departureMillis: targetDate.getTime(),
+          arrivalTimePlanned: arrTime,
+          arrivalTimeActual: arrTime,
+          platformPlanned: s.platformPlanned,
+          platformActual: s.platformPlanned,
+          delayMinutes: 0,
+          statusDescription: isToday ? 'Corse odierne concluse' : 'Programmato',
+          isLive: false,
+          durationMinutes: duration,
+          isFast: s.category === 'RV',
+        };
+      });
+    } else {
+      allTrains = SCHEDULED_ROMA_TO_ORTE.map((s) => {
+        const depTime = isTerminiArrival && s.departureTimeTermini ? s.departureTimeTermini : s.departureTimeTiburtina;
+        return {
+          trainNumber: s.trainNumber,
+          category: s.category,
+          destination: s.destination,
+          originStationName: departureStation.name,
+          originStationCode: departureStation.code,
+          departureTimePlanned: depTime,
+          departureTimeActual: depTime,
+          departureMillis: targetDate.getTime(),
+          arrivalTimePlanned: s.arrivalTimeOrte,
+          arrivalTimeActual: s.arrivalTimeOrte,
+          platformPlanned: s.platformPlanned,
+          platformActual: s.platformPlanned,
+          delayMinutes: 0,
+          statusDescription: isToday ? 'Corse odierne concluse' : 'Programmato',
+          isLive: false,
+          durationMinutes: s.durationMinutesTiburtina,
+          isFast: s.category === 'RV',
+        };
+      });
+    }
+  }
+
   // Se è oggi, per treni live che hanno problemi REALI alla partenza (origine corsa non ancora partita):
   if (isToday) {
     for (const t of allTrains) {
@@ -1124,23 +1176,44 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     if (foundIdx !== -1) {
       selectedIndex = foundIdx;
     }
-  } else if (trainOffset !== 0) {
-    selectedIndex = Math.max(0, Math.min(allTrains.length - 1, recommendedIdx + trainOffset));
+    selectedIndex = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), recommendedIdx + trainOffset));
   }
 
-  const chosenTrain = { ...allTrains[selectedIndex] };
-  chosenTrain.hasEarlierTrain = selectedIndex > 0;
-  chosenTrain.hasLaterTrain = selectedIndex < allTrains.length - 1;
+  const selectedIndexSafe = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), selectedIndex));
+  const fallbackTrain: LiveTrainInfo = {
+    trainNumber: 'REG',
+    category: 'REG',
+    destination: arrivalStation.name,
+    originStationName: departureStation.name,
+    originStationCode: departureStation.code,
+    departureTimePlanned: '06:00',
+    departureTimeActual: '06:00',
+    departureMillis: targetDate.getTime(),
+    arrivalTimePlanned: '06:45',
+    arrivalTimeActual: '06:45',
+    delayMinutes: 0,
+    statusDescription: 'Programmato',
+    isLive: false,
+    durationMinutes: 45,
+    isFast: false,
+  };
+
+  const chosenTrain = allTrains[selectedIndexSafe]
+    ? { ...allTrains[selectedIndexSafe] }
+    : fallbackTrain;
+
+  chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
+  chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
 
   // Sliding window ampia per le alternative da mostrare nell'interfaccia (fino a 8 treni)
-  const sliceStart = Math.max(0, selectedIndex - 3);
-  const sliceEnd = Math.min(allTrains.length, selectedIndex + 5);
-  const availableTrains = allTrains.slice(sliceStart, sliceEnd);
+  const sliceStart = Math.max(0, selectedIndexSafe - 3);
+  const sliceEnd = Math.min(allTrains.length, selectedIndexSafe + 5);
+  const availableTrains = allTrains.length > 0 ? allTrains.slice(sliceStart, sliceEnd) : [chosenTrain];
 
   return {
     train: chosenTrain,
     availableTrains,
-    selectedIndex,
+    selectedIndex: selectedIndexSafe,
   };
 }
 

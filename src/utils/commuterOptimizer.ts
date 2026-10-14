@@ -463,11 +463,12 @@ async function computeOutboundItinerary(
   let badgeColor = '#34c759'; // green
   let isWarning = false;
 
-  if (train.statusDescription.toLowerCase().includes('soppresso')) {
+  const outboundStatusDesc = (train?.statusDescription || '').toLowerCase();
+  if (outboundStatusDesc.includes('soppresso')) {
     badgeText = 'Treno Soppresso';
     badgeColor = '#ef4444'; // red
     isWarning = true;
-  } else if (train.isLive) {
+  } else if (train?.isLive) {
     badgeText = 'Dati Trenitalia';
     badgeColor = '#e05666';
   }
@@ -708,18 +709,18 @@ async function computeReturnItinerary(
     selectedTrainIndex: selectedIndex,
     statusBadge: {
       text:
-        train.statusDescription.toLowerCase().includes('soppresso')
+        (train?.statusDescription || '').toLowerCase().includes('soppresso')
           ? 'Treno Soppresso'
-          : train.isLive
+          : train?.isLive
           ? 'Dati Trenitalia'
           : 'Rientro in orario',
       color:
-        train.statusDescription.toLowerCase().includes('soppresso')
+        (train?.statusDescription || '').toLowerCase().includes('soppresso')
           ? '#ef4444'
-          : train.isLive
+          : train?.isLive
           ? '#e05666'
           : '#34c759',
-      isWarning: train.statusDescription.toLowerCase().includes('soppresso'),
+      isWarning: (train?.statusDescription || '').toLowerCase().includes('soppresso'),
     },
     summaryMessage: `Fine lezione ore ${targetLecture.endTime} ➔ Arrivo a casa a ${config.originAddress} alle ore ${minutesToTime(homeArrivalMins)}`,
   };

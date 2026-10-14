@@ -302,12 +302,14 @@ export default function ViaggioScreen() {
     setSelectedClassIndex(null);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
+    setItinerary(null);
   };
 
   const handleDirectionChange = (newDir: 'outbound' | 'return') => {
     setDirection(newDir);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
+    setItinerary(null);
   };
 
   const handleSelectClass = (idx: number) => {
