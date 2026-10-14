@@ -23,7 +23,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
-import { parseTimeToMinutes, evaluateTrainStatus, cleanPlatform } from '../utils/trenitaliaApi';
+import { parseTimeToMinutes, evaluateTrainStatus, cleanPlatform, clearTrenitaliaCache } from '../utils/trenitaliaApi';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -60,6 +60,7 @@ export default function ViaggioScreen() {
   const [selectedTrainOffset, setSelectedTrainOffset] = useState<number>(0);
   const [selectedTrainNumber, setSelectedTrainNumber] = useState<string | null>(null);
   const [configModalVisible, setConfigModalVisible] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
@@ -148,6 +149,10 @@ export default function ViaggioScreen() {
       if (!silent) {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
+      }
+
+      if (isRefresh) {
+        clearTrenitaliaCache();
       }
 
       try {
@@ -257,6 +262,7 @@ export default function ViaggioScreen() {
         });
 
         setItinerary(itin);
+        setLastUpdated(new Date());
       } catch (err: any) {
         console.warn('Errore calcolo itinerario pendolare', err);
       } finally {
@@ -378,14 +384,29 @@ export default function ViaggioScreen() {
 
           {/* Titolo iOS Large Title "Viaggio" */}
           <View style={styles.liquidGlassTitleRow}>
-            <Text style={styles.liquidGlassTitle}>Viaggio</Text>
+            <View>
+              <Text style={styles.liquidGlassTitle}>Viaggio</Text>
+              {lastUpdated && (
+                <View style={styles.liveUpdatedRow}>
+                  <View style={styles.liveUpdatedDot} />
+                  <Text style={styles.liveUpdatedText}>
+                    Aggiornato {lastUpdated.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} • Auto 60s
+                  </Text>
+                </View>
+              )}
+            </View>
             <View style={styles.headerActions}>
               <TouchableOpacity
                 style={styles.headerIconBtn}
                 activeOpacity={0.7}
+                disabled={refreshing}
                 onPress={() => loadData(true)}
               >
-                <Ionicons name="refresh" size={19} color="#fff" />
+                {refreshing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="refresh" size={19} color="#fff" />
+                )}
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.headerIconBtn, { marginLeft: 8 }]}
@@ -534,137 +555,140 @@ export default function ViaggioScreen() {
           </View>
         </View>
 
-        {/* Sezione Selettore Lezioni del Giorno */}
-        <View style={styles.lecturesSection}>
-          <View style={styles.sectionHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="book-outline" size={13} color={theme.accent} style={{ marginRight: 5 }} />
-              <Text style={[styles.sectionTitle, { color: theme.accent }]}>LEZIONI DEL GIORNO</Text>
+        <ScrollView
+          style={styles.scrollBody}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 90 }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => loadData(true)}
+              tintColor={theme.primary}
+              colors={[theme.primary]}
+            />
+          }
+        >
+          {/* Sezione Selettore Lezioni del Giorno */}
+          <View style={styles.lecturesSection}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="book-outline" size={13} color={theme.accent} style={{ marginRight: 5 }} />
+                <Text style={[styles.sectionTitle, { color: theme.accent }]}>LEZIONI DEL GIORNO</Text>
+              </View>
             </View>
-          </View>
 
-          {dayClasses.length === 0 ? (
-            <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
-              <Ionicons name="sunny-outline" size={18} color="#94a3b8" style={{ marginRight: 8 }} />
-              <Text style={styles.noClassesText}>Nessuna lezione in programma per questo giorno</Text>
-            </View>
-          ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.classesScrollContainer}
-            >
-              {dayClasses.map((item, idx) => {
-                const isSelected = activeSelectedClass
-                  ? item.subject === activeSelectedClass.subject &&
-                    item.startTime === activeSelectedClass.startTime
-                  : idx === 0;
+            {dayClasses.length === 0 ? (
+              <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
+                <Ionicons name="sunny-outline" size={18} color="#94a3b8" style={{ marginRight: 8 }} />
+                <Text style={styles.noClassesText}>Nessuna lezione in programma per questo giorno</Text>
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                nestedScrollEnabled={true}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.classesScrollContainer}
+              >
+                {dayClasses.map((item, idx) => {
+                  const isSelected = activeSelectedClass
+                    ? item.subject === activeSelectedClass.subject &&
+                      item.startTime === activeSelectedClass.startTime
+                    : idx === 0;
 
-                return (
-                  <TouchableOpacity
-                    key={`${item.subject}-${item.startTime}-${idx}`}
-                    style={[
-                      styles.classCard,
-                      isSelected && [
-                        styles.classCardSelected,
-                        { backgroundColor: theme.cardTint, borderColor: theme.primary },
-                      ],
-                    ]}
-                    activeOpacity={0.8}
-                    onPress={() => handleSelectClass(idx)}
-                  >
-                    <View style={styles.classCardTopRow}>
-                      <View
-                        style={[
-                          styles.classTimeBadge,
-                          { backgroundColor: theme.subtle },
-                          isSelected && [
-                            styles.classTimeBadgeSelected,
-                            { backgroundColor: theme.primary },
-                          ],
-                        ]}
+                  return (
+                    <TouchableOpacity
+                      key={`${item.subject}-${item.startTime}-${idx}`}
+                      style={[
+                        styles.classCard,
+                        isSelected && [
+                          styles.classCardSelected,
+                          { backgroundColor: theme.cardTint, borderColor: theme.primary },
+                        ],
+                      ]}
+                      activeOpacity={0.8}
+                      onPress={() => handleSelectClass(idx)}
+                    >
+                      <View style={styles.classCardTopRow}>
+                        <View
+                          style={[
+                            styles.classTimeBadge,
+                            { backgroundColor: theme.subtle },
+                            isSelected && [
+                              styles.classTimeBadgeSelected,
+                              { backgroundColor: theme.primary },
+                            ],
+                          ]}
+                        >
+                          <Ionicons
+                            name="time-outline"
+                            size={11}
+                            color={isSelected ? '#fff' : theme.accent}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.classTimeText,
+                              { color: theme.accent },
+                              isSelected && styles.classTimeTextSelected,
+                            ]}
+                          >
+                            {item.startTime} - {item.endTime}
+                          </Text>
+                        </View>
+                        {isSelected && (
+                          <View style={[styles.targetBadge, { backgroundColor: theme.primary }]}>
+                            <Ionicons name="checkmark-circle" size={12} color="#fff" style={{ marginRight: 3 }} />
+                            <Text style={styles.targetBadgeText}>Target</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <Text
+                        style={[styles.classSubjectText, isSelected && styles.classSubjectTextSelected]}
+                        numberOfLines={2}
                       >
+                        {item.subject}
+                      </Text>
+
+                      <View style={styles.classRoomRow}>
                         <Ionicons
-                          name="time-outline"
-                          size={11}
-                          color={isSelected ? '#fff' : theme.accent}
+                          name="location-outline"
+                          size={12}
+                          color={isSelected ? theme.light : '#94a3b8'}
                           style={{ marginRight: 4 }}
                         />
                         <Text
                           style={[
-                            styles.classTimeText,
-                            { color: theme.accent },
-                            isSelected && styles.classTimeTextSelected,
+                            styles.classRoomText,
+                            isSelected && [styles.classRoomTextSelected, { color: theme.light }],
                           ]}
+                          numberOfLines={1}
                         >
-                          {item.startTime} - {item.endTime}
+                          {item.room || 'Aula'}{item.building ? ` • ${item.building}` : ''}
                         </Text>
                       </View>
-                      {isSelected && (
-                        <View style={[styles.targetBadge, { backgroundColor: theme.primary }]}>
-                          <Ionicons name="checkmark-circle" size={12} color="#fff" style={{ marginRight: 3 }} />
-                          <Text style={styles.targetBadgeText}>Target</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    <Text
-                      style={[styles.classSubjectText, isSelected && styles.classSubjectTextSelected]}
-                      numberOfLines={2}
-                    >
-                      {item.subject}
-                    </Text>
-
-                    <View style={styles.classRoomRow}>
-                      <Ionicons
-                        name="location-outline"
-                        size={12}
-                        color={isSelected ? theme.light : '#94a3b8'}
-                        style={{ marginRight: 4 }}
-                      />
-                      <Text
-                        style={[
-                          styles.classRoomText,
-                          isSelected && [styles.classRoomTextSelected, { color: theme.light }],
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {item.room || 'Aula'}{item.building ? ` • ${item.building}` : ''}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
-
-        {/* Corpo Principale Itinerario */}
-        {loading ? (
-          <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color={theme.primary} />
-            <Text style={styles.loadingText}>Calcolo tempi, treni regionali e linee dirette...</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
           </View>
-        ) : !itinerary ? (
-          <View style={styles.centerContainer}>
-            <Ionicons name="train-outline" size={44} color="#64748b" />
-            <Text style={styles.emptyTitle}>Nessun itinerario calcolato</Text>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => loadData()}>
-              <Text style={styles.primaryBtnText}>Ricalcola</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <ScrollView
-            style={styles.scrollBody}
-            contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 90 }]}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => loadData(true)}
-                tintColor={theme.primary}
-              />
-            }
-          >
+
+          {/* Corpo Principale Itinerario */}
+          {loading ? (
+            <View style={[styles.centerContainer, { minHeight: 280 }]}>
+              <ActivityIndicator size="large" color={theme.primary} />
+              <Text style={styles.loadingText}>Calcolo tempi, treni regionali e linee dirette...</Text>
+            </View>
+          ) : !itinerary ? (
+            <View style={[styles.centerContainer, { minHeight: 280 }]}>
+              <Ionicons name="train-outline" size={44} color="#64748b" />
+              <Text style={styles.emptyTitle}>Nessun itinerario calcolato</Text>
+              <TouchableOpacity style={styles.primaryBtn} onPress={() => loadData(true)}>
+                <Text style={styles.primaryBtnText}>Ricalcola</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
             {/* Hero Card */}
             <View style={[styles.heroCard, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
               <View style={styles.heroTopRow}>
@@ -1192,8 +1216,9 @@ export default function ViaggioScreen() {
               />
               <Text style={styles.summaryFooterText}>{itinerary.summaryMessage}</Text>
             </View>
-          </ScrollView>
+          </>
         )}
+      </ScrollView>
 
         {/* Modal Impostazioni Pendolare */}
         {config && (
@@ -1252,6 +1277,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#ffffff',
     letterSpacing: 0.35,
+  },
+  liveUpdatedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  liveUpdatedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#34c759',
+    marginRight: 6,
+  },
+  liveUpdatedText: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '500',
   },
   headerActions: {
     flexDirection: 'row',
