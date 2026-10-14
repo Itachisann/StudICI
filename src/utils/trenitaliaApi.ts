@@ -1133,7 +1133,8 @@ export interface TrainStatusResult {
  */
 export function evaluateTrainStatus(
   train: LiveTrainInfo,
-  targetDate: Date = new Date()
+  targetDate: Date = new Date(),
+  stationName?: string
 ): TrainStatusResult {
   const now = new Date();
   const isToday =
@@ -1247,8 +1248,9 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5A: Treno deve ancora partire da questa stazione (orario attuale strettamente prima della partenza programmata/effettiva)
-  if (nowMins < actualDepMins) {
+  // Caso 5A: Treno deve ancora partire da questa stazione (orario attuale strettamente prima della partenza programmata)
+  const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
+  if (nowMins < plannedDepMins) {
     // 1. Ha già un ritardo calcolato/comunicato da Trenitalia
     if (train.delayMinutes > 0) {
       return {
@@ -1318,30 +1320,30 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5B: L'orario di partenza è passato ma il treno non è ancora partito (fermo al binario)
-  if (train.isDeparted === false || (train.isOriginStation && !train.isDepartedFromStation)) {
-    const minsLateDeparture = Math.max(0, nowMins - parseTimeToMinutes(train.departureTimePlanned || '00:00'));
+  // Caso 5B: L'orario di partenza è arrivato o passato, ma il treno non è ancora partito dalla stazione di riferimento del pendolare
+  if (!train.isDepartedFromStation || train.isDeparted === false) {
+    const minsLateDeparture = Math.max(0, nowMins - plannedDepMins);
+    const effectiveDelay = Math.max(train.delayMinutes || 0, minsLateDeparture);
+    const depTime = train.departureTimePlanned || train.departureTimeActual;
+    const delayInfo = effectiveDelay > 0 ? ` (+${effectiveDelay}m)` : '';
+    const stText = stationName ? ` a ${stationName}` : '';
+
     return {
-      statusType: minsLateDeparture > 0 ? 'delayed' : 'scheduled',
-      badgeLabel:
-        minsLateDeparture > 0
-          ? `Non ancora partito (+${minsLateDeparture}m)`
-          : train.isOriginStation
-          ? 'Origine corsa • In partenza'
-          : 'In partenza',
-      badgeColor: minsLateDeparture > 0 ? '#ef4444' : '#0ea5e9',
-      badgeBg: minsLateDeparture > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(14, 165, 233, 0.15)',
-      badgeBorder: minsLateDeparture > 0 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(14, 165, 233, 0.3)',
-      iconName: minsLateDeparture > 0 ? 'time-outline' : 'flag-outline',
-      alertMessage:
-        train.alertMessage ||
-        (train.isOriginStation
-          ? minsLateDeparture > 0
-            ? `Treno fermo al binario di partenza (+${minsLateDeparture}m). Arrivo previsto stimato alle ${train.arrivalTimeActual || train.arrivalTimePlanned}.`
-            : 'Treno pronto al binario di partenza'
-          : minsLateDeparture > 0
-          ? `Treno fermo in stazione (+${minsLateDeparture}m). Arrivo previsto stimato alle ${train.arrivalTimeActual || train.arrivalTimePlanned}.`
-          : 'Treno fermo in stazione'),
+      statusType: effectiveDelay > 0 ? 'delayed' : 'scheduled',
+      badgeLabel: `In stazione${stText} ${depTime ? `(${depTime})` : ''}${delayInfo}`.trim(),
+      badgeColor: effectiveDelay > 5 ? '#ef4444' : effectiveDelay > 0 ? '#f59e0b' : '#0ea5e9',
+      badgeBg: effectiveDelay > 5
+        ? 'rgba(239, 68, 68, 0.15)'
+        : effectiveDelay > 0
+        ? 'rgba(245, 158, 11, 0.15)'
+        : 'rgba(14, 165, 233, 0.15)',
+      badgeBorder: effectiveDelay > 5
+        ? 'rgba(239, 68, 68, 0.3)'
+        : effectiveDelay > 0
+        ? 'rgba(245, 158, 11, 0.3)'
+        : 'rgba(14, 165, 233, 0.3)',
+      iconName: effectiveDelay > 0 ? 'time-outline' : 'flag-outline',
+      alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
     };
   }

@@ -95,6 +95,11 @@ export default function ViaggioScreen() {
 
   // Stato live, programmato, avvisi e capienza Trenitalia del treno
   const liveTrain = itinerary?.liveTrain;
+  const commuterStationName =
+    direction === 'outbound'
+      ? config?.departureStation.shortName || config?.departureStation.name
+      : config?.arrivalStation.shortName || config?.arrivalStation.name;
+
   const trainStatus = useMemo(() => {
     if (!liveTrain) return null;
     const targetDate = new Date();
@@ -102,8 +107,8 @@ export default function ViaggioScreen() {
     let diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
     if (diff < 0) diff += 7;
     targetDate.setDate(targetDate.getDate() + diff);
-    return evaluateTrainStatus(liveTrain, targetDate);
-  }, [liveTrain, selectedDayIdx]);
+    return evaluateTrainStatus(liveTrain, targetDate, commuterStationName);
+  }, [liveTrain, selectedDayIdx, commuterStationName]);
 
   // Lezioni del giorno selezionato
   const dayClasses = useMemo(() => {
