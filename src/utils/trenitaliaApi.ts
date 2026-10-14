@@ -241,13 +241,17 @@ export async function getLiveStationDepartures(
         )
       );
 
+      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno con origine da questa stazione e non ancora partito, oppure nonPartito === true):
       let effectiveDelay = delay;
-      if (!isDepartedFromStation && nowMins > parseTimeToMinutes(plannedDep)) {
+      const isRealDepartureIssue =
+        (raw.nonPartito === true || (isOriginStation && !isDepartedFromStation)) &&
+        nowMins > parseTimeToMinutes(plannedDep) &&
+        nowMins - parseTimeToMinutes(plannedDep) <= 90;
+
+      if (isRealDepartureIssue) {
         const departureLateMins = nowMins - parseTimeToMinutes(plannedDep);
-        if (departureLateMins > 0) {
-          effectiveDelay = Math.max(delay, departureLateMins);
-          actualDep = minutesToTime(parseTimeToMinutes(plannedDep) + effectiveDelay);
-        }
+        effectiveDelay = Math.max(delay, departureLateMins);
+        actualDep = minutesToTime(parseTimeToMinutes(plannedDep) + effectiveDelay);
       }
 
       let statusDescription = 'In orario';
@@ -255,12 +259,12 @@ export async function getLiveStationDepartures(
         statusDescription = 'Soppresso';
       } else if (raw.provvedimento === 3 || raw.statoTreno === 'DEVIATO') {
         statusDescription = 'Deviato';
-      } else if (raw.nonPartito || !isDepartedFromStation) {
-        if (effectiveDelay > 0) {
-          statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
-        } else {
-          statusDescription = isOriginStation ? 'Origine corsa' : 'Non ancora partito';
-        }
+      } else if (isRealDepartureIssue) {
+        statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
+      } else if (raw.nonPartito && isOriginStation) {
+        statusDescription = 'Origine corsa • Non partito';
+      } else if (raw.nonPartito) {
+        statusDescription = 'Non partito all\'origine';
       } else if (effectiveDelay > 0) {
         statusDescription = `Ritardo di ${effectiveDelay} min`;
       } else if (effectiveDelay < 0) {
@@ -704,17 +708,19 @@ export async function fetchLiveTrenitaliaTimetable(
         )
       );
 
-      // Se il treno NON È ANCORA PARTITO da questa stazione ma l'orario di partenza programmato è già passato:
-      // il treno è fermo al binario e accumula ritardo.
-      // Proietta la partenza e l'arrivo a destinazione posticipandoli del ritardo reale accumulato!
+      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno con origine da questa stazione e non ancora partito, oppure nonPartito === true):
       let effectiveDelay = delay;
-      if (isToday && !isDepartedFromStation && nowMins > parseTimeToMinutes(depPlanned)) {
+      const isRealDepartureIssue =
+        isToday &&
+        (dep.nonPartito === true || (isOriginStation && !isDepartedFromStation)) &&
+        nowMins > parseTimeToMinutes(depPlanned) &&
+        nowMins - parseTimeToMinutes(depPlanned) <= 90;
+
+      if (isRealDepartureIssue) {
         const departureLateMins = nowMins - parseTimeToMinutes(depPlanned);
-        if (departureLateMins > 0) {
-          effectiveDelay = Math.max(delay, departureLateMins);
-          depActual = minutesToTime(parseTimeToMinutes(depPlanned) + effectiveDelay);
-          arrActual = minutesToTime(parseTimeToMinutes(arrPlanned) + effectiveDelay);
-        }
+        effectiveDelay = Math.max(delay, departureLateMins);
+        depActual = minutesToTime(parseTimeToMinutes(depPlanned) + effectiveDelay);
+        arrActual = minutesToTime(parseTimeToMinutes(arrPlanned) + effectiveDelay);
       }
 
       let statusDescription = 'In orario';
@@ -723,12 +729,12 @@ export async function fetchLiveTrenitaliaTimetable(
           statusDescription = 'Soppresso';
         } else if (dep.provvedimento === 3 || dep.statoTreno === 'DEVIATO') {
           statusDescription = 'Deviato';
-        } else if (dep.nonPartito || !isDepartedFromStation) {
-          if (effectiveDelay > 0) {
-            statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
-          } else {
-            statusDescription = isOriginStation ? 'Origine corsa' : 'Non ancora partito';
-          }
+        } else if (isRealDepartureIssue) {
+          statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
+        } else if (dep.nonPartito && isOriginStation) {
+          statusDescription = 'Origine corsa • Non partito';
+        } else if (dep.nonPartito) {
+          statusDescription = 'Non partito all\'origine';
         } else if (effectiveDelay > 0) {
           statusDescription = `Ritardo di ${effectiveDelay} min`;
         } else if (effectiveDelay < 0) {
@@ -964,13 +970,15 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const targetMins = parseTimeToMinutes(targetTimeStr);
   const nowMins = now.getHours() * 60 + now.getMinutes();
 
-  // Se è oggi, per tutti i treni non ancora partiti oltre l'orario programmato:
-  // proietta il ritardo reale accumulato sia sulla partenza che sull'arrivo!
+  // Se è oggi, per treni live che hanno problemi REALI alla partenza (origine corsa non ancora partita):
   if (isToday) {
     for (const t of allTrains) {
-      if (!t.isDepartedFromStation) {
+      if (
+        t.isLive &&
+        (t.isDeparted === false || (t.isOriginStation && !t.isDepartedFromStation))
+      ) {
         const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-        if (nowMins > depPlanM) {
+        if (nowMins > depPlanM && nowMins - depPlanM <= 90) {
           const lateM = nowMins - depPlanM;
           if (lateM > (t.delayMinutes || 0)) {
             t.delayMinutes = lateM;
@@ -986,12 +994,16 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   }
 
   // Verifica se un treno è prendibile dal viaggiatore:
-  // se è oggi, esclude treni già partiti dalla stazione di riferimento
+  // se è oggi, esclude treni già partiti dalla stazione di riferimento o treni passati da ore
   const isTrainCatchable = (t: LiveTrainInfo) => {
     if (!isToday) return true;
     if (t.isDepartedFromStation) return false;
     const depM = parseTimeToMinutes(t.departureTimeActual || t.departureTimePlanned);
-    return depM >= nowMins || t.isDeparted === false;
+    // Solo treni con partenza futura o al minuto attuale.
+    // Se è un treno di origine corsa fermo al binario per problemi di partenza, massimo 60 min di ritardo.
+    if (depM >= nowMins) return true;
+    if (t.isOriginStation && t.isDeparted === false && nowMins - depM <= 60) return true;
+    return false;
   };
 
   let recommendedIdx = 0;
@@ -1212,9 +1224,6 @@ export function evaluateTrainStatus(
 
   // 5. Se è oggi: verifica orario attuale rispetto alla corsa
   const nowMins = now.getHours() * 60 + now.getMinutes();
-  const actualDepMins = parseTimeToMinutes(
-    train.departureTimeActual || train.departureTimePlanned || '00:00'
-  );
   const actualArrMins = parseTimeToMinutes(
     train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
   );
@@ -1320,8 +1329,13 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5B: L'orario di partenza è arrivato o passato, ma il treno non è ancora partito dalla stazione di riferimento del pendolare
-  if (!train.isDepartedFromStation || train.isDeparted === false) {
+  // Caso 5B: Treno con problemi REALI alla partenza (origine corsa non ancora partita oltre l'orario programmato)
+  const isRealDepartureIssue =
+    (train.isDeparted === false || (train.isOriginStation && !train.isDepartedFromStation)) &&
+    nowMins >= plannedDepMins &&
+    nowMins - plannedDepMins <= 90;
+
+  if (isRealDepartureIssue) {
     const minsLateDeparture = Math.max(0, nowMins - plannedDepMins);
     const effectiveDelay = Math.max(train.delayMinutes || 0, minsLateDeparture);
     const depTime = train.departureTimePlanned || train.departureTimeActual;
@@ -1348,66 +1362,39 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5C: Treno in viaggio (orario attuale tra partenza e arrivo)
-  if (nowMins >= actualDepMins && (actualArrMins === 0 || nowMins <= actualArrMins + 3)) {
-    if (train.delayMinutes > 0) {
-      return {
-        statusType: 'delayed',
-        badgeLabel: `In viaggio • +${train.delayMinutes}m ritardo`,
-        badgeColor: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
-        badgeBg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-        badgeBorder: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
-        iconName: 'warning-outline',
-        alertMessage: train.alertMessage,
-        capacityWarning: train.capacityWarning,
-      };
-    } else if (train.delayMinutes < 0) {
-      return {
-        statusType: 'early',
-        badgeLabel: `In viaggio • Anticipo ${Math.abs(train.delayMinutes)}m`,
-        badgeColor: '#10b981',
-        badgeBg: 'rgba(16, 185, 129, 0.15)',
-        badgeBorder: 'rgba(16, 185, 129, 0.3)',
-        iconName: 'flash-outline',
-        alertMessage: train.alertMessage,
-        capacityWarning: train.capacityWarning,
-      };
-    } else {
-      return {
-        statusType: 'running',
-        badgeLabel: 'In viaggio • In orario',
-        badgeColor: '#34c759',
-        badgeBg: 'rgba(52, 199, 89, 0.15)',
-        badgeBorder: 'rgba(52, 199, 89, 0.3)',
-        iconName: 'checkmark-circle-outline',
-        alertMessage: train.alertMessage,
-        capacityWarning: train.capacityWarning,
-      };
-    }
-  }
-
-  // Caso 5C: Treno arrivato a destinazione
+  // Caso 5C: Treno in viaggio (ha già lasciato l'origine ed è in marcia sulla linea o in avvicinamento)
   if (train.delayMinutes > 0) {
     return {
       statusType: 'delayed',
-      badgeLabel: `Arrivato (+${train.delayMinutes}m)`,
-      badgeColor: '#64748b',
-      badgeBg: 'rgba(100, 116, 139, 0.15)',
-      badgeBorder: 'rgba(100, 116, 139, 0.25)',
-      iconName: 'flag-outline',
+      badgeLabel: `+${train.delayMinutes}m ritardo`,
+      badgeColor: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
+      badgeBg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+      badgeBorder: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+      iconName: 'warning-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  } else if (train.delayMinutes < 0) {
+    return {
+      statusType: 'early',
+      badgeLabel: `In orario • Anticipo ${Math.abs(train.delayMinutes)}m`,
+      badgeColor: '#10b981',
+      badgeBg: 'rgba(16, 185, 129, 0.15)',
+      badgeBorder: 'rgba(16, 185, 129, 0.3)',
+      iconName: 'flash-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  } else {
+    return {
+      statusType: 'running',
+      badgeLabel: 'In viaggio • In orario',
+      badgeColor: '#34c759',
+      badgeBg: 'rgba(52, 199, 89, 0.15)',
+      badgeBorder: 'rgba(52, 199, 89, 0.3)',
+      iconName: 'checkmark-circle-outline',
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
     };
   }
-
-  return {
-    statusType: 'on_time',
-    badgeLabel: 'Arrivato • In orario',
-    badgeColor: '#64748b',
-    badgeBg: 'rgba(100, 116, 139, 0.15)',
-    badgeBorder: 'rgba(100, 116, 139, 0.25)',
-    iconName: 'flag-outline',
-    alertMessage: train.alertMessage,
-    capacityWarning: train.capacityWarning,
-  };
 }

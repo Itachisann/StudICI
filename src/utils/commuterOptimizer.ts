@@ -158,11 +158,23 @@ function findDayLecture(
       const nowMins = now.getHours() * 60 + now.getMinutes();
       if (direction === 'outbound') {
         // Selezione intelligente: se la lezione della mattina è già passata
-        // (es. studente rimasto a casa per le lezioni 9-12), seleziona la prossima lezione!
+        // seleziona la prossima lezione. Se sono tutte passate, targetta da adesso!
         const upcoming = dayClasses.find(
           (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
         );
-        chosenClass = upcoming || dayClasses[dayClasses.length - 1];
+        if (upcoming) {
+          chosenClass = upcoming;
+        } else {
+          chosenClass = {
+            subject: 'Lezioni di oggi terminate',
+            teacher: '',
+            room: 'Treni in tempo reale',
+            building: 'Sapienza',
+            startTime: minutesToTime(nowMins + 60),
+            endTime: minutesToTime(nowMins + 180),
+            duration: 120,
+          };
+        }
       } else {
         // Ritorno: seleziona la lezione che termina intorno a quest'ora o l'ultima
         const pastOrActive = [...dayClasses].reverse().find(
@@ -248,10 +260,20 @@ async function computeOutboundItinerary(
 
   const transitMins = transitSolution.durationMinutes || config.transitLeg.durationMinutes || 20;
 
+  const now = new Date();
+  const isToday =
+    targetDate.getDate() === now.getDate() &&
+    targetDate.getMonth() === now.getMonth() &&
+    targetDate.getFullYear() === now.getFullYear();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
   // Orario target di arrivo alla stazione di Roma (es. Tiburtina)
   // Arrivo in aula = inizio - buffer
   const classroomArrivalMins = lectureStartMins - bufferMins;
-  const stationTargetArrivalMins = classroomArrivalMins - transitMins;
+  let stationTargetArrivalMins = classroomArrivalMins - transitMins;
+  if (isToday && nowMins > lectureStartMins) {
+    stationTargetArrivalMins = nowMins + 50;
+  }
   const stationTargetArrivalStr = minutesToTime(stationTargetArrivalMins);
 
   const carEnabled = config.carLeg.enabled;
@@ -503,8 +525,18 @@ async function computeReturnItinerary(
 
   const transitMins = transitSolution.durationMinutes || config.transitLeg.durationMinutes || 20;
 
+  const now = new Date();
+  const isToday =
+    targetDate.getDate() === now.getDate() &&
+    targetDate.getMonth() === now.getMonth() &&
+    targetDate.getFullYear() === now.getFullYear();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
   // Orario di arrivo in stazione a Roma
-  const stationArrivalMins = lectureEndMins + exitClassroomBuffer + transitMins;
+  let stationArrivalMins = lectureEndMins + exitClassroomBuffer + transitMins;
+  if (isToday && nowMins > stationArrivalMins) {
+    stationArrivalMins = nowMins;
+  }
   const stationArrivalStr = minutesToTime(stationArrivalMins);
 
   const carEnabled = config.carLeg.enabled;

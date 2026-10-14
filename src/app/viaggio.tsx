@@ -137,7 +137,7 @@ export default function ViaggioScreen() {
         const upcoming = dayClasses.find(
           (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
         );
-        return upcoming || dayClasses[dayClasses.length - 1];
+        return upcoming || null;
       } else {
         const pastOrActive = [...dayClasses].reverse().find(
           (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
@@ -729,7 +729,11 @@ export default function ViaggioScreen() {
               </View>
 
               <Text style={styles.heroHeadline}>
-                {direction === 'outbound' ? 'Parti da casa alle' : 'Rientro previsto alle'}
+                {itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                  ? 'Prossima partenza'
+                  : direction === 'outbound'
+                  ? 'Parti da casa alle'
+                  : 'Rientro previsto alle'}
               </Text>
               <Text style={styles.heroBigTime}>
                 {direction === 'outbound' ? itinerary.departureTime : itinerary.arrivalTime}
@@ -737,9 +741,19 @@ export default function ViaggioScreen() {
 
               <View style={[styles.heroTargetLectureBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
                 <Ionicons
-                  name={direction === 'outbound' ? 'school' : 'home'}
+                  name={
+                    itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                      ? 'checkmark-circle-outline'
+                      : direction === 'outbound'
+                      ? 'school'
+                      : 'home'
+                  }
                   size={16}
-                  color={theme.accent}
+                  color={
+                    itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                      ? '#10b981'
+                      : theme.accent
+                  }
                   style={{ marginRight: 8 }}
                 />
                 <View style={{ flex: 1 }}>
@@ -749,7 +763,9 @@ export default function ViaggioScreen() {
                       : `Rientro ad ${config?.originAddress}`}
                   </Text>
                   <Text style={styles.heroLectureDetails} numberOfLines={1}>
-                    {direction === 'outbound'
+                    {itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
+                      ? 'Treni in tempo reale da adesso'
+                      : direction === 'outbound'
                       ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
                       : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
                   </Text>
