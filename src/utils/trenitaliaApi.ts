@@ -211,20 +211,24 @@ export async function getLiveStationDepartures(
         raw.binarioEffettivoPartenzaCodice ||
         null;
 
+      const plannedDep = raw.compOrarioPartenza || '00:00';
+      const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
+
       const isOriginStation = Boolean(
         raw.codOrigine === stationCode ||
         raw.idOrigine === stationCode ||
         (typeof raw.origine === 'string' && raw.origine.trim().length === 0)
       );
+      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
+      const isDeparted = Boolean(raw.nonPartito === false);
 
-      const plannedDep = raw.compOrarioPartenza || '00:00';
-      const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
       let actualDep = plannedDep;
-
-      // Se il treno proviene da un'altra stazione (!isOriginStation) e ha ritardo (> 0),
-      // aggiorna l'orario effettivo di partenza.
-      // Se proviene dalla stazione di riferimento (isOriginStation), gli orari programmati non si modificano.
-      if (!isOriginStation) {
+      // REGOLA: Se il treno ha origine da questa stazione e non è ancora partito, non modifichiamo l'orario (resta programmato)
+      // Se invece proviene da un'altra stazione (anche non ancora partita dall'origine remota) o è già in marcia, applichiamo il ritardo
+      if (isOriginStation && !isDeparted) {
+        actualDep = plannedDep;
+      } else {
+        // NON scalare anticipo (delay <= 0) perché il treno rispetta l'orario programmato
         if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(plannedDep)) {
           actualDep = cleanLiveDep;
         } else if (delay > 0) {
@@ -232,9 +236,6 @@ export async function getLiveStationDepartures(
           actualDep = minutesToTime(ph * 60 + pm + delay);
         }
       }
-
-      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
-      const isDeparted = Boolean(raw.nonPartito === false);
 
       const now = new Date();
       const nowMins = now.getHours() * 60 + now.getMinutes();
@@ -664,33 +665,35 @@ export async function fetchLiveTrenitaliaTimetable(
         dep.idOrigine === depCode ||
         (typeof dep.origine === 'string' && dep.origine.trim().length === 0)
       );
+      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
+      const isDeparted = Boolean(dep.nonPartito === false);
 
-      // Partenza effettiva:
-      // Se il treno proviene da un'altra stazione (!isOriginStation) e ha ritardo, calcola il nuovo orario.
-      // Se proviene dalla stazione di riferimento (isOriginStation), gli orari programmati non si modificano.
+      // Partenza e arrivo effettivi:
+      // REGOLA: Se il treno ha origine da questa stazione di riferimento e non è ancora partito,
+      // NON modifichiamo né partenza né arrivo (restano quelli programmati). Il ritardo va indicato solo nel badge.
+      // Se invece proviene da un'altra stazione (anche se non ancora partita dall'origine remota) o è già in marcia,
+      // applichiamo il ritardo sia alla partenza che all'arrivo.
       const cleanLiveDep = cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
+      const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
       let depActual = depPlanned;
-      if (!isOriginStation) {
+      let arrActual = arrPlanned;
+
+      if (isOriginStation && !isDeparted) {
+        depActual = depPlanned;
+        arrActual = arrPlanned;
+      } else {
         if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
           depActual = cleanLiveDep;
         } else if (delay > 0) {
           depActual = minutesToTime(dh * 60 + dm + delay);
         }
-      }
 
-      let arrActual = arrPlanned;
-
-      // Arrivo effettivo: solo se non proviene dalla stazione di riferimento trasliamo l'orario di arrivo
-      const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-      if (!isOriginStation) {
         if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
           arrActual = cleanLiveArr;
         } else if (delay > 0) {
           arrActual = minutesToTime(ah * 60 + am + delay);
         }
       }
-      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
-      const isDeparted = Boolean(dep.nonPartito === false);
 
       const now = new Date();
       const nowMins = now.getHours() * 60 + now.getMinutes();
@@ -915,21 +918,27 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
             if (live.isDepartedFromStation !== undefined) {
               matched.isDepartedFromStation = live.isDepartedFromStation;
             }
-
-            // Solo se il treno NON ha origine dalla stazione di riferimento aggiorniamo gli orari effettivi
-            if (!live.isOriginStation && live.delayMinutes > 0) {
-              matched.departureTimeActual = live.departureTimeActual || matched.departureTimePlanned;
-              if (matched.arrivalTimePlanned) {
-                const arrMins = parseTimeToMinutes(matched.arrivalTimePlanned) + live.delayMinutes;
-                matched.arrivalTimeActual = minutesToTime(arrMins);
-              }
-            } else {
-              matched.departureTimeActual = matched.departureTimePlanned;
-              matched.arrivalTimeActual = matched.arrivalTimePlanned;
-            }
             if (live.platformActual) matched.platformActual = cleanPlatform(live.platformActual);
             if (live.platformPlanned) matched.platformPlanned = cleanPlatform(live.platformPlanned);
             matched.alertMessage = live.alertMessage;
+
+            if (matched.isOriginStation && !matched.isDeparted) {
+              // Treno che ha origine da questa stazione e non ancora partito: non modifichiamo orari
+              matched.departureTimeActual = matched.departureTimePlanned;
+              matched.arrivalTimeActual = matched.arrivalTimePlanned;
+            } else {
+              matched.departureTimeActual =
+                live.delayMinutes > 0
+                  ? live.departureTimeActual || matched.departureTimePlanned
+                  : matched.departureTimePlanned;
+
+              if (matched.arrivalTimePlanned) {
+                const arrMins =
+                  parseTimeToMinutes(matched.arrivalTimePlanned) +
+                  (live.delayMinutes > 0 ? live.delayMinutes : 0);
+                matched.arrivalTimeActual = minutesToTime(arrMins);
+              }
+            }
           }
         }
       } catch {}
@@ -1213,14 +1222,26 @@ export function evaluateTrainStatus(
   if (nowMins < actualDepMins) {
     // 1. Ha già un ritardo calcolato/comunicato da Trenitalia
     if (train.delayMinutes > 0) {
+      const isRemoteNotDeparted = !train.isOriginStation && train.isDeparted === false;
+      const isOriginNotDeparted = train.isOriginStation && train.isDeparted === false;
       return {
         statusType: 'delayed',
-        badgeLabel: `+${train.delayMinutes}m ritardo`,
+        badgeLabel: isRemoteNotDeparted
+          ? `Non partito all'origine (+${train.delayMinutes}m)`
+          : isOriginNotDeparted
+          ? `Origine corsa • In ritardo (+${train.delayMinutes}m)`
+          : `+${train.delayMinutes}m ritardo`,
         badgeColor: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
         badgeBg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
         badgeBorder: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
         iconName: 'warning-outline',
-        alertMessage: train.alertMessage,
+        alertMessage:
+          train.alertMessage ||
+          (isRemoteNotDeparted
+            ? 'Treno non ancora partito dalla stazione di origine'
+            : isOriginNotDeparted
+            ? 'Treno in ritardo alla stazione di partenza'
+            : undefined),
         capacityWarning: train.capacityWarning,
       };
     }
@@ -1270,7 +1291,7 @@ export function evaluateTrainStatus(
     // 5. Treno non ancora partito / programmato (es. partenza tra 1 o 2 ore)
     return {
       statusType: 'scheduled',
-      badgeLabel: 'Non ancora partito',
+      badgeLabel: !train.isOriginStation && train.isDeparted === false ? 'Non partito all\'origine' : 'Non ancora partito',
       badgeColor: '#94a3b8',
       badgeBg: 'rgba(148, 163, 184, 0.12)',
       badgeBorder: 'rgba(148, 163, 184, 0.25)',
@@ -1283,14 +1304,17 @@ export function evaluateTrainStatus(
   // Caso 5B: L'orario di partenza è passato ma il treno non è ancora partito (fermo al binario)
   if (train.isDeparted === false || (train.isOriginStation && !train.isDepartedFromStation)) {
     const minsLateDeparture = Math.max(0, nowMins - parseTimeToMinutes(train.departureTimePlanned || '00:00'));
+    const isRemoteNotDeparted = !train.isOriginStation;
     return {
       statusType: minsLateDeparture > 0 ? 'delayed' : 'scheduled',
       badgeLabel:
         minsLateDeparture > 0
-          ? `Non ancora partito (+${minsLateDeparture}m)`
+          ? (isRemoteNotDeparted
+              ? `Non partito all'origine (+${minsLateDeparture}m)`
+              : `Non ancora partito (+${minsLateDeparture}m)`)
           : train.isOriginStation
           ? 'Origine corsa • In partenza'
-          : 'In partenza',
+          : 'Non partito all\'origine',
       badgeColor: minsLateDeparture > 0 ? '#ef4444' : '#0ea5e9',
       badgeBg: minsLateDeparture > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(14, 165, 233, 0.15)',
       badgeBorder: minsLateDeparture > 0 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(14, 165, 233, 0.3)',
@@ -1301,9 +1325,7 @@ export function evaluateTrainStatus(
           ? minsLateDeparture > 0
             ? 'Treno fermo al binario di partenza oltre l\'orario programmato'
             : 'Treno pronto al binario di partenza'
-          : minsLateDeparture > 0
-          ? 'Treno fermo in stazione oltre l\'orario di partenza programmato'
-          : 'Treno fermo in stazione'),
+          : 'Treno non ancora partito dalla stazione di origine remota'),
       capacityWarning: train.capacityWarning,
     };
   }

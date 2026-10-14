@@ -824,7 +824,12 @@ export default function ViaggioScreen() {
                     <Text
                       style={[
                         styles.trainTimeText,
-                        Boolean(itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0 && !itinerary.liveTrain.isOriginStation) && {
+                        Boolean(
+                          itinerary.liveTrain.delayMinutes &&
+                            itinerary.liveTrain.delayMinutes > 0 &&
+                            (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
+                            itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
+                        ) && {
                           color: '#fb923c',
                         },
                       ]}
@@ -834,7 +839,7 @@ export default function ViaggioScreen() {
                     {Boolean(
                       itinerary.liveTrain.delayMinutes &&
                         itinerary.liveTrain.delayMinutes > 0 &&
-                        !itinerary.liveTrain.isOriginStation &&
+                        (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
                         itinerary.liveTrain.departureTimePlanned &&
                         itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
                     ) && (
@@ -867,7 +872,8 @@ export default function ViaggioScreen() {
                           Boolean(
                             itinerary.liveTrain.delayMinutes &&
                               itinerary.liveTrain.delayMinutes > 0 &&
-                              !itinerary.liveTrain.isOriginStation
+                              (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
+                              itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
                           ) && {
                             color: '#fb923c',
                           },
@@ -878,7 +884,7 @@ export default function ViaggioScreen() {
                       {Boolean(
                         itinerary.liveTrain.delayMinutes &&
                           itinerary.liveTrain.delayMinutes > 0 &&
-                          !itinerary.liveTrain.isOriginStation &&
+                          (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
                           itinerary.liveTrain.arrivalTimePlanned &&
                           itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
                       ) && (
