@@ -22,26 +22,62 @@ function formatViaggiaTrenoDate(d: Date): string {
   )}:${p(d.getMinutes())}:00 GMT${sign}${p(Math.floor(abs / 60))}${p(abs % 60)}`;
 }
 
+/** Diagnostica dell'ultima interrogazione a ViaggiaTreno (mostrata nel messaggio di fallback). */
+let lastFetchError = '';
+let fetchOk = 0;
+let fetchTotal = 0;
+
+export function getViaggiaTrenoDiagnostics(): string {
+  return `${fetchOk}/${fetchTotal} richieste ok${lastFetchError ? `, ultimo errore: ${lastFetchError}` : ''}`;
+}
+
 /**
  * Fetch JSON con timeout PER RICHIESTA (non condiviso), nessuna cache e un tentativo di retry.
  * Ritorna null se la richiesta fallisce definitivamente (diverso da lista vuota valida).
  */
-async function fetchViaggiaTrenoJson(url: string, timeoutMs = 7000, retries = 1): Promise<any | null> {
+async function fetchViaggiaTrenoJson(url: string, timeoutMs = 10000, retries = 1): Promise<any | null> {
+  fetchTotal++;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
-      });
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        clearTimeout(timeout);
+        lastFetchError = `HTTP ${res.status}`;
+        continue;
+      }
+      const text = await res.text();
       clearTimeout(timeout);
-      if (res.ok) return await res.json();
-    } catch {
+      try {
+        const json = JSON.parse(text);
+        fetchOk++;
+        return json;
+      } catch (e: any) {
+        lastFetchError = `risposta non valida (${text.length} caratteri): ${String(e?.message || e).slice(0, 60)}`;
+      }
+    } catch (e: any) {
       clearTimeout(timeout);
+      lastFetchError =
+        e?.name === 'AbortError' ? `timeout ${timeoutMs / 1000}s` : String(e?.message || e).slice(0, 80);
     }
   }
+  console.warn('[ViaggiaTreno]', lastFetchError, url);
   return null;
+}
+
+/** Esegue i task con un numero massimo di richieste simultanee (evita code e timeout falsi su mobile). */
+async function runLimited<T>(tasks: (() => Promise<T>)[], limit = 4): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export const POPULAR_STATIONS: StationInfo[] = [
@@ -410,10 +446,10 @@ export async function fetchLiveTrenitaliaTimetable(
         ? Math.max(0, targetMins - 60)
         : targetMins;
 
-    // Finestre ravvicinate (ogni ~45 min) per non perdere treni: ViaggiaTreno restituisce
-    // solo una manciata di corse per richiesta, quindi servono più campioni sull'arco di ~5 ore.
-    const depOffsets = [-150, -105, -60, -15, 30, 75, 120, 165];
-    const arrOffsets = [-100, -55, -10, 35, 80, 125, 170, 215];
+    // Ogni risposta di ViaggiaTreno copre circa 1h40-2h di treni: bastano 5 campioni a distanza
+    // di un'ora per coprire ~5 ore, senza sovraccaricare la rete del telefono.
+    const depOffsets = [-120, -60, 0, 60, 120];
+    const arrOffsets = [-60, 0, 60, 120, 180];
 
     const buildTimes = (offsets: number[]) =>
       offsets.map((off) => {
@@ -426,22 +462,26 @@ export async function fetchLiveTrenitaliaTimetable(
     const depTimes = buildTimes(depOffsets);
     const arrTimes = buildTimes(arrOffsets);
 
-    const [depLists, arrLists] = await Promise.all([
-      Promise.all(
-        depTimes.map((d) =>
+    fetchOk = 0;
+    fetchTotal = 0;
+    lastFetchError = '';
+
+    const allLists = await runLimited<any | null>([
+      ...depTimes.map(
+        (d) => () =>
           fetchViaggiaTrenoJson(
             `${VIAGGIATRENO_BASE_URL}/partenze/${depCode}/${encodeURIComponent(formatViaggiaTrenoDate(d))}`
           )
-        )
       ),
-      Promise.all(
-        arrTimes.map((d) =>
+      ...arrTimes.map(
+        (d) => () =>
           fetchViaggiaTrenoJson(
             `${VIAGGIATRENO_BASE_URL}/arrivi/${arrCode}/${encodeURIComponent(formatViaggiaTrenoDate(d))}`
           )
-        )
       ),
     ]);
+    const depLists = allLists.slice(0, depTimes.length);
+    const arrLists = allLists.slice(depTimes.length);
 
     const depMap = new Map<string, any>();
     for (const list of depLists) {
@@ -650,8 +690,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
           platformActual: s.platformPlanned,
           delayMinutes: 0,
           statusDescription: 'Orario non verificato',
-          alertMessage:
-            'Dati Trenitalia non raggiungibili: orario indicativo non verificato. Tocca aggiorna per riprovare.',
+          alertMessage: `Dati Trenitalia non disponibili (${getViaggiaTrenoDiagnostics()}). Orario indicativo non verificato.`,
           isLive: false,
           durationMinutes: duration,
           isFast: s.category === 'RV',
@@ -675,8 +714,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
           platformActual: s.platformPlanned,
           delayMinutes: 0,
           statusDescription: 'Orario non verificato',
-          alertMessage:
-            'Dati Trenitalia non raggiungibili: orario indicativo non verificato. Tocca aggiorna per riprovare.',
+          alertMessage: `Dati Trenitalia non disponibili (${getViaggiaTrenoDiagnostics()}). Orario indicativo non verificato.`,
           isLive: false,
           durationMinutes: s.durationMinutesTiburtina,
           isFast: s.category === 'RV',
