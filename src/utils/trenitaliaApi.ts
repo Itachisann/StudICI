@@ -1067,8 +1067,9 @@ export function evaluateTrainStatus(
     train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
   );
 
-  // Caso 5A: Treno deve ancora partire (orario attuale prima della partenza programmata/effettiva)
+  // Caso 5A: Treno deve ancora partire da questa stazione (orario attuale prima della partenza programmata/effettiva)
   if (nowMins < actualDepMins - 1) {
+    // 1. Ha già un ritardo calcolato/comunicato da Trenitalia
     if (train.delayMinutes > 0) {
       return {
         statusType: 'delayed',
@@ -1080,7 +1081,10 @@ export function evaluateTrainStatus(
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,
       };
-    } else if (train.delayMinutes < 0) {
+    }
+
+    // 2. È in anticipo
+    if (train.delayMinutes < 0) {
       return {
         statusType: 'early',
         badgeLabel: `Anticipo ${Math.abs(train.delayMinutes)}m`,
@@ -1091,23 +1095,27 @@ export function evaluateTrainStatus(
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,
       };
-    } else if (train.isLive) {
-      // Se il treno parte direttamente da questa stazione (origine corsa), mostralo chiaramente
-      if (train.isOriginStation) {
-        return {
-          statusType: 'on_time',
-          badgeLabel: 'Origine corsa • In orario',
-          badgeColor: '#0ea5e9',
-          badgeBg: 'rgba(14, 165, 233, 0.15)',
-          badgeBorder: 'rgba(14, 165, 233, 0.3)',
-          iconName: 'flag-outline',
-          alertMessage: train.alertMessage,
-          capacityWarning: train.capacityWarning,
-        };
-      }
+    }
+
+    // 3. Treno che parte direttamente da questa stazione (origine corsa, senza fermate a monte)
+    if (train.isOriginStation) {
       return {
-        statusType: 'on_time',
-        badgeLabel: 'In orario',
+        statusType: 'scheduled',
+        badgeLabel: 'Origine corsa • Non partito',
+        badgeColor: '#0ea5e9',
+        badgeBg: 'rgba(14, 165, 233, 0.15)',
+        badgeBorder: 'rgba(14, 165, 233, 0.3)',
+        iconName: 'flag-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
+    // 4. Treno passante che è già partito dall'origine remota ed è in viaggio verso qui (in orario)
+    if (train.isLive && train.isDeparted) {
+      return {
+        statusType: 'running',
+        badgeLabel: 'In viaggio • In orario',
         badgeColor: '#34c759',
         badgeBg: 'rgba(52, 199, 89, 0.15)',
         badgeBorder: 'rgba(52, 199, 89, 0.3)',
@@ -1117,9 +1125,10 @@ export function evaluateTrainStatus(
       };
     }
 
+    // 5. Treno non ancora partito / programmato (es. partenza tra 1 o 2 ore)
     return {
       statusType: 'scheduled',
-      badgeLabel: 'Programmato',
+      badgeLabel: 'Non ancora partito',
       badgeColor: '#94a3b8',
       badgeBg: 'rgba(148, 163, 184, 0.12)',
       badgeBorder: 'rgba(148, 163, 184, 0.25)',
@@ -1139,7 +1148,11 @@ export function evaluateTrainStatus(
       badgeBg: 'rgba(239, 68, 68, 0.15)',
       badgeBorder: 'rgba(239, 68, 68, 0.3)',
       iconName: 'time-outline',
-      alertMessage: train.alertMessage || 'Treno fermo in stazione oltre l\'orario di partenza programmato',
+      alertMessage:
+        train.alertMessage ||
+        (train.isOriginStation
+          ? 'Treno fermo al binario di partenza oltre l\'orario programmato'
+          : 'Treno fermo in stazione oltre l\'orario di partenza programmato'),
       capacityWarning: train.capacityWarning,
     };
   }
