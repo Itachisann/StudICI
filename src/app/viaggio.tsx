@@ -825,10 +825,10 @@ export default function ViaggioScreen() {
                       style={[
                         styles.trainTimeText,
                         Boolean(
-                          itinerary.liveTrain.delayMinutes &&
-                            itinerary.liveTrain.delayMinutes > 0 &&
-                            (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
-                            itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
+                          (itinerary.liveTrain.departureTimeActual &&
+                            itinerary.liveTrain.departureTimePlanned &&
+                            itinerary.liveTrain.departureTimeActual !== itinerary.liveTrain.departureTimePlanned) ||
+                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0)
                         ) && {
                           color: '#fb923c',
                         },
@@ -837,10 +837,8 @@ export default function ViaggioScreen() {
                       {itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned}
                     </Text>
                     {Boolean(
-                      itinerary.liveTrain.delayMinutes &&
-                        itinerary.liveTrain.delayMinutes > 0 &&
-                        (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
-                        itinerary.liveTrain.departureTimePlanned &&
+                      itinerary.liveTrain.departureTimePlanned &&
+                        itinerary.liveTrain.departureTimeActual &&
                         itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
                     ) && (
                       <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
@@ -859,40 +857,38 @@ export default function ViaggioScreen() {
                     </Text>
                   </View>
 
-                    <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                      <Text style={styles.trainStationLabel}>Arrivo</Text>
-                      <Text style={styles.trainStationName}>
-                        {direction === 'outbound'
-                          ? config?.arrivalStation.shortName || config?.arrivalStation.name
-                          : config?.departureStation.shortName || config?.departureStation.name}
+                  <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                    <Text style={styles.trainStationLabel}>Arrivo</Text>
+                    <Text style={styles.trainStationName}>
+                      {direction === 'outbound'
+                        ? config?.arrivalStation.shortName || config?.arrivalStation.name
+                        : config?.departureStation.shortName || config?.departureStation.name}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.trainTimeText,
+                        Boolean(
+                          (itinerary.liveTrain.arrivalTimeActual &&
+                            itinerary.liveTrain.arrivalTimePlanned &&
+                            itinerary.liveTrain.arrivalTimeActual !== itinerary.liveTrain.arrivalTimePlanned) ||
+                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0)
+                        ) && {
+                          color: '#fb923c',
+                        },
+                      ]}
+                    >
+                      {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
+                    </Text>
+                    {Boolean(
+                      itinerary.liveTrain.arrivalTimePlanned &&
+                        itinerary.liveTrain.arrivalTimeActual &&
+                        itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
+                    ) && (
+                      <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
+                        prog. {itinerary.liveTrain.arrivalTimePlanned}
                       </Text>
-                      <Text
-                        style={[
-                          styles.trainTimeText,
-                          Boolean(
-                            itinerary.liveTrain.delayMinutes &&
-                              itinerary.liveTrain.delayMinutes > 0 &&
-                              (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
-                              itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
-                          ) && {
-                            color: '#fb923c',
-                          },
-                        ]}
-                      >
-                        {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
-                      </Text>
-                      {Boolean(
-                        itinerary.liveTrain.delayMinutes &&
-                          itinerary.liveTrain.delayMinutes > 0 &&
-                          (!itinerary.liveTrain.isOriginStation || itinerary.liveTrain.isDeparted) &&
-                          itinerary.liveTrain.arrivalTimePlanned &&
-                          itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
-                      ) && (
-                        <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
-                          prog. {itinerary.liveTrain.arrivalTimePlanned}
-                        </Text>
-                      )}
-                    </View>
+                    )}
+                  </View>
                 </View>
 
                 {/* Selettore Alternative Treni (Treno prima / dopo & chips) */}
