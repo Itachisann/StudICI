@@ -5,6 +5,19 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.11
+
+### Novità & Miglioramenti
+- **Rework e Standardizzazione Completa dei Badge Treno**:
+  - Unificato lo stato dei treni futuri e non avviati sotto l'etichetta `Non partito` con icona a orologio (`time-outline`), rimuovendo i vecchi testi frammentati `Programmato` e `Non ancora partito`.
+  - Pulizia del badge `Già partito`: rimosso l'orario tra parentesi per mostrare in modo essenziale e pulito `Già partito` (se in orario) o `Già partito (+Xm)` (se in ritardo).
+  - Badge anticipo semplificato: omessa la dicitura superflua `In orario • ` a favore del formato sintetico `Anticipo (Xm)`.
+  - Badge in orario pulito: convertito `In viaggio • In orario` in `In orario`.
+  - Badge partenza origine ritardata: per i treni fermi alla stazione di inizio corsa oltre l'orario previsto viene ora visualizzato `Non partito (+Xm)`.
+- **Badge Permanente "Origine corsa • NOME STAZIONE"**:
+  - Introdotto un nuovo badge permanente nella card del treno che specifica sempre la stazione di partenza del convoglio (es. *Origine corsa • Orte*, *Origine corsa • Ancona*).
+  - Differenziazione cromatica dinamica: tonalità ciano/sky con icona bandiera se la stazione di origine coincide con la stazione di riferimento del pendolare, oppure tonalità ardesia/neutra per convogli passanti provenienti da altra origine remota.
+
 ## 1.6.10
 
 ### Correzioni

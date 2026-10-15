@@ -23,7 +23,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { getCommuterConfig, saveCommuterConfig } from '../utils/commuterStorage';
 import { computeCommuterItinerary } from '../utils/commuterOptimizer';
 import { fetchAllCourseData, fetchScheduleData, ScheduleData, ClassEvent } from '../utils/scraper';
-import { parseTimeToMinutes, evaluateTrainStatus, cleanPlatform, clearTrenitaliaCache } from '../utils/trenitaliaApi';
+import { parseTimeToMinutes, evaluateTrainStatus, cleanPlatform, clearTrenitaliaCache, formatStationName } from '../utils/trenitaliaApi';
 import { CommuterConfigModal } from '../components/CommuterConfigModal';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -886,6 +886,52 @@ export default function ViaggioScreen() {
                         </Text>
                       </View>
                     )}
+
+                    {/* Badge Permanente Origine Corsa */}
+                    {(() => {
+                      const cleanCommuter = (commuterStationName || '').trim().toLowerCase();
+                      const rawOrigin = (itinerary.liveTrain.originStationName || '').trim();
+                      const isOriginRef = Boolean(
+                        itinerary.liveTrain.isOriginStation ||
+                        (rawOrigin && cleanCommuter && rawOrigin.toLowerCase().includes(cleanCommuter)) ||
+                        (cleanCommuter && rawOrigin && cleanCommuter.includes(rawOrigin.toLowerCase()))
+                      );
+                      const displayOrigin = formatStationName(
+                        (isOriginRef ? commuterStationName : rawOrigin) || commuterStationName || 'Stazione'
+                      );
+
+                      return (
+                        <View
+                          style={[
+                            styles.trainOriginPill,
+                            isOriginRef
+                              ? {
+                                  backgroundColor: 'rgba(14, 165, 233, 0.16)',
+                                  borderColor: 'rgba(14, 165, 233, 0.35)',
+                                }
+                              : {
+                                  backgroundColor: 'rgba(148, 163, 184, 0.12)',
+                                  borderColor: 'rgba(148, 163, 184, 0.25)',
+                                },
+                          ]}
+                        >
+                          <Ionicons
+                            name={isOriginRef ? 'flag' : 'navigate-outline'}
+                            size={11}
+                            color={isOriginRef ? '#38bdf8' : '#94a3b8'}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.trainOriginPillText,
+                              { color: isOriginRef ? '#38bdf8' : '#cbd5e1' },
+                            ]}
+                          >
+                            {`Origine corsa • ${displayOrigin}`}
+                          </Text>
+                        </View>
+                      );
+                    })()}
                   </View>
                 </View>
 
@@ -1794,6 +1840,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   trainStatusPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  trainOriginPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  trainOriginPillText: {
     fontSize: 11,
     fontWeight: '700',
   },
