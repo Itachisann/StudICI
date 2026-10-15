@@ -1011,13 +1011,25 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const targetMins = parseTimeToMinutes(targetTimeStr);
   const nowMins = now.getHours() * 60 + now.getMinutes();
 
-  // Se è oggi, scarta i treni N.D. o senza riscontro live passati da oltre 5 minuti
+  // Se è oggi:
+  // 1. Escludi i treni la cui corsa è già conclusa (arrivati alla destinazione finale da oltre 5 minuti)
+  // 2. Escludi i treni N.D. senza riscontro live passati da oltre 5 minuti
+  // 3. MANTIENI i treni già partiti ma ancora in viaggio fino all'arrivo a destinazione (per i "treni prima")
   if (isToday) {
     allTrains = allTrains.filter((t) => {
       const depM = parseTimeToMinutes(t.departureTimePlanned || '00:00');
+      const arrM = parseTimeToMinutes(t.arrivalTimeActual || t.arrivalTimePlanned || '00:00');
+
+      // Treno già arrivato alla destinazione finale da oltre 5 minuti: escludi
+      if (arrM > 0 && nowMins > arrM + 5) {
+        return false;
+      }
+
+      // Treno N.D. senza dati live la cui partenza è passata da oltre 5 minuti: escludi
       if (nowMins > depM + 5 && !t.delayMinutes && !t.isDepartedFromStation && !t.isLive) {
         return false;
       }
+
       return true;
     });
   }
@@ -1195,6 +1207,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     if (foundIdx !== -1) {
       selectedIndex = foundIdx;
     }
+  } else if (trainOffset !== 0) {
     selectedIndex = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), recommendedIdx + trainOffset));
   }
 

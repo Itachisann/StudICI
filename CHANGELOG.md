@@ -5,6 +5,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.8
+
+### Correzioni
+- **Cambio Treno Funzionante**: risolto il conflitto nella selezione dei treni alternativi sia da pulsanti "Treno prima" / "Treno dopo" che da chip numerati; aggiunto re-render immediato dell'itinerario a ogni cambio convoglio.
+- **Treni Già Partiti ma Ancora in Viaggio**: mantenuti nell'elenco dei treni disponibili e selezionabili i convogli che hanno già lasciato la stazione del pendolare ma non sono ancora giunti a destinazione (contrassegnati con badge `Partito`), mentre il target consigliato automatico punta sempre con precisione sul primo treno ideale ancora prendibile.
+
 ## 1.6.7
 
 ### Correzioni
