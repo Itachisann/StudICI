@@ -5,6 +5,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.10
+
+### Correzioni
+- **Risoluzione Anomalia Orari e Ritardo Treni Partiti dall'Origine**: corretto il parsing dei dati di partenza di ViaggiaTreno (`compOrarioPartenzaZeroEffettivo`, timestamp `partenzaTreno` e array `compInStazionePartenza`). Eliminato il falso calcolo incrementale `now - orarioProgrammato` che sovrascriveva il ritardo reale certificato da Trenitalia (+29m) con un ritardo fittizio (+43m) sui treni già partiti dall'origine.
+- **Dicitura e Badge "In stazione" Ristretti ai Soli Casi Reali**: la dicitura `In stazione a ...` viene ora applicata esclusivamente ai convogli effettivamente non partiti (`nonPartito === true`) che attendono ancora al binario oltre l'orario programmato. Per tutti i treni partiti, l'app visualizza l'orario effettivo di partenza (es. `18:06`), il badge `Già partito` con il ritardo autentico e non altera gli orari delle tappe.
+
 ## 1.6.9
 
 ### Correzioni

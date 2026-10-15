@@ -245,9 +245,22 @@ export async function getLiveStationDepartures(
         raw.binarioEffettivoPartenzaCodice ||
         null;
 
-      const cleanLiveDep = cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
+      const isOriginStation = Boolean(
+        raw.codOrigine === stationCode ||
+        raw.idOrigine === stationCode ||
+        (typeof raw.origine === 'string' && raw.origine.trim().length === 0)
+      );
+
+      let cleanLiveDep =
+        cleanViaggiaTrenoTime(raw.compOrarioPartenzaZeroEffettivo) ||
+        cleanViaggiaTrenoTime(raw.compOrarioEffettivoPartenza);
+
+      if (!cleanLiveDep && typeof raw.partenzaTreno === 'number' && raw.partenzaTreno > 0) {
+        const pDate = new Date(raw.partenzaTreno);
+        cleanLiveDep = `${String(pDate.getHours()).padStart(2, '0')}:${String(pDate.getMinutes()).padStart(2, '0')}`;
+      }
+
       let actualDep = plannedDep;
-      // NON scalare anticipo (delay <= 0) perché il treno rispetta l'orario programmato
       if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(plannedDep)) {
         actualDep = cleanLiveDep;
       } else if (delay > 0) {
@@ -255,33 +268,33 @@ export async function getLiveStationDepartures(
         actualDep = minutesToTime(ph * 60 + pm + delay);
       }
 
-      const isOriginStation = Boolean(
-        raw.codOrigine === stationCode ||
-        raw.idOrigine === stationCode ||
-        (typeof raw.origine === 'string' && raw.origine.trim().length === 0)
-      );
-      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
-      const isDeparted = Boolean(raw.nonPartito === false);
+      const isPartitoFlag =
+        (Array.isArray(raw.compInStazionePartenza) &&
+          Boolean(raw.compInStazionePartenza[0]?.toLowerCase().includes('partito'))) ||
+        (typeof raw.partenzaTreno === 'number' && raw.partenzaTreno > 0);
+
+      const isDeparted = Boolean(raw.nonPartito === false || isPartitoFlag);
 
       const depMins = parseTimeToMinutes(actualDep);
-      // Un treno non è MAI partito dalla stazione di riferimento se nonPartito è true (oppure se è fermo al binario inStazione === true)
       const isDepartedFromStation = Boolean(
-        raw.nonPartito === false && (
-          (cleanLiveDep && nowMins >= depMins) ||
-          (nowMins >= depMins && raw.inStazione === false)
-        )
+        isPartitoFlag ||
+        (isOriginStation && raw.nonPartito === false) ||
+        (!isOriginStation && isDeparted && nowMins > depMins + 1)
       );
 
-      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno con origine da questa stazione e non ancora partito, oppure nonPartito === true):
+      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO:
+      // il treno non è ancora partito, nonPartito === true, e l'orario programmato è trascorso
       let effectiveDelay = delay;
       const isRealDepartureIssue =
-        (raw.nonPartito === true || (isOriginStation && !isDepartedFromStation)) &&
+        !isDepartedFromStation &&
+        raw.nonPartito === true &&
         nowMins > parseTimeToMinutes(plannedDep) &&
         nowMins - parseTimeToMinutes(plannedDep) <= 90;
 
       if (isRealDepartureIssue) {
-        const departureLateMins = nowMins - parseTimeToMinutes(plannedDep);
-        effectiveDelay = Math.max(delay, departureLateMins);
+        if (effectiveDelay <= 0) {
+          effectiveDelay = nowMins - parseTimeToMinutes(plannedDep);
+        }
         actualDep = minutesToTime(parseTimeToMinutes(plannedDep) + effectiveDelay);
       }
 
@@ -292,10 +305,10 @@ export async function getLiveStationDepartures(
         statusDescription = 'Deviato';
       } else if (isRealDepartureIssue) {
         statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
-      } else if (raw.nonPartito && isOriginStation) {
-        statusDescription = 'Origine corsa • Non partito';
-      } else if (raw.nonPartito) {
-        statusDescription = 'Non partito all\'origine';
+      } else if (isDepartedFromStation) {
+        statusDescription = effectiveDelay > 0 ? `Già partito (+${effectiveDelay} min)` : 'Già partito (In orario)';
+      } else if (raw.nonPartito === true) {
+        statusDescription = isOriginStation ? 'Origine corsa • Non partito' : 'Non partito all\'origine';
       } else if (effectiveDelay > 0) {
         statusDescription = `Ritardo di ${effectiveDelay} min`;
       } else if (effectiveDelay < 0) {
@@ -718,8 +731,21 @@ export async function fetchLiveTrenitaliaTimetable(
             : 0;
       const delay = isToday ? liveDelay : 0;
 
-      // Partenza effettiva: NON scalare anticipo (delay <= 0) perché il treno aspetta l'orario programmato
-      const cleanLiveDep = cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
+      const isOriginStation = Boolean(
+        dep.codOrigine === depCode ||
+        dep.idOrigine === depCode ||
+        (typeof dep.origine === 'string' && dep.origine.trim().length === 0)
+      );
+
+      let cleanLiveDep =
+        cleanViaggiaTrenoTime(dep.compOrarioPartenzaZeroEffettivo) ||
+        cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza);
+
+      if (!cleanLiveDep && typeof dep.partenzaTreno === 'number' && dep.partenzaTreno > 0) {
+        const pDate = new Date(dep.partenzaTreno);
+        cleanLiveDep = `${String(pDate.getHours()).padStart(2, '0')}:${String(pDate.getMinutes()).padStart(2, '0')}`;
+      }
+
       let depActual = depPlanned;
       if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
         depActual = cleanLiveDep;
@@ -728,8 +754,6 @@ export async function fetchLiveTrenitaliaTimetable(
       }
 
       let arrActual = arrPlanned;
-
-      // Arrivo effettivo: NON scalare anticipo (delay <= 0), ogni fermata è a sé
       const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
       if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
         arrActual = cleanLiveArr;
@@ -737,34 +761,36 @@ export async function fetchLiveTrenitaliaTimetable(
         arrActual = minutesToTime(ah * 60 + am + delay);
       }
 
-      const isOriginStation = Boolean(
-        dep.codOrigine === depCode ||
-        dep.idOrigine === depCode ||
-        (typeof dep.origine === 'string' && dep.origine.trim().length === 0)
-      );
-      // In ViaggiaTreno, nonPartito: true indica in modo categorico che il treno NON è partito dall'origine
-      const isDeparted = Boolean(dep.nonPartito === false);
+      const isPartitoFlag =
+        (Array.isArray(dep.compInStazionePartenza) &&
+          Boolean(dep.compInStazionePartenza[0]?.toLowerCase().includes('partito'))) ||
+        (typeof dep.partenzaTreno === 'number' && dep.partenzaTreno > 0);
+
+      // In ViaggiaTreno, nonPartito: true indica che il treno NON è ancora partito dall'origine
+      const isDeparted = Boolean(dep.nonPartito === false || isPartitoFlag);
 
       const depMinsActual = parseTimeToMinutes(depActual);
-      // Un treno non è MAI partito dalla stazione di riferimento se nonPartito è true (oppure se è fermo al binario inStazione === true)
       const isDepartedFromStation = Boolean(
-        isToday && dep.nonPartito === false && (
-          (cleanLiveDep && nowMins >= depMinsActual) ||
-          (nowMins >= depMinsActual && dep.inStazione === false)
+        isToday && (
+          isPartitoFlag ||
+          (isOriginStation && dep.nonPartito === false) ||
+          (!isOriginStation && isDeparted && nowMins > depMinsActual + 1)
         )
       );
 
-      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno con origine da questa stazione e non ancora partito, oppure nonPartito === true):
+      // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno fermo non ancora partito dall'origine):
       let effectiveDelay = delay;
       const isRealDepartureIssue =
         isToday &&
-        (dep.nonPartito === true || (isOriginStation && !isDepartedFromStation)) &&
+        !isDepartedFromStation &&
+        dep.nonPartito === true &&
         nowMins > parseTimeToMinutes(depPlanned) &&
         nowMins - parseTimeToMinutes(depPlanned) <= 90;
 
       if (isRealDepartureIssue) {
-        const departureLateMins = nowMins - parseTimeToMinutes(depPlanned);
-        effectiveDelay = Math.max(delay, departureLateMins);
+        if (effectiveDelay <= 0) {
+          effectiveDelay = nowMins - parseTimeToMinutes(depPlanned);
+        }
         depActual = minutesToTime(parseTimeToMinutes(depPlanned) + effectiveDelay);
         arrActual = minutesToTime(parseTimeToMinutes(arrPlanned) + effectiveDelay);
       }
@@ -777,10 +803,10 @@ export async function fetchLiveTrenitaliaTimetable(
           statusDescription = 'Deviato';
         } else if (isRealDepartureIssue) {
           statusDescription = `Non ancora partito (+${effectiveDelay} min)`;
-        } else if (dep.nonPartito && isOriginStation) {
-          statusDescription = 'Origine corsa • Non partito';
-        } else if (dep.nonPartito) {
-          statusDescription = 'Non partito all\'origine';
+        } else if (isDepartedFromStation) {
+          statusDescription = effectiveDelay > 0 ? `Già partito (+${effectiveDelay} min)` : 'Già partito (In orario)';
+        } else if (dep.nonPartito === true) {
+          statusDescription = isOriginStation ? 'Origine corsa • Non partito' : 'Non partito all\'origine';
         } else if (effectiveDelay > 0) {
           statusDescription = `Ritardo di ${effectiveDelay} min`;
         } else if (effectiveDelay < 0) {
@@ -1101,17 +1127,18 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     }
   }
 
-  // Se è oggi, per treni live che hanno problemi REALI alla partenza (origine corsa non ancora partita):
+  // Se è oggi, per treni live che hanno problemi REALI alla partenza (fermi, non partiti da qui né dall'origine):
   if (isToday) {
     for (const t of allTrains) {
       if (
         t.isLive &&
-        (t.isDeparted === false || (t.isOriginStation && !t.isDepartedFromStation))
+        t.isDepartedFromStation === false &&
+        t.isDeparted === false
       ) {
         const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
         if (nowMins > depPlanM && nowMins - depPlanM <= 90) {
-          const lateM = nowMins - depPlanM;
-          if (lateM > (t.delayMinutes || 0)) {
+          if (!t.delayMinutes || t.delayMinutes <= 0) {
+            const lateM = nowMins - depPlanM;
             t.delayMinutes = lateM;
             t.departureTimeActual = minutesToTime(depPlanM + lateM);
             if (t.arrivalTimePlanned) {
@@ -1283,7 +1310,7 @@ export interface TrainStatusResult {
   badgeColor: string;
   badgeBg: string;
   badgeBorder: string;
-  iconName: 'time-outline' | 'calendar-outline' | 'checkmark-circle-outline' | 'warning-outline' | 'flash-outline' | 'close-circle' | 'git-branch-outline' | 'alert-circle' | 'flag-outline';
+  iconName: 'time-outline' | 'calendar-outline' | 'checkmark-circle-outline' | 'warning-outline' | 'flash-outline' | 'close-circle' | 'git-branch-outline' | 'alert-circle' | 'flag-outline' | 'train-outline';
   alertMessage?: string;
   capacityWarning?: string;
 }
@@ -1396,15 +1423,23 @@ export function evaluateTrainStatus(
       };
     }
 
-    const depTime = train.departureTimePlanned || train.departureTimeActual;
+    const depTime = train.departureTimeActual || train.departureTimePlanned;
     const delayInfo = train.delayMinutes > 0 ? ` (+${train.delayMinutes}m)` : '';
     return {
-      statusType: 'running',
+      statusType: train.delayMinutes > 0 ? 'delayed' : 'running',
       badgeLabel: `Già partito ${depTime ? `(${depTime})` : ''}${delayInfo}`.trim(),
-      badgeColor: '#64748b',
-      badgeBg: 'rgba(100, 116, 139, 0.15)',
-      badgeBorder: 'rgba(100, 116, 139, 0.25)',
-      iconName: 'flag-outline',
+      badgeColor: train.delayMinutes > 5 ? '#ef4444' : train.delayMinutes > 0 ? '#f59e0b' : '#34c759',
+      badgeBg: train.delayMinutes > 5
+        ? 'rgba(239, 68, 68, 0.15)'
+        : train.delayMinutes > 0
+        ? 'rgba(245, 158, 11, 0.15)'
+        : 'rgba(52, 199, 89, 0.15)',
+      badgeBorder: train.delayMinutes > 5
+        ? 'rgba(239, 68, 68, 0.3)'
+        : train.delayMinutes > 0
+        ? 'rgba(245, 158, 11, 0.3)'
+        : 'rgba(52, 199, 89, 0.3)',
+      iconName: 'train-outline',
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
     };
@@ -1484,14 +1519,14 @@ export function evaluateTrainStatus(
 
   // Caso 5B: Treno con problemi REALI alla partenza (origine corsa non ancora partita oltre l'orario programmato)
   const isRealDepartureIssue =
-    (train.isDeparted === false || (train.isOriginStation && !train.isDepartedFromStation)) &&
+    train.isDepartedFromStation === false &&
+    train.isDeparted === false &&
     nowMins >= plannedDepMins &&
     nowMins - plannedDepMins <= 90;
 
   if (isRealDepartureIssue) {
-    const minsLateDeparture = Math.max(0, nowMins - plannedDepMins);
-    const effectiveDelay = Math.max(train.delayMinutes || 0, minsLateDeparture);
-    const depTime = train.departureTimePlanned || train.departureTimeActual;
+    const effectiveDelay = train.delayMinutes > 0 ? train.delayMinutes : Math.max(0, nowMins - plannedDepMins);
+    const depTime = train.departureTimePlanned;
     const delayInfo = effectiveDelay > 0 ? ` (+${effectiveDelay}m)` : '';
     const stText = stationName ? ` a ${stationName}` : '';
 
