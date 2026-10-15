@@ -5,6 +5,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.7
+
+### Correzioni
+- **Connessione Trenitalia / ViaggiaTreno su IPA iOS Standalone**: configurata la direttiva `NSAppTransportSecurity` in `Info.plist` con `NSAllowsArbitraryLoads` ed eccezione di dominio per `viaggiatreno.it`, sbloccando le chiamate API di ViaggiaTreno bloccate in precedenza dalla sicurezza iOS nelle build native.
+- **Ottimizzazione chiamate ViaggiaTreno**: richiesta diretta all'endpoint HTTP nativo per azzerare il redirect 301, dimezzare la latenza (~150ms) e garantire fallback automatico su HTTPS con header client standard.
+- **Resilienza Orari Notturni e Cambio Giorni**: fallback elegante a corse giornaliere concluse a tarda sera e pulizia immediata dello stato itinerario quando si cambia giorno della settimana.
+
 ## 1.6.1
 
 ### Novità
