@@ -1,9 +1,9 @@
 import { StationInfo, LiveTrainInfo } from '../types/commuter';
 
-// HTTPS obbligatorio: nelle build iOS standalone (IPA) l'App Transport Security blocca http://
-// e su Android release il traffico cleartext è vietato, quindi con http:// ogni richiesta falliva
-// e l'app ripiegava sempre sugli orari statici.
-const VIAGGIATRENO_BASE_URL = 'https://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno';
+// ViaggiaTreno espone le API resteasy su HTTP (la versione HTTPS invia un 301 verso HTTP).
+// Nelle build iOS native (IPA) è configurato NSAppTransportSecurity in app.json per permettere
+// la connessione a viaggiatreno.it sia in HTTP diretto che con fallback HTTPS.
+const VIAGGIATRENO_BASE_URL = 'http://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -43,33 +43,52 @@ export function clearTrenitaliaCache(): void {
 
 /**
  * Fetch JSON con timeout snello (4.5s) per singola richiesta.
+ * Supporta fallback automatico tra HTTP diretto (veloce, senza 301) e HTTPS.
  * Ritorna null se la richiesta fallisce definitivamente (diverso da lista vuota valida).
  */
 async function fetchViaggiaTrenoJson(url: string, timeoutMs = 4500, retries = 1): Promise<any | null> {
   fetchTotal++;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) {
-        clearTimeout(timeout);
-        lastFetchError = `HTTP ${res.status}`;
-        continue;
-      }
-      const text = await res.text();
-      clearTimeout(timeout);
+  const defaultHeaders = {
+    Accept: 'application/json, text/plain, */*',
+    'User-Agent':
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+  };
+
+  const urlsToTry = [url];
+  if (url.startsWith('http://')) {
+    urlsToTry.push(url.replace('http://', 'https://'));
+  } else if (url.startsWith('https://')) {
+    urlsToTry.push(url.replace('https://', 'http://'));
+  }
+
+  for (const targetUrl of urlsToTry) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const json = JSON.parse(text);
-        fetchOk++;
-        return json;
+        const res = await fetch(targetUrl, {
+          signal: controller.signal,
+          headers: defaultHeaders,
+        });
+        if (!res.ok) {
+          clearTimeout(timeout);
+          lastFetchError = `HTTP ${res.status}`;
+          continue;
+        }
+        const text = await res.text();
+        clearTimeout(timeout);
+        try {
+          const json = JSON.parse(text);
+          fetchOk++;
+          return json;
+        } catch (e: any) {
+          lastFetchError = `risposta non valida (${text.length} caratteri): ${String(e?.message || e).slice(0, 60)}`;
+        }
       } catch (e: any) {
-        lastFetchError = `risposta non valida (${text.length} caratteri): ${String(e?.message || e).slice(0, 60)}`;
+        clearTimeout(timeout);
+        lastFetchError =
+          e?.name === 'AbortError' ? `timeout ${timeoutMs / 1000}s` : String(e?.message || e).slice(0, 80);
       }
-    } catch (e: any) {
-      clearTimeout(timeout);
-      lastFetchError =
-        e?.name === 'AbortError' ? `timeout ${timeoutMs / 1000}s` : String(e?.message || e).slice(0, 80);
     }
   }
   console.warn('[ViaggiaTreno]', lastFetchError, url);
