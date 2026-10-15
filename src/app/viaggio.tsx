@@ -137,7 +137,7 @@ export default function ViaggioScreen() {
         const upcoming = dayClasses.find(
           (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
         );
-        return upcoming || null;
+        return upcoming || dayClasses[0];
       } else {
         const pastOrActive = [...dayClasses].reverse().find(
           (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
@@ -150,7 +150,23 @@ export default function ViaggioScreen() {
   }, [dayClasses, selectedClassIndex, selectedDayIdx, direction]);
 
   const loadData = useCallback(
-    async (isRefresh = false, silent = false) => {
+    async (
+      isRefresh = false,
+      silent = false,
+      overrides?: {
+        direction?: 'outbound' | 'return';
+        selectedDayIdx?: number;
+        selectedClassIndex?: number | null;
+        selectedTrainOffset?: number;
+        selectedTrainNumber?: string | null;
+      }
+    ) => {
+      const effDir = overrides?.direction !== undefined ? overrides.direction : direction;
+      const effDayIdx = overrides?.selectedDayIdx !== undefined ? overrides.selectedDayIdx : selectedDayIdx;
+      const effClassIdx = overrides?.selectedClassIndex !== undefined ? overrides.selectedClassIndex : selectedClassIndex;
+      const effTrainOffset = overrides?.selectedTrainOffset !== undefined ? overrides.selectedTrainOffset : selectedTrainOffset;
+      const effTrainNum = overrides?.selectedTrainNumber !== undefined ? overrides.selectedTrainNumber : selectedTrainNumber;
+
       if (!silent) {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -194,14 +210,14 @@ export default function ViaggioScreen() {
         // Calcola data target in base al giorno selezionato
         const targetDate = new Date();
         const currentDay = targetDate.getDay();
-        let diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
+        let diff = effDayIdx - (currentDay === 0 ? 7 : currentDay);
         if (diff < 0) {
           diff += 7; // Se il giorno è già trascorso nella settimana corrente, proietta al prossimo giorno utile
         }
         targetDate.setDate(targetDate.getDate() + diff);
 
         // Determina la lezione target per il calcolo
-        const dayScheduleIndex = selectedDayIdx - 1;
+        const dayScheduleIndex = effDayIdx - 1;
         const currentDayClasses =
           sched?.days && sched.days[dayScheduleIndex]
             ? [...sched.days[dayScheduleIndex]].sort(
@@ -212,19 +228,19 @@ export default function ViaggioScreen() {
             : [];
 
         const now = new Date();
-        const isToday = now.getDay() === selectedDayIdx;
+        const isToday = now.getDay() === effDayIdx;
         const nowMins = now.getHours() * 60 + now.getMinutes();
 
         let targetClassForCalculation: ClassEvent | null = null;
-        if (selectedClassIndex !== null && currentDayClasses[selectedClassIndex]) {
-          targetClassForCalculation = currentDayClasses[selectedClassIndex];
+        if (effClassIdx !== null && currentDayClasses[effClassIdx]) {
+          targetClassForCalculation = currentDayClasses[effClassIdx];
         } else if (currentDayClasses.length > 0) {
           if (isToday) {
-            if (direction === 'outbound') {
+            if (effDir === 'outbound') {
               const upcoming = currentDayClasses.find(
                 (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
               );
-              targetClassForCalculation = upcoming || null;
+              targetClassForCalculation = upcoming || currentDayClasses[0];
             } else {
               const pastOrActive = [...currentDayClasses].reverse().find(
                 (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
@@ -233,7 +249,7 @@ export default function ViaggioScreen() {
             }
           } else {
             targetClassForCalculation =
-              direction === 'outbound'
+              effDir === 'outbound'
                 ? currentDayClasses[0]
                 : currentDayClasses[currentDayClasses.length - 1];
           }
@@ -242,7 +258,7 @@ export default function ViaggioScreen() {
         const isTargetClassFinished = Boolean(
           isToday &&
           targetClassForCalculation &&
-          (direction === 'outbound'
+          (effDir === 'outbound'
             ? nowMins > parseTimeToMinutes(targetClassForCalculation.startTime || '08:30')
             : nowMins > parseTimeToMinutes(targetClassForCalculation.endTime || '18:00'))
         );
@@ -250,7 +266,7 @@ export default function ViaggioScreen() {
         // Imposta l'orario del viaggio su targetDate per centrare la ricerca ViaggiaTreno
         if (targetClassForCalculation && !isTargetClassFinished) {
           const timeToUse =
-            direction === 'outbound'
+            effDir === 'outbound'
               ? targetClassForCalculation.startTime || '08:30'
               : targetClassForCalculation.endTime || '16:00';
           const [hh, mm] = timeToUse.split(':').map(Number);
@@ -259,18 +275,18 @@ export default function ViaggioScreen() {
           if (isToday) {
             targetDate.setHours(now.getHours(), now.getMinutes(), 0, 0);
           } else {
-            targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
+            targetDate.setHours(effDir === 'outbound' ? 8 : 16, 30, 0, 0);
           }
         }
 
         const itin = await computeCommuterItinerary({
           config: currentConfig,
           scheduleData: sched,
-          direction,
+          direction: effDir,
           targetDate,
           selectedClass: targetClassForCalculation,
-          selectedTrainOffset,
-          selectedTrainNumber: selectedTrainNumber || undefined,
+          selectedTrainOffset: effTrainOffset,
+          selectedTrainNumber: effTrainNum || undefined,
           forceRefresh: isRefresh,
         });
 
@@ -303,6 +319,12 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
+    loadData(false, false, {
+      selectedDayIdx: dayIdx,
+      selectedClassIndex: null,
+      selectedTrainOffset: 0,
+      selectedTrainNumber: null,
+    });
   };
 
   const handleDirectionChange = (newDir: 'outbound' | 'return') => {
@@ -310,27 +332,51 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
+    loadData(false, false, {
+      direction: newDir,
+      selectedTrainOffset: 0,
+      selectedTrainNumber: null,
+    });
   };
 
   const handleSelectClass = (idx: number) => {
     setSelectedClassIndex(idx);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
+    loadData(false, false, {
+      selectedClassIndex: idx,
+      selectedTrainOffset: 0,
+      selectedTrainNumber: null,
+    });
   };
 
   const handleTrainPrev = () => {
-    setSelectedTrainOffset((prev) => prev - 1);
+    const nextOffset = selectedTrainOffset - 1;
+    setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);
+    loadData(false, false, {
+      selectedTrainOffset: nextOffset,
+      selectedTrainNumber: null,
+    });
   };
 
   const handleTrainNext = () => {
-    setSelectedTrainOffset((prev) => prev + 1);
+    const nextOffset = selectedTrainOffset + 1;
+    setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);
+    loadData(false, false, {
+      selectedTrainOffset: nextOffset,
+      selectedTrainNumber: null,
+    });
   };
 
   const handleSelectTrainChip = (trainNum: string) => {
     setSelectedTrainNumber(trainNum);
     setSelectedTrainOffset(0);
+    loadData(false, false, {
+      selectedTrainNumber: trainNum,
+      selectedTrainOffset: 0,
+    });
   };
 
   const handleSaveConfig = async (newConfig: CommuterConfig) => {
@@ -781,18 +827,16 @@ export default function ViaggioScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.heroLectureSubject} numberOfLines={1}>
                     {direction === 'outbound'
-                      ? (itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
-                          ? 'Lezioni di oggi'
-                          : itinerary.targetLecture?.subject || 'Lezione')
+                      ? (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
+                          ? itinerary.targetLecture.subject
+                          : (activeSelectedClass?.subject || 'Lezione'))
                       : (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
                           ? itinerary.targetLecture.subject
                           : `Rientro ad ${config?.originAddress}`)}
                   </Text>
                   <Text style={styles.heroLectureDetails} numberOfLines={1}>
                     {isTargetLectureFinished
-                      ? (itinerary.targetLecture?.subject === 'Lezioni di oggi terminate'
-                          ? 'Terminate • Treni da adesso'
-                          : 'Terminata • Treni da adesso')
+                      ? 'Terminata • Treni da adesso'
                       : direction === 'outbound'
                       ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
                       : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}

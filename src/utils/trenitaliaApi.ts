@@ -602,13 +602,10 @@ export async function fetchLiveTrenitaliaTimetable(
     }
 
     // Finestre di campionamento calibrate per la massima copertura con il minimo numero di richieste:
-    // 4 partenze + 4 arrivi = 8 richieste in parallelo (invece di 12 sequenziali a blocchi di 4)
-    // -45m: copre da -45m a +105m
-    // +45m: copre da +45m a +195m
-    // +135m: copre da +135m a +285m
-    // +225m: copre da +225m a +375m (7 ore consecutive con sovrapposizione continua)
-    const depOffsets = [-45, 45, 135, 225];
-    const arrOffsets = [15, 105, 195, 285];
+    // -90m: copre treni partiti fino a 1h30 fa ancora in viaggio verso destinazione
+    // -30m, +45m, +135m, +225m: sequenza continua con sovrapposizione
+    const depOffsets = [-90, -30, 45, 135, 225];
+    const arrOffsets = [-30, 30, 105, 195, 285];
 
     const buildTimes = (offsets: number[]) =>
       offsets.map((off) => {
@@ -687,12 +684,20 @@ export async function fetchLiveTrenitaliaTimetable(
 
       const depPlannedM = parseTimeToMinutes(depPlanned);
       // FILTRO N.D. TRENITALIA:
-      // Se l'orario di partenza è già passato e Trenitalia non ha dati live (ritardo null, non in stazione, o NON_DISPONIBILE):
-      // il treno è N.D. e non deve uscire proprio!
+      // Se l'orario di partenza è già passato e Trenitalia non ha dati live né su partenza né su arrivo
+      // (nessun ritardo né orario effettivo e non è al binario): il treno è N.D. e viene scartato.
+      // Se invece ha dati live sull'arrivo a destinazione (è partito ed è in viaggio), non è N.D.!
+      const hasLiveArrival =
+        typeof arr.ritardo === 'number' ||
+        Boolean(cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo));
+      const hasLiveDeparture =
+        typeof dep.ritardo === 'number' ||
+        Boolean(cleanViaggiaTrenoTime(dep.compOrarioEffettivoPartenza));
       const isND =
         isToday &&
         nowMins > depPlannedM &&
-        (dep.ritardo === null || dep.ritardo === undefined || dep.statoTreno === 'NON_DISPONIBILE') &&
+        !hasLiveDeparture &&
+        !hasLiveArrival &&
         dep.inStazione !== true;
       if (isND) continue;
 
@@ -1020,8 +1025,18 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       const depM = parseTimeToMinutes(t.departureTimePlanned || '00:00');
       const arrM = parseTimeToMinutes(t.arrivalTimeActual || t.arrivalTimePlanned || '00:00');
 
+      let arrNorm = arrM;
+      if (arrM > 0 && depM > 0 && arrM < depM) {
+        // Treno che viaggia a cavallo della mezzanotte
+        arrNorm += 1440;
+      }
+      let nowNorm = nowMins;
+      if (depM > 1200 && nowMins < 300) {
+        nowNorm += 1440;
+      }
+
       // Treno già arrivato alla destinazione finale da oltre 5 minuti: escludi
-      if (arrM > 0 && nowMins > arrM + 5) {
+      if (arrNorm > 0 && nowNorm > arrNorm + 5) {
         return false;
       }
 
@@ -1237,9 +1252,9 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
   chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
 
-  // Sliding window ampia per le alternative da mostrare nell'interfaccia (fino a 8 treni)
-  const sliceStart = Math.max(0, selectedIndexSafe - 3);
-  const sliceEnd = Math.min(allTrains.length, selectedIndexSafe + 5);
+  // Sliding window ampia per le alternative da mostrare nell'interfaccia (fino a 10 treni inclusi i treni precedenti in viaggio)
+  const sliceStart = Math.max(0, selectedIndexSafe - 4);
+  const sliceEnd = Math.min(allTrains.length, selectedIndexSafe + 6);
   const availableTrains = allTrains.length > 0 ? allTrains.slice(sliceStart, sliceEnd) : [chosenTrain];
 
   return {

@@ -165,11 +165,9 @@ function findDayLecture(
         if (upcoming) {
           chosenClass = upcoming;
         } else {
+          const refClass = dayClasses[0];
           chosenClass = {
-            subject: 'Lezioni di oggi terminate',
-            teacher: '',
-            room: 'Treni in tempo reale',
-            building: 'Sapienza',
+            ...refClass,
             startTime: minutesToTime(nowMins + 60),
             endTime: minutesToTime(nowMins + 180),
             duration: 120,

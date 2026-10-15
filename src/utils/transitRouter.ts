@@ -59,7 +59,8 @@ function identifyRomeStation(name: string): RomeStationType {
 /**
  * Identifica il campus o la sede universitaria di destinazione
  */
-function identifyCampus(classroom: ResolvedClassroom): CampusType {
+function identifyCampus(classroom?: Partial<ResolvedClassroom>): CampusType {
+  if (!classroom) return 'citta_universitaria';
   const bCode = (classroom.buildingCode || '').toUpperCase();
   const addr = (classroom.address || '').toLowerCase();
   const dName = (classroom.displayName || '').toLowerCase();
@@ -134,16 +135,16 @@ function identifyCampus(classroom: ResolvedClassroom): CampusType {
  * Privilegia sempre i collegamenti DIRETTI a ZERO CAMBI.
  */
 export function getOptimalRomeTransit(options: {
-  fromStationCode: string;
-  fromStationName: string;
-  classroom: ResolvedClassroom;
+  fromStationCode?: string;
+  fromStationName?: string;
+  classroom?: Partial<ResolvedClassroom>;
   direction?: 'to_campus' | 'to_station';
 }): TransitSolution {
-  const { fromStationName, classroom, direction = 'to_campus' } = options;
+  const { fromStationName = '', classroom, direction = 'to_campus' } = options;
   const stationType = identifyRomeStation(fromStationName);
   const campusType = identifyCampus(classroom);
-  const targetAddr = classroom.address || 'Roma';
-  const cName = classroom.displayName || 'Aula';
+  const targetAddr = classroom?.address || 'Roma';
+  const cName = classroom?.displayName || 'Aula';
 
   // =========================================================================
   // 1. STAZIONE ROMA TIBURTINA

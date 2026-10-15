@@ -5,6 +5,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.9
+
+### Correzioni
+- **Card Prossima Partenza con Lezione Reale**: rimosso il testo segnaposto generico "Lezioni di oggi" quando le lezioni della giornata sono terminate; la hero card visualizza ora con precisione il nome della lezione selezionata (es. *GEOMETRIA*) accompagnata dalla dicitura `Terminata • Treni da adesso`.
+- **Visibilità Treni Precedenti Ancora in Viaggio**: ampliata la finestra di campionamento delle partenze (-90 min) e perfezionato il filtro N.D. per non scartare i convogli già transitati dalla stazione di origine ma tuttora in viaggio verso Roma; i treni precedenti restano consultabili e selezionabili tra i "treni prima" finché non giungono a destinazione.
+- **Cambio Treno Immediato**: introdotto listener di sincronizzazione dello stato di selezione convoglio e lezione (`useEffect`), garantendo il ricalcolo istantaneo del viaggio sia da pulsanti "Treno prima / dopo" che dai chip numerati.
+- **Robustezza Router Urbano**: protette le funzioni di mapping aula/campus da parametri indefiniti, azzerando possibili eccezioni a runtime sul cambio giorno.
+
 ## 1.6.8
 
 ### Correzioni
