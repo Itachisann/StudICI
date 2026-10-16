@@ -1083,6 +1083,7 @@ export default function ViaggioScreen() {
                         at.trainNumber.replace(/\D/g, '') ===
                         itinerary.liveTrain?.trainNumber.replace(/\D/g, '');
                       const isDeparted = Boolean(at.isDepartedFromStation);
+                      const isStopped = Boolean(at.isStoppedInStation);
 
                       return (
                         <TouchableOpacity
@@ -1094,6 +1095,7 @@ export default function ViaggioScreen() {
                               { backgroundColor: theme.bg, borderColor: theme.primary },
                             ],
                             isDeparted && !isCurrent && { opacity: 0.65 },
+                            isStopped && !isCurrent && { borderColor: 'rgba(245, 158, 11, 0.4)' },
                           ]}
                           activeOpacity={0.7}
                           onLayout={(e) => {
@@ -1108,9 +1110,9 @@ export default function ViaggioScreen() {
                           onPress={() => handleSelectTrainChip(at.trainNumber)}
                         >
                           <Ionicons
-                            name={at.isFast ? 'flash' : 'train-outline'}
+                            name={isStopped ? 'pause-circle-outline' : at.isFast ? 'flash' : 'train-outline'}
                             size={12}
-                            color={isCurrent ? theme.accent : isDeparted ? '#64748b' : '#94a3b8'}
+                            color={isCurrent ? theme.accent : isStopped ? '#f59e0b' : isDeparted ? '#64748b' : '#94a3b8'}
                             style={{ marginRight: 4 }}
                           />
                           <Text
@@ -1118,10 +1120,11 @@ export default function ViaggioScreen() {
                               styles.trainChipText,
                               isCurrent && styles.trainChipTextCurrent,
                               isDeparted && !isCurrent && { color: '#64748b' },
+                              isStopped && !isCurrent && { color: '#f59e0b' },
                             ]}
                           >
-                            {at.trainNumber} • {at.departureTimePlanned || at.departureTimeActual}
-                            {isDeparted ? ' (Passato)' : ''}
+                            {at.trainNumber} • {at.departureTimeActual || at.departureTimePlanned}
+                            {isDeparted ? ' (Passato)' : isStopped ? ' (Fermo)' : ''}
                           </Text>
                         </TouchableOpacity>
                       );

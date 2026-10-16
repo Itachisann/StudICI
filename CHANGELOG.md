@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.1
+
+### Novità & Correzioni
+- **Gestione Treni Fermi in Stazione ("Fermo a [Stazione]")**:
+  - Risolto il caso in cui un treno fermo al binario in una stazione intermedia (es. Roma Tiburtina) veniva erroneamente etichettato come `Già passato` solo perché l'orario programmato di partenza era trascorso:
+    - Se il convoglio è arrivato alla stazione ma non è ancora partito (`inStazione: true` e nessuna partenza reale registrata), lo stato mostra esplicitamente `Fermo a [Nome Stazione]` (es. `Fermo a Roma Tiburtina (+6m)`).
+    - Il ritardo alla partenza viene calcolato dinamicamente minuto per minuto rispetto all'orario effettivo di sosta al binario.
+    - Il treno rimane correttamente contrassegnato come prendibile nell'algoritmo di viaggio, evitando che la selezione salti prematuramente al treno successivo mentre il viaggiatore è a bordo o in banchina.
+    - Nelle chips dei treni alternativi appare l'indicatore `(Fermo)` con icona dedicata.
+  - Arricchimento in tempo reale con i dati di rilevamento delle fermate di ViaggiaTreno (`andamentoTreno`), permettendo di identificare con esattezza le soste prolungate su tutte le stazioni della linea.
+
 ## 1.7.0
 
 ### Correzioni & Miglioramenti
