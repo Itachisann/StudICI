@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.3
+
+### Correzioni & Miglioramenti
+- **Separazione Ritardo alla Partenza vs Ritardo all'Arrivo per Treni Già Passati**:
+  - Risolto il caso in cui un treno già passato dalla stazione del pendolare (es. partito in orario alle 23:00 da Orte) si vedeva erroneamente applicare il ritardo accumulato a valle lungo la linea (es. tra Orte e Roma) anche all'orario di partenza:
+    - **Orario di partenza effettivo preservato**: l'orario di partenza riflette fedelmente il passaggio reale registrato alla propria stazione (es. `23:00`). Se il treno è partito in orario, l'orario di partenza rimane pulito nel colore di default del tema e senza orario barrato, perché il passaggio è avvenuto come previsto.
+    - **Ritardo a valle applicato solo all'arrivo**: l'eventuale ritardo maturato successivamente dal convoglio in corsa viene riflesso esclusivamente sull'orario di arrivo a destinazione (evidenziato in arancione, con l'orario di arrivo programmato barrato `prog. HH:mm`).
+    - Introdotto il campo `departureDelayAtStation` per distinguere con precisione il ritardo al momento dello stacco da banchina rispetto al ritardo globale della corsa.
+
 ## 1.7.2
 
 ### Correzioni & Miglioramenti

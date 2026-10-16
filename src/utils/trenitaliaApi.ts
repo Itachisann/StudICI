@@ -879,6 +879,19 @@ export async function fetchLiveTrenitaliaTimetable(
         )
       );
 
+      let departureDelayAtStation: number | undefined = undefined;
+      if (isDepartedFromStation) {
+        if (cleanLiveDep) {
+          depActual = cleanLiveDep;
+          departureDelayAtStation = Math.max(0, parseTimeToMinutes(cleanLiveDep) - parseTimeToMinutes(depPlanned));
+        } else {
+          // Se è già passato e non abbiamo un orario di partenza effettivo esplicito al tabellone,
+          // non applichiamo il ritardo globale maturato a valle alla partenza già avvenuta
+          depActual = depPlanned;
+          departureDelayAtStation = 0;
+        }
+      }
+
       let isStoppedInStation = isInStationAtDep;
       let stoppedStationName = isInStationAtDep ? formatStationName(getStationNameByCode(depCode)) : undefined;
 
@@ -1005,6 +1018,7 @@ export async function fetchLiveTrenitaliaTimetable(
         isOriginStation,
         isDeparted,
         isDepartedFromStation,
+        departureDelayAtStation,
         isStoppedInStation,
         stoppedStationName,
         alertMessage,
@@ -1067,16 +1081,13 @@ export async function fetchLiveTrenitaliaTimetable(
 
           if (!depPlanned || !arrPlanned) continue;
 
-          const depPlannedM = parseTimeToMinutes(depPlanned);
           const arrPlannedM = parseTimeToMinutes(arrPlanned);
 
           const liveDelay = typeof arr.ritardo === 'number' ? arr.ritardo : 0;
           const delay = liveDelay;
 
           let depActual = depPlanned;
-          if (delay > 0) {
-            depActual = minutesToTime(depPlannedM + delay);
-          }
+          let departureDelayAtStation = 0;
 
           let arrActual = arrPlanned;
           const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
@@ -1145,6 +1156,7 @@ export async function fetchLiveTrenitaliaTimetable(
             isOriginStation,
             isDeparted,
             isDepartedFromStation,
+            departureDelayAtStation,
             alertMessage,
           });
 
@@ -1188,9 +1200,32 @@ export async function fetchLiveTrenitaliaTimetable(
                   // Il treno è già partito da questa stazione!
                   t.isDepartedFromStation = true;
                   t.isStoppedInStation = false;
-                  if (typeof depStop.ritardoPartenza === 'number') {
+
+                  const stationDepDelay = typeof depStop.ritardoPartenza === 'number' ? depStop.ritardoPartenza : 0;
+                  t.departureDelayAtStation = stationDepDelay;
+
+                  if (depStop.partenzaReale && typeof depStop.partenzaReale === 'number') {
+                    const pDate = new Date(depStop.partenzaReale);
+                    t.departureTimeActual = `${String(pDate.getHours()).padStart(2, '0')}:${String(pDate.getMinutes()).padStart(2, '0')}`;
+                  } else if (stationDepDelay > 0) {
+                    t.departureTimeActual = minutesToTime(parseTimeToMinutes(t.departureTimePlanned) + stationDepDelay);
+                  } else {
+                    t.departureTimeActual = t.departureTimePlanned;
+                  }
+
+                  // Il ritardo globale corrente del treno (per l'orario di arrivo e il badge)
+                  if (typeof aData.ritardo === 'number') {
+                    t.delayMinutes = aData.ritardo;
+                  } else if (typeof depStop.ritardoPartenza === 'number') {
                     t.delayMinutes = depStop.ritardoPartenza;
                   }
+
+                  if (t.arrivalTimePlanned) {
+                    t.arrivalTimeActual = minutesToTime(
+                      parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
+                    );
+                  }
+
                   t.statusDescription =
                     t.delayMinutes > 0
                       ? `Già passato (+${t.delayMinutes} min)`
@@ -1566,12 +1601,16 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
       // Per qualsiasi treno con ritardo o fermo in stazione, assicura che departureTimeActual e arrivalTimeActual
       // siano sincronizzati con il ritardo effettivo affinché l'orario programmato appaia barrato nell'UI
-      if (t.isLive && t.delayMinutes > 0 && t.departureTimePlanned) {
-        const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-        const expDepActual = minutesToTime(depPlanM + t.delayMinutes);
-        if (!t.departureTimeActual || parseTimeToMinutes(t.departureTimeActual) < parseTimeToMinutes(expDepActual)) {
-          t.departureTimeActual = expDepActual;
+      if (t.isLive && t.delayMinutes > 0) {
+        // Se il treno NON è ancora partito dalla stazione del pendolare, propaga il ritardo alla partenza
+        if (!t.isDepartedFromStation && t.departureTimePlanned) {
+          const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+          const expDepActual = minutesToTime(depPlanM + t.delayMinutes);
+          if (!t.departureTimeActual || parseTimeToMinutes(t.departureTimeActual) < parseTimeToMinutes(expDepActual)) {
+            t.departureTimeActual = expDepActual;
+          }
         }
+        // L'arrivo alla destinazione finale invece risente sempre del ritardo globale attuale
         if (t.arrivalTimePlanned) {
           const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
           const expArrActual = minutesToTime(arrPlanM + t.delayMinutes);

@@ -50,6 +50,7 @@ export interface LiveTrainInfo {
   isOriginStation?: boolean; // true se il treno ha origine da questa stazione (senza fermate precedenti)
   isDeparted?: boolean; // true se il treno è già effettivamente partito dall'origine
   isDepartedFromStation?: boolean; // true se il treno è già partito dalla stazione di riferimento del pendolare
+  departureDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
   isStoppedInStation?: boolean; // true se il treno è attualmente fermo in una stazione (arrivato ma non ancora partito)
   stoppedStationName?: string; // nome della stazione in cui il treno è fermo
   hasEarlierTrain?: boolean;
