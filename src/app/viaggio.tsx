@@ -1122,7 +1122,7 @@ export default function ViaggioScreen() {
                             ]}
                           >
                             {at.trainNumber} • {at.departureTimePlanned || at.departureTimeActual}
-                            {isDeparted ? ' (Partito)' : ''}
+                            {isDeparted ? ' (Passato)' : ''}
                           </Text>
                         </TouchableOpacity>
                       );

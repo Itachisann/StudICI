@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.13
+
+### Correzioni & Miglioramenti
+- **Risoluzione Logica Treni Passanti ("Già passato" solo a passaggio avvenuto)**:
+  - Corretta la logica di transito per i treni con origine remota (es. convogli provenienti da Ancona o Perugia diretti a Roma via Orte): il treno non viene più etichettato come già partito non appena lascia la stazione di origine.
+  - Finché il convoglio è in viaggio e non ha ancora raggiunto la stazione di imbarco del pendolare (es. Orte), lo stato riporta fedelmente la marcia in avvicinamento (`+Xm ritardo`, `Anticipo (Xm)` o `In orario`) e il treno rimane correttamente valutato e selezionabile dall'algoritmo.
+  - Sostituita la dicitura `Già partito` con `Già passato` (es. `Già passato` o `Già passato (+Xm)`), che scatta esclusivamente dopo che il treno ha realmente superato l'orario effettivo di transito per la stazione del pendolare.
+  - Aggiornata l'etichetta nelle chips dei treni alternativi in `(Passato)`.
+
 ## 1.6.12
 
 ### Correzioni & Miglioramenti
