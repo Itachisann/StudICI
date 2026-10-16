@@ -41,6 +41,8 @@ const WEEKDAYS = [
   { label: 'MER', dayIdx: 3 },
   { label: 'GIO', dayIdx: 4 },
   { label: 'VEN', dayIdx: 5 },
+  { label: 'SAB', dayIdx: 6 },
+  { label: 'DOM', dayIdx: 0 },
 ];
 
 export default function ViaggioScreen() {
@@ -53,8 +55,7 @@ export default function ViaggioScreen() {
   const [itinerary, setItinerary] = useState<CommuterItinerary | null>(null);
   const [direction, setDirection] = useState<'outbound' | 'return'>('outbound');
   const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() => {
-    const today = new Date().getDay();
-    return today >= 1 && today <= 5 ? today : 1; // lunedì se weekend
+    return new Date().getDay();
   });
   const [selectedClassIndex, setSelectedClassIndex] = useState<number | null>(null);
   const [selectedTrainOffset, setSelectedTrainOffset] = useState<number>(0);
@@ -100,18 +101,20 @@ export default function ViaggioScreen() {
       ? config?.departureStation.shortName || config?.departureStation.name
       : config?.arrivalStation.shortName || config?.arrivalStation.name;
 
+  const isWeekend = selectedDayIdx === 0 || selectedDayIdx === 6;
+
   const trainStatus = useMemo(() => {
     if (!liveTrain) return null;
     const targetDate = new Date();
     const currentDay = targetDate.getDay();
-    let diff = selectedDayIdx - (currentDay === 0 ? 7 : currentDay);
-    if (diff < 0) diff += 7;
+    let diff = (selectedDayIdx - currentDay + 7) % 7;
     targetDate.setDate(targetDate.getDate() + diff);
     return evaluateTrainStatus(liveTrain, targetDate, commuterStationName);
   }, [liveTrain, selectedDayIdx, commuterStationName]);
 
-  // Lezioni del giorno selezionato
+  // Lezioni del giorno selezionato (non presenti nel weekend)
   const dayClasses = useMemo(() => {
+    if (isWeekend) return [];
     const dayScheduleIndex = selectedDayIdx - 1;
     if (!schedule?.days || !schedule.days[dayScheduleIndex]) return [];
     return [...schedule.days[dayScheduleIndex]].sort(
@@ -119,7 +122,7 @@ export default function ViaggioScreen() {
         parseTimeToMinutes(a.startTime || '08:30') -
         parseTimeToMinutes(b.startTime || '08:30')
     );
-  }, [schedule, selectedDayIdx]);
+  }, [schedule, selectedDayIdx, isWeekend]);
 
   // Lezione attualmente selezionata per il viaggio
   const activeSelectedClass = useMemo(() => {
@@ -210,16 +213,14 @@ export default function ViaggioScreen() {
         // Calcola data target in base al giorno selezionato
         const targetDate = new Date();
         const currentDay = targetDate.getDay();
-        let diff = effDayIdx - (currentDay === 0 ? 7 : currentDay);
-        if (diff < 0) {
-          diff += 7; // Se il giorno è già trascorso nella settimana corrente, proietta al prossimo giorno utile
-        }
+        let diff = (effDayIdx - currentDay + 7) % 7;
         targetDate.setDate(targetDate.getDate() + diff);
 
-        // Determina la lezione target per il calcolo
+        // Determina la lezione target per il calcolo (nessuna lezione nel weekend)
+        const isEffWeekend = effDayIdx === 0 || effDayIdx === 6;
         const dayScheduleIndex = effDayIdx - 1;
         const currentDayClasses =
-          sched?.days && sched.days[dayScheduleIndex]
+          !isEffWeekend && sched?.days && sched.days[dayScheduleIndex]
             ? [...sched.days[dayScheduleIndex]].sort(
                 (a, b) =>
                   parseTimeToMinutes(a.startTime || '08:30') -
@@ -232,31 +233,34 @@ export default function ViaggioScreen() {
         const nowMins = now.getHours() * 60 + now.getMinutes();
 
         let targetClassForCalculation: ClassEvent | null = null;
-        if (effClassIdx !== null && currentDayClasses[effClassIdx]) {
-          targetClassForCalculation = currentDayClasses[effClassIdx];
-        } else if (currentDayClasses.length > 0) {
-          if (isToday) {
-            if (effDir === 'outbound') {
-              const upcoming = currentDayClasses.find(
-                (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
-              );
-              targetClassForCalculation = upcoming || currentDayClasses[0];
+        if (!isEffWeekend) {
+          if (effClassIdx !== null && currentDayClasses[effClassIdx]) {
+            targetClassForCalculation = currentDayClasses[effClassIdx];
+          } else if (currentDayClasses.length > 0) {
+            if (isToday) {
+              if (effDir === 'outbound') {
+                const upcoming = currentDayClasses.find(
+                  (c) => parseTimeToMinutes(c.startTime || '08:30') >= nowMins - 15
+                );
+                targetClassForCalculation = upcoming || currentDayClasses[0];
+              } else {
+                const pastOrActive = [...currentDayClasses].reverse().find(
+                  (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
+                );
+                targetClassForCalculation = pastOrActive || currentDayClasses[currentDayClasses.length - 1];
+              }
             } else {
-              const pastOrActive = [...currentDayClasses].reverse().find(
-                (c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30
-              );
-              targetClassForCalculation = pastOrActive || currentDayClasses[currentDayClasses.length - 1];
+              targetClassForCalculation =
+                effDir === 'outbound'
+                  ? currentDayClasses[0]
+                  : currentDayClasses[currentDayClasses.length - 1];
             }
-          } else {
-            targetClassForCalculation =
-              effDir === 'outbound'
-                ? currentDayClasses[0]
-                : currentDayClasses[currentDayClasses.length - 1];
           }
         }
 
         const isTargetClassFinished = Boolean(
           isToday &&
+          !isEffWeekend &&
           targetClassForCalculation &&
           (effDir === 'outbound'
             ? nowMins > parseTimeToMinutes(targetClassForCalculation.startTime || '08:30')
@@ -434,6 +438,7 @@ export default function ViaggioScreen() {
   const currentNowMins = now.getHours() * 60 + now.getMinutes();
   const isTargetLectureFinished = Boolean(
     isSelectedDayToday &&
+    !isWeekend &&
     itinerary?.targetLecture &&
     (itinerary.targetLecture.subject === 'Lezioni di oggi terminate' ||
       (direction === 'outbound'
@@ -569,7 +574,11 @@ export default function ViaggioScreen() {
           <View style={styles.daySelectorContainer}>
             <TouchableOpacity
               style={styles.navArrow}
-              onPress={() => handleDayChange(selectedDayIdx === 1 ? 5 : selectedDayIdx - 1)}
+              onPress={() => {
+                const curIdx = WEEKDAYS.findIndex((w) => w.dayIdx === selectedDayIdx);
+                const prevIdx = (curIdx - 1 + WEEKDAYS.length) % WEEKDAYS.length;
+                handleDayChange(WEEKDAYS[prevIdx].dayIdx);
+              }}
               activeOpacity={0.7}
             >
               <Ionicons name="chevron-back" size={18} color="#ffffff" />
@@ -619,7 +628,11 @@ export default function ViaggioScreen() {
 
             <TouchableOpacity
               style={styles.navArrow}
-              onPress={() => handleDayChange(selectedDayIdx === 5 ? 1 : selectedDayIdx + 1)}
+              onPress={() => {
+                const curIdx = WEEKDAYS.findIndex((w) => w.dayIdx === selectedDayIdx);
+                const nextIdx = (curIdx + 1) % WEEKDAYS.length;
+                handleDayChange(WEEKDAYS[nextIdx].dayIdx);
+              }}
               activeOpacity={0.7}
             >
               <Ionicons name="chevron-forward" size={18} color="#ffffff" />
@@ -643,12 +656,26 @@ export default function ViaggioScreen() {
           <View style={styles.lecturesSection}>
             <View style={styles.sectionHeaderRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="book-outline" size={13} color={theme.accent} style={{ marginRight: 5 }} />
-                <Text style={[styles.sectionTitle, { color: theme.accent }]}>LEZIONI DEL GIORNO</Text>
+                <Ionicons
+                  name={isWeekend ? 'calendar-outline' : 'book-outline'}
+                  size={13}
+                  color={theme.accent}
+                  style={{ marginRight: 5 }}
+                />
+                <Text style={[styles.sectionTitle, { color: theme.accent }]}>
+                  {isWeekend ? 'FINE SETTIMANA' : 'LEZIONI DEL GIORNO'}
+                </Text>
               </View>
             </View>
 
-            {dayClasses.length === 0 ? (
+            {isWeekend ? (
+              <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
+                <Ionicons name="train-outline" size={18} color={theme.primary} style={{ marginRight: 8 }} />
+                <Text style={[styles.noClassesText, { color: theme.light }]}>
+                  Nessuna lezione universitaria • Monitoraggio treni stazione-stazione
+                </Text>
+              </View>
+            ) : dayClasses.length === 0 ? (
               <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
                 <Ionicons name="sunny-outline" size={18} color="#94a3b8" style={{ marginRight: 8 }} />
                 <Text style={styles.noClassesText}>Nessuna lezione in programma per questo giorno</Text>
@@ -809,7 +836,9 @@ export default function ViaggioScreen() {
               <View style={[styles.heroTargetLectureBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
                 <Ionicons
                   name={
-                    isTargetLectureFinished
+                    isWeekend
+                      ? 'train-outline'
+                      : isTargetLectureFinished
                       ? 'checkmark-circle-outline'
                       : direction === 'outbound'
                       ? 'school'
@@ -817,7 +846,9 @@ export default function ViaggioScreen() {
                   }
                   size={16}
                   color={
-                    isTargetLectureFinished
+                    isWeekend
+                      ? theme.primary
+                      : isTargetLectureFinished
                       ? '#10b981'
                       : theme.accent
                   }
@@ -825,7 +856,11 @@ export default function ViaggioScreen() {
                 />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.heroLectureSubject} numberOfLines={1}>
-                    {direction === 'outbound'
+                    {isWeekend
+                      ? direction === 'outbound'
+                        ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
+                        : `Rientro ad ${config?.originAddress}`
+                      : direction === 'outbound'
                       ? (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
                           ? itinerary.targetLecture.subject
                           : (activeSelectedClass?.subject || 'Lezione'))
@@ -834,7 +869,9 @@ export default function ViaggioScreen() {
                           : `Rientro ad ${config?.originAddress}`)}
                   </Text>
                   <Text style={styles.heroLectureDetails} numberOfLines={1}>
-                    {isTargetLectureFinished
+                    {isWeekend
+                      ? 'Fine settimana • Nessuna lezione collegata'
+                      : isTargetLectureFinished
                       ? 'Terminata • Treni da adesso'
                       : direction === 'outbound'
                       ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`

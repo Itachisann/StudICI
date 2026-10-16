@@ -5,6 +5,16 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.5
+
+### Novità & Miglioramenti
+- **Supporto Orari Treni nel Fine Settimana (Sabato & Domenica)**:
+  - Esteso il selettore dei giorni nella schermata Viaggio per includere l'intera settimana: `LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`.
+  - **Modalità Stazione-Stazione senza lezioni**: nel fine settimana i viaggi non vengono forzatamente agganciati alle lezioni universitarie (non previste), ma calcolano e monitorano direttamente le partenze e gli arrivi tra le stazioni di riferimento del pendolare (es. Orte <-> Roma Tiburtina/Termini).
+  - La card delle lezioni mostra chiaramente `FINE SETTIMANA • Monitoraggio treni stazione-stazione` senza falsi messaggi di errore o card vuote, ancorando la ricerca treni all'orario attuale se consultata nel weekend o all'orario diurno per i giorni a venire.
+- **Recupero Universale dei Treni in Arrivo**:
+  - Implementata la scansione universale di tutti i treni regionali (`REG` / `RV`) presenti nella mappa degli arrivi della stazione di destinazione, garantendo che qualsiasi treno non ancora presente nelle partenze istantanee venga rintracciato e monitorato live su tutta la linea pendolare.
+
 ## 1.7.4
 
 ### Correzioni & Miglioramenti

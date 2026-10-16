@@ -1163,6 +1163,84 @@ export async function fetchLiveTrenitaliaTimetable(
 
           matchedNumbers.add(cleanNum);
         }
+
+        // Recupero UNIVERSALE da arrMap: qualsiasi altro treno Regionale/RV in arrivo non ancora abbinato
+        for (const [numStr, arr] of arrMap) {
+          if (matchedNumbers.has(numStr)) continue;
+          if (arr.provvedimento === 1 || arr.statoTreno === 'SOPPRESSO') continue;
+
+          const catRaw = (arr.categoriaDescrizione || arr.categoria || '').toUpperCase();
+          const isRegional =
+            catRaw.includes('REG') ||
+            catRaw.includes('RV') ||
+            catRaw === 'R' ||
+            catRaw.includes('REGIONALE');
+          if (!isRegional) continue;
+
+          // Se il treno ha origine da depCode, o è passante sulla linea
+          const isOrigin = arr.codOrigine === depCode || arr.idOrigine === depCode;
+          const liveDelay = typeof arr.ritardo === 'number' ? arr.ritardo : 0;
+          const arrPlanned = arr.compOrarioArrivo;
+          if (!arrPlanned) continue;
+
+          const arrPlannedM = parseTimeToMinutes(arrPlanned);
+          let arrActual = arrPlanned;
+          const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
+          if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= arrPlannedM) {
+            arrActual = cleanLiveArr;
+          } else if (liveDelay > 0) {
+            arrActual = minutesToTime(arrPlannedM + liveDelay);
+          }
+
+          // Se non abbiamo un orario di partenza programmato esplicito, stimiamo in base alla percorrenza media (40 min)
+          const depEstimatedM = Math.max(0, arrPlannedM - 40);
+          const depPlanned = minutesToTime(depEstimatedM);
+          const isDeparted = Boolean(arr.nonPartito === false || arr.inStazione === true || arr.arrivato === true);
+          const isDepartedFromStation = nowMins >= depEstimatedM;
+
+          const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE');
+          const numInt = arr.numeroTreno || numStr;
+          const trainNumber = isFast ? `RV ${numInt}` : `REG ${numInt}`;
+
+          const rawOrigin = arr.origine && arr.origine.trim().length > 0 ? arr.origine : undefined;
+          const codeOrigin = getStationNameByCode(arr.codOrigine || arr.idOrigine);
+          const resolvedOriginName = rawOrigin
+            ? formatStationName(rawOrigin)
+            : (codeOrigin || (isOrigin ? getStationNameByCode(depCode) : ''));
+
+          let statusDesc = 'In orario';
+          if (isDepartedFromStation) {
+            statusDesc = liveDelay > 0 ? `Già passato (+${liveDelay} min)` : 'Già passato';
+          } else if (liveDelay > 0) {
+            statusDesc = `Ritardo di ${liveDelay} min`;
+          }
+
+          trains.push({
+            trainNumber,
+            category: isFast ? 'RV' : 'REG',
+            destination: arr.destinazione ? formatStationName(arr.destinazione) : '',
+            originStationName: resolvedOriginName,
+            originStationCode: arr.codOrigine || arr.idOrigine || undefined,
+            departureTimePlanned: depPlanned,
+            departureTimeActual: depPlanned,
+            departureMillis: targetDate.getTime(),
+            arrivalTimePlanned: arrPlanned,
+            arrivalTimeActual: arrActual,
+            platformPlanned: cleanPlatform(arr.binarioProgrammatoArrivoDescrizione),
+            platformActual: cleanPlatform(arr.binarioEffettivoArrivoDescrizione || arr.binarioProgrammatoArrivoDescrizione),
+            delayMinutes: liveDelay,
+            statusDescription: statusDesc,
+            isLive: true,
+            durationMinutes: 40,
+            isFast,
+            isOriginStation: isOrigin,
+            isDeparted,
+            isDepartedFromStation,
+            departureDelayAtStation: 0,
+          });
+
+          matchedNumbers.add(numStr);
+        }
       }
     }
 
