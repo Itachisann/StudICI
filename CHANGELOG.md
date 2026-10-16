@@ -5,6 +5,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.0
+
+### Correzioni & Miglioramenti
+- **Recupero Treni Già Passati in Viaggio (Es. RV 4153)**:
+  - Risolta la scomparsa dei treni già partiti dalla propria stazione di riferimento (es. Orte) ma non ancora giunti al capolinea di destinazione (es. Roma Termini). ViaggiaTreno rimuove i treni dall'endpoint `/partenze` poco dopo la partenza; ora il sistema effettua un pass di riconciliazione con l'endpoint `/arrivi` della stazione di destinazione.
+  - I treni in transito vengono mantenuti in elenco con lo stato `Già passato` (o `Già passato (+Xm)` in caso di ritardo), consentendo di consultarli premendo "Treno prima" o selezionando la chip con l'etichetta `(Passato)` fino all'effettivo arrivo a termine corsa.
+  - L'algoritmo di raccomandazione continua a suggerire in automatico il prossimo treno utile prendibile.
+
 ## 1.6.14
 
 ### Novità & Miglioramenti
