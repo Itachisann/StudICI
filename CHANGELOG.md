@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.4
+
+### Correzioni & Miglioramenti
+- **Tracciamento Treni Serali (es. RV 4161) & Risoluzione Fine Giornata**:
+  - **Aggiunta del treno serale RV 4161 (23:00 Orte -> 23:34 Tiburtina -> 23:48 Termini)** alla tabella ufficiale programmata e supporto per il codice stazione di Roma Tiburtina (`S08217`) nella procedura di recupero arrivi.
+  - **Tracciamento continuativo fino all'arrivo**: i treni appena arrivati o in transito restano visibili e tracciabili nella schermata Viaggio fino a 60 minuti dopo l'arrivo (evitando la sparizione immediata al momento del tocco banchina).
+  - **Gestione fine giornata**: a fine servizio, quando non vi sono più corse in partenza per la giornata, l'app mostra solo gli ultimi 2-3 treni serali passati con indicatore `(Passato)`, senza ricaricare erroneamente i treni del mattino dalle 05:00 né mostrarli come non partiti.
+  - **Risolto falso ritardo di 1 min**: corretta l'anomalia di arrotondamento di Trenitalia quando l'orario effettivo di partenza coincide al minuto con quello programmato (es. partenza alle 23:00 con 30s registrata da ViaggiaTreno come +1m), azzerando il ritardo locale per treni effettivamente in orario.
+
 ## 1.7.3
 
 ### Correzioni & Miglioramenti
