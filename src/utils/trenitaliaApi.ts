@@ -114,17 +114,40 @@ export const POPULAR_STATIONS: StationInfo[] = [
   { name: 'ROMA TIBURTINA', code: 'S08217', shortName: 'Roma Tiburtina' },
   { name: 'ROMA TERMINI', code: 'S08409', shortName: 'Roma Termini' },
   { name: 'ROMA OSTIENSE', code: 'S08419', shortName: 'Roma Ostiense' },
+  { name: 'ROMA TUSCOLANA', code: 'S08417', shortName: 'Roma Tuscolana' },
   { name: 'NARNI-AMELIA', code: 'S08208', shortName: 'Narni-Amelia' },
   { name: 'TERNI', code: 'S08207', shortName: 'Terni' },
+  { name: 'PERUGIA', code: 'S07004', shortName: 'Perugia' },
+  { name: 'PERUGIA PONTE SAN GIOVANNI', code: 'S07003', shortName: 'Perugia P.S.G.' },
+  { name: 'ANCONA', code: 'S07113', shortName: 'Ancona' },
+  { name: 'FOLIGNO', code: 'S07204', shortName: 'Foligno' },
+  { name: 'SPOLETO', code: 'S07200', shortName: 'Spoleto' },
+  { name: 'ASSISI', code: 'S07207', shortName: 'Assisi' },
+  { name: 'BASTIA UMBRA', code: 'S07208', shortName: 'Bastia' },
+  { name: 'FABRIANO', code: 'S07214', shortName: 'Fabriano' },
+  { name: 'JESI', code: 'S07218', shortName: 'Jesi' },
+  { name: 'FALCONARA MARITTIMA', code: 'S07106', shortName: 'Falconara M.' },
+  { name: 'PESARO', code: 'S07100', shortName: 'Pesaro' },
   { name: 'VITERBO PORTA FIORENTINA', code: 'S08005', shortName: 'Viterbo P. Fiorentina' },
   { name: 'VITERBO PORTA ROMANA', code: 'S08006', shortName: 'Viterbo P. Romana' },
   { name: 'CIVITA CASTELLANA-MAGLIANO', code: 'S08211', shortName: 'Civita Castellana' },
   { name: 'FARA SABINA-MONTELIBRETTI', code: 'S08214', shortName: 'Fara Sabina' },
   { name: 'MONTEROTONDO-MENTANA', code: 'S08216', shortName: 'Monterotondo' },
   { name: 'ORVIETO', code: 'S08300', shortName: 'Orvieto' },
+  { name: 'ALVIANO', code: 'S08302', shortName: 'Alviano' },
+  { name: 'ATTIGLIANO-BOMARZO', code: 'S08303', shortName: 'Attigliano' },
   { name: 'CHIUSI-CHIANCIANO TERME', code: 'S08304', shortName: 'Chiusi-Chianciano' },
+  { name: 'AREZZO', code: 'S06311', shortName: 'Arezzo' },
+  { name: 'FIRENZE SANTA MARIA NOVELLA', code: 'S06400', shortName: 'Firenze SMN' },
+  { name: 'FIRENZE CAMPO DI MARTE', code: 'S06421', shortName: 'Firenze Campo Marte' },
   { name: 'RIETI', code: 'S08030', shortName: 'Rieti' },
   { name: 'POGGIO MIRTETO', code: 'S08213', shortName: 'Poggio Mirteto' },
+  { name: 'PESCARA', code: 'S07810', shortName: 'Pescara' },
+  { name: 'CASERTA', code: 'S09211', shortName: 'Caserta' },
+  { name: 'NAPOLI CENTRALE', code: 'S09218', shortName: 'Napoli C.le' },
+  { name: 'NETTUNO', code: 'S08710', shortName: 'Nettuno' },
+  { name: 'GROSSETO', code: 'S06039', shortName: 'Grosseto' },
+  { name: 'FIUMICINO AEROPORTO', code: 'S08500', shortName: 'Fiumicino Aeroporto' },
 ];
 
 /**
@@ -207,7 +230,13 @@ export function getStationNameByCode(code?: string | null): string {
   const found = POPULAR_STATIONS.find(
     (s) => s.code.toUpperCase() === clean || s.code.endsWith(clean) || clean.endsWith(s.code)
   );
-  return found ? (found.shortName || found.name) : clean;
+  if (found) {
+    return found.shortName || found.name;
+  }
+  if (/^S\d+$/i.test(clean)) {
+    return '';
+  }
+  return clean;
 }
 
 /**
@@ -874,12 +903,21 @@ export async function fetchLiveTrenitaliaTimetable(
         dep.binarioEffettivoPartenzaCodice ||
         undefined;
 
+      const rawOrigin =
+        (arr.origine && arr.origine.trim().length > 0)
+          ? arr.origine
+          : (dep.origine && dep.origine.trim().length > 0)
+          ? dep.origine
+          : undefined;
+
+      const codeOrigin = getStationNameByCode(dep.codOrigine || dep.idOrigine || arr.codOrigine || arr.idOrigine);
+
       const resolvedOriginName =
-        (dep.origine && dep.origine.trim().length > 0)
-          ? formatStationName(dep.origine)
+        rawOrigin
+          ? formatStationName(rawOrigin)
           : isOriginStation
           ? getStationNameByCode(depCode)
-          : getStationNameByCode(dep.codOrigine || dep.idOrigine);
+          : (codeOrigin || getStationNameByCode(depCode));
 
       trains.push({
         trainNumber,

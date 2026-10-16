@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.12
+
+### Correzioni & Miglioramenti
+- **Risoluzione Nomi Stazione di Origine Remota (No Codici S0...)**:
+  - Risolto il problema per cui l'origine dei treni passanti mostrava il codice tecnico ViaggiaTreno (es. *S07004* anziché *Perugia*).
+  - L'origine corsa ora estrae prioritariamente il nome testuale certificato da ViaggiaTreno (`arr.origine` dall'elenco arrivi della tratta, contenente il nome della stazione in lettere, es. *Perugia*, *Ancona*, *Foligno*).
+  - Espanso il dizionario delle stazioni regionali con tutti i codici delle direttrici Orte-Roma, Orte-Falconara/Ancona, Orte-Terontola/Firenze e Roma-Pescara/Napoli.
+  - Implementato un filtro di sanitizzazione per bloccare categoricamente la visualizzazione di codici raw tipo `S0...`.
+- **Uniformazione Icona Badge Origine Corsa**:
+  - Uniformata l'icona del badge permanente "Origine corsa" all'icona a freccia di navigazione (`navigate-outline`), mantenendo la differenziazione cromatica (ciano per la propria stazione di partenza, ardesia per stazioni remote).
+
 ## 1.6.11
 
 ### Novità & Miglioramenti

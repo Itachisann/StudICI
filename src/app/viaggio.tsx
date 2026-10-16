@@ -890,7 +890,10 @@ export default function ViaggioScreen() {
                     {/* Badge Permanente Origine Corsa */}
                     {(() => {
                       const cleanCommuter = (commuterStationName || '').trim().toLowerCase();
-                      const rawOrigin = (itinerary.liveTrain.originStationName || '').trim();
+                      let rawOrigin = (itinerary.liveTrain.originStationName || '').trim();
+                      if (/^S\d+$/i.test(rawOrigin)) {
+                        rawOrigin = '';
+                      }
                       const isOriginRef = Boolean(
                         itinerary.liveTrain.isOriginStation ||
                         (rawOrigin && cleanCommuter && rawOrigin.toLowerCase().includes(cleanCommuter)) ||
@@ -916,7 +919,7 @@ export default function ViaggioScreen() {
                           ]}
                         >
                           <Ionicons
-                            name={isOriginRef ? 'flag' : 'navigate-outline'}
+                            name="navigate-outline"
                             size={11}
                             color={isOriginRef ? '#38bdf8' : '#94a3b8'}
                             style={{ marginRight: 4 }}
