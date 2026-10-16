@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.2
+
+### Correzioni & Miglioramenti
+- **Orario Programmato Barrato per Treni Fermi & Propagazione Ritardo Tratta**:
+  - Risolta l'assenza dell'orario programmato barrato quando un treno è fermo al binario o accumula ritardo lungo il tragitto:
+    - **Treno fermo a monte (es. a Terni in direzione Orte)**: il ritardo maturato nella sosta prolungata viene ora propagato istantaneamente sia alla partenza prevista nella stazione del pendolare (es. Orte) che all'arrivo alla destinazione finale. L'orario effettivo stimato appare evidenziato in arancione e sotto viene sempre mostrato l'orario programmato barrato (`prog. HH:mm`).
+    - **Treno fermo alla propria stazione di salita (es. a Orte o Tiburtina)**: quando il convoglio è al binario in attesa di partire oltre l'orario previsto ("non si sa quando parte"), il ritardo viene monitorato dinamicamente minuto per minuto; l'orario programmato viene barrato e sostituito dalla stima in tempo reale con badge `Fermo a [Stazione] (+Xm)`.
+    - Sincronizzazione automatica degli orari effettivi (`departureTimeActual` e `arrivalTimeActual`) con il ritardo live in tutto il motore orari pendolare.
+
 ## 1.7.1
 
 ### Novità & Correzioni

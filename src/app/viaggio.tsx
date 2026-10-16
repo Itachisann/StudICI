@@ -969,7 +969,8 @@ export default function ViaggioScreen() {
                           (itinerary.liveTrain.departureTimeActual &&
                             itinerary.liveTrain.departureTimePlanned &&
                             itinerary.liveTrain.departureTimeActual !== itinerary.liveTrain.departureTimePlanned) ||
-                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0)
+                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) ||
+                          itinerary.liveTrain.isStoppedInStation
                         ) && {
                           color: '#fb923c',
                         },
@@ -1012,7 +1013,8 @@ export default function ViaggioScreen() {
                           (itinerary.liveTrain.arrivalTimeActual &&
                             itinerary.liveTrain.arrivalTimePlanned &&
                             itinerary.liveTrain.arrivalTimeActual !== itinerary.liveTrain.arrivalTimePlanned) ||
-                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0)
+                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) ||
+                          itinerary.liveTrain.isStoppedInStation
                         ) && {
                           color: '#fb923c',
                         },

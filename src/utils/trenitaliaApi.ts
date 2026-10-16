@@ -1250,6 +1250,18 @@ export async function fetchLiveTrenitaliaTimetable(
                   stopPlanDepM > 0 && nowMins > stopPlanDepM ? nowMins - stopPlanDepM : 0
                 );
                 t.delayMinutes = accLate;
+
+                // Propaga il ritardo accumulato in banchina alla partenza e all'arrivo alla stazione del pendolare
+                if (accLate > 0) {
+                  const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+                  t.departureTimeActual = minutesToTime(depPlanM + accLate);
+                  if (t.arrivalTimePlanned) {
+                    t.arrivalTimeActual = minutesToTime(
+                      parseTimeToMinutes(t.arrivalTimePlanned) + accLate
+                    );
+                  }
+                }
+
                 t.statusDescription =
                   accLate > 0
                     ? `Fermo a ${t.stoppedStationName} (+${accLate} min)`
@@ -1259,6 +1271,15 @@ export async function fetchLiveTrenitaliaTimetable(
                 t.stoppedStationName = formatStationName(aData.stazioneUltimoRilevamento);
                 if (typeof aData.ritardo === 'number') {
                   t.delayMinutes = Math.max(t.delayMinutes, aData.ritardo);
+                }
+                if (t.delayMinutes > 0) {
+                  const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+                  t.departureTimeActual = minutesToTime(depPlanM + t.delayMinutes);
+                  if (t.arrivalTimePlanned) {
+                    t.arrivalTimeActual = minutesToTime(
+                      parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
+                    );
+                  }
                 }
                 t.statusDescription =
                   t.delayMinutes > 0
@@ -1539,6 +1560,23 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
               const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
               t.arrivalTimeActual = minutesToTime(arrPlanM + lateM);
             }
+          }
+        }
+      }
+
+      // Per qualsiasi treno con ritardo o fermo in stazione, assicura che departureTimeActual e arrivalTimeActual
+      // siano sincronizzati con il ritardo effettivo affinché l'orario programmato appaia barrato nell'UI
+      if (t.isLive && t.delayMinutes > 0 && t.departureTimePlanned) {
+        const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+        const expDepActual = minutesToTime(depPlanM + t.delayMinutes);
+        if (!t.departureTimeActual || parseTimeToMinutes(t.departureTimeActual) < parseTimeToMinutes(expDepActual)) {
+          t.departureTimeActual = expDepActual;
+        }
+        if (t.arrivalTimePlanned) {
+          const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
+          const expArrActual = minutesToTime(arrPlanM + t.delayMinutes);
+          if (!t.arrivalTimeActual || parseTimeToMinutes(t.arrivalTimeActual) < parseTimeToMinutes(expArrActual)) {
+            t.arrivalTimeActual = expArrActual;
           }
         }
       }
