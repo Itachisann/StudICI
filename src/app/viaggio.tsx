@@ -461,9 +461,8 @@ export default function ViaggioScreen() {
               <Text style={styles.liquidGlassTitle}>Viaggio</Text>
               {lastUpdated && (
                 <View style={styles.liveUpdatedRow}>
-                  <View style={styles.liveUpdatedDot} />
                   <Text style={styles.liveUpdatedText}>
-                    Aggiornato {lastUpdated.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} • Auto 60s
+                    Aggiornato {lastUpdated.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </Text>
                 </View>
               )}

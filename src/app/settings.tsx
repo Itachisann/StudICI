@@ -10,6 +10,7 @@ import {
   Alert,
   Animated,
   LayoutAnimation,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -1471,6 +1472,14 @@ export default function ProfiloScreen() {
 
         {/* Footer Info App */}
         <View style={styles.footer}>
+          <TouchableOpacity
+            style={styles.githubCircleBtn}
+            activeOpacity={0.7}
+            onPress={() => Linking.openURL("https://github.com/Itachisann/StudICI")}
+          >
+            <Ionicons name="logo-github" size={24} color="#ffffff" />
+          </TouchableOpacity>
+
           <Text style={styles.footerText}>
             {`StudICI · v${Constants.expoConfig?.version || "1.4.9"} (Build ${Constants.expoConfig?.ios?.buildNumber || "7"})`}
           </Text>
@@ -2332,6 +2341,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 32,
     marginBottom: 20,
+  },
+  githubCircleBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.16)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 14,
   },
   footerText: {
     color: "#636366",

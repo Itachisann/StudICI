@@ -308,7 +308,7 @@ export function CommuterConfigModal({ visible, config, onClose, onSave }: Props)
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={styles.cardHeader}>2. TRAGITTO IN AUTO</Text>
                     <Text style={styles.switchDesc}>
-                      Raggiungi la stazione del treno con la tua auto (es. da Amelia a Orte FS)
+                      Raggiungi la stazione del treno con la tua auto
                     </Text>
                   </View>
                   <Switch

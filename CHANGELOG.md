@@ -5,6 +5,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.6.14
+
+### Novità & Miglioramenti
+- **Header Viaggio Semplificato**: rimosso il pallino verde e la dicitura `• Auto 60s` sotto il titolo "Viaggio", mostrando un'etichetta pulita e minimale `Aggiornato HH:mm:ss`.
+- **Impostazioni Pendolare**: eliminato l'esempio restrittivo `(es. da Amelia a Orte FS)` nella descrizione della sezione tragitto in auto.
+- **Pulsante GitHub nel Profilo**: introdotto a fondo pagina nella schermata Profilo un pulsante circolare con icona di GitHub (`logo-github`) per accedere con un tocco al repository del progetto.
+
 ## 1.6.13
 
 ### Correzioni & Miglioramenti
