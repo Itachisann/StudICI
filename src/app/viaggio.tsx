@@ -11,6 +11,7 @@ import {
   Alert,
   Linking,
   Dimensions,
+  ActionSheetIOS,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -35,6 +36,13 @@ const SAPIENZA_RED_BG = 'rgba(130, 36, 51, 0.45)';
 const SAPIENZA_RED_BORDER = 'rgba(130, 36, 51, 0.4)';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
+
+const formatMinutes = (mins: number) => {
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+};
 
 const WEEKDAYS = [
   { label: 'LUN', dayIdx: 1 },
@@ -64,16 +72,10 @@ export default function ViaggioScreen() {
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
 
-  const IT_DAYS = useMemo(
-    () => ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'],
-    []
-  );
   const IT_MONTHS = useMemo(
     () => ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'],
     []
   );
-
-  const todayDayIdx = useMemo(() => new Date().getDay(), []);
 
   const getDayDateInfo = useCallback(
     (dayIdx: number) => {
@@ -89,21 +91,6 @@ export default function ViaggioScreen() {
     },
     [IT_MONTHS]
   );
-
-  const activeDateInfo = useMemo(() => {
-    const target = new Date();
-    const cur = target.getDay();
-    const diff = (selectedDayIdx - cur + 7) % 7;
-    target.setDate(target.getDate() + diff);
-    const isToday = diff === 0;
-    return {
-      dayNum: target.getDate(),
-      dayName: IT_DAYS[target.getDay()],
-      monthName: IT_MONTHS[target.getMonth()],
-      isToday,
-      formatted: `${isToday ? 'Oggi • ' : ''}${IT_DAYS[target.getDay()]}, ${target.getDate()} ${IT_MONTHS[target.getMonth()]}`,
-    };
-  }, [selectedDayIdx, IT_DAYS, IT_MONTHS]);
 
   const daysScrollRef = useRef<ScrollView>(null);
 
@@ -449,23 +436,9 @@ export default function ViaggioScreen() {
     loadData();
   };
 
-  const handleOpenMaps = (leg: TripLeg) => {
-    const dest = leg.details?.mapQuery;
-    const isTransit = leg.type === 'transit';
-    // Per i mezzi pubblici, non specifichiamo alcuna origine:
-    // Google Maps aprirà automaticamente l'itinerario partendo dalla "Posizione attuale" (GPS live)
-    const origin = isTransit ? undefined : leg.details?.mapOriginQuery;
-    const mode = isTransit ? 'transit' : leg.details?.travelMode || 'driving';
-
-    if (!dest) {
-      Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
-      return;
-    }
-
+  const launchGoogleMaps = (dest: string, origin?: string, mode: string = 'transit') => {
     const encodedDest = encodeURIComponent(dest);
     const encodedOrigin = origin ? encodeURIComponent(origin) : '';
-
-    // Modalità di viaggio per Google Maps: transit | driving | walking
     const gmapsMode = mode === 'transit' ? 'transit' : mode === 'walking' ? 'walking' : 'driving';
 
     // 1. URL per App nativa Google Maps su iOS / Android (comgooglemaps://)
@@ -478,7 +451,6 @@ export default function ViaggioScreen() {
       ? `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedDest}&travelmode=${gmapsMode}`
       : `https://www.google.com/maps/dir/?api=1&destination=${encodedDest}&travelmode=${gmapsMode}`;
 
-    // Prova ad aprire direttamente l'app Google Maps; se non installata, apre il browser
     Linking.canOpenURL('comgooglemaps://')
       .then((supported) => {
         if (supported) {
@@ -490,21 +462,63 @@ export default function ViaggioScreen() {
       .catch(() => Linking.openURL(gmapsWebUrl));
   };
 
+  const handleOpenMaps = (leg: TripLeg) => {
+    const dest = leg.details?.mapQuery;
+    if (!dest) {
+      Alert.alert('Navigazione', 'Nessuna destinazione specifica per questa tratta.');
+      return;
+    }
+
+    if (leg.type === 'transit') {
+      const stationName = direction === 'outbound'
+        ? (config?.arrivalStation.shortName || config?.arrivalStation.name || 'Roma Tiburtina')
+        : (itinerary?.targetLecture?.room || 'Sapienza');
+
+      const originStationLabel = direction === 'outbound'
+        ? `Dalla stazione (${stationName})`
+        : `Dalla sede (${stationName})`;
+
+      const stationOrigin = direction === 'outbound'
+        ? (leg.details?.mapOriginQuery || `Stazione Roma ${stationName}`)
+        : (leg.details?.mapOriginQuery || dest);
+
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: 'Cerca mezzi su Google Maps',
+            message: 'Scegli il punto di partenza:',
+            options: ['Dalla posizione attuale (GPS)', originStationLabel, 'Annulla'],
+            cancelButtonIndex: 2,
+          },
+          (buttonIndex) => {
+            if (buttonIndex === 0) {
+              launchGoogleMaps(dest, undefined, 'transit');
+            } else if (buttonIndex === 1) {
+              launchGoogleMaps(dest, stationOrigin, 'transit');
+            }
+          }
+        );
+      } else {
+        Alert.alert(
+          'Cerca mezzi su Google Maps',
+          'Scegli il punto di partenza:',
+          [
+            { text: 'Dalla posizione attuale', onPress: () => launchGoogleMaps(dest, undefined, 'transit') },
+            { text: originStationLabel, onPress: () => launchGoogleMaps(dest, stationOrigin, 'transit') },
+            { text: 'Annulla', style: 'cancel' },
+          ]
+        );
+      }
+      return;
+    }
+
+    const origin = leg.details?.mapOriginQuery;
+    const mode = leg.details?.travelMode || 'driving';
+    launchGoogleMaps(dest, origin, mode);
+  };
+
   const directionIndex = direction === 'outbound' ? 0 : 1;
   const directionTitles = ['Andata', 'Ritorno'];
-
-  const now = new Date();
-  const isSelectedDayToday = now.getDay() === selectedDayIdx;
-  const currentNowMins = now.getHours() * 60 + now.getMinutes();
-  const isTargetLectureFinished = Boolean(
-    isSelectedDayToday &&
-    !isWeekend &&
-    itinerary?.targetLecture &&
-    (itinerary.targetLecture.subject === 'Lezioni di oggi terminate' ||
-      (direction === 'outbound'
-        ? currentNowMins > parseTimeToMinutes(itinerary.targetLecture.startTime || '08:30')
-        : currentNowMins > parseTimeToMinutes(itinerary.targetLecture.endTime || '18:00')))
-  );
 
   return (
     <View style={styles.container}>
@@ -632,29 +646,6 @@ export default function ViaggioScreen() {
 
           {/* Selettore Giorno della settimana - iOS Native Capsule Ribbon */}
           <View style={styles.daySelectorContainer}>
-            <View style={styles.daySelectorHeaderRow}>
-              <View style={styles.dayDateInfoRow}>
-                <Ionicons name="calendar-outline" size={13} color={theme.accent} style={{ marginRight: 6 }} />
-                <Text style={styles.dayDateTitleText}>{activeDateInfo.formatted}</Text>
-                {isWeekend && (
-                  <View style={[styles.weekendBadge, { backgroundColor: SAPIENZA_RED_BG }]}>
-                    <Text style={[styles.weekendBadgeText, { color: theme.accent }]}>Weekend</Text>
-                  </View>
-                )}
-              </View>
-
-              {!activeDateInfo.isToday && (
-                <TouchableOpacity
-                  style={[styles.todayButton, { borderColor: theme.border }]}
-                  activeOpacity={0.7}
-                  onPress={() => handleDayChange(todayDayIdx)}
-                >
-                  <Ionicons name="today-outline" size={13} color="#ffffff" style={{ marginRight: 4 }} />
-                  <Text style={styles.todayButtonText}>Oggi</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
             <ScrollView
               ref={daysScrollRef}
               horizontal
@@ -676,8 +667,8 @@ export default function ViaggioScreen() {
                       isSelected && [
                         styles.dayCapsuleActive,
                         {
-                          backgroundColor: theme.primary,
-                          borderColor: 'rgba(255, 255, 255, 0.3)',
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
                           shadowColor: theme.primary,
                         },
                       ],
@@ -868,99 +859,6 @@ export default function ViaggioScreen() {
             </View>
           ) : (
             <>
-            {/* Hero Card */}
-            <View style={[styles.heroCard, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
-              <View style={styles.heroTopRow}>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: `${itinerary.statusBadge.color}22` },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.statusDot,
-                      { backgroundColor: itinerary.statusBadge.color },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.statusBadgeText,
-                      { color: itinerary.statusBadge.color },
-                    ]}
-                  >
-                    {itinerary.statusBadge.text}
-                  </Text>
-                </View>
-
-                <View style={styles.durationBadge}>
-                  <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
-                  <Text style={styles.durationBadgeText}>
-                    {Math.floor(itinerary.totalDurationMinutes / 60)}h{' '}
-                    {itinerary.totalDurationMinutes % 60}m
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={styles.heroHeadline}>
-                {isTargetLectureFinished
-                  ? 'Prossima partenza'
-                  : direction === 'outbound'
-                  ? 'Parti da casa alle'
-                  : 'Rientro previsto alle'}
-              </Text>
-              <Text style={styles.heroBigTime}>
-                {direction === 'outbound' ? itinerary.departureTime : itinerary.arrivalTime}
-              </Text>
-
-              <View style={[styles.heroTargetLectureBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
-                <Ionicons
-                  name={
-                    isWeekend
-                      ? 'train-outline'
-                      : isTargetLectureFinished
-                      ? 'checkmark-circle-outline'
-                      : direction === 'outbound'
-                      ? 'school'
-                      : 'home'
-                  }
-                  size={16}
-                  color={
-                    isWeekend
-                      ? theme.primary
-                      : isTargetLectureFinished
-                      ? '#10b981'
-                      : theme.accent
-                  }
-                  style={{ marginRight: 8 }}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.heroLectureSubject} numberOfLines={1}>
-                    {isWeekend
-                      ? direction === 'outbound'
-                        ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
-                        : `Rientro ad ${config?.originAddress}`
-                      : direction === 'outbound'
-                      ? (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
-                          ? itinerary.targetLecture.subject
-                          : (activeSelectedClass?.subject || 'Lezione'))
-                      : (itinerary.targetLecture?.subject && itinerary.targetLecture.subject !== 'Lezioni di oggi terminate'
-                          ? itinerary.targetLecture.subject
-                          : `Rientro ad ${config?.originAddress}`)}
-                  </Text>
-                  <Text style={styles.heroLectureDetails} numberOfLines={1}>
-                    {isWeekend
-                      ? 'Fine settimana • Nessuna lezione collegata'
-                      : isTargetLectureFinished
-                      ? 'Terminata • Treni da adesso'
-                      : direction === 'outbound'
-                      ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
-                      : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
             {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
             {itinerary.liveTrain && (
               <View
@@ -1279,7 +1177,7 @@ export default function ViaggioScreen() {
                   iconColor = '#a855f7';
                   circleBg = 'rgba(168, 85, 247, 0.15)';
                 } else if (leg.type === 'destination') {
-                  iconName = direction === 'outbound' ? 'school' : 'home';
+                  iconName = 'location';
                   iconColor = theme.primary;
                   circleBg = theme.subtle;
                 } else if (leg.type === 'wait') {
@@ -1328,9 +1226,11 @@ export default function ViaggioScreen() {
                         <Text style={styles.stepTitleText}>
                           {leg.title}
                         </Text>
-                        <View style={styles.durationBadgeContainer}>
-                          <Text style={styles.stepDurationText}>{leg.durationMinutes}m</Text>
-                        </View>
+                        {leg.type !== 'train' && leg.type !== 'destination' && leg.type !== 'transit' && (
+                          <View style={styles.durationBadgeContainer}>
+                            <Text style={styles.stepDurationText}>{formatMinutes(leg.durationMinutes)}</Text>
+                          </View>
+                        )}
                       </View>
 
                       <Text style={styles.stepSubtitleText}>{leg.subtitle}</Text>
@@ -1429,14 +1329,16 @@ export default function ViaggioScreen() {
                         </View>
                       )}
 
-                      {/* Note della tratta (omesse per i mezzi pubblici per reindirizzare direttamente a Maps da posizione attuale) */}
+                      {/* Note della tratta (omesse per treno, destinazione e mezzi pubblici) */}
                       {leg.details?.notes &&
+                        leg.type !== 'train' &&
+                        leg.type !== 'destination' &&
                         leg.type !== 'transit' &&
                         leg.details.notes !== 'Tocca per aprire la navigazione con orario impostato' && (
                         <Text style={styles.stepNotesText}>{leg.details.notes}</Text>
                       )}
 
-                      {/* Banner Apri Google Maps */}
+                      {/* Banner Cerca su Google Maps */}
                       {leg.details?.mapQuery && (
                         <View style={[styles.mapsBanner, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
                           <View style={styles.mapsBannerLeft}>
@@ -1456,9 +1358,9 @@ export default function ViaggioScreen() {
                             <View style={{ flex: 1, marginRight: 6 }}>
                               <Text style={[styles.mapsBannerTitle, { color: theme.accent }]}>
                                 {leg.type === 'transit'
-                                  ? 'Apri su Maps dalla posizione attuale'
+                                  ? 'Cerca mezzi su Google Maps'
                                   : leg.details.travelMode === 'transit'
-                                  ? 'Apri su Google Maps'
+                                  ? 'Cerca mezzi su Google Maps'
                                   : leg.details.travelMode === 'walking'
                                   ? 'Percorso su Google Maps'
                                   : 'Naviga su Google Maps'}
@@ -1466,7 +1368,9 @@ export default function ViaggioScreen() {
                             </View>
                           </View>
                           <View style={[styles.mapsActionBadge, { backgroundColor: theme.primary }]}>
-                            <Text style={styles.mapsActionBadgeText}>APRI MAPS</Text>
+                            <Text style={styles.mapsActionBadgeText}>
+                              {leg.type === 'transit' ? 'CERCA' : 'APRI MAPS'}
+                            </Text>
                             <Ionicons name="open-outline" size={11} color="#ffffff" style={{ marginLeft: 3 }} />
                           </View>
                         </View>
@@ -1623,55 +1527,11 @@ const styles = StyleSheet.create({
 
   /* Selettore Giorno della settimana - iOS Native Capsule Ribbon */
   daySelectorContainer: {
-    paddingBottom: 14,
-  },
-  daySelectorHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginBottom: 10,
-  },
-  dayDateInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  dayDateTitleText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#f4f4f5',
-    letterSpacing: 0.2,
-  },
-  weekendBadge: {
-    marginLeft: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: SAPIENZA_RED_BORDER,
-  },
-  weekendBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  todayButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  todayButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
+    paddingBottom: 6,
   },
   daysScrollContent: {
     paddingHorizontal: 16,
+    paddingVertical: 10,
     gap: 8,
     alignItems: 'center',
   },
@@ -1679,18 +1539,18 @@ const styles = StyleSheet.create({
     width: 52,
     height: 60,
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    backgroundColor: '#1c1c1e',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#2c2c2e',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 6,
   },
   dayCapsuleActive: {
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 8,
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.75,
+    shadowRadius: 10,
     elevation: 6,
   },
   dayCapsuleLabel: {
@@ -1700,13 +1560,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   dayCapsuleLabelActive: {
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: '#ffffff',
     fontWeight: '800',
   },
   dayCapsuleNumber: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#f4f4f5',
+    color: '#8e8e93',
     marginTop: 2,
   },
   dayCapsuleNumberActive: {
@@ -1726,7 +1586,7 @@ const styles = StyleSheet.create({
 
   /* Lezioni del Giorno */
   lecturesSection: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     marginBottom: 10,
   },
   sectionHeaderRow: {

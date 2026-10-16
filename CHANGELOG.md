@@ -5,6 +5,25 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.7
+
+### Novità & UI / UX
+- **Refactoring Schermata Viaggio & Pulizia Layout**:
+  - **Rimozione della Hero Card**: eliminato il riquadro "Parti da casa alle..." / riepilogo per un design più immediato che porta i treni e le tappe direttamente in primo piano.
+  - **Uniformità Larghezza Card**: rimosso il doppio padding sul box delle lezioni e del fine settimana, rendendolo perfettamente uniforme con la larghezza delle altre card.
+  - **Tappe Viaggio Essenziali e Pulite**:
+    - Per la tappa del **Treno Regionale**: visualizzazione concentrata esclusivamente su Titolo e Sottotitolo descrittivo in grigio, senza badge ridondanti.
+    - Per la tappa di **Arrivo/Destinazione**: sostituita l'icona del cappello di laurea con l'icona di destinazione generale (`location`), mostrando unicamente Titolo e Sottotitolo.
+    - Per la tappa dei **Trasporti Urbani / Pullman**: rimosso il tempo di percorrenza in minuti in testa alla card.
+  - **Format Orari e Durate Migliorato**: implementata la conversione automatica delle durate elevate in ore e minuti (es. `4h 20m` invece di `260m`).
+  - **Nuovo Selettore Percorso "Cerca mezzi su Google Maps"**:
+    - Sostituito il pulsante con la dicitura *"Cerca mezzi su Google Maps"*.
+    - Alla pressione, apertura di un menu in perfetto stile iOS (`ActionSheetIOS` / popup) che consente di scegliere se avviare la ricerca partendo dalla **Posizione attuale (GPS)** oppure direttamente dalla **Stazione di arrivo/partenza**.
+  - **Perfezionamento Nastro Giorni**:
+    - Rimosso il testo data sotto lo switcher Andata/Ritorno.
+    - Allineati i colori delle capsule a quelli della sezione Orario (`theme.bg` e contorno in tinta `theme.primary`).
+    - Risolto il taglio verticale dell'effetto bagliore/neon attorno al giorno selezionato grazie all'adeguamento del padding e del raggio d'ombra 360°.
+
 ## 1.7.6
 
 ### Novità & UI / UX
