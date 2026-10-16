@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   Linking,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -62,6 +63,65 @@ export default function ViaggioScreen() {
   const [selectedTrainNumber, setSelectedTrainNumber] = useState<string | null>(null);
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
+
+  const IT_DAYS = useMemo(
+    () => ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'],
+    []
+  );
+  const IT_MONTHS = useMemo(
+    () => ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'],
+    []
+  );
+
+  const todayDayIdx = useMemo(() => new Date().getDay(), []);
+
+  const getDayDateInfo = useCallback(
+    (dayIdx: number) => {
+      const target = new Date();
+      const cur = target.getDay();
+      const diff = (dayIdx - cur + 7) % 7;
+      target.setDate(target.getDate() + diff);
+      return {
+        dayNum: target.getDate(),
+        monthName: IT_MONTHS[target.getMonth()],
+        isToday: diff === 0,
+      };
+    },
+    [IT_MONTHS]
+  );
+
+  const activeDateInfo = useMemo(() => {
+    const target = new Date();
+    const cur = target.getDay();
+    const diff = (selectedDayIdx - cur + 7) % 7;
+    target.setDate(target.getDate() + diff);
+    const isToday = diff === 0;
+    return {
+      dayNum: target.getDate(),
+      dayName: IT_DAYS[target.getDay()],
+      monthName: IT_MONTHS[target.getMonth()],
+      isToday,
+      formatted: `${isToday ? 'Oggi • ' : ''}${IT_DAYS[target.getDay()]}, ${target.getDate()} ${IT_MONTHS[target.getMonth()]}`,
+    };
+  }, [selectedDayIdx, IT_DAYS, IT_MONTHS]);
+
+  const daysScrollRef = useRef<ScrollView>(null);
+
+  const centerSelectedDay = useCallback((dayIdx: number) => {
+    const idx = WEEKDAYS.findIndex((w) => w.dayIdx === dayIdx);
+    if (idx < 0 || !daysScrollRef.current) return;
+    const itemWidth = 60; // 52px width + 8px gap
+    const screenWidth = Dimensions.get('window').width;
+    const targetX = Math.max(0, idx * itemWidth + 16 - screenWidth / 2 + 26);
+    daysScrollRef.current.scrollTo({ x: targetX, animated: true });
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      centerSelectedDay(selectedDayIdx);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [selectedDayIdx, centerSelectedDay]);
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
@@ -570,76 +630,93 @@ export default function ViaggioScreen() {
             )}
           </View>
 
-          {/* Selettore Giorno della settimana (finisce qui lo sfondo arrotondato) */}
+          {/* Selettore Giorno della settimana - iOS Native Capsule Ribbon */}
           <View style={styles.daySelectorContainer}>
-            <TouchableOpacity
-              style={styles.navArrow}
-              onPress={() => {
-                const curIdx = WEEKDAYS.findIndex((w) => w.dayIdx === selectedDayIdx);
-                const prevIdx = (curIdx - 1 + WEEKDAYS.length) % WEEKDAYS.length;
-                handleDayChange(WEEKDAYS[prevIdx].dayIdx);
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="chevron-back" size={15} color="#ffffff" />
-            </TouchableOpacity>
+            <View style={styles.daySelectorHeaderRow}>
+              <View style={styles.dayDateInfoRow}>
+                <Ionicons name="calendar-outline" size={13} color={theme.accent} style={{ marginRight: 6 }} />
+                <Text style={styles.dayDateTitleText}>{activeDateInfo.formatted}</Text>
+                {isWeekend && (
+                  <View style={[styles.weekendBadge, { backgroundColor: SAPIENZA_RED_BG }]}>
+                    <Text style={[styles.weekendBadgeText, { color: theme.accent }]}>Weekend</Text>
+                  </View>
+                )}
+              </View>
 
-            <View style={styles.daysRow}>
+              {!activeDateInfo.isToday && (
+                <TouchableOpacity
+                  style={[styles.todayButton, { borderColor: theme.border }]}
+                  activeOpacity={0.7}
+                  onPress={() => handleDayChange(todayDayIdx)}
+                >
+                  <Ionicons name="today-outline" size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={styles.todayButtonText}>Oggi</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <ScrollView
+              ref={daysScrollRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.daysScrollContent}
+              decelerationRate="fast"
+            >
               {WEEKDAYS.map((w) => {
                 const isSelected = selectedDayIdx === w.dayIdx;
-                const isToday = new Date().getDay() === w.dayIdx;
+                const isItemWeekend = w.dayIdx === 0 || w.dayIdx === 6;
+                const dateInfo = getDayDateInfo(w.dayIdx);
+
                 return (
                   <TouchableOpacity
                     key={w.dayIdx}
                     onPress={() => handleDayChange(w.dayIdx)}
-                    style={styles.dayItem}
-                    activeOpacity={0.7}
+                    style={[
+                      styles.dayCapsule,
+                      isSelected && [
+                        styles.dayCapsuleActive,
+                        {
+                          backgroundColor: theme.primary,
+                          borderColor: 'rgba(255, 255, 255, 0.3)',
+                          shadowColor: theme.primary,
+                        },
+                      ],
+                    ]}
+                    activeOpacity={0.75}
                   >
-                    <View
+                    <Text
                       style={[
-                        styles.dayCircle,
-                        isSelected && [
-                          styles.dayCircleActive,
-                          { backgroundColor: theme.bg, borderColor: theme.primary },
-                        ],
+                        styles.dayCapsuleLabel,
+                        isItemWeekend && !isSelected && { color: theme.accent },
+                        isSelected && styles.dayCapsuleLabelActive,
                       ]}
                     >
-                      <Text
-                        style={[styles.dayText, isSelected && styles.dayTextActive]}
-                        numberOfLines={1}
-                        adjustsFontSizeToFit={true}
-                        minimumFontScale={0.8}
-                      >
-                        {w.label}
-                      </Text>
-                    </View>
-                    {isToday && (
+                      {w.label}
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.dayCapsuleNumber,
+                        isSelected && styles.dayCapsuleNumberActive,
+                      ]}
+                    >
+                      {dateInfo.dayNum}
+                    </Text>
+
+                    {dateInfo.isToday && (
                       <View
                         style={[
-                          styles.dayDot,
-                          isSelected && [
-                            styles.dayDotActive,
-                            { backgroundColor: theme.primary },
-                          ],
+                          styles.dayCapsuleDot,
+                          isSelected
+                            ? styles.dayCapsuleDotActive
+                            : { backgroundColor: theme.primary },
                         ]}
                       />
                     )}
                   </TouchableOpacity>
                 );
               })}
-            </View>
-
-            <TouchableOpacity
-              style={styles.navArrow}
-              onPress={() => {
-                const curIdx = WEEKDAYS.findIndex((w) => w.dayIdx === selectedDayIdx);
-                const nextIdx = (curIdx + 1) % WEEKDAYS.length;
-                handleDayChange(WEEKDAYS[nextIdx].dayIdx);
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="chevron-forward" size={15} color="#ffffff" />
-            </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
 
@@ -1544,74 +1621,106 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  /* Selettore Giorno della settimana */
+  /* Selettore Giorno della settimana - iOS Native Capsule Ribbon */
   daySelectorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
     paddingBottom: 14,
-    width: '100%',
   },
-  navArrow: {
-    width: 28,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#1c1c1e',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-  },
-  daysRow: {
-    flex: 1,
+  daySelectorHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginHorizontal: 4,
-    gap: 4,
+    paddingHorizontal: 20,
+    marginBottom: 10,
   },
-  dayItem: {
+  dayDateInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    height: 34,
   },
-  dayCircle: {
-    width: '100%',
-    height: 34,
-    borderRadius: 9,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    backgroundColor: '#1c1c1e',
-    paddingHorizontal: 1,
-  },
-  dayCircleActive: {
-    backgroundColor: SAPIENZA_RED_BG,
-    borderWidth: 1,
-    borderColor: SAPIENZA_RED,
-  },
-  dayText: {
-    color: '#8e8e93',
-    fontSize: 11,
+  dayDateTitleText: {
+    fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 0,
-    textAlign: 'center',
+    color: '#f4f4f5',
+    letterSpacing: 0.2,
   },
-  dayTextActive: {
+  weekendBadge: {
+    marginLeft: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: SAPIENZA_RED_BORDER,
+  },
+  weekendBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  todayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  todayButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
     color: '#ffffff',
   },
-  dayDot: {
-    position: 'absolute',
-    bottom: -6,
+  daysScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+    alignItems: 'center',
+  },
+  dayCapsule: {
+    width: 52,
+    height: 60,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+  },
+  dayCapsuleActive: {
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  dayCapsuleLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8e8e93',
+    letterSpacing: 0.4,
+  },
+  dayCapsuleLabelActive: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontWeight: '800',
+  },
+  dayCapsuleNumber: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#f4f4f5',
+    marginTop: 2,
+  },
+  dayCapsuleNumberActive: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 18,
+  },
+  dayCapsuleDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#8e8e93',
+    marginTop: 3,
   },
-  dayDotActive: {
+  dayCapsuleDotActive: {
     backgroundColor: '#ffffff',
   },
 

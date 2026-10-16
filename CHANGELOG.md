@@ -7,11 +7,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ## 1.7.6
 
-### Correzioni & Ottimizzazione UI
-- **Ottimizzazione Responsiva Barra Superiore dei Giorni**:
-  - Risolto il problema di overflow sullo schermo con l'introduzione di Sabato e Domenica: i pulsanti dei 7 giorni della settimana (`LUN`..`DOM`) sono ora distribuiti fluidamente tramite Flexbox (`flex: 1` e `justifyContent: space-between`), adattandosi con precisione millimetrica a qualsiasi larghezza di display senza comprimersi o forzare lo scroll.
-  - Ridimensionate le frecce laterali di navigazione (`chevron`) e ridotti i margini del container per garantire che le frecce restino saldamente visibili all'interno dei bordi dello schermo su tutti i dispositivi (iPhone mini/SE, standard e Max/Plus).
-  - Aggiunto `numberOfLines={1}` e `adjustsFontSizeToFit` sul testo dei giorni per evitare qualsiasi troncamento o a capo.
+### Novità & UI / UX
+- **Nuovo Selettore Giorni a Nastro Orizzontale in Stile iOS (Capsule Ribbon)**:
+  - Rimosse le frecce laterali rigide che causavano l'overflow dello schermo con 7 giorni attivi.
+  - Introdotto un carousel orizzontale a capsule fluide ispirato al design nativo di **Apple Calendar & Apple Fitness**:
+    - Ogni giorno è una capsula verticale (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) che include sia l'abbreviazione del giorno che il **numero effettivo del giorno del mese** (`12`, `13`, `14`...).
+    - **Sottotitolo dinamico data**: sopra il nastro viene mostrata la data completa in italiano (es. `Oggi • Sabato, 17 Ottobre` o `Domenica, 18 Ottobre`) con badge contestuale per il `Weekend`.
+    - **Tasto rapido "Oggi"**: toccando qualsiasi altro giorno della settimana appare un tasto in vetro satinato per ritornare istantaneamente alla giornata odierna in un tocco.
+    - **Centraggio automatico e feedback visivo**: scorrimento fluido con decelerazione rapida; la capsula selezionata viene automaticamente portata al centro dello schermo con illuminazione ad accento Sapienza Red e ombra sfumata iOS.
 
 ## 1.7.5
 
