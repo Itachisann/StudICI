@@ -581,7 +581,7 @@ export default function ViaggioScreen() {
               }}
               activeOpacity={0.7}
             >
-              <Ionicons name="chevron-back" size={18} color="#ffffff" />
+              <Ionicons name="chevron-back" size={15} color="#ffffff" />
             </TouchableOpacity>
 
             <View style={styles.daysRow}>
@@ -606,6 +606,9 @@ export default function ViaggioScreen() {
                     >
                       <Text
                         style={[styles.dayText, isSelected && styles.dayTextActive]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit={true}
+                        minimumFontScale={0.8}
                       >
                         {w.label}
                       </Text>
@@ -635,7 +638,7 @@ export default function ViaggioScreen() {
               }}
               activeOpacity={0.7}
             >
-              <Ionicons name="chevron-forward" size={18} color="#ffffff" />
+              <Ionicons name="chevron-forward" size={15} color="#ffffff" />
             </TouchableOpacity>
           </View>
         </View>
@@ -1545,14 +1548,14 @@ const styles = StyleSheet.create({
   daySelectorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 8,
     paddingBottom: 14,
+    width: '100%',
   },
   navArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: '#1c1c1e',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1560,27 +1563,30 @@ const styles = StyleSheet.create({
     borderColor: '#2c2c2e',
   },
   daysRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-    gap: 8,
+    justifyContent: 'space-between',
+    marginHorizontal: 4,
+    gap: 4,
   },
   dayItem: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    height: 36,
+    height: 34,
   },
   dayCircle: {
-    width: 44,
-    height: 36,
-    borderRadius: 12,
+    width: '100%',
+    height: 34,
+    borderRadius: 9,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#2c2c2e',
     backgroundColor: '#1c1c1e',
+    paddingHorizontal: 1,
   },
   dayCircleActive: {
     backgroundColor: SAPIENZA_RED_BG,
@@ -1589,16 +1595,17 @@ const styles = StyleSheet.create({
   },
   dayText: {
     color: '#8e8e93',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
+    textAlign: 'center',
   },
   dayTextActive: {
     color: '#ffffff',
   },
   dayDot: {
     position: 'absolute',
-    bottom: -7,
+    bottom: -6,
     width: 4,
     height: 4,
     borderRadius: 2,

@@ -5,6 +5,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.6
+
+### Correzioni & Ottimizzazione UI
+- **Ottimizzazione Responsiva Barra Superiore dei Giorni**:
+  - Risolto il problema di overflow sullo schermo con l'introduzione di Sabato e Domenica: i pulsanti dei 7 giorni della settimana (`LUN`..`DOM`) sono ora distribuiti fluidamente tramite Flexbox (`flex: 1` e `justifyContent: space-between`), adattandosi con precisione millimetrica a qualsiasi larghezza di display senza comprimersi o forzare lo scroll.
+  - Ridimensionate le frecce laterali di navigazione (`chevron`) e ridotti i margini del container per garantire che le frecce restino saldamente visibili all'interno dei bordi dello schermo su tutti i dispositivi (iPhone mini/SE, standard e Max/Plus).
+  - Aggiunto `numberOfLines={1}` e `adjustsFontSizeToFit` sul testo dei giorni per evitare qualsiasi troncamento o a capo.
+
 ## 1.7.5
 
 ### Novità & Miglioramenti
