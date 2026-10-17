@@ -7,7 +7,9 @@ import { useFocusEffect, router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -53,7 +55,7 @@ import {
 } from "../utils/scraper";
 import {
   checkForAppUpdate,
-  presentUpdateActionSheet,
+  GITHUB_LATEST_RELEASE_URL,
   AppUpdateInfo,
 } from "../utils/updateChecker";
 
@@ -144,6 +146,20 @@ export default function ScheduleScreen() {
     checkForAppUpdate().then((info) => {
       if (info.hasUpdate) {
         setAppUpdate(info);
+        Alert.alert(
+          "Aggiornamento Disponibile",
+          `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nPer continuare con gli orari aggiornati, la compatibilità Trenitalia e tutte le nuove funzioni, aggiorna ora l'applicazione.`,
+          [
+            { text: "Più tardi", style: "cancel" },
+            {
+              text: "Aggiorna su GitHub",
+              style: "default",
+              onPress: () => {
+                Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+              },
+            },
+          ]
+        );
       }
     });
   }, []);
@@ -420,7 +436,9 @@ export default function ScheduleScreen() {
               { backgroundColor: theme.cardTint, borderColor: theme.border },
             ]}
             activeOpacity={0.8}
-            onPress={() => presentUpdateActionSheet(appUpdate)}
+            onPress={() => {
+              Linking.openURL(appUpdate.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+            }}
           >
             <View
               style={[
@@ -445,7 +463,7 @@ export default function ScheduleScreen() {
                 </View>
               </View>
               <Text style={styles.updateBannerSub} numberOfLines={1}>
-                {"Tocca per aggiornare via SideStore, LiveContainer o scaricare l'IPA"}
+                {"Tocca per scaricare l'aggiornamento da GitHub Releases"}
               </Text>
             </View>
             <TouchableOpacity

@@ -1289,6 +1289,14 @@ export async function fetchLiveTrenitaliaTimetable(
                 const isDepartedAtStation = depStop.partenzaReale !== null && depStop.partenzaReale !== undefined;
                 const isStoppedInStation = !isDepartedAtStation && depStop.arrivoReale !== null && depStop.arrivoReale !== undefined;
 
+                let stoppedMinutes: number | undefined = undefined;
+                let stoppedSinceMillis: number | undefined = undefined;
+                if (isStoppedInStation && depStop.arrivoReale && typeof depStop.arrivoReale === 'number') {
+                  stoppedSinceMillis = depStop.arrivoReale;
+                  const stoppedMs = Math.max(0, Date.now() - depStop.arrivoReale);
+                  stoppedMinutes = Math.max(1, Math.round(stoppedMs / 60000));
+                }
+
                 let depActual = depPlanned;
                 let departureDelayAtStation = 0;
                 const depPlanM = parseTimeToMinutes(depPlanned);
@@ -1346,8 +1354,8 @@ export async function fetchLiveTrenitaliaTimetable(
                 } else if (isStoppedInStation) {
                   const stName = formatStationName(depStop.stazione || getStationNameByCode(depCode));
                   if (nowMins > depPlanM) {
-                    const lateM = nowMins - depPlanM;
-                    statusDesc = `Fermo a ${stName} (+${lateM} min)`;
+                    const durationStr = stoppedMinutes ? ` (da ${stoppedMinutes} min)` : '';
+                    statusDesc = `Fermo a ${stName}${durationStr}`;
                   } else {
                     statusDesc = 'In orario';
                   }
@@ -1379,6 +1387,8 @@ export async function fetchLiveTrenitaliaTimetable(
                   departureDelayAtStation,
                   isStoppedInStation,
                   stoppedStationName: isStoppedInStation ? formatStationName(depStop.stazione || getStationNameByCode(depCode)) : undefined,
+                  stoppedMinutes,
+                  stoppedSinceMillis,
                 });
 
                 matchedNumbers.add(numStr);
@@ -1488,6 +1498,11 @@ export async function fetchLiveTrenitaliaTimetable(
                   t.stoppedStationName = formatStationName(
                     depStop.stazione || getStationNameByCode(depCode)
                   );
+                  if (typeof depStop.arrivoReale === 'number') {
+                    t.stoppedSinceMillis = depStop.arrivoReale;
+                    const stoppedMs = Math.max(0, Date.now() - depStop.arrivoReale);
+                    t.stoppedMinutes = Math.max(1, Math.round(stoppedMs / 60000));
+                  }
 
                   const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
                   if (nowMins > depPlanM) {
@@ -1504,7 +1519,8 @@ export async function fetchLiveTrenitaliaTimetable(
                         parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
                       );
                     }
-                    t.statusDescription = `Fermo a ${t.stoppedStationName} (+${lateM} min)`;
+                    const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                    t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
                   } else {
                     // È fermo in stazione prima o al minuto dell'orario di partenza previsto:
                     // la partenza è perfettamente in orario!
@@ -1530,6 +1546,11 @@ export async function fetchLiveTrenitaliaTimetable(
               if (stoppedStop) {
                 t.isStoppedInStation = true;
                 t.stoppedStationName = formatStationName(stoppedStop.stazione);
+                if (typeof stoppedStop.arrivoReale === 'number') {
+                  t.stoppedSinceMillis = stoppedStop.arrivoReale;
+                  const stoppedMs = Math.max(0, Date.now() - stoppedStop.arrivoReale);
+                  t.stoppedMinutes = Math.max(1, Math.round(stoppedMs / 60000));
+                }
                 const stopPlanDepM = stoppedStop.partenza_teorica
                   ? new Date(stoppedStop.partenza_teorica).getHours() * 60 +
                     new Date(stoppedStop.partenza_teorica).getMinutes()
@@ -1551,10 +1572,8 @@ export async function fetchLiveTrenitaliaTimetable(
                   }
                 }
 
-                t.statusDescription =
-                  accLate > 0
-                    ? `Fermo a ${t.stoppedStationName} (+${accLate} min)`
-                    : `Fermo a ${t.stoppedStationName}`;
+                const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
               } else if (aData.inStazione === true && aData.stazioneUltimoRilevamento) {
                 t.isStoppedInStation = true;
                 t.stoppedStationName = formatStationName(aData.stazioneUltimoRilevamento);
@@ -1570,10 +1589,8 @@ export async function fetchLiveTrenitaliaTimetable(
                     );
                   }
                 }
-                t.statusDescription =
-                  t.delayMinutes > 0
-                    ? `Fermo a ${t.stoppedStationName} (+${t.delayMinutes} min)`
-                    : `Fermo a ${t.stoppedStationName}`;
+                const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
               }
             } catch {}
           })
@@ -2209,11 +2226,14 @@ export function evaluateTrainStatus(
         : train.delayMinutes > 0
         ? train.delayMinutes
         : 0;
-    const delayInfo = lateAccumulated > 0 ? ` (+${lateAccumulated}m)` : '';
+
+    // Per il badge "Fermo a [Stazione]", il timer indica da quanto tempo effettivo il convoglio è fermo in banchina
+    const stoppedTime = train.stoppedMinutes ?? (isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
+    const stoppedInfo = stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
 
     return {
       statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'running',
-      badgeLabel: `Fermo a ${stName}${delayInfo}`,
+      badgeLabel: `Fermo a ${stName}${stoppedInfo}`,
       badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#38bdf8',
       badgeBg:
         lateAccumulated > 5

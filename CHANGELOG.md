@@ -5,6 +5,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.1
+
+### Risoluzioni & Precisione Monitoraggio Ferroviario
+- **Timer Treno Fermo in Stazione Basato sul Tempo Effettivo in Banchina**:
+  - Il badge `Fermo a [Stazione]` ora indica esattamente da quanti minuti il convoglio è effettivamente fermo al binario (es. `Fermo a Orte (da 2m)`), calcolato rispetto al momento di arrivo reale (`arrivoReale`) comunicato dai sensori di banchina di Trenitalia.
+  - Risolto il conteggio fittizio che mostrava il ritardo cumulativo della corsa anziché il tempo effettivo di sosta del treno alla stazione di partenza o intermedia.
+  - L'eventuale ritardo di partenza continua a essere calcolato con precisione sull'orario di partenza effettivo e programmato.
+
+### Esperienza Utente & Notifiche Aggiornamenti
+- **Popup Aggiornamento Automatico con Link Diretto a GitHub Releases**:
+  - Quando è disponibile una nuova versione su GitHub, all'avvio dell'app compare un avviso chiaro che indirizza direttamente alla pagina di rilascio GitHub (`/releases/latest`) con il file `.ipa` pronto al download.
+  - Chi ha già configurato la sorgente in SideStore o AltStore continuerà ad aggiornare automaticamente dall'elenco app con un solo tap.
+  - Semplificata la scheda Impostazioni: rimosse le sezioni manuali non necessarie per SideStore e LiveContainer, mantenendo una gestione degli aggiornamenti pulita e lineare.
+
 ## 1.8.0
 
 ### Risoluzioni & Precisione Monitoraggio Ferroviario

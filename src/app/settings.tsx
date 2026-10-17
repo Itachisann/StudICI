@@ -80,9 +80,7 @@ import {
 import { useTheme } from "@/context/ThemeContext";
 import {
   checkForAppUpdate,
-  presentUpdateActionSheet,
-  openInSideStore,
-  openInLiveContainer,
+  GITHUB_LATEST_RELEASE_URL,
   AppUpdateInfo,
 } from "../utils/updateChecker";
 
@@ -153,7 +151,18 @@ export default function ProfiloScreen() {
     setAppUpdate(info);
     setCheckingUpdate(false);
     if (info.hasUpdate) {
-      presentUpdateActionSheet(info);
+      Alert.alert(
+        "Aggiornamento Disponibile",
+        `È disponibile la nuova versione v${info.latestVersion} di StudICI (versione installata: v${info.currentVersion}).\n\nAggiorna l'app direttamente su GitHub Releases per avere sempre gli orari e le funzionalità più recenti.`,
+        [
+          { text: "Più tardi", style: "cancel" },
+          {
+            text: "Aggiorna su GitHub",
+            style: "default",
+            onPress: () => Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL),
+          },
+        ]
+      );
     } else {
       Alert.alert(
         "App Aggiornata",
@@ -1532,46 +1541,7 @@ export default function ProfiloScreen() {
               <Ionicons name="checkmark-circle" size={16} color="#10b981" />
             )}
           </TouchableOpacity>
-
-          <View style={styles.separator} />
-
-          {/* SideStore & AltStore */}
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={openInSideStore}
-          >
-            <View style={[styles.iconBox, { backgroundColor: "#0284c7" }]}>
-              <Ionicons name="apps-outline" size={17} color="#ffffff" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Sorgente SideStore & AltStore</Text>
-              <Text style={styles.rowSubTitle}>Aggiungi sorgente community per auto-update</Text>
-            </View>
-            <Ionicons name="open-outline" size={15} color="#48484a" />
-          </TouchableOpacity>
-
-          <View style={styles.separator} />
-
-          {/* LiveContainer */}
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={openInLiveContainer}
-          >
-            <View style={[styles.iconBox, { backgroundColor: "#a855f7" }]}>
-              <Ionicons name="cube-outline" size={17} color="#ffffff" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Installa con LiveContainer</Text>
-              <Text style={styles.rowSubTitle}>Installa IPA direttamente senza computer</Text>
-            </View>
-            <Ionicons name="open-outline" size={15} color="#48484a" />
-          </TouchableOpacity>
         </View>
-        <Text style={styles.sectionFooter}>
-          Ricevi notifiche e aggiorna automaticamente StudICI direttamente da iPhone con SideStore o LiveContainer.
-        </Text>
 
         {/* Footer Info App */}
         <View style={styles.footer}>
