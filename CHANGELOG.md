@@ -5,6 +5,22 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 2.0.0
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Questa versione introduce il nuovo sistema cromatico dinamico e richiede l'aggiornamento dell'applicazione per continuare.
+
+### Personalizzazione & Temi Dinamici
+- **Pillole e Bagliori Neon 100% Coordinati al Tema Attivo**:
+  - Risolto il problema per cui i colori interni e i bagliori neon delle pillole (giorni della settimana in Orario, selettori di Anno e Canale, capsule dei giorni in Viaggio) rimanevano vincolati al rosso anche impostando un tema cromatico differente.
+  - Sfondo semitrasparente (`theme.bg`), bordo (`theme.primary`) ed effetto bagliore neon (`shadowColor: theme.primary`) si aggiornano ora istantaneamente in base al tema scelto (Rosso Sapienza, Blu Notte, Verde Smeraldo, Viola Reale o Arancio Caldo).
+  - Anche il badge **Weekend** e la pillola del fine settimana ora adottano i colori e il bagliore dell'accento cromatico del tema (`theme.accent` / `theme.light` / `theme.subtle`).
+
+### Monitoraggio Viaggio & Trasparenza Dati
+- **Etichetta "Fonte: Trenitalia" nella Hero Card**:
+  - Sostituita la dicitura "Dati Trenitalia" con **"Fonte: Trenitalia"** nella hero card della vista Viaggio.
+  - L'intero badge (punto di stato, testo, bordo e sfondo trasparente) riflette ora con precisione il tema cromatico dell'applicazione anziché rimanere con colori fissi.
+
 ## 1.8.3
 
 ### Interfaccia Utente & Design System Sapienza

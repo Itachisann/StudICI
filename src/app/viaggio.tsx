@@ -685,7 +685,7 @@ export default function ViaggioScreen() {
               <View style={styles.daySelectorHeaderRow}>
                 <View style={styles.dayDateInfoRow}>
                   {isWeekend && (
-                    <View style={[styles.weekendBadge, { backgroundColor: SAPIENZA_RED_BG }]}>
+                    <View style={[styles.weekendBadge, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
                       <Text style={[styles.weekendBadgeText, { color: theme.accent }]}>Weekend</Text>
                     </View>
                   )}
@@ -717,18 +717,26 @@ export default function ViaggioScreen() {
                 const isItemWeekend = w.dayIdx === 0 || w.dayIdx === 6;
                 const dateInfo = getDayDateInfo(w.dayIdx);
 
+                const activeBg = isItemWeekend ? `${theme.accent}30` : theme.bg;
+                const activeBorder = isItemWeekend ? theme.accent : theme.primary;
+                const activeShadow = isItemWeekend ? theme.accent : theme.primary;
+
                 return (
                   <TouchableOpacity
                     key={w.dayIdx}
                     onPress={() => handleDayChange(w.dayIdx)}
                     style={[
                       styles.dayCapsule,
+                      isItemWeekend && !isSelected && {
+                        borderColor: `${theme.accent}40`,
+                        backgroundColor: `${theme.accent}10`,
+                      },
                       isSelected && [
                         styles.dayCapsuleActive,
                         {
-                          backgroundColor: 'rgba(130, 36, 51, 0.40)',
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
+                          backgroundColor: activeBg,
+                          borderColor: activeBorder,
+                          shadowColor: activeShadow,
                         },
                       ],
                     ]}
@@ -747,6 +755,7 @@ export default function ViaggioScreen() {
                     <Text
                       style={[
                         styles.dayCapsuleNumber,
+                        isItemWeekend && !isSelected && { color: theme.light },
                         isSelected && styles.dayCapsuleNumberActive,
                       ]}
                     >
@@ -921,27 +930,43 @@ export default function ViaggioScreen() {
             {/* Hero Card */}
             <View style={[styles.heroCard, { backgroundColor: theme.cardTint, borderColor: theme.border }]}>
               <View style={styles.heroTopRow}>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: `${itinerary.statusBadge.color}22` },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.statusDot,
-                      { backgroundColor: itinerary.statusBadge.color },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.statusBadgeText,
-                      { color: itinerary.statusBadge.color },
-                    ]}
-                  >
-                    {itinerary.statusBadge.text}
-                  </Text>
-                </View>
+                {(() => {
+                  const isFonteTrenitalia =
+                    itinerary.statusBadge.text === 'Fonte: Trenitalia' ||
+                    itinerary.statusBadge.text === 'Dati Trenitalia';
+                  const badgeColor = isFonteTrenitalia ? theme.accent : itinerary.statusBadge.color;
+                  const badgeBg = isFonteTrenitalia ? theme.subtle : `${itinerary.statusBadge.color}22`;
+                  const badgeBorder = isFonteTrenitalia ? theme.border : `${itinerary.statusBadge.color}35`;
+                  const badgeText = isFonteTrenitalia ? 'Fonte: Trenitalia' : itinerary.statusBadge.text;
+
+                  return (
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        {
+                          backgroundColor: badgeBg,
+                          borderColor: badgeBorder,
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.statusDot,
+                          { backgroundColor: badgeColor },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.statusBadgeText,
+                          { color: badgeColor },
+                        ]}
+                      >
+                        {badgeText}
+                      </Text>
+                    </View>
+                  );
+                })()}
 
                 <View style={styles.durationBadge}>
                   <Ionicons name="time-outline" size={13} color="#94a3b8" style={{ marginRight: 4 }} />
@@ -1743,7 +1768,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: SAPIENZA_RED_BORDER,
   },
   weekendBadgeText: {
     fontSize: 10,
@@ -1782,9 +1806,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   dayCapsuleActive: {
-    backgroundColor: 'rgba(130, 36, 51, 0.45)',
-    borderWidth: 1,
-    borderColor: SAPIENZA_RED,
+    borderWidth: 1.5,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.85,
     shadowRadius: 10,

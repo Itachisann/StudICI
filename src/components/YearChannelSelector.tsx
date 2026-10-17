@@ -5,8 +5,6 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { useTheme } from '@/context/ThemeContext';
 
-const SAPIENZA_RED = '#822433';
-
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
 
@@ -171,7 +169,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                   onPress={() => handleSelectYear(year)}
                   style={[
                     styles.yearChipEqual,
-                    isYearActive && [styles.yearChipActive, { backgroundColor: 'rgba(130, 36, 51, 0.40)', borderColor: theme.primary, shadowColor: theme.primary }],
+                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
                   ]}
                   activeOpacity={0.7}
                 >
@@ -197,7 +195,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                   onPress={() => handleSelectYear(year)}
                   style={[
                     styles.yearChip,
-                    isYearActive && [styles.yearChipActive, { backgroundColor: 'rgba(130, 36, 51, 0.40)', borderColor: theme.primary, shadowColor: theme.primary }],
+                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
                     i === uniqueYears.length - 1 && { marginRight: 0 },
                   ]}
                   activeOpacity={0.7}
@@ -244,7 +242,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                       onPress={() => onSelectTab(item.tab)}
                       style={[
                         styles.chipEqual,
-                        isChannelActive && [styles.chipActive, { backgroundColor: 'rgba(130, 36, 51, 0.40)', borderColor: theme.primary, shadowColor: theme.primary }],
+                        isChannelActive && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
                       ]}
                       activeOpacity={0.7}
                     >
@@ -274,7 +272,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                       onPress={() => onSelectTab(item.tab)}
                       style={[
                         styles.chipFixedEqual,
-                        isChannelActive && [styles.chipActive, { backgroundColor: 'rgba(130, 36, 51, 0.40)', borderColor: theme.primary, shadowColor: theme.primary }],
+                        isChannelActive && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
                         i === channelsForActiveYear.length - 1 && { marginRight: 0 },
                       ]}
                       activeOpacity={0.7}
@@ -358,10 +356,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   yearChipActive: {
-    backgroundColor: 'rgba(130, 36, 51, 0.40)',
-    borderColor: SAPIENZA_RED,
     borderWidth: 1.5,
-    shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.85,
     shadowRadius: 8,
@@ -425,10 +420,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   chipActive: {
-    backgroundColor: 'rgba(130, 36, 51, 0.40)',
-    borderColor: SAPIENZA_RED,
     borderWidth: 1.5,
-    shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.85,
     shadowRadius: 8,

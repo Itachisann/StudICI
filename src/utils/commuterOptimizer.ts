@@ -499,7 +499,7 @@ async function computeOutboundItinerary(
     badgeColor = '#ef4444'; // red
     isWarning = true;
   } else if (train?.isLive) {
-    badgeText = 'Dati Trenitalia';
+    badgeText = 'Fonte: Trenitalia';
     badgeColor = '#e05666';
   }
 
@@ -755,7 +755,7 @@ async function computeReturnItinerary(
         (train?.statusDescription || '').toLowerCase().includes('soppresso')
           ? 'Treno Soppresso'
           : train?.isLive
-          ? 'Dati Trenitalia'
+          ? 'Fonte: Trenitalia'
           : 'Rientro in orario',
       color:
         (train?.statusDescription || '').toLowerCase().includes('soppresso')

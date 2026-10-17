@@ -568,7 +568,7 @@ export default function ScheduleScreen() {
                       isActive && [
                         styles.dayCircleActive,
                         {
-                          backgroundColor: "rgba(130, 36, 51, 0.40)",
+                          backgroundColor: theme.bg,
                           borderColor: theme.primary,
                           shadowColor: theme.primary,
                         },
@@ -1177,10 +1177,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#1c1c1e",
   },
   dayCircleActive: {
-    backgroundColor: "rgba(130, 36, 51, 0.40)",
     borderWidth: 1.5,
-    borderColor: SAPIENZA_RED,
-    shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.9,
     shadowRadius: 10,

@@ -46,6 +46,8 @@ export function detectUpdateType(
     notesLower.includes('[breaking]') ||
     notesLower.includes('obbligatorio') ||
     notesLower.includes('aggiornamento obbligatorio') ||
+    notesLower.includes('bloccante') ||
+    notesLower.includes('aggiornamento bloccante') ||
     notesLower.includes('mandatory');
 
   // Se c'è il tag di aggiornamento obbligatorio oppure il numero major è superiore (es. 2.x vs 1.x)
