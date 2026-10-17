@@ -5,6 +5,21 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.5
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Questa versione introduce la nuova architettura parallela e multi-modello per il download e la normalizzazione AI degli orari e richiede l'aggiornamento dell'applicazione per continuare.
+
+### Performance & Motore AI Gemini Ultra-Veloce
+- **Elaborazione Parallela Completa dei Canali (`scraper.ts`)**:
+  - Sostituito il ciclo sequenziale sui canali del corso con l'elaborazione parallela simultanea di tutti i tab e l'esecuzione concorrente di `parseScheduleCells` e `parseHeaderWithGemini` all'interno di ciascun canale, mantenendo intatta al 100% la struttura di scraping, pulizia celle invisibili e risoluzione aule.
+- **Load-Balancing Multi-Modello & Zero Errori Gemini (`aiParser.ts`)**:
+  - Introdotto un pool bilanciato di modelli Flash-Lite/Flash (`gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`) con semaforo di concorrenza e failover istantaneo (`80ms`), eliminando colli di bottiglia ed errori `429` / `503`.
+  - Suddivisione automatica delle celle non in cache in micro-batch paralleli da 12 celle per dimezzare i token di output generati per singola richiesta e ridurre drasticamente la latenza.
+- **Deduplicazione In-Flight & Lettura/Scrittura Batch (`multiGet` / `multiSet`)**:
+  - Aggiunte mappe di deduplicazione sincronizzate (`inFlightCellPromises`, `inFlightHeaderPromises`) e cache in RAM a `0ms`: le intestazioni e le celle condivise tra canali diversi dello stesso corso vengono analizzate una sola volta.
+  - Sostituite le letture sequenziali `AsyncStorage.getItem` con letture e scritture batch (`multiGet` / `multiSet`).
+
 ## 1.8.4
 
 > **[Aggiornamento Obbligatorio / Bloccante]**

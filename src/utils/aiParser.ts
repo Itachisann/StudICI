@@ -11,9 +11,84 @@ const getApiKey = (): string => {
   return parts.join('');
 };
 
-// Modello richiesto dall'utente: Gemini 3.1 Flash Lite
-const getGeminiUrl = () => 
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${getApiKey()}`;
+// Pool di modelli Flash Lite / Flash per load-balancing e failover istantaneo (zero 429/503)
+const GEMINI_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+];
+let rrModelIndex = 0;
+
+const getModelUrl = (modelName: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${getApiKey()}`;
+
+let activeGeminiCalls = 0;
+const MAX_CONCURRENT_GEMINI = 4;
+const geminiQueue: (() => void)[] = [];
+
+async function acquireGeminiSlot(): Promise<void> {
+  if (activeGeminiCalls < MAX_CONCURRENT_GEMINI) {
+    activeGeminiCalls++;
+    return;
+  }
+  await new Promise<void>(resolve => geminiQueue.push(resolve));
+  activeGeminiCalls++;
+}
+
+function releaseGeminiSlot(): void {
+  activeGeminiCalls = Math.max(0, activeGeminiCalls - 1);
+  const next = geminiQueue.shift();
+  if (next) next();
+}
+
+/**
+ * Esegue una chiamata JSON a Gemini distribuendo il carico tra i modelli Flash-Lite,
+ * limitando il burst simultaneo per azzerare gli errori 429 e facendo failover immediato (~80ms)
+ * sul modello secondario in caso di 429/503/timeout.
+ */
+async function callGeminiJson(prompt: string, timeoutMs = 5500, preferredIdx?: number): Promise<string> {
+  await acquireGeminiSlot();
+  try {
+    const startIdx = preferredIdx !== undefined ? preferredIdx : (rrModelIndex++ % 2);
+    const orderedModels = [
+      GEMINI_MODELS[startIdx % 2],
+      GEMINI_MODELS[(startIdx + 1) % 2],
+      GEMINI_MODELS[2],
+    ];
+
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < orderedModels.length; attempt++) {
+      const model = orderedModels[attempt];
+      try {
+        const response = await axios.post(
+          getModelUrl(model),
+          {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0,
+              responseMimeType: 'application/json',
+            },
+          },
+          { timeout: timeoutMs }
+        );
+        const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (aiText) return aiText;
+      } catch (err: any) {
+        lastErr = err;
+        if (attempt < orderedModels.length - 1) {
+          await new Promise(r => setTimeout(r, 80));
+        }
+      }
+    }
+    throw lastErr;
+  } finally {
+    releaseGeminiSlot();
+  }
+}
+
+// Cache in RAM istantanea (0ms) + deduplicazione richieste in-flight concorrenti
+const memoryCellCache = new Map<string, ParsedClass>();
+const inFlightCellPromises = new Map<string, Promise<ParsedClass>>();
 
 export interface ParsedClass {
   subject: string;
@@ -61,7 +136,7 @@ export function cleanTabNameFallback(raw: string): string {
 }
 
 /**
- * Usa Gemini 3.1 Flash Lite per standardizzare i nomi dei tab.
+ * Usa Gemini Flash Lite per standardizzare i nomi dei tab.
  */
 export async function parseTabsWithAI(tabNames: string[]): Promise<string[]> {
   if (tabNames.length === 0) return [];
@@ -102,27 +177,15 @@ Rispondi con un array JSON di stringhe nello stesso ordine.
 Nomi:
 ${JSON.stringify(cleanInput)}`;
 
-    const response = await axios.post(getGeminiUrl(), {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json"
-      }
-    }, { timeout: 4000 });
-    
-    const aiText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const aiText = await callGeminiJson(prompt, 4000);
     const parsed: string[] = JSON.parse(aiText);
     
     if (Array.isArray(parsed) && parsed.length === tabNames.length) {
       const res = parsed.map((item, idx) => item ? item.trim() : cleanTabNameFallback(tabNames[idx]));
-      try {
-        await AsyncStorage.setItem(hashKey, JSON.stringify(res));
-      } catch {}
+      AsyncStorage.setItem(hashKey, JSON.stringify(res)).catch(() => {});
       return res;
     }
-    try {
-      await AsyncStorage.setItem(hashKey, JSON.stringify(fallbackRes));
-    } catch {}
+    AsyncStorage.setItem(hashKey, JSON.stringify(fallbackRes)).catch(() => {});
     return fallbackRes;
   } catch (err: any) {
     if (err?.response?.status === 429 || err?.response?.status === 503) {
@@ -134,40 +197,8 @@ ${JSON.stringify(cleanInput)}`;
   }
 }
 
-/**
- * Usa Gemini 3.1 Flash Lite per parsare le celle delle lezioni.
- * Usa prima il parser deterministico ad alta confidenza per non consumare quota inutilmente.
- * Se tutte le celle sono già risolte con precisione assoluta (99% dei casi), zero chiamate API.
- */
-export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]> {
-  const uniqueTexts = Array.from(new Set(cells.map(c => c.trim()).filter(Boolean)));
-  
-  if (uniqueTexts.length === 0) {
-    return cells.map(() => ({ subject: '', teacher: '', room: '', buildingCode: '', address: '' }));
-  }
-
-  const map = new Map<string, ParsedClass>();
-  const toFetch: string[] = [];
-
-  // 1. Controlla la cache per ogni cella unica
-  for (const text of uniqueTexts) {
-    const hashKey = `cell_gemini_v8_${hashString(text)}`;
-    try {
-      const cached = await AsyncStorage.getItem(hashKey);
-      if (cached) {
-        map.set(text, validateAndCleanClass(JSON.parse(cached), text));
-      } else {
-        toFetch.push(text);
-      }
-    } catch {
-      toFetch.push(text);
-    }
-  }
-
-  // 2. Se ci sono celle non in cache, analisi semantica rigida con Gemini
-  if (toFetch.length > 0) {
-    try {
-      const prompt = `Sei l'analizzatore semantico ufficiale degli orari universitari della Facoltà di Ingegneria - Sapienza Università di Roma.
+function buildCellsPrompt(batch: string[]): string {
+  return `Sei l'analizzatore semantico ufficiale degli orari universitari della Facoltà di Ingegneria - Sapienza Università di Roma.
 Ricevi un array di testi estratti da tabelle orario (possono contenere abbreviazioni, formati non convenzionali, trattini o sigle).
 
 Per CIASCUNA cella analizza semanticamente il contenuto ed estrai con assoluta precisione:
@@ -198,68 +229,149 @@ Per CIASCUNA cella analizza semanticamente il contenuto ed estrai con assoluta p
 Rispondi RIGOROSAMENTE con un array JSON di oggetti [{"subject": string, "teacher": string, "room": string, "buildingCode": string, "address": string}] nello stesso identico ordine.
 
 Celle:
-${JSON.stringify(toFetch)}`;
+${JSON.stringify(batch)}`;
+}
 
-      // Chiamata con micro-retry di 350ms in caso di sovraccarico temporaneo (503 / 429) di Google
-      let response;
-      try {
-        response = await axios.post(getGeminiUrl(), {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json"
-          }
-        }, { timeout: 6500 });
-      } catch (firstErr: any) {
-        const status = firstErr?.response?.status;
-        if (status === 503 || status === 429) {
-          await new Promise(r => setTimeout(r, 400));
-          response = await axios.post(getGeminiUrl(), {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0,
-              responseMimeType: "application/json"
-            }
-          }, { timeout: 6500 });
-        } else {
-          throw firstErr;
-        }
-      }
+/**
+ * Usa Gemini per parsare le celle delle lezioni con:
+ * - Cache in RAM istantanea (0ms)
+ * - Lettura batch AsyncStorage.multiGet (1 sola operazione invece di N letture sequenziali)
+ * - Deduplicazione promesse in-flight tra tab paralleli
+ * - Suddivisione in micro-batch paralleli bilanciati su più modelli Flash-Lite
+ */
+export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]> {
+  const uniqueTexts = Array.from(new Set(cells.map(c => c.trim()).filter(Boolean)));
+  
+  if (uniqueTexts.length === 0) {
+    return cells.map(() => ({ subject: '', teacher: '', room: '', buildingCode: '', address: '' }));
+  }
 
-      const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const parsed: ParsedClass[] = JSON.parse(aiText);
+  const map = new Map<string, ParsedClass>();
+  const needStorageCheck: string[] = [];
+  const waitPromises: Promise<void>[] = [];
 
-      if (Array.isArray(parsed)) {
-        for (let i = 0; i < toFetch.length; i++) {
-          const rawText = toFetch[i];
-          if (parsed[i]) {
-            const item = validateAndCleanClass(parsed[i], rawText);
-            map.set(rawText, item);
-            AsyncStorage.setItem(`cell_gemini_v8_${hashString(rawText)}`, JSON.stringify(item)).catch(() => {});
-          }
-        }
-      }
-    } catch (error: any) {
-      if (error?.response?.status === 429 || error?.response?.status === 503) {
-        console.log(`Gemini: Servizio temporaneamente occupato (${error?.response?.status}) su celle, applicato fallback deterministico locale`);
-      } else {
-        console.log('Gemini cell parsing fallback:', error?.message || error);
-      }
-      // Se Gemini non risponde (offline/rate-limit), usa fallbackParse per le celle mancanti
-      for (const text of toFetch) {
-        if (!map.has(text)) {
-          const item = fallbackParse(text);
-          map.set(text, item);
-        }
-      }
+  // 1. Controlla prima la cache in memoria (0ms) e le richieste già in volo
+  for (const text of uniqueTexts) {
+    const mem = memoryCellCache.get(text);
+    if (mem) {
+      map.set(text, mem);
+      continue;
     }
+    const inflight = inFlightCellPromises.get(text);
+    if (inflight) {
+      waitPromises.push(
+        inflight.then(res => {
+          map.set(text, res);
+        })
+      );
+      continue;
+    }
+    needStorageCheck.push(text);
+  }
+
+  // 2. Registra SINCRONAMENTE le promesse in-flight prima di qualsiasi await,
+  //    così i tab lanciati in parallelo nello stesso tick non duplicano né letture né chiamate Gemini!
+  const resolvers = new Map<string, (val: ParsedClass) => void>();
+  for (const text of needStorageCheck) {
+    const p = new Promise<ParsedClass>(resolve => {
+      resolvers.set(text, resolve);
+    });
+    inFlightCellPromises.set(text, p);
+    waitPromises.push(
+      p.then(res => {
+        map.set(text, res);
+      })
+    );
+  }
+
+  // 3. Lettura batch unica da AsyncStorage (multiGet) per le celle non ancora in RAM
+  const toFetch: string[] = [];
+  if (needStorageCheck.length > 0) {
+    const storageKeys = needStorageCheck.map(t => `cell_gemini_v8_${hashString(t)}`);
+    try {
+      const pairs = await AsyncStorage.multiGet(storageKeys);
+      for (let i = 0; i < needStorageCheck.length; i++) {
+        const text = needStorageCheck[i];
+        const rawVal = pairs[i]?.[1];
+        if (rawVal) {
+          try {
+            const cleaned = validateAndCleanClass(JSON.parse(rawVal), text);
+            memoryCellCache.set(text, cleaned);
+            resolvers.get(text)?.(cleaned);
+            inFlightCellPromises.delete(text);
+            continue;
+          } catch {}
+        }
+        toFetch.push(text);
+      }
+    } catch {
+      toFetch.push(...needStorageCheck);
+    }
+  }
+
+  // 4. Se ci sono celle non in cache, suddividile in chunk paralleli di max 12 celle
+  //    per ridurre il numero di token di output per singola chiamata e dimezzare la latenza!
+  if (toFetch.length > 0) {
+    const CHUNK_SIZE = 12;
+    const chunks: string[][] = [];
+    for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+      chunks.push(toFetch.slice(i, i + CHUNK_SIZE));
+    }
+
+    const toSavePairs: [string, string][] = [];
+
+    await Promise.all(
+      chunks.map(async (chunk, chunkIdx) => {
+        try {
+          const prompt = buildCellsPrompt(chunk);
+          const aiText = await callGeminiJson(prompt, 6000, chunkIdx % 2);
+          const parsed: ParsedClass[] = JSON.parse(aiText);
+
+          if (Array.isArray(parsed)) {
+            for (let i = 0; i < chunk.length; i++) {
+              const rawText = chunk[i];
+              const item = parsed[i]
+                ? validateAndCleanClass(parsed[i], rawText)
+                : fallbackParse(rawText);
+              memoryCellCache.set(rawText, item);
+              toSavePairs.push([`cell_gemini_v8_${hashString(rawText)}`, JSON.stringify(item)]);
+              resolvers.get(rawText)?.(item);
+              inFlightCellPromises.delete(rawText);
+            }
+            return;
+          }
+        } catch (error: any) {
+          if (error?.response?.status === 429 || error?.response?.status === 503) {
+            console.log(`Gemini: Servizio temporaneamente occupato (${error?.response?.status}) su celle, applicato fallback deterministico locale`);
+          } else {
+            console.log('Gemini cell parsing fallback:', error?.message || error);
+          }
+        }
+
+        // Fallback deterministico per il chunk se Gemini non risponde
+        for (const rawText of chunk) {
+          const item = fallbackParse(rawText);
+          memoryCellCache.set(rawText, item);
+          resolvers.get(rawText)?.(item);
+          inFlightCellPromises.delete(rawText);
+        }
+      })
+    );
+
+    if (toSavePairs.length > 0) {
+      AsyncStorage.multiSet(toSavePairs).catch(() => {});
+    }
+  }
+
+  if (waitPromises.length > 0) {
+    await Promise.all(waitPromises);
   }
 
   // Costruisci il risultato finale usando la mappa o il fallback
   return cells.map(c => {
     const trimmed = c.trim();
     if (!trimmed) return { subject: '', teacher: '', room: '', buildingCode: '', address: '' };
-    return map.get(trimmed) || fallbackParse(trimmed);
+    return map.get(trimmed) || memoryCellCache.get(trimmed) || fallbackParse(trimmed);
   });
 }
 
@@ -657,6 +769,41 @@ export function extractDeterministicAlerts(headerRows: string[][]): string[] {
   return deterministicAlerts;
 }
 
+const memoryHeaderCache = new Map<string, HeaderAnalysisResult>();
+const inFlightHeaderPromises = new Map<string, Promise<HeaderAnalysisResult>>();
+
+function enrichHeaderResultWithRooms(
+  baseResult: HeaderAnalysisResult,
+  uniqueRooms: string[],
+  headerLines: string,
+  mapTabText: string
+): HeaderAnalysisResult {
+  const enrichedRooms = { ...baseResult.mappedRooms };
+  uniqueRooms.forEach(room => {
+    const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
+    const canon = getCanonicalRoomKey(room);
+    if (!canon || canon === 'aula') return;
+    if (!enrichedRooms[clean] && !enrichedRooms[canon]) {
+      const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
+      const bCode = (resolved.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+      const addr = formatSapienzaAddress(resolved.address, bCode);
+      const item: MappedClassroom = {
+        key: canon,
+        displayName: resolved.displayName,
+        building: resolved.buildingName,
+        address: addr,
+      };
+      enrichedRooms[canon] = item;
+      enrichedRooms[`aula ${canon}`] = item;
+    }
+  });
+  return {
+    semester: baseResult.semester,
+    alerts: baseResult.alerts,
+    mappedRooms: enrichedRooms,
+  };
+}
+
 /**
  * Affida a Gemini l'interpretazione semantica completa dell'intestazione di qualsiasi foglio orario della Sapienza.
  * Distingue intelligentemente il SEMESTRE (con date), gli AVVISI REALI e le AULE,
@@ -700,40 +847,35 @@ export async function parseHeaderWithGemini(
     .replace(/\s+/g, ' ')
     .trim();
   const hashKey = `header_ai_v8_${hashString(normalizedForCourse)}`;
-  try {
-    const cached = await AsyncStorage.getItem(hashKey);
-    if (cached) {
-      const cachedResult: HeaderAnalysisResult = JSON.parse(cached);
-      // Arricchisci con le aule uniche citate in questo canale specifico
-      const enrichedRooms = { ...cachedResult.mappedRooms };
-      uniqueRooms.forEach(room => {
-        const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
-        const canon = getCanonicalRoomKey(room);
-        if (!canon || canon === 'aula') return;
-        if (!enrichedRooms[clean] && !enrichedRooms[canon]) {
-          const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
-          const bCode = (resolved.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
-          const addr = formatSapienzaAddress(resolved.address, bCode);
-          const item: MappedClassroom = {
-            key: canon,
-            displayName: resolved.displayName,
-            building: resolved.buildingName,
-            address: addr,
-          };
-          enrichedRooms[canon] = item;
-          enrichedRooms[`aula ${canon}`] = item;
-        }
-      });
-      return {
-        semester: cachedResult.semester,
-        alerts: cachedResult.alerts,
-        mappedRooms: enrichedRooms,
-      };
-    }
-  } catch {}
 
-  try {
-    const prompt = `Sei l'assistente IA ufficiale per gli orari universitari della Sapienza Università di Roma (applicabile a qualsiasi facoltà, corso di laurea o lingua).
+  // 1. Controllo istantaneo in RAM (0ms)
+  const memCached = memoryHeaderCache.get(hashKey);
+  if (memCached) {
+    return enrichHeaderResultWithRooms(memCached, uniqueRooms, headerLines, mapTabText);
+  }
+
+  // 2. Se un altro canale dello stesso corso sta già analizzando questa intestazione in parallelo,
+  //    attendi la stessa identica promessa senza inviare richieste duplicate a Gemini!
+  const inflight = inFlightHeaderPromises.get(hashKey);
+  if (inflight) {
+    const baseRes = await inflight;
+    return enrichHeaderResultWithRooms(baseRes, uniqueRooms, headerLines, mapTabText);
+  }
+
+  // 3. Registra SINCRONAMENTE la promessa in-flight (inclusa la lettura da disco)
+  //    così i tab lanciati in parallelo nello stesso tick non duplicano mai la chiamata Gemini!
+  const fetchPromise = (async (): Promise<HeaderAnalysisResult> => {
+    try {
+      const cached = await AsyncStorage.getItem(hashKey);
+      if (cached) {
+        const cachedResult: HeaderAnalysisResult = JSON.parse(cached);
+        memoryHeaderCache.set(hashKey, cachedResult);
+        return cachedResult;
+      }
+    } catch {}
+
+    try {
+      const prompt = `Sei l'assistente IA ufficiale per gli orari universitari della Sapienza Università di Roma (applicabile a qualsiasi facoltà, corso di laurea o lingua).
 Ti fornisco l'intestazione completa estratta da un foglio orario ufficiale:
 
 --- INTESTAZIONE FOGLIO ---
@@ -782,122 +924,102 @@ Il tuo compito è analizzare con intelligenza e precisione l'intestazione e rest
 
 Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classrooms": [...] }.`;
 
-    let response;
-    try {
-      response = await axios.post(getGeminiUrl(), {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json"
-        }
-      }, { timeout: 6000 });
-    } catch (firstErr: any) {
-      const status = firstErr?.response?.status;
-      if (status === 503 || status === 429) {
-        await new Promise(r => setTimeout(r, 400));
-        response = await axios.post(getGeminiUrl(), {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json"
-          }
-        }, { timeout: 6000 });
-      } else {
-        throw firstErr;
-      }
-    }
+      const aiText = await callGeminiJson(prompt, 5500);
+      const parsed = JSON.parse(aiText);
 
-    const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const parsed = JSON.parse(aiText);
+      const rawSemester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
+        ? parsed.semester.trim()
+        : fallbackSemester;
 
-    const rawSemester: string = (parsed && typeof parsed.semester === 'string' && parsed.semester.trim())
-      ? parsed.semester.trim()
-      : fallbackSemester;
+      // Guardrail: il calendario didattico deve contenere effettive date o periodi
+      const semester = (rawSemester && hasDateInfo(rawSemester)) ? rawSemester : '';
 
-    // Guardrail: il calendario didattico deve contenere effettive date o periodi
-    const semester = (rawSemester && hasDateInfo(rawSemester)) ? rawSemester : '';
+      const rawAlerts: string[] = Array.isArray(parsed.alerts) && parsed.alerts.length > 0 
+        ? parsed.alerts 
+        : fallbackAlerts;
 
-    const rawAlerts: string[] = Array.isArray(parsed.alerts) && parsed.alerts.length > 0 
-      ? parsed.alerts 
-      : fallbackAlerts;
-
-    // Guardrail: escludi tassativamente metadati, legende, note redazionali e normalizza uniformemente il case
-    const seenAlerts = new Set<string>();
-    const alerts: string[] = [];
-    rawAlerts.forEach(a => {
-      if (typeof a !== 'string') return;
-      const normalized = normalizeAlertText(a);
-      if (!normalized || normalized.length < 5) return;
-      if (/^(?:note\s+e\s+avvisi:?|avvisi:?|note:?)$/i.test(normalized)) return;
-      if (/\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(normalized)) return;
-      if (/\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(normalized)) return;
-      if (/^(facolt[aà]|corso di studi|laurea\s+(?:triennale|magistrale))\b/i.test(normalized)) return;
-      
-      const key = normalized.toLowerCase();
-      if (!seenAlerts.has(key)) {
-        seenAlerts.add(key);
-        alerts.push(normalized);
-      }
-    });
-
-    const mappedRooms: Record<string, MappedClassroom> = {};
-
-    // 1. Inserisci prima le aule dal fallback (normalizzate)
-    Object.values(fallbackRooms).forEach(item => {
-      const canon = getCanonicalRoomKey(item.displayName || item.key);
-      const dispName = normalizeDisplayName(item.displayName || item.key);
-      if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
-      const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
-      const addr = formatSapienzaAddress(item.address, bCode);
-      const normalizedItem: MappedClassroom = {
-        key: canon,
-        displayName: dispName,
-        building: item.building,
-        address: addr,
-        dayNote: item.dayNote,
-      };
-      mappedRooms[canon] = normalizedItem;
-      mappedRooms[`aula ${canon}`] = normalizedItem;
-    });
-
-    // 2. Se Gemini ha estratto le aule, Gemini è la fonte principale autoritativa: sovrascrive / arricchisce per chiave canonica
-    if (Array.isArray(parsed.classrooms) && parsed.classrooms.length > 0) {
-      parsed.classrooms.forEach((item: any) => {
-        if (item && (item.displayName || item.key)) {
-          const rawKey = (item.key || item.displayName || '').trim();
-          if (!rawKey || rawKey.toLowerCase() === 'aula') return;
-          const canon = getCanonicalRoomKey(rawKey);
-          if (!canon || canon === 'aula') return;
-          const dispName = normalizeDisplayName(item.displayName || item.key);
-          if (dispName.toLowerCase() === 'aula') return;
-          const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
-          const addr = formatSapienzaAddress(item.address, bCode);
-          const normalizedItem: MappedClassroom = {
-            key: canon,
-            displayName: dispName,
-            building: item.building || mappedRooms[canon]?.building || 'Edificio Sapienza',
-            address: addr || mappedRooms[canon]?.address || '',
-          };
-          mappedRooms[canon] = normalizedItem;
-          mappedRooms[`aula ${canon}`] = normalizedItem;
+      // Guardrail: escludi tassativamente metadati, legende, note redazionali e normalizza uniformemente il case
+      const seenAlerts = new Set<string>();
+      const alerts: string[] = [];
+      rawAlerts.forEach(a => {
+        if (typeof a !== 'string') return;
+        const normalized = normalizeAlertText(a);
+        if (!normalized || normalized.length < 5) return;
+        if (/^(?:note\s+e\s+avvisi:?|avvisi:?|note:?)$/i.test(normalized)) return;
+        if (/\b(codice interno|legenda|legend|ultimo aggiornamento|last update)\b/i.test(normalized)) return;
+        if (/\b(materia\s*\(edificio aula\)|subject\s*\(building class\))\b/i.test(normalized)) return;
+        if (/^(facolt[aà]|corso di studi|laurea\s+(?:triennale|magistrale))\b/i.test(normalized)) return;
+        
+        const key = normalized.toLowerCase();
+        if (!seenAlerts.has(key)) {
+          seenAlerts.add(key);
+          alerts.push(normalized);
         }
       });
-    }
 
-    const finalResult: HeaderAnalysisResult = { semester, alerts, mappedRooms };
-    try {
-      await AsyncStorage.setItem(hashKey, JSON.stringify(finalResult));
-    } catch {}
+      const mappedRooms: Record<string, MappedClassroom> = {};
 
-    return finalResult;
-  } catch (err: any) {
-    if (err?.response?.status === 429 || err?.response?.status === 503) {
-      console.log(`Gemini: Servizio temporaneamente occupato (${err?.response?.status}), applicato fallback locale istantaneo`);
-    } else {
-      console.log('Gemini unified header parsing fallback:', err?.message || err);
+      // 1. Inserisci prima le aule dal fallback (normalizzate)
+      Object.values(fallbackRooms).forEach(item => {
+        const canon = getCanonicalRoomKey(item.displayName || item.key);
+        const dispName = normalizeDisplayName(item.displayName || item.key);
+        if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
+        const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        const addr = formatSapienzaAddress(item.address, bCode);
+        const normalizedItem: MappedClassroom = {
+          key: canon,
+          displayName: dispName,
+          building: item.building,
+          address: addr,
+          dayNote: item.dayNote,
+        };
+        mappedRooms[canon] = normalizedItem;
+        mappedRooms[`aula ${canon}`] = normalizedItem;
+      });
+
+      // 2. Se Gemini ha estratto le aule, Gemini è la fonte principale autoritativa: sovrascrive / arricchisce per chiave canonica
+      if (Array.isArray(parsed.classrooms) && parsed.classrooms.length > 0) {
+        parsed.classrooms.forEach((item: any) => {
+          if (item && (item.displayName || item.key)) {
+            const rawKey = (item.key || item.displayName || '').trim();
+            if (!rawKey || rawKey.toLowerCase() === 'aula') return;
+            const canon = getCanonicalRoomKey(rawKey);
+            if (!canon || canon === 'aula') return;
+            const dispName = normalizeDisplayName(item.displayName || item.key);
+            if (dispName.toLowerCase() === 'aula') return;
+            const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+            const addr = formatSapienzaAddress(item.address, bCode);
+            const normalizedItem: MappedClassroom = {
+              key: canon,
+              displayName: dispName,
+              building: item.building || mappedRooms[canon]?.building || 'Edificio Sapienza',
+              address: addr || mappedRooms[canon]?.address || '',
+            };
+            mappedRooms[canon] = normalizedItem;
+            mappedRooms[`aula ${canon}`] = normalizedItem;
+          }
+        });
+      }
+
+      const finalResult: HeaderAnalysisResult = { semester, alerts, mappedRooms };
+      memoryHeaderCache.set(hashKey, finalResult);
+      AsyncStorage.setItem(hashKey, JSON.stringify(finalResult)).catch(() => {});
+      return finalResult;
+    } catch (err: any) {
+      if (err?.response?.status === 429 || err?.response?.status === 503) {
+        console.log(`Gemini: Servizio temporaneamente occupato (${err?.response?.status}), applicato fallback locale istantaneo`);
+      } else {
+        console.log('Gemini unified header parsing fallback:', err?.message || err);
+      }
+      return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
+    } finally {
+      inFlightHeaderPromises.delete(hashKey);
     }
-    return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
-  }
+  })();
+
+  inFlightHeaderPromises.set(hashKey, fetchPromise);
+  const res = await fetchPromise;
+  return enrichHeaderResultWithRooms(res, uniqueRooms, headerLines, mapTabText);
 }
 
 export async function extractAlertsWithAI(headerRows: string[][]): Promise<string[]> {

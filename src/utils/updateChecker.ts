@@ -51,8 +51,8 @@ export function detectUpdateType(
     notesLower.includes('aggiornamento bloccante') ||
     notesLower.includes('mandatory');
 
-  // Se c'è il tag di aggiornamento obbligatorio/bloccante, major superiore o versione 1.8.4
-  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0) || cleanL === '1.8.4') {
+  // Se c'è il tag di aggiornamento obbligatorio/bloccante, major superiore o versione 1.8.4 / 1.8.5
+  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0) || cleanL === '1.8.4' || cleanL === '1.8.5') {
     return 'major';
   }
 
