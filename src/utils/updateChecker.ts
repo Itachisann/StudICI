@@ -27,38 +27,86 @@ export interface AppUpdateInfo {
   isMajor: boolean;
 }
 
+// Versioni che sono state rilasciate come aggiornamenti bloccanti obbligatori.
+// Qualsiasi versione installata precedente a una di queste riceverà l'aggiornamento come bloccante,
+// anche se nel frattempo è uscita una versione successiva non bloccante.
+export const KNOWN_BLOCKING_VERSIONS = ['1.8.4', '1.8.5', '1.8.7'];
+
 /**
- * Distingue tra major update obbligatorio e minor/patch/fix opzionale
+ * Verifica se le note o il titolo di una singola release indicano un aggiornamento bloccante
+ */
+export function isReleaseNotesBlocking(releaseNotes = '', releaseTitle = '', version = ''): boolean {
+  const cleanV = version.replace(/^v/i, '').trim();
+  if (KNOWN_BLOCKING_VERSIONS.includes(cleanV)) {
+    return true;
+  }
+
+  const notesLower = `${releaseTitle} ${releaseNotes}`.toLowerCase();
+  const isExplicitlyNonBlocking =
+    notesLower.includes('non bloccante') ||
+    notesLower.includes('non obbligatorio') ||
+    cleanV === '1.8.6';
+
+  if (isExplicitlyNonBlocking) {
+    return false;
+  }
+
+  return (
+    notesLower.includes('[major]') ||
+    notesLower.includes('[breaking]') ||
+    notesLower.includes('obbligatorio') ||
+    notesLower.includes('aggiornamento obbligatorio') ||
+    notesLower.includes('bloccante') ||
+    notesLower.includes('aggiornamento bloccante') ||
+    notesLower.includes('mandatory')
+  );
+}
+
+/**
+ * Distingue tra major update obbligatorio e minor/patch/fix opzionale,
+ * tenendo conto anche di eventuali aggiornamenti bloccanti intermedi saltati dall'utente.
  */
 export function detectUpdateType(
   latestVersion: string,
   currentVersion: string,
   releaseNotes = '',
-  releaseTitle = ''
+  releaseTitle = '',
+  missedReleases: { version: string; body?: string; name?: string }[] = []
 ): UpdateType {
   const cleanL = latestVersion.replace(/^v/i, '').trim();
   const cleanC = currentVersion.replace(/^v/i, '').trim();
   const lParts = cleanL.split('.').map((n) => parseInt(n, 10) || 0);
   const cParts = cleanC.split('.').map((n) => parseInt(n, 10) || 0);
 
-  const notesLower = `${releaseTitle} ${releaseNotes}`.toLowerCase();
-  const isExplicitlyNonBlocking =
-    notesLower.includes('non bloccante') ||
-    notesLower.includes('non obbligatorio') ||
-    cleanL === '1.8.6';
-  const hasMajorTag =
-    !isExplicitlyNonBlocking &&
-    (notesLower.includes('[major]') ||
-      notesLower.includes('[breaking]') ||
-      notesLower.includes('obbligatorio') ||
-      notesLower.includes('aggiornamento obbligatorio') ||
-      notesLower.includes('bloccante') ||
-      notesLower.includes('aggiornamento bloccante') ||
-      notesLower.includes('mandatory'));
-
-  // Se c'è il tag di aggiornamento obbligatorio/bloccante, major superiore o versione 1.8.4 / 1.8.5
-  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0) || cleanL === '1.8.4' || cleanL === '1.8.5') {
+  // 1. Se la major semver è aumentata (es. 2.0.0 vs 1.x.y)
+  if ((lParts[0] ?? 0) > (cParts[0] ?? 0)) {
     return 'major';
+  }
+
+  // 2. Se esiste una versione bloccante nota successiva alla versione attuale dell'utente
+  //    ed uguale o precedente all'ultima versione disponibile
+  const missedKnownBlocking = KNOWN_BLOCKING_VERSIONS.some(
+    (bv) => compareVersions(bv, cleanC) > 0 && compareVersions(cleanL, bv) >= 0
+  );
+  if (missedKnownBlocking) {
+    return 'major';
+  }
+
+  // 3. Se l'ultima release stessa è bloccante
+  if (isReleaseNotesBlocking(releaseNotes, releaseTitle, cleanL)) {
+    return 'major';
+  }
+
+  // 4. Se l'utente ha saltato almeno una release intermedia che era bloccante
+  //    (es. 1.8.7 bloccante seguita da 1.8.8 non bloccante, e l'utente è ancora alla 1.8.6)
+  for (const rel of missedReleases) {
+    if (
+      compareVersions(rel.version, cleanC) > 0 &&
+      compareVersions(cleanL, rel.version) >= 0 &&
+      isReleaseNotesBlocking(rel.body || '', rel.name || '', rel.version)
+    ) {
+      return 'major';
+    }
   }
 
   // Nuove feature / minor (es. 1.9 vs 1.8)
@@ -66,7 +114,7 @@ export function detectUpdateType(
     return 'minor';
   }
 
-  // Bug fix / patch (es. 1.8.3 vs 1.8.2)
+  // Bug fix / patch (es. 1.8.6 vs 1.8.5)
   return 'patch';
 }
 
@@ -94,8 +142,17 @@ export function compareVersions(v1: string, v2: string): number {
   return 0;
 }
 
+function extractReleaseVersion(release: any): string {
+  const rawTag = release?.tag_name || release?.name || '';
+  const versionMatch =
+    rawTag.match(/v?(\d+\.\d+\.\d+)/i) ||
+    (release?.name && String(release.name).match(/v?(\d+\.\d+\.\d+)/i));
+  return versionMatch ? versionMatch[1] : String(rawTag).replace(/^v/i, '').trim();
+}
+
 /**
- * Controlla se è presente una nuova release su GitHub
+ * Controlla se è presente una nuova release su GitHub, verificando anche tutte le release
+ * intermedie saltate dall'utente per determinare se almeno una di esse è bloccante.
  */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = Constants.expoConfig?.version || '1.7.7';
@@ -104,7 +161,8 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+    // Scarica le ultime release per poter controllare sia l'ultima versione sia eventuali versioni bloccanti intermedie saltate
+    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`, {
       signal: controller.signal,
       headers: {
         Accept: 'application/vnd.github.v3+json',
@@ -128,14 +186,47 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       };
     }
 
-    const release = await response.json();
-    const rawTag = release.tag_name || release.name || '';
-    const versionMatch = rawTag.match(/v?(\d+\.\d+\.\d+)/i) || (release.name && release.name.match(/v?(\d+\.\d+\.\d+)/i));
-    const latestVersion = versionMatch ? versionMatch[1] : rawTag.replace(/^v/i, '');
+    const releasesData = await response.json();
+    const releasesList = Array.isArray(releasesData)
+      ? releasesData.filter((r: any) => !r?.draft && !r?.prerelease)
+      : releasesData
+      ? [releasesData]
+      : [];
+
+    if (releasesList.length === 0) {
+      return {
+        hasUpdate: false,
+        latestVersion: currentVersion,
+        currentVersion,
+        releaseTitle: '',
+        releaseNotes: '',
+        htmlUrl: GITHUB_LATEST_RELEASE_URL,
+        ipaUrl: GITHUB_LATEST_IPA_URL,
+        updateType: 'patch',
+        isMajor: false,
+      };
+    }
+
+    const release = releasesList[0];
+    const latestVersion = extractReleaseVersion(release);
 
     const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
 
-    // Trova l'asset IPA se presente tra gli asset caricati
+    // Raccoglie tutte le release tra currentVersion (esclusa) e latestVersion (inclusa)
+    const missedReleases = releasesList
+      .map((r: any) => ({
+        version: extractReleaseVersion(r),
+        body: r?.body || '',
+        name: r?.name || '',
+      }))
+      .filter(
+        (r) =>
+          Boolean(r.version) &&
+          compareVersions(r.version, currentVersion) > 0 &&
+          compareVersions(latestVersion, r.version) >= 0
+      );
+
+    // Trova l'asset IPA se presente tra gli asset caricati dell'ultima release
     let ipaUrl = GITHUB_LATEST_IPA_URL;
     if (Array.isArray(release.assets)) {
       const ipaAsset = release.assets.find((a: any) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.ipa'));
@@ -147,7 +238,13 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     const releaseTitle = release.name || `StudICI v${latestVersion}`;
     const releaseNotes = release.body || '';
     const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
-    const updateType = detectUpdateType(latestVersion, currentVersion, releaseNotes, releaseTitle);
+    const updateType = detectUpdateType(
+      latestVersion,
+      currentVersion,
+      releaseNotes,
+      releaseTitle,
+      missedReleases
+    );
     const isMajor = hasUpdate && updateType === 'major';
 
     return {

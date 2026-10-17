@@ -871,106 +871,113 @@ export default function ScheduleScreen() {
         <View style={styles.blockingModalContainer}>
           <BlurView tint="dark" intensity={100} style={StyleSheet.absoluteFill} />
 
-          <SafeAreaView style={styles.blockingModalSafeArea}>
-            <View style={styles.blockingModalContent}>
-              <View style={styles.blockingModalTop}>
-                <View
-                  style={[
-                    styles.blockingModalIconSquircle,
-                    { backgroundColor: theme.primary, shadowColor: theme.primary },
-                  ]}
-                >
-                  <Ionicons name="arrow-up-circle" size={44} color="#ffffff" />
-                </View>
-
-                <View
-                  style={[
-                    styles.blockingPill,
-                    {
-                      backgroundColor: `${theme.primary}25`,
-                      borderColor: `${theme.primary}60`,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.blockingPillText, { color: theme.primary }]}>
-                    AGGIORNAMENTO BLOCCANTE
-                  </Text>
-                </View>
-
-                <Text style={styles.blockingModalTitle}>
-                  Nuova Versione v{appUpdate?.latestVersion}
-                </Text>
-
-                <Text style={styles.blockingModalSub}>
-                  È richiesta la nuova versione di StudICI per continuare a utilizzare l&apos;applicazione.
-                </Text>
+          <View
+            style={[
+              styles.blockingModalContent,
+              {
+                paddingTop: Math.max(insets.top, Platform.OS === "ios" ? 64 : 36) + 42,
+                paddingBottom: Math.max(insets.bottom, Platform.OS === "ios" ? 34 : 20) + 14,
+              },
+            ]}
+          >
+            <View style={styles.blockingModalTop}>
+              <View
+                style={[
+                  styles.blockingModalIconSquircle,
+                  { backgroundColor: theme.primary, shadowColor: theme.primary },
+                ]}
+              >
+                <Ionicons name="arrow-up-circle" size={44} color="#ffffff" />
               </View>
 
               <View
                 style={[
-                  styles.blockingCard,
-                  { backgroundColor: theme.cardTint, borderColor: theme.border },
+                  styles.blockingPill,
+                  {
+                    backgroundColor: theme.bg,
+                    borderColor: theme.primary,
+                    shadowColor: theme.primary,
+                  },
                 ]}
               >
-                <View style={styles.blockingCardRow}>
-                  <Text style={styles.blockingCardLabel}>Versione installata</Text>
-                  <Text style={styles.blockingCardValOld}>v{appUpdate?.currentVersion}</Text>
-                </View>
-                <View style={styles.blockingCardDivider} />
-                <View style={styles.blockingCardRow}>
-                  <Text style={styles.blockingCardLabel}>Versione richiesta</Text>
-                  <Text style={[styles.blockingCardValNew, { color: theme.primary }]}>
-                    v{appUpdate?.latestVersion}
-                  </Text>
-                </View>
-                <View style={styles.blockingCardDivider} />
-                <View style={styles.blockingCardRow}>
-                  <Text style={styles.blockingCardLabel}>Data di rilascio</Text>
-                  <Text style={styles.blockingCardValDate}>
-                    {formatReleaseDate(appUpdate?.publishedAt)}
-                  </Text>
-                </View>
-                <View style={styles.blockingCardDivider} />
-                <View style={styles.blockingCardRow}>
-                  <Text style={styles.blockingCardLabel}>Riferimento commit</Text>
-                  <Text style={styles.blockingCardValCommit} numberOfLines={1}>
-                    {appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
-                  </Text>
-                </View>
-                <View style={styles.blockingCardDivider} />
-                <TouchableOpacity
-                  style={[styles.changelogBtn, { borderColor: theme.border }]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-                  }}
-                >
-                  <Ionicons name="git-pull-request-outline" size={15} color={theme.accent} style={{ marginRight: 6 }} />
-                  <Text style={[styles.changelogBtnText, { color: theme.accent }]}>Consulta il Changelog su GitHub</Text>
-                  <Ionicons name="open-outline" size={13} color="#94a3b8" style={{ marginLeft: "auto" }} />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.blockingModalBottom}>
-                <TouchableOpacity
-                  style={[
-                    styles.blockingPrimaryBtn,
-                    { backgroundColor: theme.primary, shadowColor: theme.primary },
-                  ]}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    Linking.openURL(appUpdate?.ipaUrl || appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-                  }}
-                >
-                  <Ionicons name="cloud-download-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-                  <Text style={styles.blockingPrimaryBtnText}>Aggiorna</Text>
-                </TouchableOpacity>
-                <Text style={styles.blockingFooterText}>
-                  Gli aggiornamenti principali includono modifiche strutturali necessarie alle API Trenitalia e ai server Sapienza.
+                <Text style={[styles.blockingPillText, { color: "#ffffff" }]}>
+                  AGGIORNAMENTO BLOCCANTE
                 </Text>
               </View>
+
+              <Text style={styles.blockingModalTitle}>
+                Nuova Versione v{appUpdate?.latestVersion}
+              </Text>
+
+              <Text style={styles.blockingModalSub}>
+                È richiesta la nuova versione di StudICI per continuare a utilizzare l&apos;applicazione.
+              </Text>
             </View>
-          </SafeAreaView>
+
+            <View
+              style={[
+                styles.blockingCard,
+                { backgroundColor: theme.cardTint, borderColor: theme.border },
+              ]}
+            >
+              <View style={styles.blockingCardRow}>
+                <Text style={styles.blockingCardLabel}>Versione installata</Text>
+                <Text style={styles.blockingCardValOld}>v{appUpdate?.currentVersion}</Text>
+              </View>
+              <View style={styles.blockingCardDivider} />
+              <View style={styles.blockingCardRow}>
+                <Text style={styles.blockingCardLabel}>Versione richiesta</Text>
+                <Text style={[styles.blockingCardValNew, { color: theme.accent }]}>
+                  v{appUpdate?.latestVersion}
+                </Text>
+              </View>
+              <View style={styles.blockingCardDivider} />
+              <View style={styles.blockingCardRow}>
+                <Text style={styles.blockingCardLabel}>Data di rilascio</Text>
+                <Text style={styles.blockingCardValDate}>
+                  {formatReleaseDate(appUpdate?.publishedAt)}
+                </Text>
+              </View>
+              <View style={styles.blockingCardDivider} />
+              <View style={styles.blockingCardRow}>
+                <Text style={styles.blockingCardLabel}>Riferimento commit</Text>
+                <Text style={styles.blockingCardValCommit} numberOfLines={1}>
+                  {appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
+                </Text>
+              </View>
+              <View style={styles.blockingCardDivider} />
+              <TouchableOpacity
+                style={[styles.changelogBtn, { borderColor: theme.border }]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                }}
+              >
+                <Ionicons name="git-pull-request-outline" size={15} color={theme.accent} style={{ marginRight: 6 }} />
+                <Text style={[styles.changelogBtnText, { color: theme.accent }]}>Consulta il Changelog su GitHub</Text>
+                <Ionicons name="open-outline" size={13} color="#94a3b8" style={{ marginLeft: "auto" }} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.blockingModalBottom}>
+              <TouchableOpacity
+                style={[
+                  styles.blockingPrimaryBtn,
+                  { backgroundColor: theme.primary, shadowColor: theme.primary },
+                ]}
+                activeOpacity={0.8}
+                onPress={() => {
+                  Linking.openURL(appUpdate?.ipaUrl || appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                }}
+              >
+                <Ionicons name="cloud-download-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+                <Text style={styles.blockingPrimaryBtnText}>Aggiorna</Text>
+              </TouchableOpacity>
+              <Text style={styles.blockingFooterText}>
+                Gli aggiornamenti principali includono modifiche strutturali necessarie alle API Trenitalia e ai server Sapienza.
+              </Text>
+            </View>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -1597,11 +1604,10 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     justifyContent: "space-between",
-    paddingTop: 30,
-    paddingBottom: 20,
   },
   blockingModalTop: {
     alignItems: "center",
+    marginTop: 20,
   },
   blockingModalIconSquircle: {
     width: 84,
@@ -1616,11 +1622,15 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   blockingPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    marginBottom: 14,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    elevation: 6,
   },
   blockingPillText: {
     fontSize: 11,
@@ -1646,7 +1656,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
     padding: 16,
-    marginVertical: 18,
+    marginVertical: 14,
   },
   blockingCardRow: {
     flexDirection: "row",

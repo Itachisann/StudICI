@@ -5,6 +5,18 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.7
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Questa versione introduce il controllo cumulativo sulle release intermedie saltate e il nuovo posizionamento della schermata di blocco ottimizzato per iPhone con Dynamic Island.
+
+### Sistema di Aggiornamento Cumulativo & Dynamic Island
+- **Ereditarietà degli Aggiornamenti Bloccanti Saltati (`updateChecker.ts`)**:
+  - Se viene rilasciato un aggiornamento bloccante seguito da uno o più aggiornamenti non bloccanti, e l'utente non ha ancora installato l'aggiornamento bloccante intermedio, l'ultimo aggiornamento disponibile viene ora automaticamente riconosciuto e applicato come **bloccante obbligatorio** (`isMajor: true`).
+  - L'app analizza l'intera cronologia delle release GitHub comprese tra la versione installata (`currentVersion`) e l'ultima versione rilasciata (`latestVersion`).
+- **Layout Schermata di Blocco Ottimizzato per Dynamic Island (`index.tsx`)**:
+  - Abbassati gli elementi superiori della schermata di aggiornamento obbligatorio con spaziatura sicura dedicata alla **Dynamic Island** di iPhone e applicato l'effetto bagliore neon dinamico anche alla pill `AGGIORNAMENTO BLOCCANTE`.
+
 ## 1.8.6
 
 ### Monitoraggio Treni Live & Partenza Stimata
