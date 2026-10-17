@@ -5,6 +5,19 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.9
+
+### Risoluzioni & Precisione Monitoraggio Ferroviario
+- **Tracciamento Reale Stazione di Partenza vs Arrivo**:
+  - Risolto il problema per cui nei viaggi di andata comparivano treni "passati" o con orari riferiti alla stazione di arrivo (Roma Tiburtina) invece di quella di partenza effettiva (es. Orte).
+  - Eliminato completamente il recupero cieco di convogli dal tabellone arrivi: ora qualsiasi treno regionale mostrato viene verificato con certezza assoluta (tramite orario di linea, origine corsa o analisi del percorso `andamentoTreno`).
+  - Convogli di altre direttrici (es. FL1 da Fiumicino, FL2 da Tivoli, FL3 da Viterbo) che arrivano a Roma Tiburtina senza fermare a Orte o alla stazione scelta non vengono mai più inseriti erroneamente tra i treni dell'itinerario.
+- **Supporto Universale per Qualsiasi Tratta Configurata**:
+  - La verifica di fermata, ordine delle tappe (`progressivo_partenza < progressivo_arrivo`), orario programmato ed effettivo di passaggio e stato "Già passato" si applica ora in modo dinamico a **qualunque coppia di stazioni** scelta dall'utente nelle Impostazioni.
+  - Orario effettivo e ritardo alla partenza sono calcolati direttamente sulla banchina della stazione di partenza del pendolare, mentre il ritardo cumulativo verso la destinazione viene evidenziato in giallo/arancione solo sull'orario di arrivo.
+- **Finestra Alternativi Pulita**:
+  - Nei chip rapidi di selezione treno viene mostrato al massimo 1 treno passato precedente a quello selezionato, evitando liste sature di treni storici a fine giornata.
+
 ## 1.7.8
 
 ### Novità & Funzionalità

@@ -2,14 +2,14 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.7.8",
+    "version": "1.7.9",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "52",
+      "buildNumber": "53",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
