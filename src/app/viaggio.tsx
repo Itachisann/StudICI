@@ -1377,11 +1377,9 @@ export default function ViaggioScreen() {
                         <Text style={styles.stepTitleText}>
                           {leg.title}
                         </Text>
-                        {leg.type !== 'train' && leg.type !== 'destination' && leg.type !== 'transit' && (
-                          <View style={styles.durationBadgeContainer}>
-                            <Text style={styles.stepDurationText}>{formatDuration(leg.durationMinutes)}</Text>
-                          </View>
-                        )}
+                        <View style={styles.durationBadgeContainer}>
+                          <Text style={styles.stepDurationText}>{formatDuration(leg.durationMinutes)}</Text>
+                        </View>
                       </View>
 
                       <Text style={styles.stepSubtitleText}>{leg.subtitle}</Text>

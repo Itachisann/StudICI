@@ -5,6 +5,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.7.8
+
+### Novità & Funzionalità
+- **Notifiche Aggiornamenti GitHub In-App**:
+  - Implementato modulo di verifica automatica delle release GitHub (`updateChecker.ts`).
+  - Quando è disponibile una nuova release su GitHub superiore alla versione installata, viene mostrato un banner nativo ad alto risalto nella schermata principale dell'orario con l'avviso e il tasto `UPDATE`.
+  - Toccando il banner o la sezione Impostazioni si apre un ActionSheet iOS completo con scorciatoie di installazione rapida.
+- **Integrazione SideStore, AltStore & LiveContainer**:
+  - Creata la sorgente repository ufficiale per SideStore e AltStore (`apps.json`), che consente di aggiungere la repo con un solo tap tramite lo schema URL `sidestore://source?url=...` o `altstore://source?url=...` per aggiornamenti automatici senza computer.
+  - Aggiunto supporto per installazione diretta con LiveContainer tramite URL scheme `livecontainer://install?url=...`.
+  - Nella schermata Impostazioni è ora presente la sezione dedicata **"AGGIORNAMENTI & SIDELOADING"** con controllo manuale release, aggiunta sorgente SideStore e installazione con LiveContainer in un tocco.
+- **Ripristino Badge Minutaggio Tappe Viaggio**:
+  - Ripristinato e garantito il badge del minutaggio di percorrenza in alto a destra su tutte le card delle tappe del viaggio (`formatDuration(durationMinutes)`), offrendo sempre a colpo d'occhio la durata di ogni singolo step (treno, auto, mezzi, attese).
+
 ## 1.7.7
 
 ### Novità & Rifiniture UI / UX

@@ -2,14 +2,14 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.7.7",
+    "version": "1.7.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "51",
+      "buildNumber": "52",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -26,7 +26,10 @@
         },
         "LSApplicationQueriesSchemes": [
           "comgooglemaps",
-          "trenitalia"
+          "trenitalia",
+          "sidestore",
+          "altstore",
+          "livecontainer"
         ]
       }
     },
@@ -37,7 +40,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 51,
+      "versionCode": 52,
       "usesCleartextTraffic": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [

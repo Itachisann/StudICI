@@ -78,6 +78,13 @@ import {
   saveCommuterConfig,
 } from "../utils/commuterStorage";
 import { useTheme } from "@/context/ThemeContext";
+import {
+  checkForAppUpdate,
+  presentUpdateActionSheet,
+  openInSideStore,
+  openInLiveContainer,
+  AppUpdateInfo,
+} from "../utils/updateChecker";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -133,6 +140,29 @@ export default function ProfiloScreen() {
   const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(null);
   const [commuterModalVisible, setCommuterModalVisible] = useState(false);
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  useEffect(() => {
+    checkForAppUpdate().then((info) => setAppUpdate(info));
+  }, []);
+
+  const handleManualCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    const info = await checkForAppUpdate();
+    setAppUpdate(info);
+    setCheckingUpdate(false);
+    if (info.hasUpdate) {
+      presentUpdateActionSheet(info);
+    } else {
+      Alert.alert(
+        "App Aggiornata",
+        `Hai già installato l'ultima versione disponibile (v${info.currentVersion}).`,
+        [{ text: "OK" }],
+      );
+    }
+  };
+
   const { width: windowWidth } = useWindowDimensions();
   const [measuredCardWidth, setMeasuredCardWidth] = useState<number>(0);
   const themeCardWidth =
@@ -1469,6 +1499,79 @@ export default function ProfiloScreen() {
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
         </View>
+
+        {/* Gruppo: AGGIORNAMENTI & SIDELOADING */}
+        <Text style={styles.sectionHeader}>AGGIORNAMENTI & SIDELOADING</Text>
+        <View style={styles.groupedCard}>
+          {/* Verifica Aggiornamenti GitHub */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={handleManualCheckUpdate}
+          >
+            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+              {checkingUpdate ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Ionicons name="cloud-download-outline" size={17} color="#ffffff" />
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Aggiornamento App</Text>
+              <Text style={styles.rowSubTitle}>
+                {appUpdate?.hasUpdate
+                  ? `Nuova versione v${appUpdate.latestVersion} disponibile!`
+                  : `Versione v${Constants.expoConfig?.version || "1.7.8"} (Aggiornata)`}
+              </Text>
+            </View>
+            {appUpdate?.hasUpdate ? (
+              <View style={[styles.updatePill, { backgroundColor: theme.primary }]}>
+                <Text style={styles.updatePillText}>UPDATE</Text>
+              </View>
+            ) : (
+              <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* SideStore & AltStore */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={openInSideStore}
+          >
+            <View style={[styles.iconBox, { backgroundColor: "#0284c7" }]}>
+              <Ionicons name="apps-outline" size={17} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Sorgente SideStore & AltStore</Text>
+              <Text style={styles.rowSubTitle}>Aggiungi sorgente community per auto-update</Text>
+            </View>
+            <Ionicons name="open-outline" size={15} color="#48484a" />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* LiveContainer */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={openInLiveContainer}
+          >
+            <View style={[styles.iconBox, { backgroundColor: "#a855f7" }]}>
+              <Ionicons name="cube-outline" size={17} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Installa con LiveContainer</Text>
+              <Text style={styles.rowSubTitle}>Installa IPA direttamente senza computer</Text>
+            </View>
+            <Ionicons name="open-outline" size={15} color="#48484a" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Ricevi notifiche e aggiorna automaticamente StudICI direttamente da iPhone con SideStore o LiveContainer.
+        </Text>
 
         {/* Footer Info App */}
         <View style={styles.footer}>
@@ -3093,6 +3196,17 @@ const styles = StyleSheet.create({
     color: "#cbd5e1",
     fontWeight: "500",
     flex: 1,
+  },
+  updatePill: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  updatePillText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.4,
   },
 });
 

@@ -1,0 +1,27 @@
+{
+  "name": "StudICI Source",
+  "identifier": "com.vitor.studici.source",
+  "subtitle": "Repository ufficiale per StudICI (Sapienza Roma)",
+  "description": "Sorgente ufficiale per l'installazione e gli aggiornamenti automatici di StudICI tramite SideStore e AltStore.",
+  "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+  "headerURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+  "website": "https://github.com/Itachisann/StudICI",
+  "sourceURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/apps.json",
+  "apps": [
+    {
+      "name": "StudICI",
+      "bundleIdentifier": "com.vitor.studici",
+      "developerName": "Vitor",
+      "version": "1.7.8",
+      "versionDate": "2026-10-17",
+      "versionDescription": "Aggiornamenti tappe viaggio, notifiche update in-app e integrazione SideStore / LiveContainer.",
+      "downloadURL": "https://github.com/Itachisann/StudICI/releases/latest/download/StudICI.ipa",
+      "localizedDescription": "L'app compagna per gli studenti di Ingegneria Informatica e Automatica alla Sapienza Università di Roma. Orari lezioni, monitoraggio treni pendolari Trenitalia in tempo reale, percorsi urbani ATAC e gestione presenze.",
+      "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+      "tintColor": "822433",
+      "size": 45000000,
+      "screenshotURLs": []
+    }
+  ],
+  "news": []
+}

@@ -51,6 +51,11 @@ import {
   ScheduleData,
   Tab,
 } from "../utils/scraper";
+import {
+  checkForAppUpdate,
+  presentUpdateActionSheet,
+  AppUpdateInfo,
+} from "../utils/updateChecker";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -132,6 +137,17 @@ export default function ScheduleScreen() {
   const [attendanceRecords, setAttendanceRecords] = useState<
     AttendanceRecord[]
   >([]);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
+  const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    checkForAppUpdate().then((info) => {
+      if (info.hasUpdate) {
+        setAppUpdate(info);
+      }
+    });
+  }, []);
+
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const cardWidth = Math.max(windowWidth - 32, 280);
@@ -396,6 +412,52 @@ export default function ScheduleScreen() {
           />
         }
       >
+        {/* ── Banner Aggiornamento App Disponibile ── */}
+        {appUpdate?.hasUpdate && !updateBannerDismissed ? (
+          <TouchableOpacity
+            style={[
+              styles.updateBanner,
+              { backgroundColor: theme.cardTint, borderColor: theme.border },
+            ]}
+            activeOpacity={0.8}
+            onPress={() => presentUpdateActionSheet(appUpdate)}
+          >
+            <View
+              style={[
+                styles.updateIconSquircle,
+                { backgroundColor: theme.primary },
+              ]}
+            >
+              <Ionicons name="arrow-up-circle" size={19} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1, paddingRight: 6 }}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={styles.updateBannerTitle}>
+                  Nuova Versione {appUpdate.latestVersion}
+                </Text>
+                <View
+                  style={[
+                    styles.updateBadge,
+                    { backgroundColor: theme.primary },
+                  ]}
+                >
+                  <Text style={styles.updateBadgeText}>UPDATE</Text>
+                </View>
+              </View>
+              <Text style={styles.updateBannerSub} numberOfLines={1}>
+                {"Tocca per aggiornare via SideStore, LiveContainer o scaricare l'IPA"}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setUpdateBannerDismissed(true)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              style={{ padding: 4 }}
+            >
+              <Ionicons name="close" size={16} color="#8e8e93" />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        ) : null}
+
         {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
         {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
           <View style={[styles.semesterCard, { borderColor: theme.border }]}>
@@ -1349,5 +1411,47 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 11,
     marginTop: 1,
+  },
+  /* Banner Aggiornamento In-App */
+  updateBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  updateIconSquircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  updateBannerTitle: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+    marginRight: 6,
+  },
+  updateBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  updateBadgeText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  updateBannerSub: {
+    color: "#94a3b8",
+    fontSize: 11,
+    marginTop: 2,
   },
 });

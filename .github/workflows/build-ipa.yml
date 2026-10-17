@@ -68,11 +68,14 @@ jobs:
             echo "Build iOS (.ipa) v${VERSION} generata in automatico." > release_notes.md
           fi
           
+          # Ensure StudICI.ipa is always available with exact naming
+          cp -f "${PROJECT_NAME}.ipa" StudICI.ipa
+          
           # Delete the old 'latest' release and tag if they exist
           gh release delete latest --cleanup-tag -y || true
           
           # Create a new release and upload the IPA
-          gh release create latest ${PROJECT_NAME}.ipa \
+          gh release create latest StudICI.ipa "${PROJECT_NAME}.ipa" \
             --title "StudICI v${VERSION}" \
             --notes-file release_notes.md \
             --latest
