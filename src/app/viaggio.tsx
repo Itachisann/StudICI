@@ -1052,6 +1052,34 @@ export default function ViaggioScreen() {
                       </View>
                     )}
 
+                    {/* Badge Dedicato al Ritardo (es. quando il convoglio è fermo in stazione oltre l'orario) */}
+                    {trainStatus?.delayBadge ? (
+                      <View
+                        style={[
+                          styles.trainStatusPill,
+                          {
+                            backgroundColor: trainStatus.delayBadge.bg,
+                            borderColor: trainStatus.delayBadge.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={12}
+                          color={trainStatus.delayBadge.color}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={[
+                            styles.trainStatusPillText,
+                            { color: trainStatus.delayBadge.color },
+                          ]}
+                        >
+                          {trainStatus.delayBadge.label}
+                        </Text>
+                      </View>
+                    ) : null}
+
                     {/* Badge Permanente Origine Corsa */}
                     {(() => {
                       const cleanCommuter = (commuterStationName || '').trim().toLowerCase();
@@ -1129,30 +1157,23 @@ export default function ViaggioScreen() {
                         : config?.arrivalStation.shortName || config?.arrivalStation.name}
                     </Text>
                     {(() => {
-                      const depPlanM = parseTimeToMinutes(itinerary.liveTrain.departureTimePlanned);
+                      const depPlanM = parseTimeToMinutes(itinerary.liveTrain.departureTimePlanned || '00:00');
+                      const depActM = parseTimeToMinutes(itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned || '00:00');
                       const currentNowM = new Date().getHours() * 60 + new Date().getMinutes();
                       // La partenza è evidenziata in giallo SOLO se:
-                      // 1. È già partita da qui con ritardo effettivo registrato
+                      // 1. È già partita da qui con ritardo effettivo registrato (depActM > depPlanM)
                       // 2. Oppure è ferma in stazione ed è SUPERATO l'orario di partenza programmato (ritardo nascente)
-                      // 3. Oppure è ancora lungo la linea e viaggia con ritardo verso qui
                       const isDepDelayed = Boolean(
-                        (itinerary.liveTrain.departureTimeActual &&
-                          itinerary.liveTrain.departureTimePlanned &&
-                          itinerary.liveTrain.departureTimeActual !== itinerary.liveTrain.departureTimePlanned &&
-                          (!itinerary.liveTrain.isStoppedInStation || currentNowM > depPlanM)) ||
+                        (depPlanM > 0 && depActM > depPlanM && (!itinerary.liveTrain.isStoppedInStation || currentNowM > depPlanM)) ||
                         (!itinerary.liveTrain.isDepartedFromStation &&
                           itinerary.liveTrain.isStoppedInStation &&
-                          currentNowM > depPlanM) ||
-                        (!itinerary.liveTrain.isDepartedFromStation &&
-                          !itinerary.liveTrain.isStoppedInStation &&
-                          itinerary.liveTrain.delayMinutes &&
-                          itinerary.liveTrain.delayMinutes > 0)
+                          currentNowM > depPlanM)
                       );
                       const showStrike = Boolean(
+                        isDepDelayed &&
                         itinerary.liveTrain.departureTimePlanned &&
                         itinerary.liveTrain.departureTimeActual &&
-                        itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual &&
-                        isDepDelayed
+                        itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
                       );
 
                       return (
@@ -1192,31 +1213,41 @@ export default function ViaggioScreen() {
                         ? config?.arrivalStation.shortName || config?.arrivalStation.name
                         : config?.departureStation.shortName || config?.departureStation.name}
                     </Text>
-                    <Text
-                      style={[
-                        styles.trainTimeText,
-                        Boolean(
-                          (itinerary.liveTrain.arrivalTimeActual &&
-                            itinerary.liveTrain.arrivalTimePlanned &&
-                            itinerary.liveTrain.arrivalTimeActual !== itinerary.liveTrain.arrivalTimePlanned) ||
-                          (itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) ||
-                          itinerary.liveTrain.isStoppedInStation
-                        ) && {
-                          color: '#fb923c',
-                        },
-                      ]}
-                    >
-                      {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
-                    </Text>
-                    {Boolean(
-                      itinerary.liveTrain.arrivalTimePlanned &&
+                    {(() => {
+                      const arrPlanM = parseTimeToMinutes(itinerary.liveTrain.arrivalTimePlanned || '00:00');
+                      const arrActM = parseTimeToMinutes(itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned || '00:00');
+                      // L'orario di arrivo è in ritardo SOLO SE l'orario effettivo è successivo a quello programmato (es. 17:50 > 17:46).
+                      // Se l'orario effettivo è in anticipo (es. 17:44 su prog 17:46) o in orario (17:46), è perfettamente in orario!
+                      const isArrDelayed = Boolean(
+                        arrPlanM > 0 && arrActM > arrPlanM
+                      );
+                      const showArrStrike = Boolean(
+                        isArrDelayed &&
+                        itinerary.liveTrain.arrivalTimePlanned &&
                         itinerary.liveTrain.arrivalTimeActual &&
                         itinerary.liveTrain.arrivalTimePlanned !== itinerary.liveTrain.arrivalTimeActual
-                    ) && (
-                      <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
-                        prog. {itinerary.liveTrain.arrivalTimePlanned}
-                      </Text>
-                    )}
+                      );
+
+                      return (
+                        <>
+                          <Text
+                            style={[
+                              styles.trainTimeText,
+                              isArrDelayed && {
+                                color: '#fb923c',
+                              },
+                            ]}
+                          >
+                            {itinerary.liveTrain.arrivalTimeActual || itinerary.liveTrain.arrivalTimePlanned}
+                          </Text>
+                          {showArrStrike && (
+                            <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
+                              prog. {itinerary.liveTrain.arrivalTimePlanned}
+                            </Text>
+                          )}
+                        </>
+                      );
+                    })()}
                   </View>
                 </View>
 

@@ -5,6 +5,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.2
+
+### Risoluzioni & Precisione Monitoraggio Ferroviario
+- **Doppio Badge di Stato per Treni Fermi in Ritardo**:
+  - Quando un convoglio è fermo in stazione e accumula ritardo sulla partenza prevista, vengono ora mostrati entrambi i badge chiaramente separati:
+    1. Il badge di sosta in stazione con il tempo effettivo in banchina (es. `Fermo a Orte (da 2m)`).
+    2. Il nuovo badge dedicato al ritardo di partenza (es. `+10 min` in giallo/arancione o rosso se superiore a 5 minuti).
+- **Risolto Binario 0 & Visualizzazione Binario di Partenza Corretto**:
+  - Corretto il parsing dei binari di ViaggiaTreno: il codice `0` restituito da Trenitalia per binari non ancora assegnati non viene più scambiato per un numero di binario reale ("Binario 0").
+  - Nel box "BINARIO" della card di viaggio viene ora estratto e visualizzato il binario effettivo/programmato della **stazione di partenza del pendolare** (es. Binario 3 a Orte per RV 4155), anziché il binario della stazione di arrivo.
+- **Correzione Evidenziazione Orario di Arrivo in Orario o in Anticipo**:
+  - Risolto il bug per cui l'orario di arrivo a destinazione (es. 17:46) veniva colorato in giallo/arancione anche quando il convoglio viaggiava in perfetto orario o in anticipo.
+  - L'evidenziazione in giallo e l'orario programmato barrato scattano unicamente se l'orario effettivo di arrivo è posteriore a quello previsto (`orario_effettivo > orario_programmato`).
+
 ## 1.8.1
 
 ### Risoluzioni & Precisione Monitoraggio Ferroviario

@@ -518,7 +518,7 @@ export function cleanViaggiaTrenoTime(rawStr?: string | null): string | null {
 export function cleanPlatform(raw?: string | number | null): string | undefined {
   if (raw === null || raw === undefined) return undefined;
   let s = String(raw).trim();
-  if (!s || s === '-' || s === '--') return undefined;
+  if (!s || s === '-' || s === '--' || s === '0' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined') return undefined;
 
   // Tabella di conversione numeri romani tipici delle stazioni italiane
   const romanMap: { [key: string]: string } = {
@@ -1363,6 +1363,24 @@ export async function fetchLiveTrenitaliaTimetable(
                   statusDesc = `Ritardo di ${globalDelay} min`;
                 }
 
+                const schedMatch = isOrteToRoma
+                  ? SCHEDULED_ORTE_TO_ROMA.find((s) => s.trainNumber.replace(/\D/g, '') === numStr)
+                  : SCHEDULED_ROMA_TO_ORTE.find((s) => s.trainNumber.replace(/\D/g, '') === numStr);
+                const schedPlatform = schedMatch?.platformPlanned;
+
+                const depPlatformPlanned = cleanPlatform(
+                  depStop.binarioProgrammatoPartenzaDescrizione ||
+                  depStop.binarioProgrammatoPartenzaCodice ||
+                  depStop.binarioProgrammatoArrivoDescrizione ||
+                  schedPlatform
+                );
+                const depPlatformActual = cleanPlatform(
+                  depStop.binarioEffettivoPartenzaDescrizione ||
+                  depStop.binarioEffettivoPartenzaCodice ||
+                  depStop.binarioEffettivoArrivoDescrizione ||
+                  depPlatformPlanned
+                );
+
                 trains.push({
                   trainNumber,
                   category: isFast ? 'RV' : 'REG',
@@ -1374,8 +1392,8 @@ export async function fetchLiveTrenitaliaTimetable(
                   departureMillis: resolvedDatePart,
                   arrivalTimePlanned: arrPlanned,
                   arrivalTimeActual: arrActual,
-                  platformPlanned: cleanPlatform(arr.binarioProgrammatoArrivoDescrizione || arrStop.binarioProgrammatoArrivoDescrizione),
-                  platformActual: cleanPlatform(arr.binarioEffettivoArrivoDescrizione || arr.binarioProgrammatoArrivoDescrizione || arrStop.binarioEffettivoArrivoDescrizione),
+                  platformPlanned: depPlatformPlanned,
+                  platformActual: depPlatformActual,
                   delayMinutes: globalDelay,
                   statusDescription: statusDesc,
                   isLive: true,
@@ -1444,6 +1462,19 @@ export async function fetchLiveTrenitaliaTimetable(
               );
 
               if (depStop) {
+                const pAct = cleanPlatform(
+                  depStop.binarioEffettivoPartenzaDescrizione ||
+                  depStop.binarioEffettivoPartenzaCodice ||
+                  depStop.binarioEffettivoArrivoDescrizione
+                );
+                const pPlan = cleanPlatform(
+                  depStop.binarioProgrammatoPartenzaDescrizione ||
+                  depStop.binarioProgrammatoPartenzaCodice ||
+                  depStop.binarioProgrammatoArrivoDescrizione
+                );
+                if (pAct) t.platformActual = pAct;
+                if (pPlan) t.platformPlanned = pPlan;
+
                 if (depStop.partenzaReale !== null && depStop.partenzaReale !== undefined) {
                   // Il treno è già partito da questa stazione!
                   t.isDepartedFromStation = true;
@@ -2098,6 +2129,12 @@ export interface TrainStatusResult {
   iconName: 'time-outline' | 'calendar-outline' | 'checkmark-circle-outline' | 'warning-outline' | 'flash-outline' | 'close-circle' | 'git-branch-outline' | 'alert-circle' | 'flag-outline' | 'train-outline' | 'pause-circle-outline';
   alertMessage?: string;
   capacityWarning?: string;
+  delayBadge?: {
+    label: string;
+    color: string;
+    bg: string;
+    border: string;
+  };
 }
 
 /**
@@ -2231,6 +2268,13 @@ export function evaluateTrainStatus(
     const stoppedTime = train.stoppedMinutes ?? (isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
     const stoppedInfo = stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
 
+    const delayBadge = lateAccumulated > 0 ? {
+      label: `+${lateAccumulated} min`,
+      color: lateAccumulated > 5 ? '#ef4444' : '#f59e0b',
+      bg: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+      border: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+    } : undefined;
+
     return {
       statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'running',
       badgeLabel: `Fermo a ${stName}${stoppedInfo}`,
@@ -2250,6 +2294,7 @@ export function evaluateTrainStatus(
       iconName: 'pause-circle-outline',
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
+      delayBadge,
     };
   }
 
