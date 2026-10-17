@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useTheme } from "@/context/ThemeContext";
 
 const SAPIENZA_RED = "#822433";
 
@@ -18,23 +19,35 @@ export function CourseDownloadView({
   title = "Configurazione in corso",
   subtitle = "Download e mappatura di tutte le aule e canali in corso. Questa operazione viene eseguita solo ora!",
 }: CourseDownloadViewProps) {
+  const { theme } = useTheme();
   return (
     <SafeAreaView style={styles.downloadContainer}>
       <StatusBar style="light" />
       <View style={styles.downloadContent}>
-        <View style={styles.iconCircle}>
-          <Ionicons name="cloud-download" size={48} color={SAPIENZA_RED} />
+        <View
+          style={[
+            styles.iconCircle,
+            {
+              backgroundColor: theme.bg,
+              borderColor: theme.primary,
+              shadowColor: theme.primary,
+            },
+          ]}
+        >
+          <Ionicons name="cloud-download" size={48} color={theme.accent} />
         </View>
         <Text style={styles.downloadTitle}>{title}</Text>
-        <Text style={styles.downloadCourseName}>{courseName}</Text>
+        <Text style={[styles.downloadCourseName, { color: theme.accent }]}>
+          {courseName}
+        </Text>
 
         <ActivityIndicator
           size="large"
-          color={SAPIENZA_RED}
+          color={theme.primary}
           style={{ marginVertical: 24 }}
         />
 
-        <View style={styles.progressBox}>
+        <View style={[styles.progressBox, { borderColor: theme.border }]}>
           <Text style={styles.progressStatus}>
             {progressText || "Download in corso..."}
           </Text>
@@ -61,10 +74,17 @@ const styles = StyleSheet.create({
     width: 90,
     height: 90,
     borderRadius: 45,
-    backgroundColor: "rgba(130, 36, 51, 0.15)",
+    backgroundColor: "rgba(130, 36, 51, 0.35)",
+    borderWidth: 1.5,
+    borderColor: SAPIENZA_RED,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 20,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 12,
+    elevation: 6,
   },
   downloadTitle: {
     fontSize: 24,

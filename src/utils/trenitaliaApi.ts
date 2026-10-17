@@ -342,16 +342,25 @@ export async function getLiveStationDepartures(
 
       const isStoppedInStation = isInStationAtDep;
       const stoppedStationName = isInStationAtDep ? formatStationName(getStationNameByCode(stationCode)) : undefined;
+      const estimatedDepM = Math.max(
+        plannedDepM + Math.max(0, delay),
+        cleanLiveDep ? parseTimeToMinutes(cleanLiveDep) : 0
+      );
+      const stoppedStationEstimatedDep = isStoppedInStation ? minutesToTime(estimatedDepM) : undefined;
 
-      // Se il treno è fermo in stazione e l'orario programmato di partenza è trascorso,
-      // il ritardo si accumula minuto per minuto finché non parte:
+      // Il ritardo segue sempre il programma (plannedDepM), mentre il badge "Fermo a" scatta solo oltre la partenza stimata (estimatedDepM)
       let effectiveDelay = delay;
-      if (isStoppedInStation && nowMins > parseTimeToMinutes(plannedDep)) {
-        const lateAccumulated = nowMins - parseTimeToMinutes(plannedDep);
-        if (effectiveDelay < lateAccumulated) {
-          effectiveDelay = lateAccumulated;
+      if (isStoppedInStation) {
+        if (nowMins > plannedDepM) {
+          const lateAccumulated = nowMins - plannedDepM;
+          if (effectiveDelay < lateAccumulated) {
+            effectiveDelay = lateAccumulated;
+          }
+          actualDep = minutesToTime(plannedDepM + effectiveDelay);
+        } else if (delay <= 0) {
+          effectiveDelay = 0;
+          actualDep = plannedDep;
         }
-        actualDep = minutesToTime(parseTimeToMinutes(plannedDep) + effectiveDelay);
       }
 
       // SOLO SE CI SONO PROBLEMI REALI ALLA PARTENZA PROPRIO (treno all'origine non ancora partito oltre l'orario):
@@ -374,7 +383,7 @@ export async function getLiveStationDepartures(
         statusDescription = 'Soppresso';
       } else if (raw.provvedimento === 3 || raw.statoTreno === 'DEVIATO') {
         statusDescription = 'Deviato';
-      } else if (isStoppedInStation) {
+      } else if (isStoppedInStation && nowMins > estimatedDepM) {
         statusDescription = effectiveDelay > 0 ? `Fermo a ${stoppedStationName} (+${effectiveDelay} min)` : `Fermo a ${stoppedStationName}`;
       } else if (isRealDepartureIssue) {
         statusDescription = effectiveDelay > 0 ? `Non partito (+${effectiveDelay} min)` : 'Non partito';
@@ -438,6 +447,7 @@ export async function getLiveStationDepartures(
         isDepartedFromStation,
         isStoppedInStation,
         stoppedStationName,
+        stoppedStationEstimatedDep,
         alertMessage,
         capacityWarning,
         notPurchasable: isNotPurchasable,
@@ -918,18 +928,24 @@ export async function fetchLiveTrenitaliaTimetable(
 
       let isStoppedInStation = isInStationAtDep;
       let stoppedStationName = isInStationAtDep ? formatStationName(getStationNameByCode(depCode)) : undefined;
+      const depPlanM = parseTimeToMinutes(depPlanned);
+      const estimatedDepM = Math.max(
+        depPlanM + Math.max(0, delay),
+        cleanLiveDep ? parseTimeToMinutes(cleanLiveDep) : 0
+      );
+      let stoppedStationEstimatedDep = isStoppedInStation ? minutesToTime(estimatedDepM) : undefined;
 
       // Se il treno è fermo in stazione alla partenza:
-      // matura ritardo e stato "Fermo a" SOLO SE l'orario programmato di partenza è già trascorso!
+      // il ritardo segue sempre il programma (depPlanned), mentre lo stato "Fermo a" scatta solo oltre la partenza stimata!
       let effectiveDelay = delay;
       if (isStoppedInStation) {
-        if (nowMins > parseTimeToMinutes(depPlanned)) {
-          const lateAccumulated = nowMins - parseTimeToMinutes(depPlanned);
+        if (nowMins > depPlanM) {
+          const lateAccumulated = nowMins - depPlanM;
           effectiveDelay = Math.max(delay, lateAccumulated);
-          depActual = minutesToTime(parseTimeToMinutes(depPlanned) + effectiveDelay);
+          depActual = minutesToTime(depPlanM + effectiveDelay);
           arrActual = minutesToTime(parseTimeToMinutes(arrPlanned) + effectiveDelay);
-        } else {
-          // Fermo al binario prima dell'orario di partenza: la partenza è perfettamente in orario!
+        } else if (delay <= 0) {
+          // Fermo al binario prima dell'orario di partenza e senza ritardo pregresso: partenza in orario!
           depActual = depPlanned;
           effectiveDelay = 0;
         }
@@ -958,8 +974,8 @@ export async function fetchLiveTrenitaliaTimetable(
           statusDescription = 'Soppresso';
         } else if (dep.provvedimento === 3 || dep.statoTreno === 'DEVIATO') {
           statusDescription = 'Deviato';
-        } else if (isStoppedInStation) {
-          statusDescription = effectiveDelay > 0 ? `Fermo a ${stoppedStationName} (+${effectiveDelay} min)` : 'In orario';
+        } else if (isStoppedInStation && nowMins > estimatedDepM) {
+          statusDescription = effectiveDelay > 0 ? `Fermo a ${stoppedStationName} (+${effectiveDelay} min)` : `Fermo a ${stoppedStationName}`;
         } else if (isRealDepartureIssue) {
           statusDescription = effectiveDelay > 0 ? `Non partito (+${effectiveDelay} min)` : 'Non partito';
         } else if (isDepartedFromStation) {
@@ -1049,6 +1065,7 @@ export async function fetchLiveTrenitaliaTimetable(
         departureDelayAtStation,
         isStoppedInStation,
         stoppedStationName,
+        stoppedStationEstimatedDep,
         alertMessage,
         capacityWarning,
         notPurchasable: isNotPurchasable,
@@ -1300,6 +1317,8 @@ export async function fetchLiveTrenitaliaTimetable(
                 let depActual = depPlanned;
                 let departureDelayAtStation = 0;
                 const depPlanM = parseTimeToMinutes(depPlanned);
+                const globalDelay = typeof aData.ritardo === 'number' ? aData.ritardo : (typeof arr.ritardo === 'number' ? arr.ritardo : 0);
+                let stoppedStationEstimatedDep: string | undefined = undefined;
 
                 if (isDepartedAtStation) {
                   departureDelayAtStation = typeof depStop.ritardoPartenza === 'number' ? depStop.ritardoPartenza : 0;
@@ -1310,8 +1329,36 @@ export async function fetchLiveTrenitaliaTimetable(
                     depActual = minutesToTime(depPlanM + departureDelayAtStation);
                   }
                 } else if (isStoppedInStation) {
-                  if (nowMins > depPlanM) {
-                    departureDelayAtStation = nowMins - depPlanM;
+                  const plannedArrM = depStop.arrivo_teorico
+                    ? new Date(depStop.arrivo_teorico).getHours() * 60 + new Date(depStop.arrivo_teorico).getMinutes()
+                    : 0;
+                  const actualArrM = typeof depStop.arrivoReale === 'number'
+                    ? new Date(depStop.arrivoReale).getHours() * 60 + new Date(depStop.arrivoReale).getMinutes()
+                    : 0;
+                  const initialDelay = Math.max(
+                    0,
+                    typeof depStop.ritardoArrivo === 'number' ? depStop.ritardoArrivo : 0,
+                    typeof depStop.ritardoPartenza === 'number' ? depStop.ritardoPartenza : 0,
+                    globalDelay
+                  );
+                  const plannedDwellM =
+                    plannedArrM > 0 && depPlanM > plannedArrM
+                      ? depPlanM - plannedArrM
+                      : actualArrM > 0
+                      ? 1
+                      : 0;
+                  const estimatedDepM = Math.max(
+                    depPlanM,
+                    depPlanM + initialDelay,
+                    actualArrM > 0 ? actualArrM + plannedDwellM : 0
+                  );
+                  stoppedStationEstimatedDep = minutesToTime(estimatedDepM);
+
+                  if (initialDelay > 0 || nowMins > depPlanM) {
+                    departureDelayAtStation = Math.max(
+                      initialDelay,
+                      nowMins > depPlanM ? nowMins - depPlanM : 0
+                    );
                     depActual = minutesToTime(depPlanM + departureDelayAtStation);
                   } else {
                     depActual = depPlanned;
@@ -1332,9 +1379,9 @@ export async function fetchLiveTrenitaliaTimetable(
                 if (!arrPlanned) return;
 
                 const arrPlannedM = parseTimeToMinutes(arrPlanned);
-                const globalDelay = typeof aData.ritardo === 'number' ? aData.ritardo : (typeof arr.ritardo === 'number' ? arr.ritardo : 0);
+                const effectiveDelay = isStoppedInStation ? Math.max(globalDelay, departureDelayAtStation) : globalDelay;
                 const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-                let arrActual = cleanLiveArr || minutesToTime(arrPlannedM + Math.max(0, globalDelay));
+                let arrActual = cleanLiveArr || minutesToTime(arrPlannedM + Math.max(0, effectiveDelay));
 
                 const dur = Math.max(15, arrPlannedM - parseTimeToMinutes(depPlanned));
                 const catRaw = (arr.categoriaDescrizione || arr.categoria || aData.categoria || '').toUpperCase();
@@ -1350,17 +1397,20 @@ export async function fetchLiveTrenitaliaTimetable(
 
                 let statusDesc = 'In orario';
                 if (isDepartedFromStation) {
-                  statusDesc = globalDelay > 0 ? `Già passato (+${globalDelay} min)` : 'Già passato';
+                  statusDesc = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
                 } else if (isStoppedInStation) {
                   const stName = formatStationName(depStop.stazione || getStationNameByCode(depCode));
-                  if (nowMins > depPlanM) {
+                  const estDepM = parseTimeToMinutes(stoppedStationEstimatedDep || depActual || depPlanned);
+                  if (nowMins > estDepM) {
                     const durationStr = stoppedMinutes ? ` (da ${stoppedMinutes} min)` : '';
                     statusDesc = `Fermo a ${stName}${durationStr}`;
+                  } else if (effectiveDelay > 0) {
+                    statusDesc = `Ritardo di ${effectiveDelay} min`;
                   } else {
                     statusDesc = 'In orario';
                   }
-                } else if (globalDelay > 0) {
-                  statusDesc = `Ritardo di ${globalDelay} min`;
+                } else if (effectiveDelay > 0) {
+                  statusDesc = `Ritardo di ${effectiveDelay} min`;
                 }
 
                 const schedMatch = isOrteToRoma
@@ -1394,7 +1444,7 @@ export async function fetchLiveTrenitaliaTimetable(
                   arrivalTimeActual: arrActual,
                   platformPlanned: depPlatformPlanned,
                   platformActual: depPlatformActual,
-                  delayMinutes: globalDelay,
+                  delayMinutes: effectiveDelay,
                   statusDescription: statusDesc,
                   isLive: true,
                   durationMinutes: dur,
@@ -1407,6 +1457,7 @@ export async function fetchLiveTrenitaliaTimetable(
                   stoppedStationName: isStoppedInStation ? formatStationName(depStop.stazione || getStationNameByCode(depCode)) : undefined,
                   stoppedMinutes,
                   stoppedSinceMillis,
+                  stoppedStationEstimatedDep,
                 });
 
                 matchedNumbers.add(numStr);
@@ -1529,19 +1580,46 @@ export async function fetchLiveTrenitaliaTimetable(
                   t.stoppedStationName = formatStationName(
                     depStop.stazione || getStationNameByCode(depCode)
                   );
+                  let actualArrM = 0;
                   if (typeof depStop.arrivoReale === 'number') {
                     t.stoppedSinceMillis = depStop.arrivoReale;
                     const stoppedMs = Math.max(0, Date.now() - depStop.arrivoReale);
                     t.stoppedMinutes = Math.max(1, Math.round(stoppedMs / 60000));
+                    const arrDate = new Date(depStop.arrivoReale);
+                    actualArrM = arrDate.getHours() * 60 + arrDate.getMinutes();
                   }
 
                   const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-                  if (nowMins > depPlanM) {
-                    // Ha superato l'orario di partenza programmato ed è ancora fermo in stazione:
-                    // il ritardo nascente cresce minuto per minuto!
-                    const rawLate = nowMins - depPlanM;
-                    const globalLate = typeof aData.ritardo === 'number' ? aData.ritardo : (t.delayMinutes || 0);
-                    const lateM = Math.max(rawLate, globalLate);
+                  const plannedArrM = depStop.arrivo_teorico
+                    ? new Date(depStop.arrivo_teorico).getHours() * 60 + new Date(depStop.arrivo_teorico).getMinutes()
+                    : 0;
+                  const initialDelay = Math.max(
+                    0,
+                    typeof depStop.ritardoArrivo === 'number' ? depStop.ritardoArrivo : 0,
+                    typeof depStop.ritardoPartenza === 'number' ? depStop.ritardoPartenza : 0,
+                    typeof aData.ritardo === 'number' ? aData.ritardo : 0,
+                    t.delayMinutes || 0
+                  );
+                  const plannedDwellM =
+                    plannedArrM > 0 && depPlanM > plannedArrM
+                      ? depPlanM - plannedArrM
+                      : actualArrM > 0
+                      ? 1
+                      : 0;
+                  const estimatedDepM = Math.max(
+                    depPlanM,
+                    depPlanM + initialDelay,
+                    actualArrM > 0 ? actualArrM + plannedDwellM : 0
+                  );
+                  t.stoppedStationEstimatedDep = minutesToTime(estimatedDepM);
+
+                  // Il ritardo segue sempre il programma (depPlanM), mentre il badge Fermo a ...
+                  // appare solo se si supera la partenza stimata (estimatedDepM).
+                  if (initialDelay > 0 || nowMins > depPlanM) {
+                    const lateM = Math.max(
+                      initialDelay,
+                      nowMins > depPlanM ? nowMins - depPlanM : 0
+                    );
                     t.departureDelayAtStation = lateM;
                     t.departureTimeActual = minutesToTime(depPlanM + lateM);
                     t.delayMinutes = lateM;
@@ -1550,17 +1628,22 @@ export async function fetchLiveTrenitaliaTimetable(
                         parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
                       );
                     }
-                    const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
-                    t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
                   } else {
-                    // È fermo in stazione prima o al minuto dell'orario di partenza previsto:
-                    // la partenza è perfettamente in orario!
                     t.departureDelayAtStation = 0;
                     t.departureTimeActual = t.departureTimePlanned;
-                    t.statusDescription = 'In orario';
+                    t.delayMinutes = 0;
                     if (t.arrivalTimePlanned) {
                       t.arrivalTimeActual = t.arrivalTimePlanned;
                     }
+                  }
+
+                  if (nowMins > estimatedDepM) {
+                    const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                    t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
+                  } else if (t.delayMinutes > 0) {
+                    t.statusDescription = `Ritardo di ${t.delayMinutes} min`;
+                  } else {
+                    t.statusDescription = 'In orario';
                   }
                   return;
                 }
@@ -1577,17 +1660,49 @@ export async function fetchLiveTrenitaliaTimetable(
               if (stoppedStop) {
                 t.isStoppedInStation = true;
                 t.stoppedStationName = formatStationName(stoppedStop.stazione);
+                let stopActualArrM = 0;
                 if (typeof stoppedStop.arrivoReale === 'number') {
                   t.stoppedSinceMillis = stoppedStop.arrivoReale;
                   const stoppedMs = Math.max(0, Date.now() - stoppedStop.arrivoReale);
                   t.stoppedMinutes = Math.max(1, Math.round(stoppedMs / 60000));
+                  const arrD = new Date(stoppedStop.arrivoReale);
+                  stopActualArrM = arrD.getHours() * 60 + arrD.getMinutes();
                 }
                 const stopPlanDepM = stoppedStop.partenza_teorica
                   ? new Date(stoppedStop.partenza_teorica).getHours() * 60 +
                     new Date(stoppedStop.partenza_teorica).getMinutes()
                   : 0;
+                const stopPlanArrM = stoppedStop.arrivo_teorico
+                  ? new Date(stoppedStop.arrivo_teorico).getHours() * 60 +
+                    new Date(stoppedStop.arrivo_teorico).getMinutes()
+                  : 0;
+                const stopInitialDelay = Math.max(
+                  0,
+                  typeof stoppedStop.ritardoArrivo === 'number' ? stoppedStop.ritardoArrivo : 0,
+                  typeof stoppedStop.ritardoPartenza === 'number' ? stoppedStop.ritardoPartenza : 0,
+                  typeof aData.ritardo === 'number' ? aData.ritardo : 0,
+                  t.delayMinutes || 0
+                );
+                const stopPlannedDwellM =
+                  stopPlanArrM > 0 && stopPlanDepM > stopPlanArrM
+                    ? stopPlanDepM - stopPlanArrM
+                    : stopActualArrM > 0
+                    ? 1
+                    : 0;
+                const stopEstDepM =
+                  stopPlanDepM > 0
+                    ? Math.max(
+                        stopPlanDepM,
+                        stopPlanDepM + stopInitialDelay,
+                        stopActualArrM > 0 ? stopActualArrM + stopPlannedDwellM : 0
+                      )
+                    : 0;
+                if (stopEstDepM > 0) {
+                  t.stoppedStationEstimatedDep = minutesToTime(stopEstDepM);
+                }
+
                 const accLate = Math.max(
-                  typeof aData.ritardo === 'number' ? aData.ritardo : t.delayMinutes,
+                  stopInitialDelay,
                   stopPlanDepM > 0 && nowMins > stopPlanDepM ? nowMins - stopPlanDepM : 0
                 );
                 t.delayMinutes = accLate;
@@ -1603,8 +1718,14 @@ export async function fetchLiveTrenitaliaTimetable(
                   }
                 }
 
-                const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
-                t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
+                if (stopEstDepM === 0 || nowMins > stopEstDepM) {
+                  const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                  t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
+                } else if (accLate > 0) {
+                  t.statusDescription = `Ritardo di ${accLate} min`;
+                } else {
+                  t.statusDescription = 'In orario';
+                }
               } else if (aData.inStazione === true && aData.stazioneUltimoRilevamento) {
                 t.isStoppedInStation = true;
                 t.stoppedStationName = formatStationName(aData.stazioneUltimoRilevamento);
@@ -1925,21 +2046,19 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       }
 
       // Per qualsiasi treno con ritardo o fermo in stazione, assicura che departureTimeActual e arrivalTimeActual
-      // siano sincronizzati con il ritardo effettivo affinché l'orario programmato appaia barrato nell'UI
+      // siano sincronizzati con il ritardo effettivo rispetto al programma affinché l'orario programmato appaia barrato nell'UI
       if (t.isLive && t.delayMinutes > 0) {
-        // Se il treno NON è ancora partito dalla stazione del pendolare, propaga il ritardo alla partenza:
+        // Se il treno NON è ancora partito dalla stazione del pendolare, propaga il ritardo rispetto al programma:
         if (!t.isDepartedFromStation && t.departureTimePlanned) {
           const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-          if (t.isStoppedInStation && nowMins <= depPlanM) {
-            // Convoglio già presente al binario prima dell'orario di partenza: la partenza è in orario!
-            t.departureTimeActual = t.departureTimePlanned;
-            t.departureDelayAtStation = 0;
-          } else if (t.isStoppedInStation && nowMins > depPlanM) {
-            // Convoglio fermo oltre l'orario previsto: ritardo nascente
-            const lateM = nowMins - depPlanM;
+          if (t.isStoppedInStation) {
+            const lateM = Math.max(
+              t.delayMinutes,
+              nowMins > depPlanM ? nowMins - depPlanM : 0
+            );
             t.departureTimeActual = minutesToTime(depPlanM + lateM);
             t.departureDelayAtStation = lateM;
-          } else if (!t.isStoppedInStation) {
+          } else {
             // Convoglio ancora in linea verso questa stazione
             const expDepActual = minutesToTime(depPlanM + t.delayMinutes);
             if (!t.departureTimeActual || parseTimeToMinutes(t.departureTimeActual) < parseTimeToMinutes(expDepActual)) {
@@ -2233,6 +2352,9 @@ export function evaluateTrainStatus(
   // Se il convoglio è fermo in una stazione (es. arrivato ma non ancora partito da quella stazione):
   if (train.isStoppedInStation) {
     const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
+    const estimatedDepMins = parseTimeToMinutes(
+      train.stoppedStationEstimatedDep || train.departureTimeActual || train.departureTimePlanned || '00:00'
+    );
     const stName = train.stoppedStationName || stationName || 'Stazione';
     const isAtCommuterStation =
       !train.stoppedStationName ||
@@ -2240,10 +2362,27 @@ export function evaluateTrainStatus(
       formatStationName(train.stoppedStationName).toLowerCase() ===
         formatStationName(stationName).toLowerCase();
 
-    // Se il convoglio è fermo alla stazione di partenza del pendolare:
-    // Deve uscire il badge "Fermo a [Stazione]" SOLO SE è stato superato l'orario di partenza programmato!
-    // Prima dell'orario di partenza, il treno al binario è perfettamente "In orario".
-    if (isAtCommuterStation && nowMins <= plannedDepMins) {
+    // Il ritardo segue sempre il programma (plannedDepMins), mentre il badge "Fermo a [Stazione]"
+    // vale SOLO quando si supera la partenza stimata (estimatedDepMins).
+    const programDelay = Math.max(
+      0,
+      train.delayMinutes || 0,
+      isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : 0
+    );
+
+    if (nowMins <= estimatedDepMins) {
+      if (programDelay > 0) {
+        return {
+          statusType: 'delayed',
+          badgeLabel: `+${programDelay}m ritardo`,
+          badgeColor: programDelay > 5 ? '#ef4444' : '#f59e0b',
+          badgeBg: programDelay > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+          badgeBorder: programDelay > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+          iconName: 'warning-outline',
+          alertMessage: train.alertMessage,
+          capacityWarning: train.capacityWarning,
+        };
+      }
       return {
         statusType: 'running',
         badgeLabel: 'In orario',
@@ -2256,16 +2395,11 @@ export function evaluateTrainStatus(
       };
     }
 
-    // Se è fermo oltre l'orario programmato di partenza (ritardo nascente) o in una stazione precedente:
-    const lateAccumulated =
-      isAtCommuterStation && nowMins > plannedDepMins
-        ? nowMins - plannedDepMins
-        : train.delayMinutes > 0
-        ? train.delayMinutes
-        : 0;
+    // Se è fermo oltre la partenza stimata: mostra "Fermo a [Stazione]" + l'eventuale ritardo rispetto al programma
+    const lateAccumulated = programDelay;
 
     // Per il badge "Fermo a [Stazione]", il timer indica da quanto tempo effettivo il convoglio è fermo in banchina
-    const stoppedTime = train.stoppedMinutes ?? (isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
+    const stoppedTime = train.stoppedMinutes ?? (isAtCommuterStation && nowMins > estimatedDepMins ? nowMins - estimatedDepMins : undefined);
     const stoppedInfo = stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
 
     const delayBadge = lateAccumulated > 0 ? {

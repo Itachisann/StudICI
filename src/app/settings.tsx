@@ -1634,7 +1634,14 @@ export default function ProfiloScreen() {
                     key={i}
                     style={[
                       styles.modalItem,
-                      isSelected && [styles.modalItemSelected, { borderColor: theme.primary }],
+                      isSelected && [
+                        styles.modalItemSelected,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                        },
+                      ],
                     ]}
                     activeOpacity={0.7}
                     onPress={() => selectDegree(deg)}
@@ -1642,10 +1649,11 @@ export default function ProfiloScreen() {
                     <View
                       style={[
                         styles.courseIconBox,
-                        isSelected && { backgroundColor: theme.primary },
+                        { backgroundColor: theme.subtle, borderColor: theme.border, borderWidth: 1 },
+                        isSelected && { backgroundColor: theme.primary, borderColor: theme.primary },
                       ]}
                     >
-                      <Ionicons name="school" size={18} color="#ffffff" />
+                      <Ionicons name="school" size={18} color={isSelected ? "#ffffff" : theme.accent} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text
@@ -1662,15 +1670,17 @@ export default function ProfiloScreen() {
                             styles.typeBadge,
                             {
                               backgroundColor: isMagistrale
-                                ? "rgba(168, 85, 247, 0.15)"
-                                : "rgba(59, 130, 246, 0.15)",
+                                ? "rgba(168, 85, 247, 0.25)"
+                                : "rgba(59, 130, 246, 0.25)",
+                              borderColor: isMagistrale ? "#c084fc" : "#60a5fa",
+                              shadowColor: isMagistrale ? "#c084fc" : "#60a5fa",
                             },
                           ]}
                         >
                           <Text
                             style={[
                               styles.typeBadgeText,
-                              { color: isMagistrale ? "#c084fc" : "#60a5fa" },
+                              { color: isMagistrale ? "#e9d5ff" : "#bfdbfe" },
                             ]}
                           >
                             {isMagistrale ? "Magistrale" : "Triennale"}
@@ -1689,7 +1699,7 @@ export default function ProfiloScreen() {
                       <Ionicons
                         name="checkmark-circle"
                         size={22}
-                        color={theme.primary}
+                        color={theme.accent}
                       />
                     )}
                   </TouchableOpacity>
@@ -2501,8 +2511,13 @@ const styles = StyleSheet.create({
   },
   modalItemSelected: {
     borderColor: SAPIENZA_RED,
-    backgroundColor: "rgba(130, 36, 51, 0.15)",
+    backgroundColor: "rgba(130, 36, 51, 0.35)",
     borderWidth: 1.5,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    elevation: 6,
   },
   courseIconBox: {
     width: 40,
@@ -2523,24 +2538,38 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    overflow: "visible",
+    paddingVertical: 2,
   },
   typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
   },
   typeBadgeText: {
     fontSize: 11,
     fontWeight: "700",
   },
   classBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.15)",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    backgroundColor: "rgba(255, 159, 10, 0.25)",
+    borderColor: "#ff9f0a",
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    shadowColor: "#ff9f0a",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
   },
   classBadgeText: {
-    color: "#ff9f0a",
+    color: "#fde68a",
     fontSize: 11,
     fontWeight: "700",
   },

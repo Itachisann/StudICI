@@ -1185,11 +1185,10 @@ export default function ViaggioScreen() {
                       const depPlanM = parseTimeToMinutes(itinerary.liveTrain.departureTimePlanned || '00:00');
                       const depActM = parseTimeToMinutes(itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned || '00:00');
                       const currentNowM = new Date().getHours() * 60 + new Date().getMinutes();
-                      // La partenza è evidenziata in giallo SOLO se:
-                      // 1. È già partita da qui con ritardo effettivo registrato (depActM > depPlanM)
-                      // 2. Oppure è ferma in stazione ed è SUPERATO l'orario di partenza programmato (ritardo nascente)
+                      // Il ritardo segue sempre il programma: la partenza è evidenziata in giallo se depActM > depPlanM
+                      // oppure se il treno è fermo in stazione ed è stato superato l'orario di partenza programmato.
                       const isDepDelayed = Boolean(
-                        (depPlanM > 0 && depActM > depPlanM && (!itinerary.liveTrain.isStoppedInStation || currentNowM > depPlanM)) ||
+                        (depPlanM > 0 && depActM > depPlanM) ||
                         (!itinerary.liveTrain.isDepartedFromStation &&
                           itinerary.liveTrain.isStoppedInStation &&
                           currentNowM > depPlanM)
@@ -1327,11 +1326,13 @@ export default function ViaggioScreen() {
                         at.trainNumber.replace(/\D/g, '') ===
                         itinerary.liveTrain?.trainNumber.replace(/\D/g, '');
                       const isDeparted = Boolean(at.isDepartedFromStation);
-                      const atDepPlanM = parseTimeToMinutes(at.departureTimePlanned);
+                      const atEstDepM = parseTimeToMinutes(
+                        at.stoppedStationEstimatedDep || at.departureTimeActual || at.departureTimePlanned
+                      );
                       const currentNowM = new Date().getHours() * 60 + new Date().getMinutes();
-                      // Il convoglio è evidenziato come fermo con ritardo nascente SOLO se ha superato l'orario di partenza previsto
+                      // Il convoglio è evidenziato come fermo oltre l'orario SOLO se ha superato la partenza stimata
                       const isStoppedLate = Boolean(
-                        at.isStoppedInStation && (!at.departureTimePlanned || currentNowM > atDepPlanM)
+                        at.isStoppedInStation && (atEstDepM === 0 || currentNowM > atEstDepM)
                       );
 
                       return (

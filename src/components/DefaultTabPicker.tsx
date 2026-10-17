@@ -119,7 +119,7 @@ export function DefaultTabPicker({
           </View>
           <Text style={styles.title}>{title}</Text>
           {degreeName ? (
-            <Text style={styles.degreeTitle} numberOfLines={2}>
+            <Text style={[styles.degreeTitle, { color: theme.accent }]} numberOfLines={2}>
               {degreeName}
             </Text>
           ) : null}
@@ -136,7 +136,17 @@ export function DefaultTabPicker({
                 return (
                   <TouchableOpacity
                     key={idx}
-                    style={[styles.chip, isSelected && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }]]}
+                    style={[
+                      styles.chip,
+                      isSelected && [
+                        styles.chipActive,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                        },
+                      ],
+                    ]}
                     activeOpacity={0.7}
                     onPress={() => handleSelectYear(year)}
                   >
@@ -174,7 +184,17 @@ export function DefaultTabPicker({
                 return (
                   <TouchableOpacity
                     key={idx}
-                    style={[styles.chipEqual, isSelected && [styles.chipActive, { backgroundColor: theme.bg, borderColor: theme.primary }]]}
+                    style={[
+                      styles.chipEqual,
+                      isSelected && [
+                        styles.chipActive,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                        },
+                      ],
+                    ]}
                     activeOpacity={0.7}
                     onPress={() => handleSelectChannel(item.channel)}
                   >
@@ -202,7 +222,7 @@ export function DefaultTabPicker({
 
         {/* ── 3. Card Anteprima Selezione ── */}
         <View style={styles.summaryCard}>
-          <View style={[styles.summaryIconBox, { backgroundColor: theme.subtle }]}>
+          <View style={[styles.summaryIconBox, { backgroundColor: theme.subtle, borderColor: theme.border }]}>
             <Ionicons name="time" size={24} color={theme.accent} />
           </View>
           <View style={{ flex: 1 }}>
@@ -288,6 +308,7 @@ const styles = StyleSheet.create({
   },
   section: {
     marginBottom: 24,
+    overflow: "visible",
   },
   sectionLabel: {
     fontSize: 11,
@@ -303,6 +324,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     gap: 8,
+    overflow: "visible",
+    paddingVertical: 4,
   },
   // Stile Pill Anno e Canale (snello, staccato e centrato)
   chip: {
@@ -319,6 +342,12 @@ const styles = StyleSheet.create({
   chipActive: {
     backgroundColor: "rgba(130, 36, 51, 0.45)",
     borderColor: SAPIENZA_RED,
+    borderWidth: 1.5,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    elevation: 6,
   },
   chipText: {
     fontSize: 13,
@@ -338,6 +367,8 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     alignSelf: "center",
     gap: 8,
+    overflow: "visible",
+    paddingVertical: 4,
   },
   chipEqual: {
     flex: 1,

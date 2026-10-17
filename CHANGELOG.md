@@ -5,6 +5,18 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.6
+
+### Monitoraggio Treni Live & Partenza Stimata
+- **Badge "Fermo a [Stazione]" Basato sulla Partenza Stimata (`trenitaliaApi.ts`, `viaggio.tsx`)**:
+  - Il **ritardo** (`+X min` e orario barrato) segue sempre fedelmente l'orario di partenza **programmato** (`departureTimePlanned`).
+  - La **partenza stimata** (`stoppedStationEstimatedDep`) viene calcolata tenendo conto del ritardo accumulato e dell'arrivo reale al binario sommato al tempo minimo tecnico di sosta in banchina (`partenza_teorica - arrivo_teorico`, min 1 minuto).
+  - Il badge **"Fermo a [Stazione]"** compare ora esclusivamente quando l'orario attuale supera la **partenza stimata** e il treno non è ancora ripartito.
+
+### Stile Pill & Bagliore Neon nella Configurazione Corso e Canale
+- **Effetto Glow sulle Pill di Configurazione (`DefaultTabPicker.tsx`, `OnboardingCourseSelector.tsx`, `CourseDownloadView.tsx`, `settings.tsx`)**:
+  - Esteso l'effetto bagliore neon dinamico (`shadowColor: theme.primary`, `backgroundColor: theme.bg`, `borderColor: theme.primary`) alle pillole di selezione di **Anno di Corso**, **Canale / Suddivisione**, **Modalità di Avvio** e badge dei corsi, sia durante il **primo avvio** che cambiando corso/canale dal **Profilo**.
+
 ## 1.8.5
 
 > **[Aggiornamento Obbligatorio / Bloccante]**

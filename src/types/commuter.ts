@@ -53,6 +53,7 @@ export interface LiveTrainInfo {
   departureDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
   isStoppedInStation?: boolean; // true se il treno è attualmente fermo in una stazione (arrivato ma non ancora partito)
   stoppedStationName?: string; // nome della stazione in cui il treno è fermo
+  stoppedStationEstimatedDep?: string; // orario di partenza stimato (HH:MM) dalla stazione in cui è fermo
   stoppedMinutes?: number; // quanti minuti effettivi il treno è fermo nella stazione (da quanto è fermo)
   stoppedSinceMillis?: number; // timestamp ms di arrivo nella stazione in cui è fermo
   hasEarlierTrain?: boolean;

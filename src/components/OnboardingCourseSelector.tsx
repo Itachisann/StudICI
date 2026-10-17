@@ -26,6 +26,7 @@ import Constants, { ExecutionEnvironment } from "expo-constants";
 import { linkDeviceWithCode, isValidSyncCode } from "../utils/cloudSync";
 import { CourseDownloadView } from "./CourseDownloadView";
 import { DefaultTabPicker } from "./DefaultTabPicker";
+import { useTheme } from "@/context/ThemeContext";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -38,6 +39,7 @@ interface OnboardingCourseSelectorProps {
 export function OnboardingCourseSelector({
   onComplete,
 }: OnboardingCourseSelectorProps) {
+  const { theme } = useTheme();
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -223,7 +225,7 @@ export function OnboardingCourseSelector({
     <SafeAreaView style={styles.container}>
       {/* Header Introduttivo */}
       <View style={styles.header}>
-        <View style={styles.logoBadge}>
+        <View style={[styles.logoBadge, { backgroundColor: theme.primary, shadowColor: theme.primary }]}>
           <Image
             source={require("../../assets/images/icon.png")}
             style={styles.logoBadgeImage}
@@ -231,7 +233,7 @@ export function OnboardingCourseSelector({
           />
         </View>
         <Text style={styles.appTitle}>Benvenuto in StudICI</Text>
-        <Text style={styles.appSubtitle}>
+        <Text style={[styles.appSubtitle, { color: theme.accent }]}>
           Sapienza Università di Roma · Facoltà I.C.I.
         </Text>
         <Text style={styles.instruction}>
@@ -252,7 +254,7 @@ export function OnboardingCourseSelector({
               setSetupMode(idx === 0 ? "normal" : "sync");
             }}
             appearance="dark"
-            tintColor={SAPIENZA_RED}
+            tintColor={theme.primary}
             fontStyle={{ fontSize: 13, fontWeight: "600", color: "#a1a1aa" }}
             activeFontStyle={{ fontSize: 13, fontWeight: "700", color: "#ffffff" }}
             style={styles.nativeSegmentedControl}
@@ -263,7 +265,14 @@ export function OnboardingCourseSelector({
           <TouchableOpacity
             style={[
               styles.modeTab,
-              setupMode === "normal" && styles.modeTabActive,
+              setupMode === "normal" && [
+                styles.modeTabActive,
+                {
+                  backgroundColor: theme.bg,
+                  borderColor: theme.primary,
+                  shadowColor: theme.primary,
+                },
+              ],
             ]}
             onPress={() => setSetupMode("normal")}
             activeOpacity={0.8}
@@ -285,7 +294,17 @@ export function OnboardingCourseSelector({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.modeTab, setupMode === "sync" && styles.modeTabActive]}
+            style={[
+              styles.modeTab,
+              setupMode === "sync" && [
+                styles.modeTabActive,
+                {
+                  backgroundColor: theme.bg,
+                  borderColor: theme.primary,
+                  shadowColor: theme.primary,
+                },
+              ],
+            ]}
             onPress={() => setSetupMode("sync")}
             activeOpacity={0.8}
           >
@@ -417,7 +436,7 @@ export function OnboardingCourseSelector({
       {/* Lista Corsi */}
       {loading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={SAPIENZA_RED} />
+          <ActivityIndicator size="large" color={theme.primary} />
           <Text style={styles.loadingText}>
             Caricamento elenco corsi Sapienza...
           </Text>
@@ -452,11 +471,11 @@ export function OnboardingCourseSelector({
                   activeOpacity={0.7}
                   onPress={() => handleSelectDegree(deg)}
                 >
-                  <View style={styles.courseIconCircle}>
+                  <View style={[styles.courseIconCircle, { backgroundColor: theme.subtle, borderColor: theme.border, borderWidth: 1 }]}>
                     <Ionicons
                       name="book-outline"
                       size={22}
-                      color={SAPIENZA_RED}
+                      color={theme.accent}
                     />
                   </View>
                   <View style={{ flex: 1 }}>
@@ -467,15 +486,17 @@ export function OnboardingCourseSelector({
                           styles.typeBadge,
                           {
                             backgroundColor: isMagistrale
-                              ? "rgba(168, 85, 247, 0.15)"
-                              : "rgba(59, 130, 246, 0.15)",
+                              ? "rgba(168, 85, 247, 0.25)"
+                              : "rgba(59, 130, 246, 0.25)",
+                            borderColor: isMagistrale ? "#c084fc" : "#60a5fa",
+                            shadowColor: isMagistrale ? "#c084fc" : "#60a5fa",
                           },
                         ]}
                       >
                         <Text
                           style={[
                             styles.typeBadgeText,
-                            { color: isMagistrale ? "#c084fc" : "#60a5fa" },
+                            { color: isMagistrale ? "#e9d5ff" : "#bfdbfe" },
                           ]}
                         >
                           {isMagistrale ? "Magistrale" : "Triennale"}
@@ -604,24 +625,38 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    overflow: "visible",
+    paddingVertical: 2,
   },
   typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
   },
   typeBadgeText: {
     fontSize: 11,
     fontWeight: "700",
   },
   classBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.15)",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    backgroundColor: "rgba(255, 159, 10, 0.25)",
+    borderColor: "#ff9f0a",
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    shadowColor: "#ff9f0a",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
   },
   classBadgeText: {
-    color: "#ff9f0a",
+    color: "#fde68a",
     fontSize: 11,
     fontWeight: "700",
   },
@@ -710,12 +745,13 @@ const styles = StyleSheet.create({
   modeSelectorContainer: {
     flexDirection: "row",
     backgroundColor: "#1c1c1e",
-    borderRadius: 12,
-    padding: 3,
+    borderRadius: 14,
+    padding: 4,
     marginHorizontal: 16,
     marginBottom: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255, 255, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    overflow: "visible",
   },
   modeTab: {
     flex: 1,
@@ -723,14 +759,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 10,
-    borderRadius: 9,
+    borderRadius: 10,
   },
   modeTabActive: {
-    backgroundColor: SAPIENZA_RED,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    backgroundColor: "rgba(130, 36, 51, 0.45)",
+    borderColor: SAPIENZA_RED,
+    borderWidth: 1.5,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    elevation: 6,
   },
   modeTabText: {
     fontSize: 13,
@@ -739,6 +778,7 @@ const styles = StyleSheet.create({
   },
   modeTabTextActive: {
     color: "#ffffff",
+    fontWeight: "700",
   },
   syncContainer: {
     flex: 1,

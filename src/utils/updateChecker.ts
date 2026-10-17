@@ -42,14 +42,19 @@ export function detectUpdateType(
   const cParts = cleanC.split('.').map((n) => parseInt(n, 10) || 0);
 
   const notesLower = `${releaseTitle} ${releaseNotes}`.toLowerCase();
+  const isExplicitlyNonBlocking =
+    notesLower.includes('non bloccante') ||
+    notesLower.includes('non obbligatorio') ||
+    cleanL === '1.8.6';
   const hasMajorTag =
-    notesLower.includes('[major]') ||
-    notesLower.includes('[breaking]') ||
-    notesLower.includes('obbligatorio') ||
-    notesLower.includes('aggiornamento obbligatorio') ||
-    notesLower.includes('bloccante') ||
-    notesLower.includes('aggiornamento bloccante') ||
-    notesLower.includes('mandatory');
+    !isExplicitlyNonBlocking &&
+    (notesLower.includes('[major]') ||
+      notesLower.includes('[breaking]') ||
+      notesLower.includes('obbligatorio') ||
+      notesLower.includes('aggiornamento obbligatorio') ||
+      notesLower.includes('bloccante') ||
+      notesLower.includes('aggiornamento bloccante') ||
+      notesLower.includes('mandatory'));
 
   // Se c'è il tag di aggiornamento obbligatorio/bloccante, major superiore o versione 1.8.4 / 1.8.5
   if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0) || cleanL === '1.8.4' || cleanL === '1.8.5') {
