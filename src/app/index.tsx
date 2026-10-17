@@ -75,6 +75,21 @@ const ACCENT_COLORS = [
   "#6366f1",
 ];
 
+function formatReleaseDate(isoString?: string): string {
+  if (!isoString) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
+    return d.toLocaleDateString("it-IT", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "Recente";
+  }
+}
+
 function AttendanceCheckmark() {
   const [scale] = useState(() => new Animated.Value(0));
   const [opacity] = useState(() => new Animated.Value(0));
@@ -146,22 +161,9 @@ export default function ScheduleScreen() {
     checkForAppUpdate().then((info) => {
       if (info.hasUpdate) {
         setAppUpdate(info);
-        if (info.isMajor) {
-          Alert.alert(
-            "Aggiornamento Obbligatorio",
-            `È richiesta la nuova versione v${info.latestVersion} di StudICI per continuare a utilizzare l'applicazione.\n\nQuesto aggiornamento contiene modifiche essenziali ai server e ai servizi integrati.`,
-            [
-              {
-                text: "Aggiorna su GitHub",
-                style: "default",
-                onPress: () => {
-                  Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-                },
-              },
-            ],
-            { cancelable: false }
-          );
-        } else {
+        // Per gli aggiornamenti minori/patch mostra il prompt opzionale.
+        // Per gli aggiornamenti bloccanti (major), la schermata/modal a tutto schermo subentra senza popup.
+        if (!info.isMajor) {
           Alert.alert(
             "Aggiornamento Disponibile",
             `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nVuoi aggiornare ora con le ultime correzioni e miglioramenti?`,
@@ -891,7 +893,7 @@ export default function ScheduleScreen() {
                   ]}
                 >
                   <Text style={[styles.blockingPillText, { color: theme.primary }]}>
-                    AGGIORNAMENTO OBBLIGATORIO
+                    AGGIORNAMENTO BLOCCANTE
                   </Text>
                 </View>
 
@@ -921,17 +923,32 @@ export default function ScheduleScreen() {
                     v{appUpdate?.latestVersion}
                   </Text>
                 </View>
-                {appUpdate?.releaseNotes ? (
-                  <>
-                    <View style={styles.blockingCardDivider} />
-                    <Text style={styles.blockingNotesLabel}>Novità & Cambiamenti:</Text>
-                    <ScrollView style={styles.blockingNotesScroll} nestedScrollEnabled>
-                      <Text style={styles.blockingNotesText}>
-                        {appUpdate.releaseNotes}
-                      </Text>
-                    </ScrollView>
-                  </>
-                ) : null}
+                <View style={styles.blockingCardDivider} />
+                <View style={styles.blockingCardRow}>
+                  <Text style={styles.blockingCardLabel}>Data di rilascio</Text>
+                  <Text style={styles.blockingCardValDate}>
+                    {formatReleaseDate(appUpdate?.publishedAt)}
+                  </Text>
+                </View>
+                <View style={styles.blockingCardDivider} />
+                <View style={styles.blockingCardRow}>
+                  <Text style={styles.blockingCardLabel}>Riferimento commit</Text>
+                  <Text style={styles.blockingCardValCommit} numberOfLines={1}>
+                    {appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
+                  </Text>
+                </View>
+                <View style={styles.blockingCardDivider} />
+                <TouchableOpacity
+                  style={[styles.changelogBtn, { borderColor: theme.border }]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                  }}
+                >
+                  <Ionicons name="git-pull-request-outline" size={15} color={theme.accent} style={{ marginRight: 6 }} />
+                  <Text style={[styles.changelogBtnText, { color: theme.accent }]}>Consulta il Changelog su GitHub</Text>
+                  <Ionicons name="open-outline" size={13} color="#94a3b8" style={{ marginLeft: "auto" }} />
+                </TouchableOpacity>
               </View>
 
               <View style={styles.blockingModalBottom}>
@@ -942,11 +959,11 @@ export default function ScheduleScreen() {
                   ]}
                   activeOpacity={0.8}
                   onPress={() => {
-                    Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                    Linking.openURL(appUpdate?.ipaUrl || appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
                   }}
                 >
                   <Ionicons name="cloud-download-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-                  <Text style={styles.blockingPrimaryBtnText}>Aggiorna Ora su GitHub</Text>
+                  <Text style={styles.blockingPrimaryBtnText}>Aggiorna</Text>
                 </TouchableOpacity>
                 <Text style={styles.blockingFooterText}>
                   Gli aggiornamenti principali includono modifiche strutturali necessarie alle API Trenitalia e ai server Sapienza.
@@ -1656,21 +1673,30 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.12)",
     marginVertical: 10,
   },
-  blockingNotesLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#e2e8f0",
-    marginBottom: 6,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+  blockingCardValDate: {
+    fontSize: 15,
+    color: "#f8fafc",
+    fontWeight: "600",
   },
-  blockingNotesScroll: {
-    maxHeight: 120,
-  },
-  blockingNotesText: {
-    fontSize: 13,
+  blockingCardValCommit: {
+    fontSize: 14,
     color: "#94a3b8",
-    lineHeight: 18,
+    fontWeight: "600",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  changelogBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 2,
+  },
+  changelogBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
   },
   blockingModalBottom: {
     alignItems: "center",

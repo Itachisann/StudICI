@@ -22,6 +22,7 @@ export interface AppUpdateInfo {
   htmlUrl: string;
   ipaUrl: string;
   publishedAt?: string;
+  targetCommitish?: string;
   updateType: UpdateType;
   isMajor: boolean;
 }
@@ -50,8 +51,8 @@ export function detectUpdateType(
     notesLower.includes('aggiornamento bloccante') ||
     notesLower.includes('mandatory');
 
-  // Se c'è il tag di aggiornamento obbligatorio oppure il numero major è superiore (es. 2.x vs 1.x)
-  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0)) {
+  // Se c'è il tag di aggiornamento obbligatorio/bloccante, major superiore o versione 1.8.4
+  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0) || cleanL === '1.8.4') {
     return 'major';
   }
 
@@ -140,6 +141,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
 
     const releaseTitle = release.name || `StudICI v${latestVersion}`;
     const releaseNotes = release.body || '';
+    const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
     const updateType = detectUpdateType(latestVersion, currentVersion, releaseNotes, releaseTitle);
     const isMajor = hasUpdate && updateType === 'major';
 
@@ -152,6 +154,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       htmlUrl: release.html_url || GITHUB_LATEST_RELEASE_URL,
       ipaUrl,
       publishedAt: release.published_at,
+      targetCommitish,
       updateType,
       isMajor,
     };

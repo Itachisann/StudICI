@@ -5,10 +5,10 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
-## 2.0.0
+## 1.8.4
 
 > **[Aggiornamento Obbligatorio / Bloccante]**
-> Questa versione introduce il nuovo sistema cromatico dinamico e richiede l'aggiornamento dell'applicazione per continuare.
+> Questa versione introduce la schermata bloccante fissa, il nuovo sistema cromatico dinamico e richiede l'aggiornamento dell'applicazione per continuare.
 
 ### Personalizzazione & Temi Dinamici
 - **Pillole e Bagliori Neon 100% Coordinati al Tema Attivo**:
@@ -20,6 +20,13 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 - **Etichetta "Fonte: Trenitalia" nella Hero Card**:
   - Sostituita la dicitura "Dati Trenitalia" con **"Fonte: Trenitalia"** nella hero card della vista Viaggio.
   - L'intero badge (punto di stato, testo, bordo e sfondo trasparente) riflette ora con precisione il tema cromatico dell'applicazione anziché rimanere con colori fissi.
+
+### Gestione Aggiornamenti & Modal Bloccante
+- **Schermata Fissa Senza Scroll & Nuova Visualizzazione Compatta**:
+  - Eliminato il popup alert "Aggiornamento Obbligatorio" in favore della sola schermata modale a tutto schermo.
+  - Rimossa la sezione di anteprima delle note per evitare qualsiasi scorrimento: la schermata è ora completamente statica e fissa.
+  - Aggiunta la data di rilascio, il riferimento commit/tag e il pulsante per consultare il Changelog completo su GitHub.
+  - Rinominato il pulsante di download principale in "Aggiorna".
 
 ## 1.8.3
 
