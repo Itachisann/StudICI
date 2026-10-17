@@ -1493,10 +1493,12 @@ export async function fetchLiveTrenitaliaTimetable(
                   if (nowMins > depPlanM) {
                     // Ha superato l'orario di partenza programmato ed è ancora fermo in stazione:
                     // il ritardo nascente cresce minuto per minuto!
-                    const lateM = nowMins - depPlanM;
+                    const rawLate = nowMins - depPlanM;
+                    const globalLate = typeof aData.ritardo === 'number' ? aData.ritardo : (t.delayMinutes || 0);
+                    const lateM = Math.max(rawLate, globalLate);
                     t.departureDelayAtStation = lateM;
                     t.departureTimeActual = minutesToTime(depPlanM + lateM);
-                    t.delayMinutes = Math.max(t.delayMinutes || 0, lateM);
+                    t.delayMinutes = lateM;
                     if (t.arrivalTimePlanned) {
                       t.arrivalTimeActual = minutesToTime(
                         parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
