@@ -1128,32 +1128,51 @@ export default function ViaggioScreen() {
                         ? config?.departureStation.shortName || config?.departureStation.name
                         : config?.arrivalStation.shortName || config?.arrivalStation.name}
                     </Text>
-                    <Text
-                      style={[
-                        styles.trainTimeText,
-                        Boolean(
-                          (itinerary.liveTrain.departureTimeActual &&
-                            itinerary.liveTrain.departureTimePlanned &&
-                            itinerary.liveTrain.departureTimeActual !== itinerary.liveTrain.departureTimePlanned) ||
-                          (!itinerary.liveTrain.isDepartedFromStation &&
-                            ((itinerary.liveTrain.delayMinutes && itinerary.liveTrain.delayMinutes > 0) ||
-                              itinerary.liveTrain.isStoppedInStation))
-                        ) && {
-                          color: '#fb923c',
-                        },
-                      ]}
-                    >
-                      {itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned}
-                    </Text>
-                    {Boolean(
-                      itinerary.liveTrain.departureTimePlanned &&
+                    {(() => {
+                      const depPlanM = parseTimeToMinutes(itinerary.liveTrain.departureTimePlanned);
+                      const currentNowM = new Date().getHours() * 60 + new Date().getMinutes();
+                      // La partenza è evidenziata in giallo SOLO se:
+                      // 1. È già partita da qui con ritardo effettivo registrato
+                      // 2. Oppure è ferma in stazione ed è SUPERATO l'orario di partenza programmato (ritardo nascente)
+                      // 3. Oppure è ancora lungo la linea e viaggia con ritardo verso qui
+                      const isDepDelayed = Boolean(
+                        (itinerary.liveTrain.departureTimeActual &&
+                          itinerary.liveTrain.departureTimePlanned &&
+                          itinerary.liveTrain.departureTimeActual !== itinerary.liveTrain.departureTimePlanned &&
+                          (!itinerary.liveTrain.isStoppedInStation || currentNowM > depPlanM)) ||
+                        (!itinerary.liveTrain.isDepartedFromStation &&
+                          itinerary.liveTrain.isStoppedInStation &&
+                          currentNowM > depPlanM) ||
+                        (!itinerary.liveTrain.isDepartedFromStation &&
+                          !itinerary.liveTrain.isStoppedInStation &&
+                          itinerary.liveTrain.delayMinutes &&
+                          itinerary.liveTrain.delayMinutes > 0)
+                      );
+                      const showStrike = Boolean(
+                        itinerary.liveTrain.departureTimePlanned &&
                         itinerary.liveTrain.departureTimeActual &&
-                        itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual
-                    ) && (
-                      <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
-                        prog. {itinerary.liveTrain.departureTimePlanned}
-                      </Text>
-                    )}
+                        itinerary.liveTrain.departureTimePlanned !== itinerary.liveTrain.departureTimeActual &&
+                        isDepDelayed
+                      );
+
+                      return (
+                        <>
+                          <Text
+                            style={[
+                              styles.trainTimeText,
+                              isDepDelayed && { color: '#fb923c' },
+                            ]}
+                          >
+                            {itinerary.liveTrain.departureTimeActual || itinerary.liveTrain.departureTimePlanned}
+                          </Text>
+                          {showStrike && (
+                            <Text style={{ fontSize: 10, color: '#94a3b8', textDecorationLine: 'line-through' }}>
+                              prog. {itinerary.liveTrain.departureTimePlanned}
+                            </Text>
+                          )}
+                        </>
+                      );
+                    })()}
                   </View>
 
                   {/* Binario Risaltato */}
@@ -1252,7 +1271,12 @@ export default function ViaggioScreen() {
                         at.trainNumber.replace(/\D/g, '') ===
                         itinerary.liveTrain?.trainNumber.replace(/\D/g, '');
                       const isDeparted = Boolean(at.isDepartedFromStation);
-                      const isStopped = Boolean(at.isStoppedInStation);
+                      const atDepPlanM = parseTimeToMinutes(at.departureTimePlanned);
+                      const currentNowM = new Date().getHours() * 60 + new Date().getMinutes();
+                      // Il convoglio è evidenziato come fermo con ritardo nascente SOLO se ha superato l'orario di partenza previsto
+                      const isStoppedLate = Boolean(
+                        at.isStoppedInStation && (!at.departureTimePlanned || currentNowM > atDepPlanM)
+                      );
 
                       return (
                         <TouchableOpacity
@@ -1264,7 +1288,7 @@ export default function ViaggioScreen() {
                               { backgroundColor: theme.bg, borderColor: theme.primary },
                             ],
                             isDeparted && !isCurrent && { opacity: 0.65 },
-                            isStopped && !isCurrent && { borderColor: 'rgba(245, 158, 11, 0.4)' },
+                            isStoppedLate && !isCurrent && { borderColor: 'rgba(245, 158, 11, 0.4)' },
                           ]}
                           activeOpacity={0.7}
                           onLayout={(e) => {
@@ -1279,9 +1303,9 @@ export default function ViaggioScreen() {
                           onPress={() => handleSelectTrainChip(at.trainNumber)}
                         >
                           <Ionicons
-                            name={isStopped ? 'pause-circle-outline' : at.isFast ? 'flash' : 'train-outline'}
+                            name={isStoppedLate ? 'pause-circle-outline' : at.isFast ? 'flash' : 'train-outline'}
                             size={12}
-                            color={isCurrent ? theme.accent : isStopped ? '#f59e0b' : isDeparted ? '#64748b' : '#94a3b8'}
+                            color={isCurrent ? theme.accent : isStoppedLate ? '#f59e0b' : isDeparted ? '#64748b' : '#94a3b8'}
                             style={{ marginRight: 4 }}
                           />
                           <Text
@@ -1289,11 +1313,11 @@ export default function ViaggioScreen() {
                               styles.trainChipText,
                               isCurrent && styles.trainChipTextCurrent,
                               isDeparted && !isCurrent && { color: '#64748b' },
-                              isStopped && !isCurrent && { color: '#f59e0b' },
+                              isStoppedLate && !isCurrent && { color: '#f59e0b' },
                             ]}
                           >
                             {at.trainNumber} • {at.departureTimeActual || at.departureTimePlanned}
-                            {isDeparted ? ' (Passato)' : isStopped ? ' (Fermo)' : ''}
+                            {isDeparted ? ' (Passato)' : isStoppedLate ? ' (Fermo)' : ''}
                           </Text>
                         </TouchableOpacity>
                       );

@@ -5,6 +5,14 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.0
+
+### Risoluzioni & Precisione Monitoraggio Ferroviario
+- **Gestione Corretta Treni Fermi in Stazione Prima vs Dopo l'Orario Previsto**:
+  - Risolto il problema per cui un treno già giunto alla stazione di partenza prima dell'orario (es. RV 4153 arrivato a Orte alle 12:13 con partenza programmata alle 12:16) appariva erroneamente colorato in giallo con badge "Fermo a Orte".
+  - Fintanto che l'orario attuale è precedente o uguale a quello programmato di partenza (`now <= orario_partenza`), il treno fermo al binario è classificato come **perfettamente in orario** (testo orario regolare, badge verde "In orario", nessun testo barrato e chip alternativi senza stato "Fermo").
+  - L'evidenziazione in giallo/arancione, l'orario programmato barrato sotto e il badge "Fermo a [Stazione] (+X min)" scattano **esclusivamente se l'orario di partenza programmato è stato superato** e il convoglio si trova ancora fermo al binario, calcolando minuto per minuto il ritardo nascente.
+
 ## 1.7.9
 
 ### Risoluzioni & Precisione Monitoraggio Ferroviario
