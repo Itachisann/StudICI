@@ -726,7 +726,7 @@ export default function ViaggioScreen() {
                       isSelected && [
                         styles.dayCapsuleActive,
                         {
-                          backgroundColor: theme.bg,
+                          backgroundColor: 'rgba(130, 36, 51, 0.40)',
                           borderColor: theme.primary,
                           shadowColor: theme.primary,
                         },

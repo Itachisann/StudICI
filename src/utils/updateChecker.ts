@@ -11,6 +11,8 @@ export const SIDESTORE_SCHEME_URL = `sidestore://source?url=${encodeURIComponent
 export const ALTSTORE_SCHEME_URL = `altstore://source?url=${encodeURIComponent(SIDESTORE_SOURCE_RAW_URL)}`;
 export const LIVECONTAINER_SCHEME_URL = `livecontainer://install?url=${encodeURIComponent(GITHUB_LATEST_IPA_URL)}`;
 
+export type UpdateType = 'major' | 'minor' | 'patch';
+
 export interface AppUpdateInfo {
   hasUpdate: boolean;
   latestVersion: string;
@@ -20,6 +22,44 @@ export interface AppUpdateInfo {
   htmlUrl: string;
   ipaUrl: string;
   publishedAt?: string;
+  updateType: UpdateType;
+  isMajor: boolean;
+}
+
+/**
+ * Distingue tra major update obbligatorio e minor/patch/fix opzionale
+ */
+export function detectUpdateType(
+  latestVersion: string,
+  currentVersion: string,
+  releaseNotes = '',
+  releaseTitle = ''
+): UpdateType {
+  const cleanL = latestVersion.replace(/^v/i, '').trim();
+  const cleanC = currentVersion.replace(/^v/i, '').trim();
+  const lParts = cleanL.split('.').map((n) => parseInt(n, 10) || 0);
+  const cParts = cleanC.split('.').map((n) => parseInt(n, 10) || 0);
+
+  const notesLower = `${releaseTitle} ${releaseNotes}`.toLowerCase();
+  const hasMajorTag =
+    notesLower.includes('[major]') ||
+    notesLower.includes('[breaking]') ||
+    notesLower.includes('obbligatorio') ||
+    notesLower.includes('aggiornamento obbligatorio') ||
+    notesLower.includes('mandatory');
+
+  // Se c'è il tag di aggiornamento obbligatorio oppure il numero major è superiore (es. 2.x vs 1.x)
+  if (hasMajorTag || (lParts[0] ?? 0) > (cParts[0] ?? 0)) {
+    return 'major';
+  }
+
+  // Nuove feature / minor (es. 1.9 vs 1.8)
+  if ((lParts[1] ?? 0) > (cParts[1] ?? 0)) {
+    return 'minor';
+  }
+
+  // Bug fix / patch (es. 1.8.3 vs 1.8.2)
+  return 'patch';
 }
 
 /**
@@ -75,6 +115,8 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
         releaseNotes: '',
         htmlUrl: GITHUB_LATEST_RELEASE_URL,
         ipaUrl: GITHUB_LATEST_IPA_URL,
+        updateType: 'patch',
+        isMajor: false,
       };
     }
 
@@ -94,15 +136,22 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       }
     }
 
+    const releaseTitle = release.name || `StudICI v${latestVersion}`;
+    const releaseNotes = release.body || '';
+    const updateType = detectUpdateType(latestVersion, currentVersion, releaseNotes, releaseTitle);
+    const isMajor = hasUpdate && updateType === 'major';
+
     return {
       hasUpdate,
       latestVersion,
       currentVersion,
-      releaseTitle: release.name || `StudICI v${latestVersion}`,
-      releaseNotes: release.body || '',
+      releaseTitle,
+      releaseNotes,
       htmlUrl: release.html_url || GITHUB_LATEST_RELEASE_URL,
       ipaUrl,
       publishedAt: release.published_at,
+      updateType,
+      isMajor,
     };
   } catch {
     return {
@@ -113,6 +162,8 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       releaseNotes: '',
       htmlUrl: GITHUB_LATEST_RELEASE_URL,
       ipaUrl: GITHUB_LATEST_IPA_URL,
+      updateType: 'patch',
+      isMajor: false,
     };
   }
 }

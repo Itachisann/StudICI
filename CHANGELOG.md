@@ -5,6 +5,21 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.3
+
+### Interfaccia Utente & Design System Sapienza
+- **Glow Neon Rosso e Stile Pillole Coordinato**:
+  - Esteso l'effetto neon glow rosso Sapienza (`SAPIENZA_RED`) ai selettori dei giorni della settimana nella vista Orario e ai selettori di anno e canale (`YearChannelSelector`).
+  - Uniformata la struttura delle pillole attive con bordino rosso e interno semitrasparente (`rgba(130, 36, 51, 0.40)`), garantendo coerenza estetica tra le schermate Orario e Viaggio.
+- **Interfaccia Orario Più Pulita**:
+  - Rimosso il box "Itinerario Pendolari" dalla vista dell'orario giornaliero, rendendo l'elenco lezioni più lineare e focalizzato.
+
+### Gestione Aggiornamenti
+- **Sistema di Notifica Differenziato (Major vs Minor/Fix)**:
+  - Introdotta la classificazione automatica degli aggiornamenti in **Major** (breaking / obbligatori) e **Minor / Fix** (facoltativi).
+  - **Major Update Bloccante**: in presenza di una nuova release contrassegnata come major, l'app presenta un **modal nativo iOS a schermo intero bloccante** (con sfocatura dinamica `BlurView`, visualizzazione delle note di rilascio e unico pulsante "Aggiorna Ora su GitHub"), impedendo l'uso di versioni obsolete non compatibili.
+  - Per patch e fix minori rimane attivo il consueto avviso con opzione di posticipare ("Più tardi").
+
 ## 1.8.2
 
 ### Risoluzioni & Precisione Monitoraggio Ferroviario

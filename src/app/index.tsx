@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
-import { useFocusEffect, router } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -146,20 +146,37 @@ export default function ScheduleScreen() {
     checkForAppUpdate().then((info) => {
       if (info.hasUpdate) {
         setAppUpdate(info);
-        Alert.alert(
-          "Aggiornamento Disponibile",
-          `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nPer continuare con gli orari aggiornati, la compatibilità Trenitalia e tutte le nuove funzioni, aggiorna ora l'applicazione.`,
-          [
-            { text: "Più tardi", style: "cancel" },
-            {
-              text: "Aggiorna su GitHub",
-              style: "default",
-              onPress: () => {
-                Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+        if (info.isMajor) {
+          Alert.alert(
+            "Aggiornamento Obbligatorio",
+            `È richiesta la nuova versione v${info.latestVersion} di StudICI per continuare a utilizzare l'applicazione.\n\nQuesto aggiornamento contiene modifiche essenziali ai server e ai servizi integrati.`,
+            [
+              {
+                text: "Aggiorna su GitHub",
+                style: "default",
+                onPress: () => {
+                  Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                },
               },
-            },
-          ]
-        );
+            ],
+            { cancelable: false }
+          );
+        } else {
+          Alert.alert(
+            "Aggiornamento Disponibile",
+            `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nVuoi aggiornare ora con le ultime correzioni e miglioramenti?`,
+            [
+              { text: "Più tardi", style: "cancel" },
+              {
+                text: "Aggiorna",
+                style: "default",
+                onPress: () => {
+                  Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                },
+              },
+            ]
+          );
+        }
       }
     });
   }, []);
@@ -551,8 +568,9 @@ export default function ScheduleScreen() {
                       isActive && [
                         styles.dayCircleActive,
                         {
-                          backgroundColor: theme.bg,
+                          backgroundColor: "rgba(130, 36, 51, 0.40)",
                           borderColor: theme.primary,
+                          shadowColor: theme.primary,
                         },
                       ],
                     ]}
@@ -602,29 +620,6 @@ export default function ScheduleScreen() {
           </Text>
           <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
         </View>
-
-        {/* ── Banner Rapido Pendolare ── */}
-        {todayClasses.length > 0 && (
-          <TouchableOpacity
-            style={[
-              styles.commuterQuickBanner,
-              { backgroundColor: theme.cardTint, borderColor: theme.border },
-            ]}
-            activeOpacity={0.7}
-            onPress={() => router.push("/viaggio" as any)}
-          >
-            <View style={[styles.commuterBannerIcon, { backgroundColor: theme.subtle }]}>
-              <Ionicons name="train" size={15} color={theme.accent} />
-            </View>
-            <View style={{ flex: 1, paddingRight: 6 }}>
-              <Text style={styles.commuterBannerTitle}>Itinerario Pendolare</Text>
-              <Text style={styles.commuterBannerSub} numberOfLines={1}>
-                Calcola tempi di trasporto
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={14} color={theme.accent} />
-          </TouchableOpacity>
-        )}
 
         {/* ── Classes List ── */}
         {loading ? (
@@ -863,6 +858,104 @@ export default function ScheduleScreen() {
         subjects={selectedRoomSubjects}
         onClose={() => setSelectedRoomModal(null)}
       />
+
+      {/* ── Modal iOS Bloccante per Major Update Obbligatorio ── */}
+      <Modal
+        visible={Boolean(appUpdate?.hasUpdate && appUpdate?.isMajor)}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+      >
+        <View style={styles.blockingModalContainer}>
+          <BlurView tint="dark" intensity={100} style={StyleSheet.absoluteFill} />
+
+          <SafeAreaView style={styles.blockingModalSafeArea}>
+            <View style={styles.blockingModalContent}>
+              <View style={styles.blockingModalTop}>
+                <View
+                  style={[
+                    styles.blockingModalIconSquircle,
+                    { backgroundColor: theme.primary, shadowColor: theme.primary },
+                  ]}
+                >
+                  <Ionicons name="arrow-up-circle" size={44} color="#ffffff" />
+                </View>
+
+                <View
+                  style={[
+                    styles.blockingPill,
+                    {
+                      backgroundColor: `${theme.primary}25`,
+                      borderColor: `${theme.primary}60`,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.blockingPillText, { color: theme.primary }]}>
+                    AGGIORNAMENTO OBBLIGATORIO
+                  </Text>
+                </View>
+
+                <Text style={styles.blockingModalTitle}>
+                  Nuova Versione v{appUpdate?.latestVersion}
+                </Text>
+
+                <Text style={styles.blockingModalSub}>
+                  È richiesta la nuova versione di StudICI per continuare a utilizzare l&apos;applicazione.
+                </Text>
+              </View>
+
+              <View
+                style={[
+                  styles.blockingCard,
+                  { backgroundColor: theme.cardTint, borderColor: theme.border },
+                ]}
+              >
+                <View style={styles.blockingCardRow}>
+                  <Text style={styles.blockingCardLabel}>Versione installata</Text>
+                  <Text style={styles.blockingCardValOld}>v{appUpdate?.currentVersion}</Text>
+                </View>
+                <View style={styles.blockingCardDivider} />
+                <View style={styles.blockingCardRow}>
+                  <Text style={styles.blockingCardLabel}>Versione richiesta</Text>
+                  <Text style={[styles.blockingCardValNew, { color: theme.primary }]}>
+                    v{appUpdate?.latestVersion}
+                  </Text>
+                </View>
+                {appUpdate?.releaseNotes ? (
+                  <>
+                    <View style={styles.blockingCardDivider} />
+                    <Text style={styles.blockingNotesLabel}>Novità & Cambiamenti:</Text>
+                    <ScrollView style={styles.blockingNotesScroll} nestedScrollEnabled>
+                      <Text style={styles.blockingNotesText}>
+                        {appUpdate.releaseNotes}
+                      </Text>
+                    </ScrollView>
+                  </>
+                ) : null}
+              </View>
+
+              <View style={styles.blockingModalBottom}>
+                <TouchableOpacity
+                  style={[
+                    styles.blockingPrimaryBtn,
+                    { backgroundColor: theme.primary, shadowColor: theme.primary },
+                  ]}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                  }}
+                >
+                  <Ionicons name="cloud-download-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+                  <Text style={styles.blockingPrimaryBtnText}>Aggiorna Ora su GitHub</Text>
+                </TouchableOpacity>
+                <Text style={styles.blockingFooterText}>
+                  Gli aggiornamenti principali includono modifiche strutturali necessarie alle API Trenitalia e ai server Sapienza.
+                </Text>
+              </View>
+            </View>
+          </SafeAreaView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1084,9 +1177,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#1c1c1e",
   },
   dayCircleActive: {
-    backgroundColor: "rgba(130, 36, 51, 0.45)",
-    borderWidth: 1,
+    backgroundColor: "rgba(130, 36, 51, 0.40)",
+    borderWidth: 1.5,
     borderColor: SAPIENZA_RED,
+    shadowColor: SAPIENZA_RED,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    elevation: 8,
   },
   dayText: {
     color: "#8e8e93",
@@ -1471,5 +1569,138 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     fontSize: 11,
     marginTop: 2,
+  },
+
+  /* Modal iOS Bloccante per Major Update */
+  blockingModalContainer: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  blockingModalSafeArea: {
+    flex: 1,
+  },
+  blockingModalContent: {
+    flex: 1,
+    paddingHorizontal: 24,
+    justifyContent: "space-between",
+    paddingTop: 30,
+    paddingBottom: 20,
+  },
+  blockingModalTop: {
+    alignItems: "center",
+  },
+  blockingModalIconSquircle: {
+    width: 84,
+    height: 84,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 18,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  blockingPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  blockingPillText: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  blockingModalTitle: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: "#ffffff",
+    textAlign: "center",
+    marginBottom: 10,
+    letterSpacing: -0.3,
+  },
+  blockingModalSub: {
+    fontSize: 15,
+    color: "#94a3b8",
+    textAlign: "center",
+    lineHeight: 21,
+    paddingHorizontal: 10,
+  },
+  blockingCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+    marginVertical: 18,
+  },
+  blockingCardRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  blockingCardLabel: {
+    fontSize: 14,
+    color: "#94a3b8",
+    fontWeight: "500",
+  },
+  blockingCardValOld: {
+    fontSize: 15,
+    color: "#a1a1aa",
+    fontWeight: "600",
+  },
+  blockingCardValNew: {
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  blockingCardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    marginVertical: 10,
+  },
+  blockingNotesLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#e2e8f0",
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  blockingNotesScroll: {
+    maxHeight: 120,
+  },
+  blockingNotesText: {
+    fontSize: 13,
+    color: "#94a3b8",
+    lineHeight: 18,
+  },
+  blockingModalBottom: {
+    alignItems: "center",
+  },
+  blockingPrimaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    paddingVertical: 16,
+    borderRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 6,
+    marginBottom: 12,
+  },
+  blockingPrimaryBtnText: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#ffffff",
+  },
+  blockingFooterText: {
+    fontSize: 12,
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 16,
+    paddingHorizontal: 16,
   },
 });
