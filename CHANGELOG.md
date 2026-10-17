@@ -7,22 +7,25 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ## 1.7.7
 
-### Novità & UI / UX
-- **Refactoring Schermata Viaggio & Pulizia Layout**:
-  - **Rimozione della Hero Card**: eliminato il riquadro "Parti da casa alle..." / riepilogo per un design più immediato che porta i treni e le tappe direttamente in primo piano.
-  - **Uniformità Larghezza Card**: rimosso il doppio padding sul box delle lezioni e del fine settimana, rendendolo perfettamente uniforme con la larghezza delle altre card.
-  - **Tappe Viaggio Essenziali e Pulite**:
-    - Per la tappa del **Treno Regionale**: visualizzazione concentrata esclusivamente su Titolo e Sottotitolo descrittivo in grigio, senza badge ridondanti.
-    - Per la tappa di **Arrivo/Destinazione**: sostituita l'icona del cappello di laurea con l'icona di destinazione generale (`location`), mostrando unicamente Titolo e Sottotitolo.
-    - Per la tappa dei **Trasporti Urbani / Pullman**: rimosso il tempo di percorrenza in minuti in testa alla card.
-  - **Format Orari e Durate Migliorato**: implementata la conversione automatica delle durate elevate in ore e minuti (es. `4h 20m` invece di `260m`).
-  - **Nuovo Selettore Percorso "Cerca mezzi su Google Maps"**:
-    - Sostituito il pulsante con la dicitura *"Cerca mezzi su Google Maps"*.
-    - Alla pressione, apertura di un menu in perfetto stile iOS (`ActionSheetIOS` / popup) che consente di scegliere se avviare la ricerca partendo dalla **Posizione attuale (GPS)** oppure direttamente dalla **Stazione di arrivo/partenza**.
-  - **Perfezionamento Nastro Giorni**:
-    - Rimosso il testo data sotto lo switcher Andata/Ritorno.
-    - Allineati i colori delle capsule a quelli della sezione Orario (`theme.bg` e contorno in tinta `theme.primary`).
-    - Risolto il taglio verticale dell'effetto bagliore/neon attorno al giorno selezionato grazie all'adeguamento del padding e del raggio d'ombra 360°.
+### Novità & Rifiniture UI / UX
+- **Card Tappe Viaggio Semplificate & Pulite**:
+  - **Treno e Arrivo Destinazione**: rimosse le etichette con minutaggio e le note ridondanti; le card mostrano con massima chiarezza unicamente il titolo e il sottotitolo grigio descrittivo della tratta.
+  - **Icona Traguardo**: sostituita l'icona del tocco accademico (`school`) con l'icona della destinazione raggiunta (`flag`) sia nella hero card che nel nodo di arrivo della timeline.
+  - **Card Mezzi Urbani & Pullman**:
+    - Titolo dinamico calcolato in base all'aula target e alla stazione (`transitSolution.lineName`).
+    - Rimosso il minutaggio dalla card e dal sottotitolo per un look minimale.
+    - Il pulsante d'azione diventa **"Cerca mezzi su Google Maps"**.
+    - Toccando la card o il banner si apre un **ActionSheet nativo iOS** (con fallback Alert su Android) che consente di scegliere se avviare la ricerca **"Dalla posizione attuale (GPS)"** oppure direttamente **"Dalla Stazione di [Nome]"** / sede prestabilita.
+- **Riformattazione Universale delle Durate**:
+  - Introdotto `formatDuration`: qualsiasi durata temporale (es. `260m`) viene convertita automaticamente nel formato ore e minuti (es. `4h 20m`), sia nella hero card che nelle tappe di viaggio.
+- **Armonizzazione Colori e Bagliore Neon 360° nel Selettore Giorni**:
+  - Allineati i colori delle capsule del selettore giorni ai pill della schermata Orario (`#1c1c1e` con bordo `#2c2c2e` a riposo, `rgba(130, 36, 51, 0.45)` con bordo primario `#822433` e testo bianco quando attivo).
+  - Risolto il ritaglio del bagliore neon: aumentato il padding verticale e sbloccato l'overflow dello scroll con ombra simmetrica (`shadowOffset: { width: 0, height: 0 }`), diffondendo l'effetto bagliore in tutte le direzioni senza tagli netti.
+  - Rimosso il testo data esteso sotto il selettore andata/ritorno, preservando elegantemente il badge `Weekend` e il tasto `Oggi`.
+- **Layout Box Lezioni Uniformato**:
+  - Rimossa l'indentazione eccessiva del box lezioni/fine settimana per pareggiare perfettamente la larghezza di tutte le card della schermata Viaggio, garantendo il wrapping del testo per prevenire qualsiasi fuoriuscita dallo schermo.
+- **Eliminazione Footer Riassuntivo Ridondante**:
+  - Rimosso il box riepilogativo in fondo alla schermata per snellire la navigazione.
 
 ## 1.7.6
 
