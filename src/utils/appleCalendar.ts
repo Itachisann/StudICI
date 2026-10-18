@@ -1,10 +1,10 @@
-import * as Calendar from 'expo-calendar/legacy';
-import { Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ScheduleData, fetchScheduleData } from './scraper';
-import { resolveClassroom, formatSapienzaAddress } from './classroomLocations';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Calendar from "expo-calendar/legacy";
+import { Platform } from "react-native";
+import { formatSapienzaAddress, resolveClassroom } from "./classroomLocations";
+import { ScheduleData, fetchScheduleData } from "./scraper";
 
-const LAST_CALENDAR_SYNC_KEY = 'studici_last_calendar_sync';
+const LAST_CALENDAR_SYNC_KEY = "studici_last_calendar_sync";
 
 export interface CalendarSyncResult {
   success: boolean;
@@ -29,7 +29,7 @@ export async function getLastCalendarSync(): Promise<number | null> {
 export async function syncScheduleToAppleCalendar(
   schedule: ScheduleData,
   courseName: string,
-  channelName?: string
+  channelName?: string,
 ): Promise<CalendarSyncResult> {
   try {
     const isAvailable = await Calendar.isAvailableAsync();
@@ -37,25 +37,32 @@ export async function syncScheduleToAppleCalendar(
       return {
         success: false,
         eventsCount: 0,
-        message: 'Il servizio Calendario non è disponibile su questo dispositivo.',
-        error: 'calendar_not_available',
+        message:
+          "Il servizio Calendario non è disponibile su questo dispositivo.",
+        error: "calendar_not_available",
       };
     }
 
     const { status } = await Calendar.requestCalendarPermissionsAsync();
-    if (status !== 'granted') {
+    if (status !== "granted") {
       return {
         success: false,
         eventsCount: 0,
-        message: 'Permesso calendario negato. Abilitalo nelle Impostazioni di sistema per sincronizzare.',
-        error: 'permission_denied',
+        message:
+          "Permesso calendario negato. Abilitalo nelle Impostazioni di sistema per sincronizzare.",
+        error: "permission_denied",
       };
     }
 
     // 1. Cerca o riusa il calendario dedicato StudICI (evita duplicati di calendari)
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const calendars = await Calendar.getCalendarsAsync(
+      Calendar.EntityTypes.EVENT,
+    );
     const matchingCalendars = calendars.filter(
-      c => (c.name === 'studici_lessons' || c.title === 'StudICI - Lezioni Sapienza') && c.allowsModifications
+      (c) =>
+        (c.name === "studici_lessons" ||
+          c.title === "StudICI - Lezioni Sapienza") &&
+        c.allowsModifications,
     );
     const existingCal = matchingCalendars[0] || null;
     if (matchingCalendars.length > 1) {
@@ -78,7 +85,11 @@ export async function syncScheduleToAppleCalendar(
       try {
         const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const futureDate = new Date(Date.now() + 240 * 24 * 60 * 60 * 1000);
-        const oldEvents = await Calendar.getEventsAsync([existingCal.id], pastDate, futureDate);
+        const oldEvents = await Calendar.getEventsAsync(
+          [existingCal.id],
+          pastDate,
+          futureDate,
+        );
         for (const evt of oldEvents) {
           try {
             await Calendar.deleteEventAsync(evt.id, { futureEvents: true });
@@ -87,19 +98,23 @@ export async function syncScheduleToAppleCalendar(
           }
         }
       } catch (cleanErr) {
-        console.warn('Errore pulizia vecchi orari calendario:', cleanErr);
+        console.warn("Errore pulizia vecchi orari calendario:", cleanErr);
       }
     }
 
     // 2. Se non esiste un calendario StudICI, tenta di crearlo testando le sorgenti disponibili
     if (!calendarId) {
-      if (Platform.OS === 'ios') {
+      if (Platform.OS === "ios") {
         const defaultCal = await Calendar.getDefaultCalendarAsync();
         const candidateSources: Calendar.Source[] = [];
 
         // Priorità 1: iCloud (sorgente primaria che permette creazione calendari su iOS)
         const iCloudCal = calendars.find(
-          c => c.source && (c.source.name?.toLowerCase().includes('icloud') || c.source.type === Calendar.SourceType.CALDAV) && c.allowsModifications
+          (c) =>
+            c.source &&
+            (c.source.name?.toLowerCase().includes("icloud") ||
+              c.source.type === Calendar.SourceType.CALDAV) &&
+            c.allowsModifications,
         );
         if (iCloudCal?.source) candidateSources.push(iCloudCal.source);
 
@@ -108,13 +123,21 @@ export async function syncScheduleToAppleCalendar(
 
         // Priorità 3: sorgente locale
         const localCal = calendars.find(
-          c => c.source && (c.source.type === Calendar.SourceType.LOCAL || c.source.name?.toLowerCase() === 'default') && c.allowsModifications
+          (c) =>
+            c.source &&
+            (c.source.type === Calendar.SourceType.LOCAL ||
+              c.source.name?.toLowerCase() === "default") &&
+            c.allowsModifications,
         );
         if (localCal?.source) candidateSources.push(localCal.source);
 
         // Priorità 4: tutte le altre sorgenti modificabili
         for (const cal of calendars) {
-          if (cal.source && cal.allowsModifications && !candidateSources.some(s => s.id === cal.source.id)) {
+          if (
+            cal.source &&
+            cal.allowsModifications &&
+            !candidateSources.some((s) => s.id === cal.source.id)
+          ) {
             candidateSources.push(cal.source);
           }
         }
@@ -123,18 +146,21 @@ export async function syncScheduleToAppleCalendar(
         for (const src of candidateSources) {
           try {
             calendarId = await Calendar.createCalendarAsync({
-              title: 'StudICI - Lezioni Sapienza',
-              color: '#822433',
+              title: "StudICI - Lezioni Sapienza",
+              color: "#822433",
               entityType: Calendar.EntityTypes.EVENT,
               sourceId: src.id,
               source: src,
-              name: 'studici_lessons',
-              ownerAccount: 'personal',
+              name: "studici_lessons",
+              ownerAccount: "personal",
               accessLevel: Calendar.CalendarAccessLevel.OWNER,
             });
             if (calendarId) break;
           } catch (createErr: any) {
-            console.warn(`Creazione calendario su sorgente ${src.name} non supportata:`, createErr?.message);
+            console.warn(
+              `Creazione calendario su sorgente ${src.name} non supportata:`,
+              createErr?.message,
+            );
           }
         }
 
@@ -148,12 +174,12 @@ export async function syncScheduleToAppleCalendar(
         // Android
         try {
           calendarId = await Calendar.createCalendarAsync({
-            title: 'StudICI - Lezioni Sapienza',
-            color: '#822433',
+            title: "StudICI - Lezioni Sapienza",
+            color: "#822433",
             entityType: Calendar.EntityTypes.EVENT,
-            source: { isLocalAccount: true, name: 'StudICI', type: 'LOCAL' },
-            name: 'studici_lessons',
-            ownerAccount: 'StudICI',
+            source: { isLocalAccount: true, name: "StudICI", type: "LOCAL" },
+            name: "studici_lessons",
+            ownerAccount: "StudICI",
             accessLevel: Calendar.CalendarAccessLevel.OWNER,
           });
         } catch {
@@ -179,8 +205,8 @@ export async function syncScheduleToAppleCalendar(
       for (const cls of dayClasses) {
         if (!cls.startTime || !cls.endTime) continue;
 
-        const [startH, startM] = cls.startTime.split(':').map(Number);
-        const [endH, endM] = cls.endTime.split(':').map(Number);
+        const [startH, startM] = cls.startTime.split(":").map(Number);
+        const [endH, endM] = cls.endTime.split(":").map(Number);
 
         if (isNaN(startH) || isNaN(endH)) continue;
 
@@ -191,29 +217,29 @@ export async function syncScheduleToAppleCalendar(
         const endDate = new Date(startDate);
         endDate.setHours(endH, endM || 0, 0, 0);
 
-        const resolved = resolveClassroom(cls.room || '', cls.building || '');
+        const resolved = resolveClassroom(cls.room || "", cls.building || "");
         // Posizione: via/indirizzo per Apple Maps e indicazioni
         const locationAddress = resolved.address
           ? resolved.address
           : cls.address
             ? formatSapienzaAddress(cls.address, cls.building)
-            : 'Via Eudossiana 18, 00184 Roma';
+            : "Via Eudossiana 18, 00184 Roma";
 
         // Note: dettagli puliti senza dicitura "Generato da ICIStud"
         const notesParts = [
-          cls.room ? `Aula: ${cls.room}` : '',
-          cls.teacher ? `Docente: Prof. ${cls.teacher}` : '',
+          cls.room ? `Aula: ${cls.room}` : "",
+          cls.teacher ? `Docente: Prof. ${cls.teacher}` : "",
           `Corso: ${courseName}`,
-          channelName ? `Canale: ${channelName}` : '',
-          resolved.buildingName ? `Edificio: ${resolved.buildingName}` : '',
-          resolved.campus ? `Campus: ${resolved.campus}` : '',
-          'StudICI • Sapienza Università di Roma',
+          channelName ? `Canale: ${channelName}` : "",
+          resolved.buildingName ? `Edificio: ${resolved.buildingName}` : "",
+          resolved.campus ? `Campus: ${resolved.campus}` : "",
+          "StudICI • Sapienza Università di Roma",
         ].filter(Boolean);
 
         // Titolo con materia, aula e docente
-        const subjectUpper = cls.subject?.trim().toUpperCase() || 'LEZIONE';
-        const roomStr = cls.room ? ` (${cls.room})` : '';
-        const profStr = cls.teacher ? ` - Prof. ${cls.teacher}` : '';
+        const subjectUpper = cls.subject?.trim().toUpperCase() || "LEZIONE";
+        const roomStr = cls.room ? ` (${cls.room})` : "";
+        const profStr = cls.teacher ? ` - Prof. ${cls.teacher}` : "";
         const eventTitle = `${subjectUpper}${roomStr}${profStr}`;
 
         await Calendar.createEventAsync(calendarId, {
@@ -221,8 +247,8 @@ export async function syncScheduleToAppleCalendar(
           startDate,
           endDate,
           location: locationAddress,
-          notes: notesParts.join('\n'),
-          timeZone: 'Europe/Rome',
+          notes: notesParts.join("\n"),
+          timeZone: "Europe/Rome",
           recurrenceRule: {
             frequency: Calendar.Frequency.WEEKLY,
             endDate: semesterEndDate,
@@ -237,7 +263,7 @@ export async function syncScheduleToAppleCalendar(
     await AsyncStorage.setItem(LAST_CALENDAR_SYNC_KEY, timestamp.toString());
 
     const targetCalendarName = isDefaultCalendarFallback
-      ? 'tuo Calendario'
+      ? "tuo Calendario"
       : "Calendario Apple ('StudICI - Lezioni Sapienza')";
 
     return {
@@ -246,11 +272,13 @@ export async function syncScheduleToAppleCalendar(
       message: `Sincronizzazione completata: ${eventsCount} lezioni inserite nel ${targetCalendarName}!`,
     };
   } catch (err: any) {
-    console.error('Errore sincronizzazione calendario Apple:', err);
+    console.error("Errore sincronizzazione calendario Apple:", err);
     return {
       success: false,
       eventsCount: 0,
-      message: err?.message || 'Si è verificato un errore durante la sincronizzazione con il Calendario Apple.',
+      message:
+        err?.message ||
+        "Si è verificato un errore durante la sincronizzazione con il calendario Apple.",
       error: String(err),
     };
   }
@@ -266,9 +294,9 @@ export async function refreshAppleCalendarIfConfigured(): Promise<boolean> {
     if (!lastSync) return false;
 
     const [degreeUrl, degreeName, defaultTabUrl] = await Promise.all([
-      AsyncStorage.getItem('selectedDegreeUrl'),
-      AsyncStorage.getItem('selectedDegreeName'),
-      AsyncStorage.getItem('defaultTabUrl'),
+      AsyncStorage.getItem("selectedDegreeUrl"),
+      AsyncStorage.getItem("selectedDegreeName"),
+      AsyncStorage.getItem("defaultTabUrl"),
     ]);
 
     if (!degreeUrl || !defaultTabUrl) return false;
@@ -278,13 +306,12 @@ export async function refreshAppleCalendarIfConfigured(): Promise<boolean> {
 
     const res = await syncScheduleToAppleCalendar(
       schedule,
-      degreeName || 'Corso di Laurea',
-      undefined
+      degreeName || "Corso di Laurea",
+      undefined,
     );
     return res.success;
   } catch (err) {
-    console.warn('Errore auto-aggiornamento calendario Apple live:', err);
+    console.warn("Errore auto-aggiornamento calendario Apple live:", err);
     return false;
   }
 }
-

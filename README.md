@@ -5,8 +5,8 @@
 <h1 align="center">StudICI</h1>
 
 <p align="center">
-  <b>L'applicazione definitiva per gli studenti e i pendolari di Ingegneria alla Sapienza Università di Roma.</b><br/>
-  Orari lezioni in tempo reale, monitoraggio treni Trenitalia/ViaggiaTreno, percorsi urbani ATAC, registro presenze con esportazione PDF, mappa aule e sincronizzazione cloud.
+  <b>App per gli studenti e pendolari di Ingegneria alla Sapienza Università di Roma.</b><br/>
+  Orari delle lezioni, monitoraggio treni in tempo reale, tragitti urbani, registro presenze ed esportazione PDF.
 </p>
 
 <p align="center">
@@ -24,82 +24,71 @@
 
 ## 📖 Indice
 
-1. [Caratteristiche Principali](#-caratteristiche-principali)
-   - [📅 Orario Accademico & AI Alerts](#1-orario-accademico--ai-alerts)
-   - [🚆 Modulo Pendolari Intelligente (Viaggio)](#2-modulo-pendolari-intelligente-viaggio)
-   - [🏛️ Schede Aula & Mappa Sedi Sapienza](#3-schede-aula--mappa-sedi-sapienza)
-   - [📊 Registro Presenze & Esportazione PDF](#4-registro-presenze--esportazione-pdf)
-   - [☁️ Sincronizzazione Cloud Multi-Dispositivo](#5-sincronizzazione-cloud-multi-dispositivo)
-   - [🔔 Notifiche di Aggiornamento In-App](#6-notifiche-di-aggiornamento-in-app)
-   - [🎨 Design Nativo iOS & Temi Sapienza](#7-design-nativo-ios--temi-sapienza)
-2. [Guida all'Installazione & Sideloading (iOS)](#-guida-allinstallazione--sideloading-ios)
-   - [Opzione 1: SideStore & AltStore (Consigliata · Aggiornamenti Automatici)](#opzione-1-sidestore--altstore-consigliata--aggiornamenti-automatici)
-   - [Opzione 2: LiveContainer (Nessun limite di 3 app)](#opzione-2-livecontainer-nessun-limite-di-3-app)
-   - [Opzione 3: TrollStore (Installazione permanente)](#opzione-3-trollstore-installazione-permanente)
-   - [Opzione 4: Sideloadly / AltServer via Computer](#opzione-4-sideloadly--altserver-via-computer)
-3. [Architettura Tecnica & Funzionamento](#-architettura-tecnica--funzionamento)
+1. [Funzionalità](#-funzionalità)
+   - [📅 Orario delle Lezioni](#1-orario-delle-lezioni)
+   - [🚆 Sezione Viaggio (Pendolari)](#2-sezione-viaggio-pendolari)
+   - [🏛️ Aule e Sedi Sapienza](#3-aule-e-sedi-sapienza)
+   - [📊 Registro presenze & Esportazione PDF](#4-registro-presenze--esportazione-pdf)
+   - [☁️ Sincronizzazione tra Dispositivi](#5-sincronizzazione-tra-dispositivi)
+   - [🔔 Aggiornamenti In-App](#6-aggiornamenti-in-app)
+   - [🎨 Design & Temi](#7-design--temi)
+2. [Installazione su iOS](#-installazione-su-ios)
+   - [SideStore & AltStore](#opzione-1-sidestore--altstore-consigliata--aggiornamenti-automatici)
+   - [LiveContainer](#opzione-2-livecontainer-nessun-limite-di-3-app)
+   - [TrollStore](#opzione-3-trollstore-installazione-permanente)
+   - [Sideloadly / AltServer](#opzione-4-sideloadly--altserver-via-computer)
+3. [Architettura](#-architettura-tecnica--funzionamento)
 4. [Sviluppo Locale](#-sviluppo-locale)
-5. [Configurazione Cloud Backend](#-configurazione-cloud-backend)
+5. [Configurazione Cloud](#-configurazione-cloud-backend)
 6. [Crediti & Disclaimer](#-crediti--disclaimer)
 
 ---
 
-## ✨ Caratteristiche Principali
+## ✨ Funzionalità
 
-### 1. Orario Accademico & AI Alerts
-- **Scraping Diretto e Istantaneo**: sincronizzazione automatica degli orari ufficiali della presidenza della Facoltà di Ingegneria Civile e Industriale (ICI) e Ingegneria dell'Informazione (I3S).
-- **Suddivisione Avanzata**: consultazione per Corso di Laurea, Anno di Corso e Canale alfabetico (A-K, L-Z, ecc.).
-- **Live Class Indicator**: indicatore visivo in tempo reale delle lezioni attualmente in corso con barra di avanzamento e minuti rimanenti.
-- **AI Academic Alerts**: sistema di analisi semantica degli avvisi urgenti della presidenza (variazioni d'aula, lezioni sospese, festività) con visualizzazione in banner fluttuante in stile iOS.
-- **Offline-First**: cache locale ad accesso immediato (0ms di latenza all'avvio dell'app).
+### 1. Orario delle Lezioni
 
-### 2. Modulo Pendolari Intelligente (Viaggio)
-Il sistema più evoluto dedicato agli studenti pendolari che viaggiano verso le sedi Sapienza di Roma:
-- **Monitoraggio Trenitalia in Tempo Reale**:
-  - Collegamento diretto con le API ViaggiaTreno per il tracciamento dei treni Regionali (`REG`) e Regionali Veloci (`RV`).
-  - **Gestione Dinamica Ritardi**: calcolo del ritardo stazione per stazione, con indicazione dell'orario di partenza effettivo e dell'arrivo stimato.
-  - **Stati Treno Contestuali**: evidenziazione chiara se il treno è *in orario*, *in ritardo*, *"Fermo in stazione [Nome]"* o *"Già passato"* dalla stazione di salita dello studente.
-  - **Visualizzazione Orario Programmato Barrato**: indicazione visiva dell'orario originale barrato affiancato all'orario effettivo ricalcolato con il ritardo.
-  - **Tracciamento Completo Fino a Destinazione**: monitoraggio continuo della corsa fino al raggiungimento della stazione di arrivo prestabilita.
-- **Tratte Stradali Casa ➔ Stazione (OSRM)**:
-  - Calcolo del tragitto in automobile dall'indirizzo di partenza fino al parcheggio della stazione ferroviaria.
-  - Stima del traffico in tempo reale con differenziazione oraria di punta e buffer per parcheggio e accesso ai binari.
-- **Trasporti Urbani di Roma (ATAC / Metro / Bus)**:
-  - Calcolo del percorso ottimale dalla stazione di arrivo ferroviaria (es. Roma Tiburtina, Roma Termini) fino all'aula esatta della lezione.
-  - Titolo dinamico del mezzo (es. Metro B, Bus 310, Tram 3 o tragitto a piedi).
-  - **ActionSheet Nativo Google Maps**: toccando la card del mezzo o il banner dedicato, si apre un menu nativo iOS per scegliere se navigare con partenza **dalla posizione GPS attuale** oppure **dalla stazione ferroviaria prestabilita**.
-- **Selettore Giorni a Nastro Fluido (Capsule Ribbon)**:
-  - Scorrimento orizzontale ispirato al design nativo di Apple Calendar e Apple Fitness con data del mese, feedback tattile e **bagliore neon radiale a 360°**.
-  - **Supporto Fine Settimana**: consultazione treni estesa al Sabato e alla Domenica in modalità stazione-stazione indipendente dalle lezioni universitarie.
-  - **Pulsante Rapido "Oggi"**: ritorno istantaneo alla giornata corrente in un solo tocco.
+- Orari ufficiali della Facoltà di Ingegneria Civile e Industriale (ICI) e dell'Informazione (I3S).
+- Suddivisione per Corso di Laurea, anno e canale alfabetico (A-K, L-Z).
+- Indicatore visivo delle lezioni in corso con tempo rimanente.
+- Avvisi della presidenza (variazioni d'aula, lezioni sospese, festività).
+- Cache locale offline per apertura istantanea.
 
-### 3. Schede Aula & Mappa Sedi Sapienza
-- **Database Geocodificato Completo**:
-  - Sede Centrale San Pietro in Vincoli (Aule 1–40, Chiostro, Aule Boaga, Radice, ecc.).
-  - Sede Via Scarpa / Castro Laurenziano (Ingegneria Informatica ed Economia).
-  - Sede Via Regina Elena, Via Ariosto, Via Eudossiana e Città Universitaria.
-- **Navigazione Integrata**: anteprima mappa satellitare, coordinate precise dell'edificio, indicazioni stradali in un tocco con **Apple Maps** o **Google Maps**.
+### 2. Sezione Viaggio (Pendolari)
 
-### 4. Registro Presenze & Esportazione PDF
-- **Segnatura Rapida Presenze**: menu contestuale nativo iOS (`UIContextMenuInteraction`) tenendo premuto sulla lezione o sul giorno settimanale per segnare l'intera giornata.
-- **Monitoraggio Frequenza**: barra percentuale e contatore per verificare il rispetto della soglia minima di frequenza obbligatoria per ciascuna materia.
-- **Esportazione Documentale Professionale**:
-  - Generazione istantanea di **documenti PDF** formattati in grafica vettoriale ad alta definizione.
-  - Tabella Orario Settimanale in formato planning accademico.
-  - Registro Completo Presenze e Statistiche Frequenze con branding Sapienza.
+- **Treni in tempo reale**: collegamento con le API ViaggiaTreno per monitorare corse Regionali e Regionali Veloci.
+- **Ritardi e binari**: orario programmato vs orario effettivo ricalcolato con il ritardo in tempo reale.
+- **Tragitto in auto**: calcolo percorso casa-stazione con stima del traffico, festività, ponti e tempi di parcheggio.
+- **Mezzi urbani**: indicazioni per raggiungere la sede della lezione dalla stazione di arrivo (Metro, Bus, Tram, a piedi).
+- **Navigazione rapida**: apertura Google Maps per navigare dalla posizione GPS attuale o dalla stazione selezionata.
+- **Selettore giorni**: visualizzazione orizzontale dal lunedì alla domenica per consultare orari lezioni e treni.
 
-### 5. Sincronizzazione Cloud Multi-Dispositivo
-- **Architettura Crittografata Zero-Knowledge**: sincronizzazione istantanea di corsi selezionati, preferenze pendolari e registro presenze su tutti i tuoi dispositivi iOS/iPadOS tramite un codice univoco non indovinabile.
-- **Accoppiamento Rapido**: condivisione codice via AirDrop, clipboard o input diretto.
-- **Gestione Dispositivi Associati**: pannello per visualizzare i dispositivi collegati (modello, ultimo sync) con possibilità di dissociarli in qualsiasi momento.
+### 3. Aule e Sedi Sapienza
 
-### 6. Notifiche di Aggiornamento In-App
-- **Verifica Automatica Release GitHub**: all'apertura dell'app viene effettuato un controllo non bloccante delle release ufficiali.
-- **Banner Intelligente & ActionSheet**: se è disponibile una nuova versione rispetto a quella installata, appare un banner con tasto `UPDATE` che consente di aggiornare direttamente l'app via SideStore, LiveContainer o scaricare l'IPA in un tocco.
+- Coordinate e indicazioni per tutte le sedi principali: San Pietro in Vincoli, Via Scarpa, Castro Laurenziano, Regina Elena e Città Universitaria.
+- Navigazione in un tocco su Apple Maps o Google Maps.
 
-### 7. Design Nativo iOS & Temi Sapienza
-- Interfaccia costruita con i componenti UIKit nativi su iOS: `UISegmentedControl`, `UISwitch`, menu a comparsa, effetto vetro satinato (`BlurView`) e feedback aptico.
-- Motore di personalizzazione grafica con palette studiate ad hoc: *Sapienza Red*, *Midnight Blue*, *Emerald Green*, *Amethyst Purple*, *Slate Dark* e *AMOLED Black*.
+### 4. Registro presenze & Esportazione PDF
+
+- Registrazione rapida della frequenza tenendo premuta una lezione nell'orario.
+- Riepilogo ore totali, lezioni frequentate e rispetto della soglia minima.
+- Esportazione in PDF dell'orario settimanale e del registro presenze per la stampa o la condivisione.
+
+### 5. Sincronizzazione tra Dispositivi
+
+- Sincronizzazione tra più dispositivi iOS/iPadOS tramite codice univoco.
+- Salvataggio e ripristino di corsi, canali, preferenze pendolari e presenze.
+- Gestione dei dispositivi collegati con possibilità di disaccoppiamento in qualsiasi momento.
+
+### 6. Aggiornamenti In-App
+
+- Controllo automatico di nuove release pubblicate su GitHub.
+- Notifica con aggiornamento diretto tramite SideStore, LiveContainer o download del file IPA.
+
+### 7. Design & Temi
+
+- Interfaccia in stile iOS con sfocature, menu contestuali e feedback aptico.
+- Palette colori personalizzabili (_Sapienza Red_, _Midnight Blue_, _Emerald Green_, _Amethyst Purple_, _Slate Dark_, _AMOLED Black_).
 
 ---
 
@@ -120,6 +109,7 @@ Sorgente SideStore: https://raw.githubusercontent.com/Itachisann/StudICI/main/ap
 **[SideStore](https://sidestore.io)** permette di installare e aggiornare le app direttamente dal dispositivo iOS via Wi-Fi tramite VPN locale (WireGuard), senza dover ricollegare l'iPhone al computer ogni 7 giorni.
 
 #### Aggiunta della Community Source (1-Tap):
+
 1. Sul tuo iPhone, apri questo link per aggiungere automaticamente il repository a SideStore:
    ```
    sidestore://source?url=https%3A%2F%2Fraw.githubusercontent.com%2FItachisann%2FStudICI%2Fmain%2Fapps.json
@@ -130,7 +120,7 @@ Sorgente SideStore: https://raw.githubusercontent.com/Itachisann/StudICI/main/ap
      ```
      https://raw.githubusercontent.com/Itachisann/StudICI/main/apps.json
      ```
-3. Cerca **StudICI** nella scheda *Browse* e premi **GET** per installarla.
+3. Cerca **StudICI** nella scheda _Browse_ e premi **GET** per installarla.
 4. Da questo momento, quando esce una nuova versione, SideStore te la notificherà e potrai aggiornarla con un semplice tocco!
 
 ---
@@ -140,6 +130,7 @@ Sorgente SideStore: https://raw.githubusercontent.com/Itachisann/StudICI/main/ap
 **[LiveContainer](https://github.com/khanhduytran0/LiveContainer)** permette di eseguire app non firmate senza consumare i 3 slot del certificato Apple ID gratuito e senza limiti di revoca.
 
 #### Installazione Diretta con URL Scheme:
+
 1. Apri questo link da Safari per avviare l'installazione automatica in LiveContainer:
    ```
    livecontainer://install?url=https%3A%2F%2Fgithub.com%2FItachisann%2FStudICI%2Freleases%2Flatest%2Fdownload%2FStudICI.ipa
@@ -153,6 +144,7 @@ Sorgente SideStore: https://raw.githubusercontent.com/Itachisann/StudICI/main/ap
 ### Opzione 3: TrollStore (Installazione permanente)
 
 Per dispositivi compatibili con **[TrollStore](https://github.com/opa334/TrollStore)** (iOS 14.0 – 16.6.1 / 17.0):
+
 1. Scarica `StudICI.ipa` dall'ultima release.
 2. Condividi il file e seleziona **"Apri con TrollStore"**.
 3. L'app verrà installata permanentemente con certificato di sistema, senza scadenze dei 7 giorni e con supporto completo a tutte le funzioni native.
@@ -164,7 +156,7 @@ Per dispositivi compatibili con **[TrollStore](https://github.com/opa334/TrollSt
 1. Scarica `StudICI.ipa` sul tuo PC/Mac da **[GitHub Releases](https://github.com/Itachisann/StudICI/releases/latest)**.
 2. Collega l'iPhone con cavo USB.
 3. Apri **[Sideloadly](https://sideloadly.io)** (o AltServer), trascina il file `StudICI.ipa`, inserisci il tuo Apple ID e premi **Start**.
-4. Su iPhone, vai in *Impostazioni ➔ Generali ➔ VPN e gestione dispositivi* e autorizza il tuo profilo sviluppatore.
+4. Su iPhone, vai in _Impostazioni ➔ Generali ➔ VPN e gestione dispositivi_ e autorizza il tuo profilo sviluppatore.
 
 ---
 
@@ -179,7 +171,7 @@ graph TD
     D --> G["Interfaccia Viaggio Pendolari"]
     B --> H["Schermata Orario Settimanale"]
     B --> I["Schede Aule & Geocoding"]
-    J["Registro Presenze"] -->|"PDFKit"| K["Esportazione PDF Ufficiale"]
+    J["Registro presenze"] -->|"PDFKit"| K["Esportazione PDF Ufficiale"]
     J -->|"Realtime Sync"| L["Firebase Cloud Storage"]
     M["GitHub Releases API"] -->|"Update Checker"| N["In-App Update Notifier"]
     N -->|"Schemi URL"| O["SideStore / LiveContainer"]
@@ -196,6 +188,7 @@ graph TD
 ## 🛠️ Sviluppo Locale
 
 ### Requisiti
+
 - **Node.js** 20+ o 22+
 - **npm** o **bun**
 - **Expo CLI** (`npx expo`)
@@ -244,7 +237,8 @@ La sincronizzazione tra dispositivi si basa su **Firebase Realtime Database** (p
    ```
 4. Inserisci l'URL del tuo database in [`src/config/syncConfig.ts`](src/config/syncConfig.ts):
    ```ts
-   export const SYNC_DB_URL = "https://tuo-database.europe-west1.firebasedatabase.app";
+   export const SYNC_DB_URL =
+     "https://tuo-database.europe-west1.firebasedatabase.app";
    ```
 
 ---
@@ -253,7 +247,7 @@ La sincronizzazione tra dispositivi si basa su **Firebase Realtime Database** (p
 
 - **Sviluppatore**: Vitor ([@Itachisann](https://github.com/Itachisann))
 - **Progetto**: Open-source, indipendente e realizzato per la comunità studentesca.
-- **Disclaimer**: *StudICI è un software non ufficiale e non è in alcun modo affiliato, sponsorizzato o approvato da Sapienza Università di Roma o da Trenitalia S.p.A. Tutti i marchi, i nomi di corsi e le stazioni appartengono ai rispettivi proprietari. I dati degli orari sono estratti dalle tabelle pubbliche fornite dalla presidenza di Facoltà.*
+- **Disclaimer**: _StudICI è un software non ufficiale e non è in alcun modo affiliato, sponsorizzato o approvato da Sapienza Università di Roma o da Trenitalia S.p.A. Tutti i marchi, i nomi di corsi e le stazioni appartengono ai rispettivi proprietari. I dati degli orari sono estratti dalle tabelle pubbliche fornite dalla presidenza di Facoltà._
 
 ---
 

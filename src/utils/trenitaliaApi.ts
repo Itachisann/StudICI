@@ -1,4 +1,7 @@
 import { StationInfo, LiveTrainInfo } from '../types/commuter';
+import allStationsData from '../data/allStations.json';
+
+export const ALL_STATIONS: StationInfo[] = allStationsData as StationInfo[];
 
 // ViaggiaTreno espone le API resteasy su HTTP (la versione HTTPS invia un 301 verso HTTP).
 // Nelle build iOS native (IPA) è configurato NSAppTransportSecurity in app.json per permettere
@@ -110,103 +113,264 @@ async function runLimited<T>(tasks: (() => Promise<T>)[], limit = 8): Promise<T[
 }
 
 export const POPULAR_STATIONS: StationInfo[] = [
-  { name: 'ORTE', code: 'S08209', shortName: 'Orte' },
-  { name: 'ROMA TIBURTINA', code: 'S08217', shortName: 'Roma Tiburtina' },
   { name: 'ROMA TERMINI', code: 'S08409', shortName: 'Roma Termini' },
-  { name: 'ROMA OSTIENSE', code: 'S08419', shortName: 'Roma Ostiense' },
-  { name: 'ROMA TUSCOLANA', code: 'S08417', shortName: 'Roma Tuscolana' },
-  { name: 'NARNI-AMELIA', code: 'S08208', shortName: 'Narni-Amelia' },
-  { name: 'TERNI', code: 'S08207', shortName: 'Terni' },
+  { name: 'ROMA TIBURTINA', code: 'S08217', shortName: 'Roma Tiburtina' },
+  { name: 'FIRENZE SANTA MARIA NOVELLA', code: 'S06421', shortName: 'Firenze SMN' },
+  { name: 'NAPOLI CENTRALE', code: 'S09218', shortName: 'Napoli C.le' },
+  { name: 'BOLOGNA CENTRALE', code: 'S05043', shortName: 'Bologna C.le' },
+  { name: 'MILANO CENTRALE', code: 'S01700', shortName: 'Milano C.le' },
+  { name: 'TORINO PORTA NUOVA', code: 'S00219', shortName: 'Torino P. Nuova' },
+  { name: 'VENEZIA SANTA LUCIA', code: 'S02593', shortName: 'Venezia S. Lucia' },
+  { name: 'PISA CENTRALE', code: 'S06500', shortName: 'Pisa C.le' },
   { name: 'PERUGIA', code: 'S07004', shortName: 'Perugia' },
-  { name: 'PERUGIA PONTE SAN GIOVANNI', code: 'S07003', shortName: 'Perugia P.S.G.' },
+  { name: 'TERNI', code: 'S07226', shortName: 'Terni' },
   { name: 'ANCONA', code: 'S07113', shortName: 'Ancona' },
-  { name: 'FOLIGNO', code: 'S07204', shortName: 'Foligno' },
-  { name: 'SPOLETO', code: 'S07200', shortName: 'Spoleto' },
-  { name: 'ASSISI', code: 'S07207', shortName: 'Assisi' },
-  { name: 'BASTIA UMBRA', code: 'S07208', shortName: 'Bastia' },
-  { name: 'FABRIANO', code: 'S07214', shortName: 'Fabriano' },
-  { name: 'JESI', code: 'S07218', shortName: 'Jesi' },
-  { name: 'FALCONARA MARITTIMA', code: 'S07106', shortName: 'Falconara M.' },
-  { name: 'PESARO', code: 'S07100', shortName: 'Pesaro' },
-  { name: 'VITERBO PORTA FIORENTINA', code: 'S08005', shortName: 'Viterbo P. Fiorentina' },
-  { name: 'VITERBO PORTA ROMANA', code: 'S08006', shortName: 'Viterbo P. Romana' },
+  { name: 'PESCARA', code: 'S07810', shortName: 'Pescara' },
+  { name: 'ROMA OSTIENSE', code: 'S08406', shortName: 'Roma Ostiense' },
+  { name: 'ROMA TUSCOLANA', code: 'S08408', shortName: 'Roma Tuscolana' },
+  { name: 'ROMA S. PIETRO', code: 'S08402', shortName: 'Roma S. Pietro' },
+  { name: 'VITERBO PORTA FIORENTINA', code: 'S08304', shortName: 'Viterbo P. Fiorentina' },
+  { name: 'VITERBO PORTA ROMANA', code: 'S08306', shortName: 'Viterbo P. Romana' },
+  { name: 'ORTE', code: 'S08209', shortName: 'Orte' },
+  { name: 'NARNI AMELIA', code: 'S07230', shortName: 'Narni Amelia' },
+  { name: 'CHIUSI-CHIANCIANO TERME', code: 'S06925', shortName: 'Chiusi-Chianciano' },
   { name: 'CIVITA CASTELLANA-MAGLIANO', code: 'S08211', shortName: 'Civita Castellana' },
   { name: 'FARA SABINA-MONTELIBRETTI', code: 'S08214', shortName: 'Fara Sabina' },
-  { name: 'MONTEROTONDO-MENTANA', code: 'S08216', shortName: 'Monterotondo' },
-  { name: 'ORVIETO', code: 'S08300', shortName: 'Orvieto' },
-  { name: 'ALVIANO', code: 'S08302', shortName: 'Alviano' },
-  { name: 'ATTIGLIANO-BOMARZO', code: 'S08303', shortName: 'Attigliano' },
-  { name: 'CHIUSI-CHIANCIANO TERME', code: 'S08304', shortName: 'Chiusi-Chianciano' },
-  { name: 'AREZZO', code: 'S06311', shortName: 'Arezzo' },
-  { name: 'FIRENZE SANTA MARIA NOVELLA', code: 'S06400', shortName: 'Firenze SMN' },
-  { name: 'FIRENZE CAMPO DI MARTE', code: 'S06421', shortName: 'Firenze Campo Marte' },
-  { name: 'RIETI', code: 'S08030', shortName: 'Rieti' },
-  { name: 'POGGIO MIRTETO', code: 'S08213', shortName: 'Poggio Mirteto' },
-  { name: 'PESCARA', code: 'S07810', shortName: 'Pescara' },
+  { name: 'MONTEROTONDO-MENTANA', code: 'S08215', shortName: 'Monterotondo' },
+  { name: 'ORVIETO', code: 'S08203', shortName: 'Orvieto' },
+  { name: 'FOLIGNO', code: 'S07217', shortName: 'Foligno' },
+  { name: 'SPOLETO', code: 'S07221', shortName: 'Spoleto' },
+  { name: 'ASSISI', code: 'S07008', shortName: 'Assisi' },
+  { name: 'AREZZO', code: 'S06915', shortName: 'Arezzo' },
   { name: 'CASERTA', code: 'S09211', shortName: 'Caserta' },
-  { name: 'NAPOLI CENTRALE', code: 'S09218', shortName: 'Napoli C.le' },
   { name: 'NETTUNO', code: 'S08710', shortName: 'Nettuno' },
   { name: 'GROSSETO', code: 'S06039', shortName: 'Grosseto' },
-  { name: 'FIUMICINO AEROPORTO', code: 'S08500', shortName: 'Fiumicino Aeroporto' },
+  { name: 'FIUMICINO AEROPORTO', code: 'S08411', shortName: 'Fiumicino Aeroporto' },
 ];
 
+function normalizeStationKey(str?: string | null): string {
+  if (!str) return '';
+  return str
+    .toUpperCase()
+    .replace(/[-_./]/g, ' ')
+    .replace(/\bSAN\b/g, 'S')
+    .replace(/\bSANTA\b/g, 'S')
+    .replace(/\bUMBRA\b/g, '')
+    .replace(/\bDI\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
- * Cerca stazioni tramite ViaggiaTreno API, combinando i risultati con le stazioni frequenti
+ * Riallinea qualsiasi stazione salvata (anche con vecchi codici errati o trattini, es. NARNI-AMELIA S08208)
+ * al codice ufficiale ViaggiaTreno corrispondente.
+ */
+export function normalizeStationInfo(station: StationInfo): StationInfo {
+  if (!station) return POPULAR_STATIONS[0];
+  const keyName = normalizeStationKey(station.name);
+  const keyShort = normalizeStationKey(station.shortName);
+
+  const byName = POPULAR_STATIONS.find((s) => {
+    const pName = normalizeStationKey(s.name);
+    const pShort = normalizeStationKey(s.shortName);
+    return (
+      (keyName && (pName === keyName || pShort === keyName)) ||
+      (keyShort && (pName === keyShort || pShort === keyShort))
+    );
+  });
+  if (byName) {
+    return { ...byName };
+  }
+
+  const cleanCode = (station.code || '').trim().toUpperCase();
+  const byCode = POPULAR_STATIONS.find((s) => s.code.toUpperCase() === cleanCode);
+  if (byCode) {
+    return { ...byCode };
+  }
+
+  return station;
+}
+
+function computeLevenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const val = Math.min(row[j] + 1, prev + 1, row[j - 1] + cost);
+      row[j - 1] = prev;
+      prev = val;
+    }
+    row[b.length] = prev;
+  }
+  return row[b.length];
+}
+
+function calculateStationScore(
+  s: StationInfo,
+  cleanQ: string,
+  normQ: string
+): number {
+  const name = s.name.toUpperCase();
+  const shortName = (s.shortName || '').toUpperCase();
+  const normName = normalizeStationKey(s.name);
+  const normShort = normalizeStationKey(s.shortName);
+
+  // 1. Corrispondenza ESATTA al 100% (Nome completo o ShortName) -> Priorità assoluta #1
+  if (name === cleanQ || shortName === cleanQ) {
+    return 100000;
+  }
+  if (normName === normQ || normShort === normQ) {
+    return 95000;
+  }
+
+  // 2. Inizia esattamente con la query (Prefisso del nome o shortName)
+  if (name.startsWith(cleanQ) || shortName.startsWith(cleanQ)) {
+    return 80000 - Math.abs(name.length - cleanQ.length) * 10;
+  }
+  if (normName.startsWith(normQ) || normShort.startsWith(normQ)) {
+    return 75000 - Math.abs(normName.length - normQ.length) * 10;
+  }
+
+  // 3. Una parola interna inizia esattamente con la query (es. "TERMINI" per "ROMA TERMINI")
+  const words = name.split(/[\s\-_/.]+/).filter(Boolean);
+  const exactWordMatch = words.some((w) => w === cleanQ);
+  if (exactWordMatch) {
+    return 60000 - name.length * 5;
+  }
+  const prefixWordMatch = words.some((w) => w.startsWith(cleanQ));
+  if (prefixWordMatch) {
+    return 50000 - name.length * 5;
+  }
+
+  // 4. Substring inclusa nel nome o shortName
+  if (name.includes(cleanQ) || shortName.includes(cleanQ)) {
+    const idx = Math.min(
+      name.includes(cleanQ) ? name.indexOf(cleanQ) : 99,
+      shortName.includes(cleanQ) ? shortName.indexOf(cleanQ) : 99
+    );
+    return 30000 - idx * 50 - name.length * 5;
+  }
+  if (normName.includes(normQ) || normShort.includes(normQ)) {
+    return 25000 - normName.length * 5;
+  }
+
+  // 5. Corrispondenza fuzzy / per somiglianza (typo tolerance)
+  if (cleanQ.length >= 3) {
+    let minWordDist = 99;
+    for (const w of words) {
+      const sliceLen = Math.min(w.length, cleanQ.length + 1);
+      const dist = computeLevenshtein(cleanQ, w.slice(0, sliceLen));
+      if (dist < minWordDist) minWordDist = dist;
+    }
+
+    const wholeDist = computeLevenshtein(cleanQ, name.slice(0, cleanQ.length + 2));
+    const bestDist = Math.min(minWordDist, wholeDist);
+
+    const maxAllowed = cleanQ.length <= 4 ? 1 : cleanQ.length <= 7 ? 2 : 3;
+    if (bestDist <= maxAllowed) {
+      return 15000 - bestDist * 3000 - name.length * 5;
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * Cerca stazioni dando priorità alla corrispondenza esatta, poi prefissi, parole e somiglianza
  */
 export async function searchStations(query: string): Promise<StationInfo[]> {
   const cleanQ = query.trim().toUpperCase();
-  if (!cleanQ) return POPULAR_STATIONS;
+  if (!cleanQ) return ALL_STATIONS;
 
-  const localMatches = POPULAR_STATIONS.filter(
-    (s) => s.name.includes(cleanQ) || (s.shortName && s.shortName.toUpperCase().includes(cleanQ))
-  );
+  const normQ = normalizeStationKey(cleanQ);
+
+  // Calcola i punteggi locali
+  const scoredLocal: { station: StationInfo; score: number }[] = [];
+  for (const st of ALL_STATIONS) {
+    const score = calculateStationScore(st, cleanQ, normQ);
+    if (score >= 0) {
+      scoredLocal.push({ station: st, score });
+    }
+  }
+
+  scoredLocal.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.station.name.length !== b.station.name.length) {
+      return a.station.name.length - b.station.name.length;
+    }
+    return a.station.name.localeCompare(b.station.name);
+  });
+
+  const localMatches = scoredLocal.map((item) => item.station);
 
   if (cleanQ.length < 3) {
     return localMatches;
   }
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+  const queriesToTry = Array.from(
+    new Set([cleanQ.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim(), cleanQ])
+  );
 
-    const res = await fetch(
-      `${VIAGGIATRENO_BASE_URL}/autocompletaStazione/${encodeURIComponent(cleanQ)}`,
-      { signal: controller.signal }
-    );
-    clearTimeout(timeout);
+  const remoteMatches: StationInfo[] = [];
 
-    if (res.ok) {
-      const text = await res.text();
-      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-      const remoteMatches: StationInfo[] = [];
+  for (const qStr of queriesToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
 
-      for (const line of lines) {
-        const parts = line.split('|');
-        if (parts.length >= 2) {
-          const name = parts[0].trim();
-          const code = parts[1].trim();
-          if (name && code && !remoteMatches.some((m) => m.code === code)) {
-            remoteMatches.push({
-              name,
-              code,
-              shortName: formatStationName(name),
-            });
+      const res = await fetch(
+        `${VIAGGIATRENO_BASE_URL}/autocompletaStazione/${encodeURIComponent(qStr)}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+        for (const line of lines) {
+          const parts = line.split('|');
+          if (parts.length >= 2) {
+            const name = parts[0].trim();
+            const code = parts[1].trim();
+            if (
+              name &&
+              code &&
+              !remoteMatches.some(
+                (m) => m.code === code || normalizeStationKey(m.name) === normalizeStationKey(name)
+              )
+            ) {
+              remoteMatches.push({
+                name,
+                code,
+                shortName: formatStationName(name),
+              });
+            }
           }
         }
+        if (remoteMatches.length > 0) break;
       }
+    } catch {}
+  }
 
-      // Unisci senza duplicati
-      const combined = [...localMatches];
-      for (const r of remoteMatches) {
-        if (!combined.some((c) => c.code === r.code)) {
-          combined.push(r);
-        }
-      }
-      return combined;
+  // Unisci senza duplicati preservando l'ordinamento per punteggio
+  const combined = [...localMatches];
+  for (const r of remoteMatches) {
+    const rKey = normalizeStationKey(r.name);
+    if (
+      !combined.some(
+        (c) => c.code === r.code || (rKey.length > 0 && normalizeStationKey(c.name) === rKey)
+      )
+    ) {
+      combined.push(r);
     }
-  } catch {}
-
-  return localMatches;
+  }
+  return combined;
 }
 
 export function formatStationName(name?: string | null): string {
@@ -1081,10 +1245,10 @@ export async function fetchLiveTrenitaliaTimetable(
     // Verifichiamo i treni programmati della linea per recuperare quelli già passati ma non ancora arrivati al capolinea.
     if (isToday) {
       const isOrteToRoma =
-        (depCode === 'S08209' && (arrCode === 'S08409' || arrCode === 'S08217' || arrCode === 'S08419')) ||
+        (depCode === 'S08209' && (arrCode === 'S08409' || arrCode === 'S08217' || arrCode === 'S08406')) ||
         (direction === 'outbound' && depCode === 'S08209');
       const isRomaToOrte =
-        ((depCode === 'S08409' || depCode === 'S08217' || depCode === 'S08419') && arrCode === 'S08209') ||
+        ((depCode === 'S08409' || depCode === 'S08217' || depCode === 'S08406') && arrCode === 'S08209') ||
         (direction === 'return' && arrCode === 'S08209');
 
       if (isOrteToRoma || isRomaToOrte) {
@@ -1777,14 +1941,17 @@ export async function fetchLiveTrenitaliaTimetable(
 export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Promise<OptimalTrainResult> {
   const {
     direction,
-    departureStation,
-    arrivalStation,
+    departureStation: rawDepartureStation,
+    arrivalStation: rawArrivalStation,
     targetTimeStr,
     targetDate = new Date(),
     trainOffset = 0,
     selectedTrainNumber,
     forceRefresh = false,
   } = options;
+
+  const departureStation = normalizeStationInfo(rawDepartureStation);
+  const arrivalStation = normalizeStationInfo(rawArrivalStation);
 
   const isOutbound = direction === 'outbound';
   const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');

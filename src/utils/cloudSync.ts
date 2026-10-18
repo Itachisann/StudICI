@@ -1,24 +1,24 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform, AppState, AppStateStatus } from 'react-native';
-import * as Device from 'expo-device';
-import * as Clipboard from 'expo-clipboard';
-import * as FileSystem from 'expo-file-system/legacy';
-import { refreshAppleCalendarIfConfigured } from './appleCalendar';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
+import * as Device from "expo-device";
+import * as FileSystem from "expo-file-system/legacy";
+import { AppState, AppStateStatus, Platform } from "react-native";
+import { SYNC_DB_URL } from "../config/syncConfig";
+import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
 import {
-  getAttendanceRecords,
   AttendanceRecord,
+  getAttendanceRecords,
   getAttendanceTombstones,
-  setAttendanceTombstones,
   setAttendanceChangeListener,
-} from './attendance';
-import { SYNC_DB_URL } from '../config/syncConfig';
+  setAttendanceTombstones,
+} from "./attendance";
 
-const CLOUD_SYNC_ID_KEY = 'studici_cloud_sync_id';
-const LAST_CLOUD_SYNC_KEY = 'studici_last_cloud_sync';
-const CLOUD_BACKUP_DATA_KEY = 'studici_cloud_backup_data';
-const ICLOUD_AUTO_SYNC_KEY = 'studici_icloud_auto_sync_enabled';
-const ICLOUD_BACKUP_FILENAME = 'studici_icloud_sync.json';
-const LOCAL_DEVICE_ID_KEY = 'studici_local_device_instance_id';
+const CLOUD_SYNC_ID_KEY = "studici_cloud_sync_id";
+const LAST_CLOUD_SYNC_KEY = "studici_last_cloud_sync";
+const CLOUD_BACKUP_DATA_KEY = "studici_cloud_backup_data";
+const ICLOUD_AUTO_SYNC_KEY = "studici_icloud_auto_sync_enabled";
+const ICLOUD_BACKUP_FILENAME = "studici_icloud_sync.json";
+const LOCAL_DEVICE_ID_KEY = "studici_local_device_instance_id";
 
 export interface SyncDeviceInfo {
   id: string;
@@ -54,7 +54,7 @@ export interface CloudBackupPayload {
 
 /** Normalizza un codice digitato dall'utente (spazi, minuscole) */
 export function normalizeSyncCode(code: string): string {
-  return code.trim().toUpperCase().replace(/\s+/g, '');
+  return code.trim().toUpperCase().replace(/\s+/g, "");
 }
 
 export function isValidSyncCode(code: string): boolean {
@@ -67,11 +67,11 @@ export function isValidSyncCode(code: string): boolean {
  * ST + 4 NUMERI + 1 LETTERA (es. ST4928X).
  */
 export function generateInitialSyncCode(): string {
-  let digits = '';
+  let digits = "";
   for (let i = 0; i < 4; i++) {
     digits += Math.floor(Math.random() * 10).toString();
   }
-  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const letter = letters[Math.floor(Math.random() * letters.length)];
   return `ST${digits}${letter}`;
 }
@@ -81,7 +81,11 @@ export async function generateUniqueInitialSyncCode(): Promise<string> {
     const candidate = generateInitialSyncCode();
     try {
       const existing = await fetchRemote(candidate);
-      if (!existing || !existing.devices || Object.keys(existing.devices).length === 0) {
+      if (
+        !existing ||
+        !existing.devices ||
+        Object.keys(existing.devices).length === 0
+      ) {
         return candidate;
       }
     } catch {
@@ -97,13 +101,13 @@ export async function generateUniqueInitialSyncCode(): Promise<string> {
 export async function getCloudSyncId(): Promise<string> {
   try {
     let id = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
-    if (!id || !isValidSyncCode(id) || id.startsWith('STUD-')) {
+    if (!id || !isValidSyncCode(id) || id.startsWith("STUD-")) {
       id = await generateUniqueInitialSyncCode();
       await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, id);
     }
     return id.toUpperCase();
   } catch {
-    return 'ST1000A';
+    return "ST1000A";
   }
 }
 
@@ -112,19 +116,20 @@ export async function getCloudSyncId(): Promise<string> {
  * Include il controllo di non-conflittualità: non si possono inserire nomi già esistenti usati da altri.
  */
 export async function setCustomCloudSyncId(
-  newId: string
+  newId: string,
 ): Promise<{ success: boolean; message: string }> {
   const norm = normalizeSyncCode(newId);
   if (!isValidSyncCode(norm)) {
     return {
       success: false,
-      message: 'Il nome deve contenere tra 3 e 40 caratteri (lettere e numeri).',
+      message:
+        "Il nome deve contenere tra 3 e 40 caratteri (lettere e numeri).",
     };
   }
 
   const currentId = await getCloudSyncId();
   if (norm === currentId) {
-    return { success: true, message: 'Nome già impostato.' };
+    return { success: true, message: "Nome già impostato." };
   }
 
   // Non-conflittualità: verifica se il nome è già registrato sul cloud da altri dispositivi
@@ -133,7 +138,7 @@ export async function setCustomCloudSyncId(
     if (existing && existing.devices) {
       const myDevice = await getLocalDeviceInfo();
       const otherDevices = Object.values(existing.devices).filter(
-        (d) => d && d.id !== myDevice.id
+        (d) => d && d.id !== myDevice.id,
       );
       if (otherDevices.length > 0 && !existing.devices[myDevice.id]) {
         return {
@@ -153,7 +158,6 @@ export async function setCustomCloudSyncId(
     message: `Codice aggiornato a "${norm}". Ora i tuoi dati sono salvati in questo spazio.`,
   };
 }
-
 
 /**
  * Ritorna il timestamp dell'ultima sincronizzazione cloud (in ms)
@@ -181,19 +185,19 @@ export async function performCloudSync(): Promise<{
 }> {
   const syncId = await getCloudSyncId();
   const timestamp = Date.now();
-  const formattedDate = new Date(timestamp).toLocaleString('it-IT');
+  const formattedDate = new Date(timestamp).toLocaleString("it-IT");
 
   const [url, name, className, defaultTabUrl, records] = await Promise.all([
-    AsyncStorage.getItem('selectedDegreeUrl'),
-    AsyncStorage.getItem('selectedDegreeName'),
-    AsyncStorage.getItem('selectedDegreeClassName'),
-    AsyncStorage.getItem('defaultTabUrl'),
+    AsyncStorage.getItem("selectedDegreeUrl"),
+    AsyncStorage.getItem("selectedDegreeName"),
+    AsyncStorage.getItem("selectedDegreeClassName"),
+    AsyncStorage.getItem("defaultTabUrl"),
     getAttendanceRecords(),
   ]);
 
   const payload: CloudBackupPayload = {
     syncId,
-    version: '1.5.6',
+    version: "1.5.6",
     timestamp,
     formattedDate,
     course: {
@@ -223,7 +227,7 @@ export async function performCloudSync(): Promise<{
     success: true,
     syncId,
     timestamp,
-    message: `Sincronizzazione Cloud completata con successo! Salvate ${records.length} presenze e configurazione corso.`,
+    message: `Sincronizzazione completata con successo! Salvate ${records.length} presenze e configurazione corso.`,
     backupCode,
     payload,
   };
@@ -249,10 +253,10 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
 }> {
   try {
     let clean = codeOrJson.trim();
-    let jsonStr = '';
+    let jsonStr = "";
 
-    if (clean.startsWith('STUDICI_CLOUD:')) {
-      const b64 = clean.replace('STUDICI_CLOUD:', '').trim();
+    if (clean.startsWith("STUDICI_CLOUD:")) {
+      const b64 = clean.replace("STUDICI_CLOUD:", "").trim();
       jsonStr = decodeURIComponent(escape(atob(b64)));
     } else {
       jsonStr = clean;
@@ -261,24 +265,30 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
     const data: CloudBackupPayload = JSON.parse(jsonStr);
 
     if (!data || !data.course) {
-      throw new Error('Formato di backup non valido.');
+      throw new Error("Formato di backup non valido.");
     }
 
     if (data.course.url) {
-      await AsyncStorage.setItem('selectedDegreeUrl', data.course.url);
+      await AsyncStorage.setItem("selectedDegreeUrl", data.course.url);
     }
     if (data.course.name) {
-      await AsyncStorage.setItem('selectedDegreeName', data.course.name);
+      await AsyncStorage.setItem("selectedDegreeName", data.course.name);
     }
     if (data.course.className) {
-      await AsyncStorage.setItem('selectedDegreeClassName', data.course.className);
+      await AsyncStorage.setItem(
+        "selectedDegreeClassName",
+        data.course.className,
+      );
     }
     if (data.course.defaultTabUrl) {
-      await AsyncStorage.setItem('defaultTabUrl', data.course.defaultTabUrl);
+      await AsyncStorage.setItem("defaultTabUrl", data.course.defaultTabUrl);
     }
 
     if (Array.isArray(data.attendanceRecords)) {
-      await AsyncStorage.setItem('studici_attendance_records', JSON.stringify(data.attendanceRecords));
+      await AsyncStorage.setItem(
+        "studici_attendance_records",
+        JSON.stringify(data.attendanceRecords),
+      );
     }
 
     const timestamp = Date.now();
@@ -293,14 +303,14 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
 
     return {
       success: true,
-      message: `Ripristino completato con successo: ${data.course.name || 'Corso'} e ${data.attendanceRecords?.length || 0} presenze ripristinate.`,
+      message: `Ripristino completato con successo: ${data.course.name || "Corso"} e ${data.attendanceRecords?.length || 0} presenze ripristinate.`,
       courseName: data.course.name || undefined,
       recordsCount: data.attendanceRecords?.length || 0,
     };
   } catch (err: any) {
     return {
       success: false,
-      message: err?.message || 'Codice o file di backup non valido.',
+      message: err?.message || "Codice o file di backup non valido.",
     };
   }
 }
@@ -311,7 +321,7 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
 export async function getICloudAutoSyncEnabled(): Promise<boolean> {
   try {
     const val = await AsyncStorage.getItem(ICLOUD_AUTO_SYNC_KEY);
-    return val === 'true';
+    return val === "true";
   } catch {
     return false;
   }
@@ -320,11 +330,16 @@ export async function getICloudAutoSyncEnabled(): Promise<boolean> {
 /**
  * Attiva o disattiva la sincronizzazione automatica tra dispositivi
  */
-export async function setICloudAutoSyncEnabled(enabled: boolean): Promise<void> {
+export async function setICloudAutoSyncEnabled(
+  enabled: boolean,
+): Promise<void> {
   try {
-    await AsyncStorage.setItem(ICLOUD_AUTO_SYNC_KEY, enabled ? 'true' : 'false');
+    await AsyncStorage.setItem(
+      ICLOUD_AUTO_SYNC_KEY,
+      enabled ? "true" : "false",
+    );
   } catch (err) {
-    console.error('Error saving auto sync setting:', err);
+    console.error("Error saving auto sync setting:", err);
   }
 }
 
@@ -332,8 +347,8 @@ export async function setICloudAutoSyncEnabled(enabled: boolean): Promise<void> 
 // Sincronizzazione reale tra dispositivi (Firebase Realtime Database via REST)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COURSE_MODIFIED_KEY = 'studici_course_modified_at';
-const COURSE_SNAPSHOT_KEY = 'studici_course_snapshot';
+const COURSE_MODIFIED_KEY = "studici_course_modified_at";
+const COURSE_SNAPSHOT_KEY = "studici_course_snapshot";
 const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 8000;
 
@@ -368,10 +383,13 @@ export function isCloudConfigured(): boolean {
 }
 
 function remoteUrl(syncId: string): string {
-  return `${SYNC_DB_URL.replace(/\/+$/, '')}/sync/${syncId}.json`;
+  return `${SYNC_DB_URL.replace(/\/+$/, "")}/sync/${syncId}.json`;
 }
 
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -386,18 +404,18 @@ async function fetchRemote(syncId: string): Promise<RemoteDoc | null> {
   if (!res.ok) {
     throw new Error(
       res.status === 401 || res.status === 403
-        ? 'Accesso al database negato: controlla le regole di Firebase (vedi README).'
-        : `Errore server cloud (${res.status}).`
+        ? "Accesso al database negato: controlla le regole di Firebase (vedi README)."
+        : `Errore server cloud (${res.status}).`,
     );
   }
   const json = await res.json();
-  return json && typeof json === 'object' ? (json as RemoteDoc) : null;
+  return json && typeof json === "object" ? (json as RemoteDoc) : null;
 }
 
 async function pushRemote(syncId: string, doc: RemoteDoc): Promise<void> {
   const res = await fetchWithTimeout(remoteUrl(syncId), {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(doc),
   });
   if (!res.ok) {
@@ -423,13 +441,21 @@ export async function getLocalDeviceId(): Promise<string> {
 }
 
 export function getFriendlyDeviceName(): string {
-  if (Device.deviceName && Device.deviceName !== 'iPhone' && Device.deviceName !== 'iPad') {
+  if (
+    Device.deviceName &&
+    Device.deviceName !== "iPhone" &&
+    Device.deviceName !== "iPad"
+  ) {
     return Device.deviceName;
   }
   if (Device.modelName) {
     return Device.modelName;
   }
-  return Platform.OS === 'ios' ? 'iPhone' : Platform.OS === 'android' ? 'Dispositivo Android' : 'Dispositivo';
+  return Platform.OS === "ios"
+    ? "iPhone"
+    : Platform.OS === "android"
+      ? "Dispositivo Android"
+      : "Dispositivo";
 }
 
 /**
@@ -439,11 +465,11 @@ export function getFriendlyDeviceName(): string {
 export function ensureUniqueDeviceName(
   candidateName: string,
   existingDevices: SyncDeviceInfo[],
-  myDeviceId: string
+  myDeviceId: string,
 ): string {
   const otherNames = existingDevices
     .filter((d) => d && d.id !== myDeviceId)
-    .map((d) => (d.name || '').trim().toLowerCase());
+    .map((d) => (d.name || "").trim().toLowerCase());
 
   let name = candidateName.trim();
   if (!otherNames.includes(name.toLowerCase())) {
@@ -460,9 +486,15 @@ export function ensureUniqueDeviceName(
 export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
   const id = await getLocalDeviceId();
   const name = getFriendlyDeviceName();
-  const model = Device.modelName || (Platform.OS === 'ios' ? 'iPhone' : 'Dispositivo');
-  const platform = Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web';
-  const osVersion = Device.osVersion || '';
+  const model =
+    Device.modelName || (Platform.OS === "ios" ? "iPhone" : "Dispositivo");
+  const platform =
+    Platform.OS === "ios"
+      ? "iOS"
+      : Platform.OS === "android"
+        ? "Android"
+        : "Web";
+  const osVersion = Device.osVersion || "";
   return {
     id,
     name,
@@ -477,19 +509,34 @@ export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
 export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
   const myDevice = await getLocalDeviceInfo();
   if (!isCloudConfigured()) {
-    return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 1 };
+    return {
+      myDevice,
+      otherDevices: [],
+      otherDevice: null,
+      isPaired: false,
+      totalDevices: 1,
+    };
   }
   try {
     const syncId = await getCloudSyncId();
     const remote = await fetchRemote(syncId);
     if (!remote || !remote.devices) {
-      return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 0 };
+      return {
+        myDevice,
+        otherDevices: [],
+        otherDevice: null,
+        isPaired: false,
+        totalDevices: 0,
+      };
     }
     const devicesMap: Record<string, SyncDeviceInfo> =
-      typeof remote.devices === 'object' ? remote.devices : {};
+      typeof remote.devices === "object" ? remote.devices : {};
     const registeredMy = devicesMap[myDevice.id] || myDevice;
     const others: SyncDeviceInfo[] = Object.entries(devicesMap)
-      .filter(([k, d]) => k !== myDevice.id && d && (d.id ? d.id !== myDevice.id : true))
+      .filter(
+        ([k, d]) =>
+          k !== myDevice.id && d && (d.id ? d.id !== myDevice.id : true),
+      )
       .map(([k, d]) => ({
         ...d,
         id: d.id || k,
@@ -497,7 +544,9 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
     const otherDevice = others.length > 0 ? others[0] : null;
 
     const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
-    const isDissociated = Boolean(remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
+    const isDissociated = Boolean(
+      remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
+    );
 
     if (isDissociated || (!isCurrentDeviceRegistered && others.length > 0)) {
       setTimeout(() => {
@@ -520,7 +569,13 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
       totalDevices: Object.keys(devicesMap).length,
     };
   } catch {
-    return { myDevice, otherDevices: [], otherDevice: null, isPaired: false, totalDevices: 1 };
+    return {
+      myDevice,
+      otherDevices: [],
+      otherDevice: null,
+      isPaired: false,
+      totalDevices: 1,
+    };
   }
 }
 
@@ -535,7 +590,9 @@ let isKickingOut = false;
  * Gestisce l'uscita forzata o la dissociazione di questo dispositivo dal gruppo.
  * Genera un nuovo ID privato, registra lo stato locale isolato e disattiva la sincronizzazione automatica.
  */
-async function handleLocalDeviceWasKickedOut(myDevice: SyncDeviceInfo): Promise<void> {
+async function handleLocalDeviceWasKickedOut(
+  myDevice: SyncDeviceInfo,
+): Promise<void> {
   if (isKickingOut) return;
   isKickingOut = true;
   try {
@@ -545,7 +602,7 @@ async function handleLocalDeviceWasKickedOut(myDevice: SyncDeviceInfo): Promise<
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
     await setICloudAutoSyncEnabled(false);
-    lastKnownDevicesHash = '';
+    lastKnownDevicesHash = "";
     lastKnownRemoteUpdatedAt = 0;
 
     const freshMyDevice: SyncDeviceInfo = {
@@ -579,7 +636,9 @@ async function handleLocalDeviceWasKickedOut(myDevice: SyncDeviceInfo): Promise<
  * Interrompe la sincronizzazione con il dispositivo specificato o resetta questo dispositivo.
  * Registra un tombstone permanente su cloud per impedire la ri-comparsa automatica.
  */
-export async function dissociateDevice(targetDeviceId?: string): Promise<{ success: boolean; message: string }> {
+export async function dissociateDevice(
+  targetDeviceId?: string,
+): Promise<{ success: boolean; message: string }> {
   try {
     const syncId = await getCloudSyncId();
     const myDevice = await getLocalDeviceInfo();
@@ -587,7 +646,9 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
 
     if (remote && remote.devices) {
       const updatedDevices = { ...remote.devices };
-      const updatedDissociated: Record<string, number> = { ...(remote.dissociatedDevices || {}) };
+      const updatedDissociated: Record<string, number> = {
+        ...(remote.dissociatedDevices || {}),
+      };
 
       // Se rimuoviamo nello specifico l'altro dispositivo
       if (targetDeviceId && targetDeviceId !== myDevice.id) {
@@ -608,20 +669,23 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
         });
 
         await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
-        lastKnownDevicesHash = Object.values(updatedDevices).filter(Boolean)
+        lastKnownDevicesHash = Object.values(updatedDevices)
+          .filter(Boolean)
           .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
           .sort()
-          .join('|');
+          .join("|");
         lastKnownRemoteUpdatedAt = Date.now();
 
-        const remaining = Object.values(updatedDevices).filter((d) => d && d.id !== myDevice.id);
+        const remaining = Object.values(updatedDevices).filter(
+          (d) => d && d.id !== myDevice.id,
+        );
         await notifyLiveSyncListeners(true);
         return {
           success: true,
           message:
             remaining.length > 0
-              ? 'Dispositivo associato rimosso con successo. La sincronizzazione rimane attiva con gli altri dispositivi.'
-              : 'Dispositivo associato rimosso con successo. La sincronizzazione è ora disattivata.',
+              ? "Dispositivo associato rimosso con successo. La sincronizzazione rimane attiva con gli altri dispositivi."
+              : "Dispositivo associato rimosso con successo. La sincronizzazione è ora disattivata.",
         };
       }
 
@@ -641,12 +705,13 @@ export async function dissociateDevice(targetDeviceId?: string): Promise<{ succe
 
     return {
       success: true,
-      message: 'Dispositivo dissociato con successo. La sincronizzazione è ora disattivata.',
+      message:
+        "Dispositivo dissociato con successo. La sincronizzazione è ora disattivata.",
     };
   } catch (err: any) {
     return {
       success: false,
-      message: err?.message || 'Errore durante la dissociazione.',
+      message: err?.message || "Errore durante la dissociazione.",
     };
   }
 }
@@ -662,20 +727,20 @@ function normalizeCourse(c?: Partial<CourseData> | null): CourseData {
 
 async function readLocalCourse(): Promise<CourseData> {
   const [url, name, className, defaultTabUrl] = await Promise.all([
-    AsyncStorage.getItem('selectedDegreeUrl'),
-    AsyncStorage.getItem('selectedDegreeName'),
-    AsyncStorage.getItem('selectedDegreeClassName'),
-    AsyncStorage.getItem('defaultTabUrl'),
+    AsyncStorage.getItem("selectedDegreeUrl"),
+    AsyncStorage.getItem("selectedDegreeName"),
+    AsyncStorage.getItem("selectedDegreeClassName"),
+    AsyncStorage.getItem("defaultTabUrl"),
   ]);
   return { url, name, className, defaultTabUrl };
 }
 
 async function writeLocalCourse(c: CourseData): Promise<void> {
   const pairs: [string, string | null][] = [
-    ['selectedDegreeUrl', c.url],
-    ['selectedDegreeName', c.name],
-    ['selectedDegreeClassName', c.className],
-    ['defaultTabUrl', c.defaultTabUrl],
+    ["selectedDegreeUrl", c.url],
+    ["selectedDegreeName", c.name],
+    ["selectedDegreeClassName", c.className],
+    ["defaultTabUrl", c.defaultTabUrl],
   ];
   for (const [key, val] of pairs) {
     if (val) await AsyncStorage.setItem(key, val);
@@ -687,7 +752,7 @@ function idsKey(list: AttendanceRecord[]): string {
   return list
     .map((r) => `${r.id}:${r.timestamp}`)
     .sort()
-    .join('|');
+    .join("|");
 }
 
 let syncInFlight: Promise<CloudSyncResult> | null = null;
@@ -697,7 +762,7 @@ async function runSync(): Promise<CloudSyncResult> {
     return {
       success: false,
       updated: false,
-      message: 'Sincronizzazione cloud non configurata in questa build.',
+      message: "Sincronizzazione cloud non configurata in questa build.",
     };
   }
 
@@ -707,8 +772,12 @@ async function runSync(): Promise<CloudSyncResult> {
     const myDevice = await getLocalDeviceInfo();
 
     // Verifica se questo dispositivo è stato dissociato o rimosso dal gruppo da un altro dispositivo
-    const isDissociated = Boolean(remote?.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
-    const isAlreadyRegistered = Boolean(remote?.devices && remote.devices[myDevice.id]);
+    const isDissociated = Boolean(
+      remote?.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
+    );
+    const isAlreadyRegistered = Boolean(
+      remote?.devices && remote.devices[myDevice.id],
+    );
     const otherRegisteredCount = remote?.devices
       ? Object.keys(remote.devices).filter((k) => k !== myDevice.id).length
       : 0;
@@ -719,13 +788,14 @@ async function runSync(): Promise<CloudSyncResult> {
         success: false,
         updated: true,
         notPaired: true,
-        message: 'Questo dispositivo è stato rimosso dal gruppo di sincronizzazione.',
+        message:
+          "Questo dispositivo è stato rimosso dal gruppo di sincronizzazione.",
       };
     }
 
     // Mappa dispositivi registrati nel cloud
     const devicesMap: Record<string, SyncDeviceInfo> =
-      remote?.devices && typeof remote.devices === 'object'
+      remote?.devices && typeof remote.devices === "object"
         ? { ...remote.devices }
         : {};
 
@@ -733,7 +803,7 @@ async function runSync(): Promise<CloudSyncResult> {
     const uniqueName = ensureUniqueDeviceName(
       myDevice.name,
       Object.values(devicesMap),
-      myDevice.id
+      myDevice.id,
     );
     devicesMap[myDevice.id] = {
       ...myDevice,
@@ -743,7 +813,9 @@ async function runSync(): Promise<CloudSyncResult> {
     };
 
     // Verifica se c'è un altro dispositivo associato
-    const otherDevices = Object.values(devicesMap).filter((d) => d && d.id !== myDevice.id);
+    const otherDevices = Object.values(devicesMap).filter(
+      (d) => d && d.id !== myDevice.id,
+    );
     const otherDevice = otherDevices.length > 0 ? otherDevices[0] : null;
     const isPaired = otherDevice !== null;
 
@@ -767,14 +839,17 @@ async function runSync(): Promise<CloudSyncResult> {
         success: false,
         updated: false,
         notPaired: true,
-        message: 'Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo con AirDrop o Codice.',
+        message:
+          "Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo con AirDrop o Codice.",
       };
     }
 
     // ── Corso / canale predefinito: vince la modifica più recente ──
     const localCourse = await readLocalCourse();
     const localSnap = await AsyncStorage.getItem(COURSE_SNAPSHOT_KEY);
-    let localMod = parseInt((await AsyncStorage.getItem(COURSE_MODIFIED_KEY)) || '0', 10) || 0;
+    let localMod =
+      parseInt((await AsyncStorage.getItem(COURSE_MODIFIED_KEY)) || "0", 10) ||
+      0;
     if (JSON.stringify(localCourse) !== localSnap) {
       localMod = localCourse.url ? Date.now() : 0;
     }
@@ -785,12 +860,16 @@ async function runSync(): Promise<CloudSyncResult> {
     let finalMod = localMod;
     let courseChanged = false;
     if (remoteCourse.url && remoteMod > localMod) {
-      courseChanged = JSON.stringify(remoteCourse) !== JSON.stringify(localCourse);
+      courseChanged =
+        JSON.stringify(remoteCourse) !== JSON.stringify(localCourse);
       if (courseChanged) await writeLocalCourse(remoteCourse);
       finalCourse = remoteCourse;
       finalMod = remoteMod;
     }
-    await AsyncStorage.setItem(COURSE_SNAPSHOT_KEY, JSON.stringify(finalCourse));
+    await AsyncStorage.setItem(
+      COURSE_SNAPSHOT_KEY,
+      JSON.stringify(finalCourse),
+    );
     await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
 
     // ── Presenze: unione per ID con tombstone per le cancellazioni ──
@@ -813,15 +892,21 @@ async function runSync(): Promise<CloudSyncResult> {
     const byId = new Map<string, AttendanceRecord>();
     for (const r of [...remoteAtt, ...localAtt]) {
       const prev = byId.get(r.id);
-      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) byId.set(r.id, r);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0))
+        byId.set(r.id, r);
     }
     const merged = Array.from(byId.values())
-      .filter((r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)))
+      .filter(
+        (r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)),
+      )
       .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
     const attChanged = idsKey(merged) !== idsKey(localAtt);
     if (attChanged) {
-      await AsyncStorage.setItem('studici_attendance_records', JSON.stringify(merged));
+      await AsyncStorage.setItem(
+        "studici_attendance_records",
+        JSON.stringify(merged),
+      );
     }
     await setAttendanceTombstones(tombstones);
 
@@ -848,13 +933,13 @@ async function runSync(): Promise<CloudSyncResult> {
         : `Tutto già sincronizzato con ${otherDevice.name}.`,
     };
   } catch (err: any) {
-    const aborted = err?.name === 'AbortError';
+    const aborted = err?.name === "AbortError";
     return {
       success: false,
       updated: false,
       message: aborted
-        ? 'Nessuna risposta dal cloud: controlla la connessione.'
-        : err?.message || 'Errore durante la sincronizzazione cloud.',
+        ? "Nessuna risposta dal cloud: controlla la connessione."
+        : err?.message || "Errore durante la sincronizzazione cloud.",
     };
   }
 }
@@ -876,12 +961,14 @@ export function syncWithICloudStorage(): Promise<CloudSyncResult> {
  * Collega questo dispositivo a uno spazio cloud esistente tramite Codice Dispositivo
  * (generato su un altro dispositivo) e scarica subito i dati.
  */
-export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResult> {
+export async function linkDeviceWithCode(
+  rawCode: string,
+): Promise<CloudSyncResult> {
   if (!isCloudConfigured()) {
     return {
       success: false,
       updated: false,
-      message: 'Sincronizzazione cloud non configurata in questa build.',
+      message: "Sincronizzazione cloud non configurata in questa build.",
     };
   }
   const code = normalizeSyncCode(rawCode);
@@ -889,7 +976,8 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
     return {
       success: false,
       updated: false,
-      message: 'Codice non valido. Deve contenere da 3 a 40 caratteri alfanumerici.',
+      message:
+        "Codice non valido. Deve contenere da 3 a 40 caratteri alfanumerici.",
     };
   }
 
@@ -902,12 +990,13 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       return {
         success: false,
         updated: false,
-        message: 'Codice non trovato. Esegui prima una sincronizzazione o condividi da un dispositivo attivo.',
+        message:
+          "Codice non trovato. Esegui prima una sincronizzazione o condividi da un dispositivo attivo.",
       };
     }
 
     const existingDevices: SyncDeviceInfo[] =
-      remote.devices && typeof remote.devices === 'object'
+      remote.devices && typeof remote.devices === "object"
         ? Object.values(remote.devices).filter(Boolean)
         : [];
 
@@ -916,10 +1005,12 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
     const uniqueName = ensureUniqueDeviceName(
       myDevice.name,
       existingDevices,
-      myDevice.id
+      myDevice.id,
     );
 
-    const updatedDissociated: Record<string, number> = { ...(remote.dissociatedDevices || {}) };
+    const updatedDissociated: Record<string, number> = {
+      ...(remote.dissociatedDevices || {}),
+    };
     delete updatedDissociated[myDevice.id];
 
     const updatedDevices: Record<string, SyncDeviceInfo> = {
@@ -943,12 +1034,17 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       finalCourse = remoteCourse;
       await writeLocalCourse(remoteCourse);
     }
-    await AsyncStorage.setItem(COURSE_SNAPSHOT_KEY, JSON.stringify(finalCourse));
+    await AsyncStorage.setItem(
+      COURSE_SNAPSHOT_KEY,
+      JSON.stringify(finalCourse),
+    );
     await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
 
     // Merge presenze
     const localAtt = await getAttendanceRecords();
-    const remoteAtt: AttendanceRecord[] = Array.isArray(remote.attendance) ? remote.attendance : [];
+    const remoteAtt: AttendanceRecord[] = Array.isArray(remote.attendance)
+      ? remote.attendance
+      : [];
     const localTomb = await getAttendanceTombstones();
     const remoteTomb = remote.tombstones || {};
 
@@ -956,13 +1052,19 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
     const byId = new Map<string, AttendanceRecord>();
     for (const r of [...remoteAtt, ...localAtt]) {
       const prev = byId.get(r.id);
-      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) byId.set(r.id, r);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0))
+        byId.set(r.id, r);
     }
     const merged = Array.from(byId.values())
-      .filter((r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)))
+      .filter(
+        (r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)),
+      )
       .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-    await AsyncStorage.setItem('studici_attendance_records', JSON.stringify(merged));
+    await AsyncStorage.setItem(
+      "studici_attendance_records",
+      JSON.stringify(merged),
+    );
     await setAttendanceTombstones(tombstones);
 
     await pushRemote(code, {
@@ -979,11 +1081,12 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
 
     const partner = otherDevices[0];
     const partnerName = partner ? partner.name : "gli altri dispositivi";
-    const displayMsg = otherDevices.length > 1
-      ? `Dispositivo associato con successo al gruppo (${otherDevices.length + 1} dispositivi)! La sincronizzazione è ora attiva tra tutti i dispositivi.`
-      : partner
-      ? `Dispositivo associato con successo a "${partner.name}"! La sincronizzazione è ora attiva tra i dispositivi.`
-      : `Dispositivo associato con successo! Sincronizzazione attiva.`;
+    const displayMsg =
+      otherDevices.length > 1
+        ? `Dispositivo associato con successo al gruppo (${otherDevices.length + 1} dispositivi)! La sincronizzazione è ora attiva tra tutti i dispositivi.`
+        : partner
+          ? `Dispositivo associato con successo a "${partner.name}"! La sincronizzazione è ora attiva tra i dispositivi.`
+          : `Dispositivo associato con successo! Sincronizzazione attiva.`;
 
     await notifyLiveSyncListeners(true);
 
@@ -999,9 +1102,9 @@ export async function linkDeviceWithCode(rawCode: string): Promise<CloudSyncResu
       success: false,
       updated: false,
       message:
-        err?.name === 'AbortError'
-          ? 'Nessuna risposta dal cloud: controlla la connessione.'
-          : err?.message || 'Impossibile associare il dispositivo.',
+        err?.name === "AbortError"
+          ? "Nessuna risposta dal cloud: controlla la connessione."
+          : err?.message || "Impossibile associare il dispositivo.",
     };
   }
 }
@@ -1030,10 +1133,13 @@ setAttendanceChangeListener(() => {
 
 let livePollTimer: ReturnType<typeof setInterval> | null = null;
 let lastKnownRemoteUpdatedAt = 0;
-let lastKnownDevicesHash = '';
+let lastKnownDevicesHash = "";
 let isPollingInProgress = false;
 
-export type LiveSyncCallback = (status: PairedDevicesStatus, updated: boolean) => void;
+export type LiveSyncCallback = (
+  status: PairedDevicesStatus,
+  updated: boolean,
+) => void;
 const liveSyncListeners = new Set<LiveSyncCallback>();
 
 /**
@@ -1078,8 +1184,12 @@ async function checkRemoteLiveChanges(): Promise<void> {
     if (!remote) return;
 
     const myDevice = await getLocalDeviceInfo();
-    const isDissociated = Boolean(remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id]);
-    const isAlreadyRegistered = Boolean(remote.devices && remote.devices[myDevice.id]);
+    const isDissociated = Boolean(
+      remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
+    );
+    const isAlreadyRegistered = Boolean(
+      remote.devices && remote.devices[myDevice.id],
+    );
     const otherDevs = remote.devices
       ? Object.keys(remote.devices).filter((k) => k !== myDevice.id)
       : [];
@@ -1090,17 +1200,20 @@ async function checkRemoteLiveChanges(): Promise<void> {
     }
 
     const devices = remote.devices || {};
-    const devEntries = Object.values(devices).filter(Boolean) as SyncDeviceInfo[];
+    const devEntries = Object.values(devices).filter(
+      Boolean,
+    ) as SyncDeviceInfo[];
     const devHash = devEntries
       .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
       .sort()
-      .join('|');
+      .join("|");
 
     const remoteUpdated = remote.updatedAt || 0;
     const localLastSync = (await getLastCloudSync()) || 0;
 
     const hasNewDevices = devHash !== lastKnownDevicesHash;
-    const hasNewData = remoteUpdated > Math.max(localLastSync, lastKnownRemoteUpdatedAt);
+    const hasNewData =
+      remoteUpdated > Math.max(localLastSync, lastKnownRemoteUpdatedAt);
 
     if (hasNewDevices || hasNewData) {
       lastKnownDevicesHash = devHash;
@@ -1139,8 +1252,8 @@ export function stopLiveSyncLoop(): void {
 }
 
 // Gestione Foreground / Background con AppState
-AppState.addEventListener('change', (nextState: AppStateStatus) => {
-  if (nextState === 'active') {
+AppState.addEventListener("change", (nextState: AppStateStatus) => {
+  if (nextState === "active") {
     startLiveSyncLoop();
   } else {
     stopLiveSyncLoop();

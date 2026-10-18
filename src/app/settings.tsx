@@ -1,6 +1,8 @@
+import { useTheme } from "@/context/ThemeContext";
 import { MenuView } from "@expo/ui/community/menu";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
@@ -14,7 +16,6 @@ import {
   Modal,
   Platform,
   ScrollView,
-  Share,
   StyleSheet,
   Switch,
   Text,
@@ -24,10 +25,16 @@ import {
   View,
 } from "react-native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
+import { CommuterConfig } from "../types/commuter";
+import {
+  getLastCalendarSync,
+  syncScheduleToAppleCalendar,
+} from "../utils/appleCalendar";
 import {
   AttendanceRecord,
   AttendanceStats,
@@ -37,51 +44,40 @@ import {
   getAttendanceStats,
 } from "../utils/attendance";
 import {
-  Degree,
-  fetchAllCourseData,
-  fetchDegrees,
-  fetchTabs,
-  getCachedTabs,
-  fetchScheduleData,
-  Tab,
-} from "../utils/scraper";
-import {
-  syncScheduleToAppleCalendar,
-  getLastCalendarSync,
-} from "../utils/appleCalendar";
-import {
-  exportScheduleToPdf,
-  exportAttendanceToPdf,
-} from "../utils/pdfExport";
-import * as Clipboard from "expo-clipboard";
-import {
-  getCloudSyncId,
-  getLastCloudSync,
   copyCloudSyncCodeToClipboard,
-  restoreFromCloudBackup,
-  getICloudAutoSyncEnabled,
-  setICloudAutoSyncEnabled,
-  syncWithICloudStorage,
-  linkDeviceWithCode,
-  isValidSyncCode,
-  isCloudConfigured,
-  setCustomCloudSyncId,
-  getPairedDevicesInfo,
   dissociateDevice,
+  getCloudSyncId,
+  getICloudAutoSyncEnabled,
+  getLastCloudSync,
+  getPairedDevicesInfo,
+  isCloudConfigured,
+  isValidSyncCode,
+  linkDeviceWithCode,
   PairedDevicesStatus,
+  restoreFromCloudBackup,
+  setCustomCloudSyncId,
+  setICloudAutoSyncEnabled,
   subscribeToLiveSync,
+  syncWithICloudStorage,
 } from "../utils/cloudSync";
-import { CommuterConfigModal } from "../components/CommuterConfigModal";
-import { CommuterConfig } from "../types/commuter";
 import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
-import { useTheme } from "@/context/ThemeContext";
+import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
 import {
+  Degree,
+  fetchAllCourseData,
+  fetchDegrees,
+  fetchScheduleData,
+  fetchTabs,
+  getCachedTabs,
+  Tab,
+} from "../utils/scraper";
+import {
+  AppUpdateInfo,
   checkForAppUpdate,
   GITHUB_LATEST_RELEASE_URL,
-  AppUpdateInfo,
 } from "../utils/updateChecker";
 
 const SAPIENZA_RED = "#822433";
@@ -103,6 +99,7 @@ const formatSyncDate = (ts: number | null): string => {
 };
 
 export default function ProfiloScreen() {
+  const insets = useSafeAreaInsets();
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
   const [degreeName, setDegreeName] = useState<string>("");
   const [degreeClassName, setDegreeClassName] = useState<string>("");
@@ -124,18 +121,25 @@ export default function ProfiloScreen() {
   const [attendanceStats, setAttendanceStats] =
     useState<AttendanceStats | null>(null);
 
-  // Stati Sincronizzazione Cloud, Calendario Apple ed Esportazione PDF
+  // Stati Sincronizzazione, Calendario Apple ed Esportazione PDF
   const [cloudModalVisible, setCloudModalVisible] = useState(false);
   const [cloudSyncId, setCloudSyncId] = useState<string>("");
-  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<number | null>(null);
-  const [lastCalendarSyncTime, setLastCalendarSyncTime] = useState<number | null>(null);
+  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<number | null>(
+    null,
+  );
+  const [lastCalendarSyncTime, setLastCalendarSyncTime] = useState<
+    number | null
+  >(null);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
   const [iCloudAutoSync, setICloudAutoSync] = useState(false);
-  const [pairedDevices, setPairedDevices] = useState<PairedDevicesStatus | null>(null);
-  const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(null);
+  const [pairedDevices, setPairedDevices] =
+    useState<PairedDevicesStatus | null>(null);
+  const [commuterConfig, setCommuterConfig] = useState<CommuterConfig | null>(
+    null,
+  );
   const [commuterModalVisible, setCommuterModalVisible] = useState(false);
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
@@ -153,15 +157,16 @@ export default function ProfiloScreen() {
     if (info.hasUpdate) {
       Alert.alert(
         "Aggiornamento Disponibile",
-        `È disponibile la nuova versione v${info.latestVersion} di StudICI (versione installata: v${info.currentVersion}).\n\nAggiorna l'app direttamente su GitHub Releases per avere sempre gli orari e le funzionalità più recenti.`,
+        `È disponibile la nuova versione v${info.latestVersion} (versione attuale: v${info.currentVersion}).`,
         [
           { text: "Più tardi", style: "cancel" },
           {
-            text: "Aggiorna su GitHub",
+            text: "Aggiorna",
             style: "default",
-            onPress: () => Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL),
+            onPress: () =>
+              Linking.openURL(info.htmlUrl || GITHUB_LATEST_RELEASE_URL),
           },
-        ]
+        ],
       );
     } else {
       Alert.alert(
@@ -224,13 +229,14 @@ export default function ProfiloScreen() {
       setAttendanceStats(getAttendanceStats(attList));
 
       // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
-      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig] = await Promise.all([
-        getCloudSyncId(),
-        getLastCloudSync(),
-        getLastCalendarSync(),
-        getICloudAutoSyncEnabled(),
-        getCommuterConfig(),
-      ]);
+      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig] =
+        await Promise.all([
+          getCloudSyncId(),
+          getLastCloudSync(),
+          getLastCalendarSync(),
+          getICloudAutoSyncEnabled(),
+          getCommuterConfig(),
+        ]);
 
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
@@ -239,20 +245,26 @@ export default function ProfiloScreen() {
       setCommuterConfig(commConfig);
 
       // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
-      getPairedDevicesInfo().then((pairs) => {
-        if (pairs) setPairedDevices(pairs);
-      }).catch(() => {});
+      getPairedDevicesInfo()
+        .then((pairs) => {
+          if (pairs) setPairedDevices(pairs);
+        })
+        .catch(() => {});
 
       if (storedUrl && localTabs.length === 0) {
-        fetchTabs(storedUrl).then((tabs) => {
-          if (tabs && tabs.length > 0) setAvailableTabs(tabs);
-        }).catch(() => {});
+        fetchTabs(storedUrl)
+          .then((tabs) => {
+            if (tabs && tabs.length > 0) setAvailableTabs(tabs);
+          })
+          .catch(() => {});
       }
 
       if (degrees.length === 0) {
-        fetchDegrees().then((degList) => {
-          if (degList && degList.length > 0) setDegrees(degList);
-        }).catch(() => {});
+        fetchDegrees()
+          .then((degList) => {
+            if (degList && degList.length > 0) setDegrees(degList);
+          })
+          .catch(() => {});
       }
     } catch (e) {
       console.error("Errore caricamento profilo:", e);
@@ -376,7 +388,7 @@ export default function ProfiloScreen() {
 
   const resetApp = async () => {
     Alert.alert(
-      "Ripristina Applicazione",
+      "Ripristina",
       "Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso e le impostazioni salvate.",
       [
         { text: "Annulla", style: "cancel" },
@@ -425,7 +437,7 @@ export default function ProfiloScreen() {
 
   const handleClearAllAttendance = () => {
     Alert.alert(
-      "Azzera Registro Presenze",
+      "Azzera Registro presenze",
       "Sei sicuro di voler cancellare tutte le presenze registrate finora? Questa operazione non può essere annullata.",
       [
         { text: "Annulla", style: "cancel" },
@@ -559,19 +571,22 @@ export default function ProfiloScreen() {
       if (res.success) {
         setLastCloudSyncTime(await getLastCloudSync());
         if (res.updated) await loadProfileData();
-        Alert.alert("Sincronizzazione Cloud", res.message);
+        Alert.alert("Sincronizzazione", res.message);
       } else {
         if (res.notPaired) {
           Alert.alert(
             "Nessun Dispositivo Associato",
-            "La sincronizzazione tra dispositivi richiede che due dispositivi siano associati. Invia il codice con AirDrop o inseriscilo sul secondo iPhone per associarlo."
+            "Copia il codice e inseriscilo sul secondo dispositivo per avviare la sincronizzazione.",
           );
         } else {
           Alert.alert("Sincronizzazione non riuscita", res.message);
         }
       }
     } catch {
-      Alert.alert("Errore", "Impossibile completare la sincronizzazione cloud.");
+      Alert.alert(
+        "Errore",
+        "Impossibile completare la sincronizzazione cloud.",
+      );
     } finally {
       setIsSyncingCloud(false);
     }
@@ -579,12 +594,18 @@ export default function ProfiloScreen() {
 
   const handleSyncCalendar = async () => {
     if (!degreeUrl) {
-      Alert.alert("Nessun corso", "Configura prima un corso di laurea per sincronizzare le lezioni.");
+      Alert.alert(
+        "Nessun corso",
+        "Configura prima un corso di laurea per sincronizzare le lezioni.",
+      );
       return;
     }
     const tabUrl = defaultTabUrl || availableTabs[0]?.url;
     if (!tabUrl) {
-      Alert.alert("Nessun canale", "Seleziona prima un canale o anno per sincronizzare l'orario.");
+      Alert.alert(
+        "Nessun canale",
+        "Seleziona prima un canale o anno per sincronizzare l'orario.",
+      );
       return;
     }
 
@@ -594,7 +615,7 @@ export default function ProfiloScreen() {
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Sincronizza Ora",
+          text: "Sincronizza",
           onPress: async () => {
             setIsSyncingCalendar(true);
             try {
@@ -602,7 +623,7 @@ export default function ProfiloScreen() {
               const res = await syncScheduleToAppleCalendar(
                 schedule,
                 courseMetadata.cleanCourseTitle,
-                defaultTabLabel
+                defaultTabLabel,
               );
               if (res.success) {
                 setLastCalendarSyncTime(Date.now());
@@ -611,19 +632,26 @@ export default function ProfiloScreen() {
                 Alert.alert("Errore Calendario", res.message);
               }
             } catch (err: any) {
-              Alert.alert("Errore", err?.message || "Errore durante la sincronizzazione con il calendario.");
+              Alert.alert(
+                "Errore",
+                err?.message ||
+                  "Errore durante la sincronizzazione con il calendario.",
+              );
             } finally {
               setIsSyncingCalendar(false);
             }
           },
         },
-      ]
+      ],
     );
   };
 
   const handleExportSchedulePdf = async () => {
     if (!degreeUrl) {
-      Alert.alert("Nessun corso", "Configura prima un corso per esportare l'orario.");
+      Alert.alert(
+        "Nessun corso",
+        "Configura prima un corso per esportare l'orario.",
+      );
       return;
     }
     const tabUrl = defaultTabUrl || availableTabs[0]?.url;
@@ -635,9 +663,16 @@ export default function ProfiloScreen() {
     setIsExportingPdf(true);
     try {
       const schedule = await fetchScheduleData(tabUrl, true);
-      await exportScheduleToPdf(schedule, courseMetadata.cleanCourseTitle, defaultTabLabel);
+      await exportScheduleToPdf(
+        schedule,
+        courseMetadata.cleanCourseTitle,
+        defaultTabLabel,
+      );
     } catch (err: any) {
-      Alert.alert("Errore Esportazione", err?.message || "Impossibile generare il PDF dell'orario.");
+      Alert.alert(
+        "Errore Esportazione",
+        err?.message || "Impossibile generare il PDF dell'orario.",
+      );
     } finally {
       setIsExportingPdf(false);
     }
@@ -646,36 +681,27 @@ export default function ProfiloScreen() {
   const handleExportAttendancePdf = async () => {
     setIsExportingPdf(true);
     try {
-      await exportAttendanceToPdf(attendanceRecords, attendanceStats, courseMetadata.cleanCourseTitle);
+      await exportAttendanceToPdf(
+        attendanceRecords,
+        attendanceStats,
+        courseMetadata.cleanCourseTitle,
+      );
     } catch (err: any) {
-      Alert.alert("Errore Esportazione", err?.message || "Impossibile generare il PDF del registro presenze.");
+      Alert.alert(
+        "Errore Esportazione",
+        err?.message || "Impossibile generare il PDF del registro presenze.",
+      );
     } finally {
       setIsExportingPdf(false);
     }
   };
 
-  const handleAirDrop = async () => {
-    try {
-      setIsSyncingCloud(true);
-      await syncWithICloudStorage();
-      const code = await getCloudSyncId();
-      const url = `studici://sync?code=${encodeURIComponent(code)}`;
-      await Share.share({
-        title: "Sincronizza StudICI",
-        message: `Codice di sincronizzazione StudICI:\n${code}\n\nSe hai l'app installata o usi LiveContainer, apri questo link:\n${url}`,
-        url: url,
-      });
-      const updatedPairs = await getPairedDevicesInfo();
-      setPairedDevices(updatedPairs);
-    } catch {
-      Alert.alert("Errore", "Impossibile aprire il menu di condivisione.");
-    } finally {
-      setIsSyncingCloud(false);
-    }
-  };
-
-  const handleDissociateDevice = (targetDeviceId?: string, deviceName?: string) => {
-    const isSelf = !targetDeviceId || targetDeviceId === pairedDevices?.myDevice?.id;
+  const handleDissociateDevice = (
+    targetDeviceId?: string,
+    deviceName?: string,
+  ) => {
+    const isSelf =
+      !targetDeviceId || targetDeviceId === pairedDevices?.myDevice?.id;
     const targetName =
       deviceName ||
       (isSelf
@@ -709,7 +735,7 @@ export default function ProfiloScreen() {
                     ? "Dispositivo Scollegato"
                     : "Dispositivo Dissociato"
                   : "Errore",
-                res.message
+                res.message,
               );
             } catch {
               Alert.alert("Errore", "Impossibile dissociare il dispositivo.");
@@ -718,7 +744,7 @@ export default function ProfiloScreen() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -726,7 +752,7 @@ export default function ProfiloScreen() {
     if (Platform.OS === "ios") {
       Alert.prompt(
         "Personalizza Codice Cloud",
-        "Scegli un nome semplice non ancora in uso (es. il tuo nome o matricola). Inserendo lo stesso nome su entrambi i telefoni, si sincronizzeranno senza codici casuali.",
+        "Scegli un identificativo univoco (es. nome o matricola). Usando lo stesso testo su entrambi i dispositivi si collegheranno automaticamente.",
         [
           { text: "Annulla", style: "cancel" },
           {
@@ -753,22 +779,18 @@ export default function ProfiloScreen() {
   const handleCopyCloudCode = async () => {
     try {
       if (isCloudConfigured()) {
-        // Sincronizza prima, così il codice punta a dati già presenti sul cloud
         await syncWithICloudStorage();
         const code = await getCloudSyncId();
         await Clipboard.setStringAsync(code);
         setCloudSyncId(code);
         Alert.alert(
-          "Codice Copiato!",
-          `Il Codice Dispositivo ${code} è stato copiato. Inseriscilo nel campo "Collega un altro dispositivo" sull'altro dispositivo.`,
+          "Codice Copiato",
+          `Codice ${code} copiato negli appunti. Inseriscilo sull'altro dispositivo per collegarlo.`,
         );
         return;
       }
       await copyCloudSyncCodeToClipboard();
-      Alert.alert(
-        "Codice Copiato!",
-        "Il codice di backup è stato copiato negli appunti. Incollalo su un altro dispositivo per ripristinare i tuoi dati.",
-      );
+      Alert.alert("Codice Copiato", "Codice copiato negli appunti.");
     } catch {
       Alert.alert("Errore", "Impossibile copiare il codice.");
     }
@@ -803,7 +825,7 @@ export default function ProfiloScreen() {
 
     // Codice di backup manuale (STUDICI_CLOUD:...)
     Alert.alert(
-      "Ripristina Dati Cloud",
+      "Ripristina dati Cloud",
       "I dati attuali sul dispositivo verranno sostituiti con quelli presenti nel backup cloud. Continuare?",
       [
         { text: "Annulla", style: "cancel" },
@@ -816,21 +838,21 @@ export default function ProfiloScreen() {
               setRestoreCodeInput("");
               setCloudModalVisible(false);
               await loadProfileData();
-              Alert.alert("Ripristino Completato", res.message);
+              Alert.alert("Ripristino completato", res.message);
             } else {
-              Alert.alert("Errore Ripristino", res.message);
+              Alert.alert("Errore ripristino", res.message);
             }
           },
         },
-      ]
+      ],
     );
   };
 
   const handleToggleICloudAutoSync = async (value: boolean) => {
     if (!pairedDevices?.isPaired) {
       Alert.alert(
-        "Associazione Richiesta",
-        "La sincronizzazione automatica non è selezionabile finché non associ un secondo dispositivo. Usa il pulsante AirDrop o condividi il codice per associare l'altro iPhone/iPad.",
+        "Associazione richiesta",
+        "Associa prima un secondo dispositivo usando il codice per attivare la sincronizzazione automatica.",
       );
       setICloudAutoSync(false);
       await setICloudAutoSyncEnabled(false);
@@ -983,12 +1005,19 @@ export default function ProfiloScreen() {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={{ paddingBottom: 130 }}
+        contentContainerStyle={{
+          paddingBottom: Math.max(20, insets.bottom + 14),
+        }}
         showsVerticalScrollIndicator={false}
       >
         {/* Apple ID Style Account Header Card con Metadati Corso */}
         <View style={styles.profileHeaderCard}>
-          <View style={[styles.profileAvatarBox, { backgroundColor: theme.primary, shadowColor: theme.primary }]}>
+          <View
+            style={[
+              styles.profileAvatarBox,
+              { backgroundColor: theme.primary, shadowColor: theme.primary },
+            ]}
+          >
             <Ionicons name="school" size={26} color="#ffffff" />
           </View>
           <View style={styles.profileHeaderInfo}>
@@ -1074,8 +1103,13 @@ export default function ProfiloScreen() {
               }
             }}
           >
-            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
-              <Ionicons name="school" size={17} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="school-outline" size={17} color={theme.accent} />
             </View>
             <Text style={styles.rowTitle}>Corso di Laurea</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
@@ -1092,10 +1126,15 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={() => setChannelModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#ff2d55" }]}>
-              <Ionicons name="funnel" size={16} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="funnel-outline" size={16} color={theme.accent} />
             </View>
-            <Text style={styles.rowTitle}>Corso Predefinito</Text>
+            <Text style={styles.rowTitle}>Specifiche</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
               {defaultTabLabel}
             </Text>
@@ -1103,9 +1142,9 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          {
-            "L'app visualizzerà in automatico l'orario e le aule del canale selezionato."
-          }
+          Modifica il corso di laurea e il canale/anno predefinito per
+          l&apos;app. Queste impostazioni influenzano le lezioni, gli orari e le
+          aule visualizzate.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -1121,7 +1160,7 @@ export default function ProfiloScreen() {
         >
           {isNativeComponentAvailable ? (
             <MenuView
-              title="Colore Tema"
+              title="Tema"
               actions={themeMenuActions}
               shouldOpenOnLongPress={false}
               onPressAction={({ nativeEvent }) => {
@@ -1130,13 +1169,25 @@ export default function ProfiloScreen() {
               style={{ width: themeCardWidth }}
             >
               <View style={[styles.tableRow, { width: themeCardWidth }]}>
-                <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
-                  <Ionicons name="color-palette" size={17} color="#ffffff" />
+                <View
+                  style={[
+                    styles.iconBox,
+                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                  ]}
+                >
+                  <Ionicons
+                    name="color-palette-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
                 </View>
-                <Text style={styles.rowTitle}>Colore Tema</Text>
+                <Text style={styles.rowTitle}>Tema</Text>
                 <View style={styles.themeRowPreview}>
                   <View
-                    style={[styles.themeRowDot, { backgroundColor: theme.primary }]}
+                    style={[
+                      styles.themeRowDot,
+                      { backgroundColor: theme.primary },
+                    ]}
                   />
                   <Text style={styles.rowDetail} numberOfLines={1}>
                     {theme.name}
@@ -1152,13 +1203,25 @@ export default function ProfiloScreen() {
                 activeOpacity={0.7}
                 onPress={() => setThemeSectionExpanded((prev) => !prev)}
               >
-                <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
-                  <Ionicons name="color-palette" size={17} color="#ffffff" />
+                <View
+                  style={[
+                    styles.iconBox,
+                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                  ]}
+                >
+                  <Ionicons
+                    name="color-palette-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
                 </View>
-                <Text style={styles.rowTitle}>Colore Tema</Text>
+                <Text style={styles.rowTitle}>Tema</Text>
                 <View style={styles.themeRowPreview}>
                   <View
-                    style={[styles.themeRowDot, { backgroundColor: theme.primary }]}
+                    style={[
+                      styles.themeRowDot,
+                      { backgroundColor: theme.primary },
+                    ]}
                   />
                   <Text style={styles.rowDetail} numberOfLines={1}>
                     {theme.name}
@@ -1197,13 +1260,20 @@ export default function ProfiloScreen() {
                             ]}
                           >
                             {isSelected && (
-                              <Ionicons name="checkmark" size={13} color="#ffffff" />
+                              <Ionicons
+                                name="checkmark"
+                                size={13}
+                                color="#ffffff"
+                              />
                             )}
                           </View>
                           <Text
                             style={[
                               styles.themeCardName,
-                              isSelected && { color: "#ffffff", fontWeight: "700" },
+                              isSelected && {
+                                color: "#ffffff",
+                                fontWeight: "700",
+                              },
                             ]}
                             numberOfLines={1}
                           >
@@ -1219,7 +1289,7 @@ export default function ProfiloScreen() {
           )}
         </View>
         <Text style={styles.sectionFooter}>
-          Modifica il colore tema dell&apos;intera app. I dettagli visivi e le sezioni del viaggio pendolare si adatteranno automaticamente.
+          Personalizza il colore principale dell&apos;app.
         </Text>
 
         {/* Gruppo: REGISTRO PRESENZE */}
@@ -1283,10 +1353,19 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={() => setAttendanceModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#10b981" }]}>
-              <Ionicons name="calendar" size={17} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons
+                name="calendar-outline"
+                size={17}
+                color={theme.accent}
+              />
             </View>
-            <Text style={styles.rowTitle}>Registro Presenze</Text>
+            <Text style={styles.rowTitle}>Registro presenze</Text>
             <Text style={styles.rowDetail}>
               {attendanceRecords.length > 0
                 ? `${attendanceRecords.length} registrate`
@@ -1296,44 +1375,66 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          {
-            "Tieni premuta una lezione nell'orario per registrarne la frequenza."
-          }
+          Tieni premuta una lezione nell&apos;orario per registrarne la
+          frequenza.
         </Text>
 
         {/* Gruppo: SINCRONIZZAZIONE */}
         <Text style={styles.sectionHeader}>SINCRONIZZAZIONE</Text>
         <View style={styles.groupedCard}>
-          {/* Riga 1: Sincronizzazione Cloud */}
+          {/* Riga 1: Sincronizzazione */}
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
             onPress={() => setCloudModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#0ea5e9" }]}>
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
               {isSyncingCloud ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons name="cloud-done" size={17} color="#ffffff" />
+                <Ionicons
+                  name="cloud-outline"
+                  size={17}
+                  color={theme.accent}
+                />
               )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Sincronizzazione Cloud</Text>
+              <Text style={styles.rowTitle}>Sincronizzazione</Text>
               <Text style={styles.rowSubTitle}>
                 {pairedDevices?.isPaired && pairedDevices.otherDevice
                   ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
-                  : "Non associato (richiede 2 dispositivi)"}
+                  : "Non attiva"}
               </Text>
             </View>
             <TouchableOpacity
-              style={styles.inlineActionBtn}
+              style={[
+                styles.inlineActionBtn,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                },
+              ]}
               activeOpacity={0.7}
               onPress={handleSyncCloud}
               disabled={isSyncingCloud}
             >
-              <Text style={styles.inlineActionBtnText}>Sincronizza</Text>
+              <Text style={[styles.inlineActionBtnText, { color: theme.accent }]}>
+                {isSyncingCloud ? "In corso..." : "Sincronizza"}
+              </Text>
             </TouchableOpacity>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" style={{ marginLeft: 6 }} />
+            <Ionicons
+              name="chevron-forward"
+              size={15}
+              color="#48484a"
+              style={{ marginLeft: 6 }}
+            />
           </TouchableOpacity>
 
           <View style={styles.separator} />
@@ -1345,11 +1446,20 @@ export default function ProfiloScreen() {
             onPress={handleSyncCalendar}
             disabled={isSyncingCalendar}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#ff2d55" }]}>
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
               {isSyncingCalendar ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons name="calendar" size={17} color="#ffffff" />
+                <Ionicons
+                  name="calendar-clear-outline"
+                  size={17}
+                  color={theme.accent}
+                />
               )}
             </View>
             <View style={{ flex: 1 }}>
@@ -1359,46 +1469,67 @@ export default function ProfiloScreen() {
               </Text>
             </View>
             <TouchableOpacity
-              style={[styles.inlineActionBtn, { backgroundColor: "rgba(255, 45, 85, 0.15)" }]}
+              style={[
+                styles.inlineActionBtn,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                },
+              ]}
               activeOpacity={0.7}
               onPress={handleSyncCalendar}
               disabled={isSyncingCalendar}
             >
-              <Text style={[styles.inlineActionBtnText, { color: "#ff2d55" }]}>
+              <Text style={[styles.inlineActionBtnText, { color: theme.accent }]}>
                 {isSyncingCalendar ? "In corso..." : "Sincronizza"}
               </Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Sincronizza lezioni e presenze nel cloud o esportale direttamente nel Calendario Apple.
+          Sincronizza tra dispositivi o esporta nel calendario Apple.
         </Text>
 
         {/* Gruppo: ITINERARIO PENDOLARE */}
-        <Text style={styles.sectionHeader}>ITINERARIO PENDOLARE</Text>
+        <Text style={styles.sectionHeader}>VIAGGIO</Text>
         <View style={styles.groupedCard}>
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
             onPress={() => setCommuterModalVisible(true)}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#fb923c" }]}>
-              <Ionicons name="train" size={17} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="train-outline" size={17} color={theme.accent} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Impostazioni Viaggio Pendolare</Text>
+              <Text style={styles.rowTitle}>Impostazioni</Text>
               <Text style={styles.rowSubTitle}>
-                {commuterConfig?.originAddress || "Amelia"} ➔{" "}
-                {commuterConfig?.departureStation?.shortName || "Orte"} ➔{" "}
-                {commuterConfig?.arrivalStation?.shortName || "Roma Tiburtina"}
-                {commuterConfig?.carLeg?.enabled ? " • Auto inclusa" : ""}
+                {commuterConfig?.enabled === false
+                  ? "Tocca per configurare"
+                  : `${commuterConfig?.originAddress || "Amelia"} ➔ ${
+                      commuterConfig?.departureStation?.shortName || "Orte"
+                    } ➔ ${commuterConfig?.arrivalStation?.shortName || "Roma Tiburtina"}${
+                      commuterConfig?.carLeg?.enabled ? " • Auto inclusa" : ""
+                    }`}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" style={{ marginLeft: 6 }} />
+            <Ionicons
+              name="chevron-forward"
+              size={15}
+              color="#48484a"
+              style={{ marginLeft: 6 }}
+            />
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Configura partenza da casa, tragitto in auto per la stazione, stazioni Trenitalia e mezzi urbani a Roma per calcolare l&apos;itinerario migliore.
+          Configura il tuo itinerario pendolare per ricevere gli aggiornamenti
+          sullo stato dei treni.
         </Text>
 
         {/* Gruppo: ESPORTA & CONDIVIDI */}
@@ -1406,50 +1537,62 @@ export default function ProfiloScreen() {
         <View style={styles.groupedCard}>
           {/* Riga 1: PDF Orario Settimanale */}
           <TouchableOpacity
-            style={styles.tableRow}
+            style={[styles.tableRow, styles.exportRowCentered]}
             activeOpacity={0.7}
             onPress={handleExportSchedulePdf}
             disabled={isExportingPdf}
           >
-            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+            <View
+              style={[
+                styles.iconBox,
+                styles.exportIconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
               {isExportingPdf ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons name="document-text" size={17} color="#ffffff" />
+                <Ionicons
+                  name="document-text-outline"
+                  size={17}
+                  color={theme.accent}
+                />
               )}
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Orario Settimanale (PDF)</Text>
-              <Text style={styles.rowSubTitle}>Formato Calendario A4</Text>
-            </View>
-            <Ionicons name="share-outline" size={18} color="#8e8e93" />
+            <Text style={styles.exportRowTitle}>Orario settimanale</Text>
           </TouchableOpacity>
 
-          <View style={styles.separator} />
+          <View style={styles.exportSeparator} />
 
-          {/* Riga 2: PDF Registro Presenze */}
+          {/* Riga 2: PDF Registro presenze */}
           <TouchableOpacity
-            style={styles.tableRow}
+            style={[styles.tableRow, styles.exportRowCentered]}
             activeOpacity={0.7}
             onPress={handleExportAttendancePdf}
             disabled={isExportingPdf}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#10b981" }]}>
+            <View
+              style={[
+                styles.iconBox,
+                styles.exportIconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
               {isExportingPdf ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons name="stats-chart" size={16} color="#ffffff" />
+                <Ionicons
+                  name="stats-chart-outline"
+                  size={16}
+                  color={theme.accent}
+                />
               )}
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Registro Presenze (PDF)</Text>
-              <Text style={styles.rowSubTitle}>Statistiche, Frequenze & Calendario</Text>
-            </View>
-            <Ionicons name="share-outline" size={18} color="#8e8e93" />
+            <Text style={styles.exportRowTitle}>Registro presenze</Text>
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Genera ed esporta documenti PDF pronti per la stampa, salvataggio su File o condivisione.
+          Esporta orario e presenze in formato PDF.
         </Text>
 
         {/* Gruppo 2: FONTI UFFICIALI */}
@@ -1460,8 +1603,13 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={openSourceWebsite}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#007aff" }]}>
-              <Ionicons name="globe-outline" size={17} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="globe-outline" size={17} color={theme.accent} />
             </View>
             <Text style={styles.rowTitle}>Portale Orari ICI</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
@@ -1470,10 +1618,6 @@ export default function ProfiloScreen() {
             <Ionicons name="open-outline" size={15} color="#48484a" />
           </TouchableOpacity>
         </View>
-        <Text style={styles.sectionFooter}>
-          Orari e aule sono estratti direttamente dalle tabelle ufficiali della
-          presidenza.
-        </Text>
 
         {/* Gruppo 3: SISTEMA & ARCHIVIAZIONE */}
         <Text style={styles.sectionHeader}>ARCHIVIAZIONE</Text>
@@ -1484,10 +1628,19 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={clearCacheAndReload}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#34c759" }]}>
-              <Ionicons name="refresh" size={17} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons
+                name="refresh-outline"
+                size={17}
+                color={theme.accent}
+              />
             </View>
-            <Text style={styles.rowTitle}>Aggiorna</Text>
+            <Text style={styles.rowTitle}>Riscarica orari</Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
 
@@ -1499,18 +1652,26 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={resetApp}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#ff3b30" }]}>
-              <Ionicons name="trash" size={16} color="#ffffff" />
+            <View
+              style={[
+                styles.iconBox,
+                {
+                  backgroundColor: "rgba(255, 69, 58, 0.12)",
+                  borderColor: "rgba(255, 69, 58, 0.25)",
+                },
+              ]}
+            >
+              <Ionicons name="trash-outline" size={16} color="#ff453a" />
             </View>
             <Text style={[styles.rowTitle, { color: "#ff453a" }]}>
-              Ripristina Applicazione
+              Ripristina applicazione
             </Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
         </View>
 
         {/* Gruppo: AGGIORNAMENTI & SIDELOADING */}
-        <Text style={styles.sectionHeader}>AGGIORNAMENTI & SIDELOADING</Text>
+        <Text style={styles.sectionHeader}>AGGIORNAMENTI</Text>
         <View style={styles.groupedCard}>
           {/* Verifica Aggiornamenti GitHub */}
           <TouchableOpacity
@@ -1518,23 +1679,34 @@ export default function ProfiloScreen() {
             activeOpacity={0.7}
             onPress={handleManualCheckUpdate}
           >
-            <View style={[styles.iconBox, { backgroundColor: theme.primary }]}>
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
               {checkingUpdate ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons name="cloud-download-outline" size={17} color="#ffffff" />
+                <Ionicons
+                  name="cloud-download-outline"
+                  size={17}
+                  color={theme.accent}
+                />
               )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Aggiornamento App</Text>
+              <Text style={styles.rowTitle}>Controlla versione</Text>
               <Text style={styles.rowSubTitle}>
                 {appUpdate?.hasUpdate
                   ? `Nuova versione v${appUpdate.latestVersion} disponibile!`
-                  : `Versione v${Constants.expoConfig?.version || "1.7.8"} (Aggiornata)`}
+                  : `Versione v${Constants.expoConfig?.version || "1.7.8"} (aggiornata)`}
               </Text>
             </View>
             {appUpdate?.hasUpdate ? (
-              <View style={[styles.updatePill, { backgroundColor: theme.primary }]}>
+              <View
+                style={[styles.updatePill, { backgroundColor: theme.primary }]}
+              >
                 <Text style={styles.updatePillText}>UPDATE</Text>
               </View>
             ) : (
@@ -1548,7 +1720,9 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.githubCircleBtn}
             activeOpacity={0.7}
-            onPress={() => Linking.openURL("https://github.com/Itachisann/StudICI")}
+            onPress={() =>
+              Linking.openURL("https://github.com/Itachisann/StudICI")
+            }
           >
             <Ionicons name="logo-github" size={24} color="#ffffff" />
           </TouchableOpacity>
@@ -1594,7 +1768,7 @@ export default function ProfiloScreen() {
             />
             <TextInput
               style={styles.searchInput}
-              placeholder="Cerca corso o classe (es. Clinica, L-9)..."
+              placeholder="Cerca corso o classe (es. Meccanica, L-9)..."
               placeholderTextColor="#71717a"
               value={searchCourse}
               onChangeText={setSearchCourse}
@@ -1649,11 +1823,22 @@ export default function ProfiloScreen() {
                     <View
                       style={[
                         styles.courseIconBox,
-                        { backgroundColor: theme.subtle, borderColor: theme.border, borderWidth: 1 },
-                        isSelected && { backgroundColor: theme.primary, borderColor: theme.primary },
+                        {
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
+                          borderWidth: 1,
+                        },
+                        isSelected && {
+                          backgroundColor: theme.primary,
+                          borderColor: theme.primary,
+                        },
                       ]}
                     >
-                      <Ionicons name="school" size={18} color={isSelected ? "#ffffff" : theme.accent} />
+                      <Ionicons
+                        name="school"
+                        size={18}
+                        color={isSelected ? "#ffffff" : theme.accent}
+                      />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text
@@ -1738,9 +1923,9 @@ export default function ProfiloScreen() {
             tabs={availableTabs}
             initialTabUrl={defaultTabUrl}
             degreeName={degreeName}
-            title="Anno e Canale Predefinito"
-            subtitle="Scegli quale orario visualizzare all'apertura dell'app."
-            confirmButtonText="Imposta come Predefinito"
+            title="Personalizza il tuo corso"
+            subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
+            confirmButtonText="Salva"
             onConfirm={async (tab) => {
               await selectDefaultTab(tab);
             }}
@@ -1748,7 +1933,7 @@ export default function ProfiloScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal Registro Presenze Completo */}
+      {/* Modal Registro presenze Completo */}
       <Modal
         visible={attendanceModalVisible}
         animationType="slide"
@@ -1758,7 +1943,7 @@ export default function ProfiloScreen() {
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.modalTitle}>Registro Presenze</Text>
+              <Text style={styles.modalTitle}>Registro presenze</Text>
               <Text style={styles.modalSubtitle}>
                 {attendanceRecords.length}{" "}
                 {attendanceRecords.length === 1
@@ -1801,8 +1986,8 @@ export default function ProfiloScreen() {
                   Nessuna presenza
                 </Text>
                 <Text style={styles.attendanceEmptySub}>
-                  Tieni premuto su una lezione nell&apos;Orario per registrarne
-                  la presenza.
+                  Tieni premuta una lezione nell&apos;orario per registrarne la
+                  frequenza.
                 </Text>
               </View>
             ) : (
@@ -1894,7 +2079,7 @@ export default function ProfiloScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal Gestione Sincronizzazione Cloud */}
+      {/* Modal Gestione Sincronizzazione */}
       <Modal
         visible={cloudModalVisible}
         animationType="slide"
@@ -1904,7 +2089,7 @@ export default function ProfiloScreen() {
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.modalTitle}>Sincronizzazione Cloud</Text>
+              <Text style={styles.modalTitle}>Sincronizzazione</Text>
               <Text style={styles.modalSubtitle}>
                 Backup e ripristino di corsi, preferenze e presenze
               </Text>
@@ -1925,8 +2110,18 @@ export default function ProfiloScreen() {
           >
             {/* Status Card */}
             <View style={styles.cloudStatusCard}>
-              <View style={styles.cloudIconCircle}>
-                <Ionicons name="cloud-done" size={30} color="#0284c7" />
+              <View
+                style={[
+                  styles.cloudIconCircle,
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                    borderWidth: 1,
+                    shadowColor: theme.accent,
+                  },
+                ]}
+              >
+                <Ionicons name="cloud-done" size={32} color={theme.accent} />
               </View>
               <Text style={styles.cloudStatusTitle}>Cloud Sync StudICI</Text>
               <Text style={styles.cloudStatusSub}>
@@ -1936,21 +2131,30 @@ export default function ProfiloScreen() {
               </Text>
               {cloudSyncId ? (
                 <TouchableOpacity
-                  style={styles.cloudIdBadge}
+                  style={[
+                    styles.cloudIdBadge,
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                      borderWidth: 1,
+                    },
+                  ]}
                   activeOpacity={0.7}
                   onPress={handleChangeCustomSyncCode}
                 >
                   <Ionicons
                     name="finger-print"
                     size={13}
-                    color="#38bdf8"
-                    style={{ marginRight: 4 }}
+                    color={theme.accent}
+                    style={{ marginRight: 5 }}
                   />
-                  <Text style={styles.cloudIdText} selectable>{cloudSyncId}</Text>
+                  <Text style={[styles.cloudIdText, { color: theme.accent }]} selectable>
+                    {cloudSyncId}
+                  </Text>
                   <Ionicons
                     name="pencil"
                     size={11}
-                    color="#38bdf8"
+                    color={theme.accent}
                     style={{ marginLeft: 6, opacity: 0.8 }}
                   />
                 </TouchableOpacity>
@@ -1961,13 +2165,21 @@ export default function ProfiloScreen() {
             <View style={styles.devicesSection}>
               <View style={styles.devicesHeaderRow}>
                 <Text style={styles.devicesSectionTitle}>
-                  Dispositivi Associati ({pairedDevices ? (pairedDevices.otherDevices?.length || 0) + 1 : 1})
+                  Dispositivi Associati (
+                  {pairedDevices
+                    ? (pairedDevices.otherDevices?.length || 0) + 1
+                    : 1}
+                  )
                 </Text>
                 <View
                   style={[
                     styles.pairingStatusPill,
                     pairedDevices?.isPaired
-                      ? styles.pairingStatusPillActive
+                      ? {
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
+                          borderWidth: 1,
+                        }
                       : styles.pairingStatusPillWaiting,
                   ]}
                 >
@@ -1975,7 +2187,7 @@ export default function ProfiloScreen() {
                     style={[
                       styles.pairingStatusDot,
                       pairedDevices?.isPaired
-                        ? styles.pairingStatusDotActive
+                        ? { backgroundColor: theme.accent }
                         : styles.pairingStatusDotWaiting,
                     ]}
                   />
@@ -1983,7 +2195,7 @@ export default function ProfiloScreen() {
                     style={[
                       styles.pairingStatusText,
                       pairedDevices?.isPaired
-                        ? styles.pairingStatusTextActive
+                        ? { color: theme.accent }
                         : styles.pairingStatusTextWaiting,
                     ]}
                   >
@@ -1999,18 +2211,38 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.deviceIconCircle,
-                    { backgroundColor: "rgba(2, 132, 199, 0.15)" },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                      borderWidth: 1,
+                    },
                   ]}
                 >
-                  <Ionicons name="phone-portrait" size={19} color="#38bdf8" />
+                  <Ionicons name="phone-portrait" size={19} color={theme.accent} />
                 </View>
                 <View style={{ flex: 1, paddingRight: 4 }}>
                   <View style={{ flexDirection: "row", alignItems: "center" }}>
                     <Text style={styles.deviceNameText} numberOfLines={1}>
                       {pairedDevices?.myDevice?.name || "Questo iPhone"}
                     </Text>
-                    <View style={styles.myDeviceBadge}>
-                      <Text style={styles.myDeviceBadgeText}>Questo</Text>
+                    <View
+                      style={[
+                        styles.myDeviceBadge,
+                        {
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
+                          borderWidth: 0.5,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.myDeviceBadgeText,
+                          { color: theme.accent },
+                        ]}
+                      >
+                        Questo
+                      </Text>
                     </View>
                   </View>
                   <Text style={styles.deviceMetaText}>
@@ -2035,29 +2267,59 @@ export default function ProfiloScreen() {
               </View>
 
               {/* Lista Dispositivi Associati oppure Empty State */}
-              {pairedDevices?.isPaired && pairedDevices.otherDevices && pairedDevices.otherDevices.length > 0 ? (
+              {pairedDevices?.isPaired &&
+              pairedDevices.otherDevices &&
+              pairedDevices.otherDevices.length > 0 ? (
                 pairedDevices.otherDevices.map((dev) => (
-                  <View key={dev.id} style={[styles.deviceCard, { marginTop: 8 }]}>
+                  <View
+                    key={dev.id}
+                    style={[styles.deviceCard, { marginTop: 8 }]}
+                  >
                     <View
                       style={[
                         styles.deviceIconCircle,
-                        { backgroundColor: "rgba(52, 199, 89, 0.15)" },
+                        {
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
+                          borderWidth: 1,
+                        },
                       ]}
                     >
-                      <Ionicons name="phone-portrait" size={19} color="#34c759" />
+                      <Ionicons
+                        name="phone-portrait"
+                        size={19}
+                        color={theme.accent}
+                      />
                     </View>
                     <View style={{ flex: 1, paddingRight: 4 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <View
+                        style={{ flexDirection: "row", alignItems: "center" }}
+                      >
                         <Text style={styles.deviceNameText} numberOfLines={1}>
                           {dev.name}
                         </Text>
-                        <View style={styles.pairedDeviceBadge}>
-                          <Text style={styles.pairedDeviceBadgeText}>Associato</Text>
+                        <View
+                          style={[
+                            styles.pairedDeviceBadge,
+                            {
+                              backgroundColor: theme.subtle,
+                              borderColor: theme.border,
+                              borderWidth: 0.5,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.pairedDeviceBadgeText,
+                              { color: theme.accent },
+                            ]}
+                          >
+                            Associato
+                          </Text>
                         </View>
                       </View>
                       <Text style={styles.deviceMetaText}>
-                        {dev.platform} • Sinc:{" "}
-                        {formatSyncDate(dev.lastActive)}
+                        {dev.platform} • Sinc: {formatSyncDate(dev.lastActive)}
                       </Text>
                     </View>
                     <TouchableOpacity
@@ -2089,7 +2351,8 @@ export default function ProfiloScreen() {
                     </Text>
                   </View>
                   <Text style={styles.unpairedNoticeDesc}>
-                    La sincronizzazione si attiva solo se associ altri dispositivi. Invia il codice con AirDrop o inseriscilo sull&apos;altro iPhone per iniziare.
+                    Copia il codice e inseriscilo sul secondo dispositivo per
+                    avviare la sincronizzazione.
                   </Text>
                 </View>
               )}
@@ -2106,7 +2369,7 @@ export default function ProfiloScreen() {
                 if (!pairedDevices?.isPaired) {
                   Alert.alert(
                     "Associazione Richiesta",
-                    "La sincronizzazione automatica non è selezionabile finché non associ un secondo dispositivo. Usa il pulsante AirDrop o condividi il codice per associare l'altro iPhone/iPad.",
+                    "Associa prima un secondo dispositivo usando il codice per attivare la sincronizzazione automatica.",
                   );
                 }
               }}
@@ -2114,133 +2377,164 @@ export default function ProfiloScreen() {
               <View
                 style={[
                   styles.cloudICloudIconBox,
-                  !pairedDevices?.isPaired && {
-                    backgroundColor: "rgba(142, 142, 147, 0.15)",
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                    borderWidth: 1,
                   },
                 ]}
               >
                 <Ionicons
                   name="cloud"
                   size={20}
-                  color={pairedDevices?.isPaired ? "#34c759" : "#8e8e93"}
+                  color={pairedDevices?.isPaired ? theme.accent : "#8e8e93"}
                 />
               </View>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.cloudICloudTitle}>Sincronizzazione Automatica</Text>
+                <Text style={styles.cloudICloudTitle}>
+                  Sincronizzazione automatica
+                </Text>
                 <Text style={styles.cloudICloudSub}>
                   {pairedDevices?.isPaired
-                    ? pairedDevices.otherDevices && pairedDevices.otherDevices.length > 1
-                      ? `Mantiene sincronizzato questo dispositivo con gli altri ${pairedDevices.otherDevices.length} dispositivi associati`
-                      : `Mantiene sincronizzato questo dispositivo con ${pairedDevices.otherDevice?.name || "l'altro dispositivo"}`
-                    : "Non selezionabile: richiede almeno un dispositivo associato"}
+                    ? pairedDevices.otherDevices &&
+                      pairedDevices.otherDevices.length > 1
+                      ? `Sincronizzazione attiva con ${pairedDevices.otherDevices.length} dispositivi`
+                      : `Sincronizzazione attiva con ${pairedDevices.otherDevice?.name || "il dispositivo associato"}`
+                    : "Richiede almeno un dispositivo associato"}
                 </Text>
               </View>
               <Switch
                 value={pairedDevices?.isPaired ? iCloudAutoSync : false}
                 disabled={!pairedDevices?.isPaired}
                 onValueChange={handleToggleICloudAutoSync}
-                trackColor={{ false: "#39393d", true: "#34c759" }}
+                trackColor={{ false: "#39393d", true: theme.accent }}
                 ios_backgroundColor="#39393d"
               />
             </TouchableOpacity>
 
-            {/* Azioni Principali */}
-            <TouchableOpacity
-              style={[
-                styles.cloudPrimaryBtn,
-                isSyncingCloud && { opacity: 0.7 },
-              ]}
-              activeOpacity={0.7}
-              onPress={handleSyncCloud}
-              disabled={isSyncingCloud}
-            >
-              <Ionicons
-                name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
-                size={18}
-                color="#ffffff"
-                style={{ marginRight: 8 }}
-              />
-              <Text style={styles.cloudPrimaryBtnText}>
-                {isSyncingCloud
-                  ? "Sincronizzazione in corso..."
-                  : "Esegui Sincronizzazione Ora"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cloudAirDropBtn}
-              activeOpacity={0.7}
-              onPress={handleAirDrop}
-              disabled={isSyncingCloud}
-            >
-              <Ionicons
-                name="share-outline"
-                size={18}
-                color="#ffffff"
-                style={{ marginRight: 8 }}
-              />
-              <Text style={styles.cloudAirDropBtnText}>
-                Invia via AirDrop
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cloudSecondaryBtn}
-              activeOpacity={0.7}
-              onPress={handleCopyCloudCode}
-            >
-              <Ionicons
-                name="copy-outline"
-                size={18}
-                color="#0284c7"
-                style={{ marginRight: 8 }}
-              />
-              <Text style={styles.cloudSecondaryBtnText}>
-                Copia Codice Dispositivo
-              </Text>
-            </TouchableOpacity>
-
-            {/* Box Ripristino */}
-            <View style={styles.cloudRestoreBox}>
-              <Text style={styles.cloudRestoreTitle}>
-                Collega un altro dispositivo
-              </Text>
-              <Text style={styles.cloudRestoreSub}>
-                Inserisci il Codice Dispositivo mostrato sull&apos;altro
-                dispositivo: corso, canale e presenze verranno sincronizzati
-                automaticamente. (Accetta anche un codice di backup
-                STUDICI_CLOUD:...)
-              </Text>
-              <TextInput
-                style={styles.cloudRestoreInput}
-                placeholder="es. ST1234A o NOME"
-                placeholderTextColor="#71717a"
-                value={restoreCodeInput}
-                onChangeText={setRestoreCodeInput}
-                multiline
-                numberOfLines={3}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
+            {/* Azioni Principali sulla stessa riga con effetto Glow e bordi arrotondati */}
+            <View style={styles.cloudActionRow}>
               <TouchableOpacity
                 style={[
-                  styles.cloudRestoreBtn,
-                  (!restoreCodeInput.trim() || isSyncingCloud) && {
-                    opacity: 0.4,
+                  styles.cloudPrimaryBtn,
+                  {
+                    backgroundColor: theme.accent,
+                    shadowColor: theme.accent,
                   },
+                  isSyncingCloud && { opacity: 0.7 },
                 ]}
                 activeOpacity={0.7}
-                onPress={handleRestoreFromCloud}
-                disabled={!restoreCodeInput.trim() || isSyncingCloud}
+                onPress={handleSyncCloud}
+                disabled={isSyncingCloud}
               >
                 <Ionicons
-                  name="link-outline"
-                  size={16}
+                  name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
+                  size={17}
                   color="#ffffff"
                   style={{ marginRight: 6 }}
                 />
-                <Text style={styles.cloudRestoreBtnText}>Collega</Text>
+                <Text style={styles.cloudPrimaryBtnText} numberOfLines={1}>
+                  {isSyncingCloud ? "Sincronizzo..." : "Sincronizza"}
+                </Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.cloudSecondaryBtn,
+                  {
+                    borderColor: theme.border,
+                    backgroundColor: theme.subtle,
+                  },
+                ]}
+                activeOpacity={0.7}
+                onPress={handleCopyCloudCode}
+              >
+                <Ionicons
+                  name="copy-outline"
+                  size={17}
+                  color={theme.accent}
+                  style={{ marginRight: 6 }}
+                />
+                <Text
+                  style={[styles.cloudSecondaryBtnText, { color: theme.accent }]}
+                  numberOfLines={1}
+                >
+                  Copia codice
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Box Ripristino / Collegamento Stile iOS con effetto Glow e pillole */}
+            <View style={styles.cloudRestoreBox}>
+              <View style={styles.cloudRestoreHeaderRow}>
+                <View
+                  style={[
+                    styles.cloudRestoreIconBadge,
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  <Ionicons name="link-outline" size={17} color={theme.accent} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cloudRestoreTitle}>
+                    Collega un altro dispositivo
+                  </Text>
+                  <Text style={styles.cloudRestoreSub}>
+                    Inserisci il codice del secondo dispositivo per sincronizzare
+                    corso, canale e presenze.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.cloudRestoreInputRow}>
+                <View style={styles.cloudRestoreInputWrap}>
+                  <Ionicons
+                    name="keypad-outline"
+                    size={16}
+                    color="#71717a"
+                    style={{ marginRight: 8 }}
+                  />
+                  <TextInput
+                    style={styles.cloudRestoreInput}
+                    placeholder="es. ST1234A o NOME"
+                    placeholderTextColor="#71717a"
+                    value={restoreCodeInput}
+                    onChangeText={setRestoreCodeInput}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    returnKeyType="done"
+                    onSubmitEditing={handleRestoreFromCloud}
+                  />
+                  {restoreCodeInput.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setRestoreCodeInput("")}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={{ padding: 4 }}
+                    >
+                      <Ionicons name="close-circle" size={16} color="#71717a" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.cloudRestoreBtn,
+                    {
+                      backgroundColor: theme.accent,
+                      shadowColor: theme.accent,
+                    },
+                    (!restoreCodeInput.trim() || isSyncingCloud) &&
+                      styles.cloudRestoreBtnDisabled,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={handleRestoreFromCloud}
+                  disabled={!restoreCodeInput.trim() || isSyncingCloud}
+                >
+                  <Text style={styles.cloudRestoreBtnText}>Collega</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -2394,9 +2688,10 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   iconBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 7,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
@@ -2422,8 +2717,8 @@ const styles = StyleSheet.create({
   /* Footer */
   footer: {
     alignItems: "center",
-    marginTop: 32,
-    marginBottom: 20,
+    marginTop: 26,
+    marginBottom: 8,
   },
   githubCircleBtn: {
     width: 46,
@@ -2573,7 +2868,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-  /* ── Registro Presenze Styles ── */
+  /* ── Registro presenze Styles ── */
   statsCardsRow: {
     flexDirection: "row",
     gap: 10,
@@ -2807,13 +3102,31 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.08)",
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 10,
+    borderRadius: 9999,
     marginLeft: 8,
   },
   inlineActionBtnText: {
     color: "#ffffff",
     fontSize: 12.5,
     fontWeight: "600",
+  },
+  exportRowCentered: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  exportIconBox: {
+    marginRight: 10,
+  },
+  exportRowTitle: {
+    fontSize: 16,
+    color: "#ffffff",
+    letterSpacing: -0.2,
+    fontWeight: "500",
+  },
+  exportSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    marginHorizontal: 16,
   },
   modalExportHeaderBtn: {
     width: 32,
@@ -2834,13 +3147,16 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.08)",
   },
   cloudIconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "rgba(2, 132, 199, 0.15)",
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    elevation: 6,
   },
   cloudStatusTitle: {
     color: "#ffffff",
@@ -2857,10 +3173,9 @@ const styles = StyleSheet.create({
   cloudIdBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(56, 189, 248, 0.12)",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 9999,
   },
   cloudIdText: {
     color: "#38bdf8",
@@ -2892,9 +3207,9 @@ const styles = StyleSheet.create({
   pairingStatusPill: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 9999,
   },
   pairingStatusPillActive: {
     backgroundColor: "rgba(52, 199, 89, 0.15)",
@@ -2928,7 +3243,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#2c2c2e",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 12,
   },
   deviceIconCircle: {
@@ -2952,9 +3267,9 @@ const styles = StyleSheet.create({
   },
   myDeviceBadge: {
     backgroundColor: "rgba(56, 189, 248, 0.15)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 9999,
     marginLeft: 6,
   },
   myDeviceBadgeText: {
@@ -2964,9 +3279,9 @@ const styles = StyleSheet.create({
   },
   pairedDeviceBadge: {
     backgroundColor: "rgba(52, 199, 89, 0.15)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 9999,
     marginLeft: 6,
   },
   pairedDeviceBadgeText: {
@@ -2978,9 +3293,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(239, 68, 68, 0.12)",
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 9999,
     marginLeft: 8,
     borderWidth: 0.5,
     borderColor: "rgba(239, 68, 68, 0.3)",
@@ -3043,60 +3358,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  cloudActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 16,
+  },
   cloudPrimaryBtn: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0284c7",
     height: 44,
     borderRadius: 9999,
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    shadowColor: "#0284c7",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+    paddingHorizontal: 12,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 5,
   },
   cloudPrimaryBtnText: {
     color: "#ffffff",
-    fontSize: 14.5,
-    fontWeight: "600",
-    letterSpacing: -0.2,
-  },
-  cloudAirDropBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#2563eb",
-    height: 44,
-    borderRadius: 9999,
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    shadowColor: "#2563eb",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-  },
-  cloudAirDropBtnText: {
-    color: "#ffffff",
-    fontSize: 14.5,
+    fontSize: 14,
     fontWeight: "600",
     letterSpacing: -0.2,
   },
   cloudSecondaryBtn: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(2, 132, 199, 0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(2, 132, 199, 0.35)",
     height: 44,
     borderRadius: 9999,
-    paddingHorizontal: 20,
-    marginBottom: 20,
+    paddingHorizontal: 12,
+    borderWidth: 1,
   },
   cloudSecondaryBtnText: {
-    color: "#38bdf8",
     fontSize: 14,
     fontWeight: "600",
     letterSpacing: -0.2,
@@ -3107,41 +3404,69 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 0.5,
     borderColor: "rgba(255, 255, 255, 0.08)",
-    marginBottom: 40,
+    marginBottom: 32,
+  },
+  cloudRestoreHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  cloudRestoreIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+    borderWidth: 1,
   },
   cloudRestoreTitle: {
     color: "#ffffff",
     fontSize: 15,
-    fontWeight: "700",
-    marginBottom: 6,
+    fontWeight: "600",
+    marginBottom: 3,
   },
   cloudRestoreSub: {
     color: "#8e8e93",
-    fontSize: 12.5,
-    lineHeight: 17,
-    marginBottom: 12,
+    fontSize: 12,
+    lineHeight: 16,
   },
-  cloudRestoreInput: {
-    backgroundColor: "#141416",
-    color: "#ffffff",
-    fontSize: 12.5,
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    marginBottom: 12,
-    minHeight: 64,
-    textAlignVertical: "top",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  cloudRestoreBtn: {
+  cloudRestoreInputRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#10b981",
-    height: 42,
+    gap: 10,
+  },
+  cloudRestoreInputWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#141416",
     borderRadius: 9999,
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
+    height: 44,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  cloudRestoreInput: {
+    flex: 1,
+    color: "#ffffff",
+    fontSize: 13,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    padding: 0,
+  },
+  cloudRestoreBtn: {
+    height: 44,
+    paddingHorizontal: 20,
+    borderRadius: 9999,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  cloudRestoreBtnDisabled: {
+    opacity: 0.4,
   },
   cloudRestoreBtnText: {
     color: "#ffffff",
@@ -3208,4 +3533,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
 });
-

@@ -1,19 +1,34 @@
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
-import { File, Paths } from 'expo-file-system';
-import { ScheduleData } from './scraper';
-import { AttendanceRecord, AttendanceStats } from './attendance';
+import { File, Paths } from "expo-file-system";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import { AttendanceRecord, AttendanceStats } from "./attendance";
+import { ScheduleData } from "./scraper";
 
-const SAPIENZA_RED = '#822433';
-const DAYS_NAMES = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì'];
-const ACCENT_COLORS = ['#3b82f6', '#a855f7', '#f59e0b', '#10b981', '#ef4444', '#6366f1'];
-
+const SAPIENZA_RED = "#822433";
+const DAYS_NAMES = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì"];
+const ACCENT_COLORS = [
+  "#3b82f6",
+  "#a855f7",
+  "#f59e0b",
+  "#10b981",
+  "#ef4444",
+  "#6366f1",
+];
 
 const escapeHtml = (s?: string) =>
-  (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const formatRoomLabel = (room?: string) => {
+  if (!room) return "";
+  const trimmed = room.trim();
+  if (/^aula\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `Aula ${trimmed}`;
+};
 
 const timeToMinutes = (t: string) => {
-  const [h, m] = (t || '0:0').split(':').map((n) => parseInt(n, 10));
+  const [h, m] = (t || "0:0").split(":").map((n) => parseInt(n, 10));
   return (h || 0) * 60 + (m || 0);
 };
 
@@ -42,19 +57,23 @@ async function renamePdf(uri: string, fileName: string): Promise<string> {
 export async function exportScheduleToPdf(
   schedule: ScheduleData,
   courseName: string,
-  channelName?: string
+  channelName?: string,
 ): Promise<string> {
-  const currentDateFormatted = new Date().toLocaleDateString('it-IT', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+  const currentDateFormatted = new Date().toLocaleDateString("it-IT", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   });
 
   const allClasses = schedule.days.flat();
   const starts = allClasses.map((c) => timeToMinutes(c.startTime));
   const ends = allClasses.map((c) => timeToMinutes(c.endTime));
-  const gridStart = allClasses.length ? Math.min(8 * 60, Math.floor(Math.min(...starts) / 60) * 60) : 8 * 60;
-  const gridEnd = allClasses.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
+  const gridStart = allClasses.length
+    ? Math.min(8 * 60, Math.floor(Math.min(...starts) / 60) * 60)
+    : 8 * 60;
+  const gridEnd = allClasses.length
+    ? Math.ceil(Math.max(...ends) / 60) * 60
+    : 18 * 60;
   const hours = Math.max(1, (gridEnd - gridStart) / 60);
   const hourH = Math.max(36, Math.min(60, Math.floor(430 / hours)));
   const gridHeight = hours * hourH;
@@ -62,9 +81,12 @@ export async function exportScheduleToPdf(
   // Colore stabile per materia
   const subjectColors = new Map<string, string>();
   allClasses.forEach((c) => {
-    const key = (c.subject || '').toUpperCase();
+    const key = (c.subject || "").toUpperCase();
     if (!subjectColors.has(key)) {
-      subjectColors.set(key, ACCENT_COLORS[subjectColors.size % ACCENT_COLORS.length]);
+      subjectColors.set(
+        key,
+        ACCENT_COLORS[subjectColors.size % ACCENT_COLORS.length],
+      );
     }
   });
 
@@ -73,18 +95,18 @@ export async function exportScheduleToPdf(
   const timeSlotsHtml = Array.from({ length: hours }, (_, i) => {
     const startH = gridStart / 60 + i;
     const endH = startH + 1;
-    const label = `${String(startH).padStart(2, '0')}:00 - ${String(endH).padStart(2, '0')}:00`;
+    const label = `${String(startH).padStart(2, "0")}:00 - ${String(endH).padStart(2, "0")}:00`;
     return `
       <div class="time-slot" style="top:${i * hourH}px; height:${hourH}px;">
         <span>${label}</span>
       </div>
     `;
-  }).join('');
+  }).join("");
 
   const hourLinesHtml = Array.from({ length: hours }, (_, i) => {
-    if (i === 0) return '';
+    if (i === 0) return "";
     return `<div class="hour-line" style="top:${i * hourH}px;"></div>`;
-  }).join('');
+  }).join("");
 
   const columnsHtml = DAYS_NAMES.map((dayName, dayIdx) => {
     // Unione difensiva di slot contigui della stessa materia (es. 15-18 e 18-19 accorpati in 15-19)
@@ -99,7 +121,8 @@ export async function exportScheduleToPdf(
       const curStart = timeToMinutes(item.startTime);
       const sameSubj =
         prev &&
-        (prev.subject || '').toUpperCase().trim() === (item.subject || '').toUpperCase().trim();
+        (prev.subject || "").toUpperCase().trim() ===
+          (item.subject || "").toUpperCase().trim();
 
       if (prev && sameSubj && prevEnd === curStart) {
         prev.endTime = item.endTime;
@@ -112,11 +135,21 @@ export async function exportScheduleToPdf(
     }
 
     const dayClasses = normalizedDayClasses
-      .map((c) => ({ c, s: timeToMinutes(c.startTime), e: timeToMinutes(c.endTime) }))
+      .map((c) => ({
+        c,
+        s: timeToMinutes(c.startTime),
+        e: timeToMinutes(c.endTime),
+      }))
       .sort((a, b) => a.s - b.s || a.e - b.e);
 
     // Gestione lezioni sovrapposte: assegna corsie dentro a ogni gruppo di sovrapposizione
-    const placed: { c: (typeof dayClasses)[number]['c']; s: number; e: number; lane: number; lanes: number }[] = [];
+    const placed: {
+      c: (typeof dayClasses)[number]["c"];
+      s: number;
+      e: number;
+      lane: number;
+      lanes: number;
+    }[] = [];
     let cluster: typeof placed = [];
     let laneEnds: number[] = [];
     let clusterEnd = -1;
@@ -142,20 +175,22 @@ export async function exportScheduleToPdf(
 
     const lessonsHtml = placed
       .map((p) => {
-        const color = subjectColors.get((p.c.subject || '').toUpperCase()) || ACCENT_COLORS[0];
+        const color =
+          subjectColors.get((p.c.subject || "").toUpperCase()) ||
+          ACCENT_COLORS[0];
         const top = ((p.s - gridStart) / 60) * hourH + 1;
         const height = ((p.e - p.s) / 60) * hourH - 2;
         const width = 100 / p.lanes;
         return `
           <div class="lesson" style="top:${top}px; height:${height}px; left:calc(${p.lane * width}% + 1px); width:calc(${width}% - 2px); border-left:3px solid ${color}; background:linear-gradient(${color}22, ${color}22), #ffffff;">
             <div class="lesson-time">${escapeHtml(p.c.startTime)} - ${escapeHtml(p.c.endTime)}</div>
-            <div class="lesson-title">${escapeHtml((p.c.subject || '').toUpperCase())}</div>
-            ${p.c.teacher ? `<div class="lesson-meta">${escapeHtml(p.c.teacher)}</div>` : ''}
-            ${p.c.room ? `<div class="lesson-room">Aula ${escapeHtml(p.c.room)}</div>` : ''}
+            <div class="lesson-title">${escapeHtml((p.c.subject || "").toUpperCase())}</div>
+            ${p.c.teacher ? `<div class="lesson-meta">${escapeHtml(p.c.teacher)}</div>` : ""}
+            ${p.c.room ? `<div class="lesson-room">${escapeHtml(formatRoomLabel(p.c.room))}</div>` : ""}
           </div>
         `;
       })
-      .join('');
+      .join("");
 
     return `
       <div class="day-col">
@@ -166,7 +201,7 @@ export async function exportScheduleToPdf(
         </div>
       </div>
     `;
-  }).join('');
+  }).join("");
 
   const html = `
     <!DOCTYPE html>
@@ -347,8 +382,8 @@ export async function exportScheduleToPdf(
             </div>
           </div>
           <div class="header-meta">
-            ${channelName ? `<div>Canale / Anno: <strong>${escapeHtml(channelName)}</strong></div>` : ''}
-            ${schedule?.info?.semester ? `<div>Periodo: <strong>${escapeHtml(schedule.info.semester)}</strong></div>` : ''}
+            ${channelName ? `<div>Canale / Anno: <strong>${escapeHtml(channelName)}</strong></div>` : ""}
+            ${schedule?.info?.semester ? `<div>Periodo: <strong>${escapeHtml(schedule.info.semester)}</strong></div>` : ""}
             <div class="meta-pill">Aggiornato al: ${currentDateFormatted}</div>
           </div>
         </div>
@@ -370,43 +405,50 @@ export async function exportScheduleToPdf(
   `;
 
   const { uri: rawUri } = await Print.printToFileAsync({ html });
-  const uri = await renamePdf(rawUri, 'Orario.pdf');
+  const uri = await renamePdf(rawUri, "Orario.pdf");
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, {
-      UTI: '.pdf',
-      mimeType: 'application/pdf',
-      dialogTitle: 'Orario',
+      UTI: ".pdf",
+      mimeType: "application/pdf",
+      dialogTitle: "Orario",
     });
   }
   return uri;
 }
 
-
 /**
- * Genera ed esporta il PDF del Registro Presenze con frequenza lezioni e dettaglio calendario.
+ * Genera ed esporta il PDF del Registro presenze con frequenza lezioni e dettaglio calendario.
  */
 export async function exportAttendanceToPdf(
   records: AttendanceRecord[],
   stats: AttendanceStats | null,
-  courseName: string
+  courseName: string,
 ): Promise<string> {
-  const currentDateFormatted = new Date().toLocaleDateString('it-IT', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+  const currentDateFormatted = new Date().toLocaleDateString("it-IT", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   });
 
   // Raggruppamento presenze per data (calendario presenze)
-  const map = new Map<string, { date: string; displayDate: string; dayName: string; records: AttendanceRecord[] }>();
+  const map = new Map<
+    string,
+    {
+      date: string;
+      displayDate: string;
+      dayName: string;
+      records: AttendanceRecord[];
+    }
+  >();
   const sorted = [...records].sort((a, b) => b.timestamp - a.timestamp);
 
   for (const r of sorted) {
-    const key = r.date || 'other';
+    const key = r.date || "other";
     if (!map.has(key)) {
       map.set(key, {
         date: r.date,
         displayDate: r.displayDate || r.date,
-        dayName: r.dayName || 'Giorno',
+        dayName: r.dayName || "Giorno",
         records: [],
       });
     }
@@ -426,47 +468,47 @@ export async function exportAttendanceToPdf(
             <td style="text-align: center; font-weight: 700; color: #10b981;">${s.hours} ore</td>
             <td style="text-align: right; color: #636366;">${s.lastDate}</td>
           </tr>
-        `
+        `,
           )
-          .join('')
+          .join("")
       : `<tr><td colspan="4" style="text-align: center; color: #8e8e93;">Nessuna materia registrata</td></tr>`;
 
   const calendarDaysHtml =
     groupedList.length === 0
       ? `<div style="text-align:center; padding: 30px; color: #8e8e93; font-style: italic;">Nessuna presenza registrata finora.</div>`
       : groupedList
-          .map(group => {
+          .map((group) => {
             const recordsHtml = group.records
               .map(
-                r => `
+                (r) => `
               <div class="attendance-item-row">
                 <div class="item-time">${r.startTime} - ${r.endTime} (${r.duration}h)</div>
                 <div class="item-subject"><strong>${r.subject.toUpperCase()}</strong></div>
-                ${r.room ? `<div class="item-room">📍 ${r.room}</div>` : ''}
+                ${r.room ? `<div class="item-room">📍 ${r.room}</div>` : ""}
                 <div class="item-status"><span class="badge-presente">✓ FREQUENTATA</span></div>
               </div>
-            `
+            `,
               )
-              .join('');
+              .join("");
 
             return `
               <div class="attendance-day-group">
                 <div class="day-group-header">
                   <span>📅 <strong>${group.dayName.toUpperCase()}</strong> · ${group.displayDate.toUpperCase()}</span>
-                  <span>${group.records.length} ${group.records.length === 1 ? 'lezione' : 'lezioni'}</span>
+                  <span>${group.records.length} ${group.records.length === 1 ? "lezione" : "lezioni"}</span>
                 </div>
                 ${recordsHtml}
               </div>
             `;
           })
-          .join('');
+          .join("");
 
   const html = `
     <!DOCTYPE html>
     <html lang="it">
       <head>
         <meta charset="utf-8" />
-        <title>Registro Presenze - ${courseName}</title>
+        <title>Registro presenze - ${courseName}</title>
         <style>
           @page {
             size: A4 portrait;
@@ -633,7 +675,7 @@ export async function exportAttendanceToPdf(
           <div>
             <span class="badge-sapienza">SAPIENZA</span>
             <p class="university-title" style="margin-top: 6px;">Facoltà di Ingegneria Civile e Industriale</p>
-            <h1 class="title-main">Registro Presenze & Frequenza</h1>
+            <h1 class="title-main">Registro presenze & Frequenza</h1>
             <div style="font-size: 13px; color: #3a3a3c; margin-top: 2px;">Corso: <strong>${courseName}</strong></div>
           </div>
           <div class="header-meta">
@@ -686,9 +728,9 @@ export async function exportAttendanceToPdf(
   const { uri } = await Print.printToFileAsync({ html });
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, {
-      UTI: '.pdf',
-      mimeType: 'application/pdf',
-      dialogTitle: `Registro Presenze - ${courseName}`,
+      UTI: ".pdf",
+      mimeType: "application/pdf",
+      dialogTitle: `Registro presenze - ${courseName}`,
     });
   }
   return uri;

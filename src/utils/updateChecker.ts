@@ -23,6 +23,7 @@ export interface AppUpdateInfo {
   ipaUrl: string;
   publishedAt?: string;
   targetCommitish?: string;
+  commitName?: string;
   updateType: UpdateType;
   isMajor: boolean;
 }
@@ -30,7 +31,7 @@ export interface AppUpdateInfo {
 // Versioni che sono state rilasciate come aggiornamenti bloccanti obbligatori.
 // Qualsiasi versione installata precedente a una di queste riceverà l'aggiornamento come bloccante,
 // anche se nel frattempo è uscita una versione successiva non bloccante.
-export const KNOWN_BLOCKING_VERSIONS = ['1.8.4', '1.8.5', '1.8.7'];
+export const KNOWN_BLOCKING_VERSIONS = ['1.8.4', '1.8.5', '1.8.7', '1.8.8'];
 
 /**
  * Verifica se le note o il titolo di una singola release indicano un aggiornamento bloccante
@@ -238,6 +239,32 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     const releaseTitle = release.name || `StudICI v${latestVersion}`;
     const releaseNotes = release.body || '';
     const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
+
+    // Recupera il titolo reale del commit associato al rilascio anziché limitarsi alla stringa 'main'
+    let commitName: string | undefined;
+    try {
+      const commitRef = release.target_commitish || release.tag_name || 'main';
+      const commitRes = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/commits/${commitRef}`,
+        {
+          headers: {
+            Accept: 'application/vnd.github.v3+json',
+            'User-Agent': 'StudICI-App',
+          },
+        }
+      );
+      if (commitRes.ok) {
+        const commitData = await commitRes.json();
+        const rawMsg = commitData?.commit?.message || '';
+        const firstLine = rawMsg.split('\n')[0]?.trim();
+        if (firstLine) {
+          commitName = firstLine;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
     const updateType = detectUpdateType(
       latestVersion,
       currentVersion,
@@ -257,6 +284,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       ipaUrl,
       publishedAt: release.published_at,
       targetCommitish,
+      commitName: commitName || releaseTitle || `v${latestVersion}`,
       updateType,
       isMajor,
     };
@@ -275,62 +303,13 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   }
 }
 
-/**
- * Apre SideStore aggiungendo automaticamente la sorgente
- */
-export async function openInSideStore(): Promise<void> {
-  const supported = await Linking.canOpenURL('sidestore://').catch(() => false);
-  if (supported) {
-    Linking.openURL(SIDESTORE_SCHEME_URL);
-  } else {
-    // Prova AltStore come alternativa
-    const altSupported = await Linking.canOpenURL('altstore://').catch(() => false);
-    if (altSupported) {
-      Linking.openURL(ALTSTORE_SCHEME_URL);
-    } else {
-      await Clipboard.setStringAsync(SIDESTORE_SOURCE_RAW_URL);
-      Alert.alert(
-        'Sorgente SideStore Copiata',
-        'SideStore non è stato aperto direttamente, ma l\'URL della sorgente è stato copiato negli appunti:\n\n' +
-          SIDESTORE_SOURCE_RAW_URL +
-          '\n\nIncolla questo link nella scheda "Sources" di SideStore o AltStore per aggiornare con un tap.',
-        [
-          { text: 'OK' },
-          { text: 'Apri Release Web', onPress: () => Linking.openURL(GITHUB_LATEST_RELEASE_URL) },
-        ]
-      );
-    }
-  }
-}
 
 /**
- * Apre LiveContainer per installare direttamente l'IPA
- */
-export async function openInLiveContainer(): Promise<void> {
-  const supported = await Linking.canOpenURL('livecontainer://').catch(() => false);
-  if (supported) {
-    Linking.openURL(LIVECONTAINER_SCHEME_URL);
-  } else {
-    await Clipboard.setStringAsync(GITHUB_LATEST_IPA_URL);
-    Alert.alert(
-      'LiveContainer Link Copiato',
-      'L\'URL per scaricare l\'IPA di StudICI è stato copiato negli appunti:\n\n' +
-        GITHUB_LATEST_IPA_URL +
-        '\n\nPuoi incollare il link in LiveContainer o Safari per installare la nuova versione.',
-      [
-        { text: 'OK' },
-        { text: 'Scarica da Safari', onPress: () => Linking.openURL(GITHUB_LATEST_RELEASE_URL) },
-      ]
-    );
-  }
-}
-
-/**
- * Mostra il menu completo di aggiornamento in stile nativo iOS / ActionSheet
+ * Mostra il menu di aggiornamento con download diretto, copia sorgente e changelog
  */
 export function presentUpdateActionSheet(updateInfo: AppUpdateInfo): void {
   const title = `Aggiornamento StudICI v${updateInfo.latestVersion}`;
-  const message = `Versione attuale: v${updateInfo.currentVersion}\nScegli la modalità di installazione:`;
+  const message = `Versione attuale: v${updateInfo.currentVersion}`;
 
   if (Platform.OS === 'ios') {
     ActionSheetIOS.showActionSheetWithOptions(
@@ -339,27 +318,20 @@ export function presentUpdateActionSheet(updateInfo: AppUpdateInfo): void {
         message,
         options: [
           'Annulla',
-          '⚡ Aggiorna con SideStore (1-tap)',
-          '📦 Installa con LiveContainer',
-          '🌐 Scarica IPA da GitHub Release',
-          '📋 Copia URL Sorgente SideStore',
-          '📋 Copia Link Diretto IPA',
+          'Download',
+          'Copia URL sorgente',
+          'Consulta Changelog',
         ],
         cancelButtonIndex: 0,
       },
       async (buttonIndex) => {
         if (buttonIndex === 1) {
-          openInSideStore();
+          Linking.openURL(updateInfo.ipaUrl || GITHUB_LATEST_IPA_URL);
         } else if (buttonIndex === 2) {
-          openInLiveContainer();
+          await Clipboard.setStringAsync(SIDESTORE_SOURCE_RAW_URL);
+          Alert.alert('Copiato', 'URL sorgente copiato negli appunti.');
         } else if (buttonIndex === 3) {
           Linking.openURL(updateInfo.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-        } else if (buttonIndex === 4) {
-          await Clipboard.setStringAsync(SIDESTORE_SOURCE_RAW_URL);
-          Alert.alert('Copiato', 'URL Sorgente SideStore copiato negli appunti!');
-        } else if (buttonIndex === 5) {
-          await Clipboard.setStringAsync(updateInfo.ipaUrl || GITHUB_LATEST_IPA_URL);
-          Alert.alert('Copiato', 'Link diretto al file IPA copiato negli appunti!');
         }
       }
     );
@@ -369,8 +341,15 @@ export function presentUpdateActionSheet(updateInfo: AppUpdateInfo): void {
       message,
       [
         { text: 'Annulla', style: 'cancel' },
-        { text: 'Apri Release GitHub', onPress: () => Linking.openURL(updateInfo.htmlUrl || GITHUB_LATEST_RELEASE_URL) },
-        { text: 'SideStore / LiveContainer', onPress: () => openInSideStore() },
+        { text: 'Download', onPress: () => Linking.openURL(updateInfo.ipaUrl || GITHUB_LATEST_IPA_URL) },
+        {
+          text: 'Copia URL sorgente',
+          onPress: async () => {
+            await Clipboard.setStringAsync(SIDESTORE_SOURCE_RAW_URL);
+            Alert.alert('Copiato', 'URL sorgente copiato negli appunti.');
+          },
+        },
+        { text: 'Consulta Changelog', onPress: () => Linking.openURL(updateInfo.htmlUrl || GITHUB_LATEST_RELEASE_URL) },
       ]
     );
   }

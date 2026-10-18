@@ -2,7 +2,7 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
 import { ScheduleData, ClassEvent } from './scraper';
 import { resolveClassroom, formatSapienzaAddress, SAPIENZA_BUILDINGS } from './classroomLocations';
 import { getOptimalRomeTransit } from './transitRouter';
-import { calculateDrivingEstimate } from './drivingRouter';
+import { calculateDrivingEstimate, getStationNavigationQuery } from './drivingRouter';
 import {
   findOptimalCommuterTrain,
   parseTimeToMinutes,
@@ -333,7 +333,7 @@ async function computeOutboundItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
+    carDuration = Math.ceil(drivingEst.durationMinutes || config.carLeg.durationMinutes || 24);
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus;
@@ -359,13 +359,13 @@ async function computeOutboundItinerary(
     legs.push({
       id: 'car-leg',
       type: 'car',
-      title: `Partenza in Auto da ${config.originAddress}`,
-      subtitle: `Tragitto verso Stazione di ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km${carTrafficNote ? ` • ${carTrafficNote}` : ''})`,
+      title: `Partenza da ${config.originAddress}`,
+      subtitle: `Tragitto verso ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km)`,
       startTime: minutesToTime(homeDepartureMins),
       endTime: minutesToTime(homeDepartureMins + carDuration),
       durationMinutes: carDuration,
       details: {
-        mapQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
+        mapQuery: getStationNavigationQuery(config.departureStation.shortName || config.departureStation.name),
         mapOriginQuery: config.originAddress,
         travelMode: 'driving',
         targetDate: targetDateStr,
@@ -383,7 +383,7 @@ async function computeOutboundItinerary(
     legs.push({
       id: 'park-leg',
       type: 'wait',
-      title: 'Parcheggio & Accesso Binario',
+      title: 'Parcheggio & accesso',
       subtitle: `Parcheggia e raggiungi il binario (${parkDuration} min)`,
       startTime: minutesToTime(homeDepartureMins + carDuration),
       endTime: minutesToTime(trainDepMins),
@@ -398,8 +398,8 @@ async function computeOutboundItinerary(
     legs.push({
       id: 'station-arrival-leg',
       type: 'walk',
-      title: `Arrivo in Stazione a ${config.departureStation.shortName || config.departureStation.name}`,
-      subtitle: `Accesso ai binari`,
+      title: `Arrivo a ${config.departureStation.shortName || config.departureStation.name}`,
+      subtitle: `Raggiungi il binario del treno`,
       startTime: minutesToTime(trainDepMins - 10),
       endTime: minutesToTime(trainDepMins),
       durationMinutes: 10,
@@ -625,7 +625,7 @@ async function computeReturnItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDuration = drivingEst.durationMinutes || config.carLeg.durationMinutes || 24;
+    carDuration = Math.ceil(drivingEst.durationMinutes || config.carLeg.durationMinutes || 24);
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
     carTrafficNote = drivingEst.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus;
@@ -722,7 +722,7 @@ async function computeReturnItinerary(
       durationMinutes: carDuration,
       details: {
         travelMode: 'driving',
-        mapOriginQuery: config.carLeg.stationAddress || `Stazione di ${config.departureStation.shortName || config.departureStation.name}`,
+        mapOriginQuery: getStationNavigationQuery(config.departureStation.shortName || config.departureStation.name),
         mapQuery: config.originAddress,
         targetDate: targetDateStr,
         targetTime: minutesToTime(trainArrMins + carWalkBuffer),

@@ -901,7 +901,7 @@ export default function ScheduleScreen() {
                 ]}
               >
                 <Text style={[styles.blockingPillText, { color: "#ffffff" }]}>
-                  AGGIORNAMENTO BLOCCANTE
+                  AGGIORNAMENTO RICHIESTO
                 </Text>
               </View>
 
@@ -940,9 +940,9 @@ export default function ScheduleScreen() {
               </View>
               <View style={styles.blockingCardDivider} />
               <View style={styles.blockingCardRow}>
-                <Text style={styles.blockingCardLabel}>Riferimento commit</Text>
-                <Text style={styles.blockingCardValCommit} numberOfLines={1}>
-                  {appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
+                <Text style={styles.blockingCardLabel}>Commit di rilascio</Text>
+                <Text style={styles.blockingCardValCommit} numberOfLines={2}>
+                  {appUpdate?.commitName || appUpdate?.releaseTitle || appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
                 </Text>
               </View>
               <View style={styles.blockingCardDivider} />
@@ -1689,10 +1689,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   blockingCardValCommit: {
-    fontSize: 14,
-    color: "#94a3b8",
+    fontSize: 13,
+    color: "#e2e8f0",
     fontWeight: "600",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    flex: 1,
+    textAlign: "right",
+    marginLeft: 12,
   },
   changelogBtn: {
     flexDirection: "row",
