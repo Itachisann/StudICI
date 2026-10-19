@@ -132,6 +132,14 @@ export default function ProfiloScreen() {
     number | null
   >(null);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudNotice, setCloudNotice] = useState<{
+    text: string;
+    ok: boolean;
+  } | null>(null);
+  const showCloudNotice = useCallback((text: string, ok = true) => {
+    setCloudNotice({ text, ok });
+    setTimeout(() => setCloudNotice(null), 4000);
+  }, []);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
@@ -572,14 +580,20 @@ export default function ProfiloScreen() {
       if (res.success) {
         setLastCloudSyncTime(await getLastCloudSync());
         if (res.updated) await loadProfileData();
+        showCloudNotice(res.message, true);
         Alert.alert("Sincronizzazione", res.message);
       } else {
         if (res.notPaired) {
+          showCloudNotice(
+            "Nessun dispositivo associato: copia il codice e inseriscilo sul secondo dispositivo.",
+            false,
+          );
           Alert.alert(
             "Nessun Dispositivo Associato",
             "Copia il codice e inseriscilo sul secondo dispositivo per avviare la sincronizzazione.",
           );
         } else {
+          showCloudNotice(res.message, false);
           Alert.alert("Sincronizzazione non riuscita", res.message);
         }
       }
@@ -835,6 +849,7 @@ export default function ProfiloScreen() {
       const code = cloudSyncId || (await getCloudSyncId());
       await Clipboard.setStringAsync(code);
       setCloudSyncId(code);
+      showCloudNotice(`Codice ${code} copiato negli appunti`, true);
       Alert.alert(
         "Codice Copiato",
         `Codice ${code} copiato negli appunti. Inseriscilo sull'altro dispositivo per collegarlo.`,
@@ -864,10 +879,13 @@ export default function ProfiloScreen() {
           const updatedPairs = await getPairedDevicesInfo();
           setPairedDevices(updatedPairs);
         }
+        showCloudNotice(res.message, res.success);
         Alert.alert(
           res.success ? "Dispositivi Associati" : "Associazione non riuscita",
           res.message,
         );
+      } catch (err: any) {
+        showCloudNotice(err?.message || "Collegamento non riuscito.", false);
       } finally {
         setIsSyncingCloud(false);
       }
@@ -2120,6 +2138,31 @@ export default function ProfiloScreen() {
           <Text style={styles.sheetSubtitle}>
             Backup e ripristino di corsi, preferenze, viaggio e presenze
           </Text>
+          {cloudNotice ? (
+            <View
+              style={[
+                styles.cloudNoticeBanner,
+                {
+                  backgroundColor: cloudNotice.ok
+                    ? "rgba(52, 199, 89, 0.18)"
+                    : "rgba(245, 158, 11, 0.18)",
+                  borderColor: cloudNotice.ok
+                    ? "rgba(52, 199, 89, 0.4)"
+                    : "rgba(245, 158, 11, 0.4)",
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  color: cloudNotice.ok ? "#34c759" : "#f59e0b",
+                  fontSize: 13,
+                  fontWeight: "600",
+                }}
+              >
+                {cloudNotice.text}
+              </Text>
+            </View>
+          ) : null}
 
           <ScrollView
             style={styles.modalScroll}
@@ -3378,6 +3421,14 @@ const styles = StyleSheet.create({
     color: "#34c759",
     fontSize: 10,
     fontWeight: "700",
+  },
+  cloudNoticeBanner: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
   },
   slaveLockedNoticeBox: {
     padding: 16,

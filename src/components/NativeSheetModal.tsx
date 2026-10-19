@@ -123,40 +123,113 @@ export function NativeSheetModal({
     );
   }
 
-  const theme = {
-    ...DarkTheme,
-    colors: {
-      ...DarkTheme.colors,
-      background: backgroundColor,
-      card: backgroundColor,
-      text: tintColor,
-      primary: tintColor,
-    },
-  };
+  return (
+    <IosSheet
+      visible={visible}
+      onClose={onClose}
+      handleBack={handleBack}
+      title={title}
+      backgroundColor={backgroundColor}
+      tintColor={tintColor}
+      rightActions={rightActions}
+    >
+      {children}
+    </IosSheet>
+  );
+}
 
-  const leftItems = (): NativeStackHeaderItem[] => [
-    {
-      type: 'button',
-      label: 'Indietro',
-      icon: { type: 'sfSymbol', name: 'chevron.left' } as any,
-      onPress: handleBack,
-      accessibilityLabel: 'Indietro',
-    },
-  ];
+function IosSheet({
+  visible,
+  onClose,
+  handleBack,
+  title,
+  backgroundColor,
+  tintColor,
+  rightActions,
+  children,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  handleBack: () => void;
+  title: string;
+  backgroundColor: string;
+  tintColor: string;
+  rightActions?: SheetAction[];
+  children: React.ReactNode;
+}) {
+  // I callback più recenti vivono in un ref: le opzioni dell'header restano
+  // stabili e il navigatore nativo non viene aggiornato a ogni render del genitore.
+  const handlersRef = React.useRef({ handleBack, rightActions });
+  React.useEffect(() => {
+    handlersRef.current = { handleBack, rightActions };
+  });
 
-  const rightItems = (): NativeStackHeaderItem[] =>
-    (rightActions || []).map((a) => ({
-      type: 'button' as const,
-      label: a.label,
-      icon: a.sfSymbol
-        ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
-        : undefined,
-      variant: a.prominent ? ('prominent' as const) : ('plain' as const),
-      tintColor: a.tintColor || (a.prominent ? undefined : tintColor),
-      disabled: a.disabled,
-      onPress: a.onPress,
-      accessibilityLabel: a.label,
-    }));
+  const actionsKey = (rightActions || [])
+    .map(
+      (a) =>
+        `${a.label}|${a.sfSymbol || ''}|${a.prominent ? 1 : 0}|${a.tintColor || ''}|${a.disabled ? 1 : 0}`,
+    )
+    .join(';');
+
+  const theme = React.useMemo(
+    () => ({
+      ...DarkTheme,
+      colors: {
+        ...DarkTheme.colors,
+        background: backgroundColor,
+        card: backgroundColor,
+        text: tintColor,
+        primary: tintColor,
+      },
+    }),
+    [backgroundColor, tintColor],
+  );
+
+  const screenOptions = React.useMemo(
+    () => ({
+      headerTintColor: tintColor,
+      headerTitleStyle: { color: tintColor },
+      headerStyle: { backgroundColor },
+      headerShadowVisible: false,
+      contentStyle: { backgroundColor },
+    }),
+    [backgroundColor, tintColor],
+  );
+
+  const screenOpts = React.useMemo(
+    () => ({
+      title,
+      unstable_headerLeftItems: (): NativeStackHeaderItem[] => [
+        {
+          type: 'button',
+          label: 'Indietro',
+          icon: { type: 'sfSymbol', name: 'chevron.left' } as any,
+          onPress: () => handlersRef.current.handleBack(),
+          accessibilityLabel: 'Indietro',
+        },
+      ],
+      unstable_headerRightItems: (): NativeStackHeaderItem[] =>
+        (handlersRef.current.rightActions || []).map((a, i) => ({
+          type: 'button' as const,
+          label: a.label,
+          icon: a.sfSymbol
+            ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
+            : undefined,
+          variant: a.prominent ? ('prominent' as const) : ('plain' as const),
+          tintColor: a.tintColor || (a.prominent ? undefined : tintColor),
+          disabled: a.disabled,
+          onPress: () => handlersRef.current.rightActions?.[i]?.onPress(),
+          accessibilityLabel: a.label,
+        })),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [title, tintColor, actionsKey],
+  );
+
+  const contextValue = React.useMemo(
+    () => ({ children, backgroundColor }),
+    [children, backgroundColor],
+  );
 
   return (
     <Modal
@@ -166,26 +239,14 @@ export function NativeSheetModal({
       onRequestClose={onClose}
       onDismiss={onClose}
     >
-      <SheetContentContext.Provider value={{ children, backgroundColor }}>
+      <SheetContentContext.Provider value={contextValue}>
         <NavigationIndependentTree>
           <NavigationContainer theme={theme}>
-            <Stack.Navigator
-              screenOptions={{
-                headerTintColor: tintColor,
-                headerTitleStyle: { color: tintColor },
-                headerStyle: { backgroundColor },
-                headerShadowVisible: false,
-                contentStyle: { backgroundColor },
-              }}
-            >
+            <Stack.Navigator screenOptions={screenOptions}>
               <Stack.Screen
                 name="sheet"
                 component={SheetContentScreen}
-                options={{
-                  title,
-                  unstable_headerLeftItems: leftItems,
-                  unstable_headerRightItems: rightItems,
-                }}
+                options={screenOpts}
               />
             </Stack.Navigator>
           </NavigationContainer>

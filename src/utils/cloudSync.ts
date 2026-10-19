@@ -836,7 +836,7 @@ export async function dissociateDevice(
         });
 
         await setICloudAutoSyncEnabled(false);
-        lastKnownDevicesHash = `${myDevice.id}:${myDevice.name}:${myDevice.lastActive}`;
+        lastKnownDevicesHash = `${myDevice.id}:${myDevice.name}`;
         lastKnownRemoteUpdatedAt = Date.now();
         await notifyLiveSyncListeners(true);
 
@@ -867,7 +867,7 @@ export async function dissociateDevice(
       await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
       lastKnownDevicesHash = Object.values(updatedDevices)
         .filter(Boolean)
-        .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
+        .map((d) => `${d.id}:${d.name}`)
         .sort()
         .join("|");
       lastKnownRemoteUpdatedAt = Date.now();
@@ -1069,7 +1069,10 @@ async function runSync(): Promise<CloudSyncResult> {
       ...myDevice,
       name: uniqueName,
       pairedAt: devicesMap[myDevice.id]?.pairedAt || Date.now(),
-      lastActive: Date.now(),
+      lastActive:
+        Date.now() - (devicesMap[myDevice.id]?.lastActive || 0) > 60000
+          ? Date.now()
+          : devicesMap[myDevice.id].lastActive,
     };
 
     // Verifica se c'è un altro dispositivo associato
@@ -1506,7 +1509,7 @@ async function checkRemoteLiveChanges(): Promise<void> {
       Boolean,
     ) as SyncDeviceInfo[];
     const devHash = devEntries
-      .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
+      .map((d) => `${d.id}:${d.name}`)
       .sort()
       .join("|");
 
