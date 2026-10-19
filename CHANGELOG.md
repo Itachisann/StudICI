@@ -7,29 +7,23 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ## 1.8.8
 
-> **[Aggiornamento Obbligatorio / Major Update]**
-> Nuovo design per la sincronizzazione cloud, pulsanti arrotondati con glow coordinato al tema, miglioramenti alle impostazioni ed esportazione PDF.
+### Viaggio Pendolare & Traffico
 
-### Sincronizzazione & Profilo
+- **Integrazione del ritardo traffico nell'itinerario e nelle tappe**:
+  - L'orario di partenza da casa e la durata stimata della tratta in auto tengono conto del ritardo dovuto a traffico, viabilità o rallentamenti indicato nelle impostazioni del viaggio.
+  - La tappa del viaggio in auto riporta la durata complessiva effettiva e l'eventuale indicazione dei minuti di traffico previsti.
 
-- **Refactoring Sincronizzazione Cloud**:
-  - Pulsanti "Sincronizza" e "Copia codice" affiancati sulla stessa riga in formato pillola con effetto glow nel colore del tema attivo.
-  - Nuova scheda per il collegamento di un secondo dispositivo: barra compatta con cancellazione rapida e tasto "Collega" integrato.
-  - Uniformati tutti gli elementi grafici del modale (icone dispositivi, badge e switch) alla palette del tema selezionato.
-- **Esportazione PDF & Layout**:
-  - Centrati orizzontalmente icona e testo per "Orario settimanale" e "Registro presenze" nelle opzioni di esportazione.
-  - Risolta la duplicazione "Aula Aula" nei PDF generati.
-  - Rimosso lo spazio vuoto in eccesso a fondo pagina nella schermata Profilo.
+### Interfaccia e Sincronizzazione Cloud
 
-### Viaggio & Pendolare
-
-- **Gestione Stazioni & Itinerario**:
-  - Elenco completo stazioni ferroviarie ordinato A-Z con ricerca esatta e fuzzy fallback per corrispondenza più vicina.
-  - Stazioni principali e snodi importanti impostati come default.
-  - Calcolo tempi di percorrenza con stima dinamica di traffico e ritardi viari.
-  - Scheda tragitto urbano semplificata e uniformati i raggi di curvatura delle pillole dei giorni con la vista orario.
-- **Menu Aggiornamento**:
-  - Ridotto alle opzioni essenziali (copia URL sorgente e download diretto) con accesso rapido alla cronologia delle versioni.
+- **Nuova scheda di Sincronizzazione Cloud**:
+  - Box unificato con codice dispositivo compatto, switch rapido per la sincronizzazione automatica e pulsanti affiancati con stile glow coerente al tema attivo.
+- **Pulsanti di ritorno nei modali**:
+  - Sostituita la classica "X" con un pulsante circolare `<` (chevron) in alto a sinistra in stile nativo iOS.
+- **Rifiniture grafiche nel Profilo**:
+  - Titoli delle sezioni con peso del testo bilanciato (`500`) per una gerarchia visiva più pulita.
+  - Divisori interni centrati orizzontalmente ed eliminato lo spazio vuoto in eccesso a fondo pagina.
+- **Esportazione PDF**:
+  - Risolto il problema che causava la ripetizione della parola "Aula" nei dettagli delle lezioni esportate.
 
 ## 1.8.7
 

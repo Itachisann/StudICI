@@ -433,8 +433,8 @@ const styles = StyleSheet.create({
   },
   confirmButton: {
     backgroundColor: SAPIENZA_RED,
-    height: 52,
-    borderRadius: 16,
+    height: 50,
+    borderRadius: 9999,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",

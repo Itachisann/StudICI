@@ -198,16 +198,29 @@ export function CommuterConfigModal({
           originCoords,
         );
         if (!cancelled) {
-          const ceilDuration = Math.ceil(est.durationMinutes);
+          const baseDuration = Math.ceil(
+            est.baseDurationMinutes || est.durationMinutes,
+          );
+          const trafficDelay = Math.max(
+            0,
+            Math.ceil(est.trafficDelayMinutes || 0),
+          );
+          const totalDuration = Math.max(2, baseDuration + trafficDelay);
           setDrivingEstimate({
             ...est,
-            durationMinutes: ceilDuration,
+            durationMinutes: totalDuration,
+            baseDurationMinutes: baseDuration,
+            trafficDelayMinutes: trafficDelay,
           });
           setLocalConfig((prev) => ({
             ...prev,
             carLeg: {
               ...prev.carLeg,
-              durationMinutes: ceilDuration,
+              durationMinutes: totalDuration,
+              baseDurationMinutes: baseDuration,
+              trafficDelayMinutes: trafficDelay,
+              trafficCondition: est.trafficCondition,
+              trafficFluency: est.fluencyStatus,
               distanceKm: est.distanceKm,
               stationAddress: getStationNavigationQuery(
                 prev.departureStation.shortName || prev.departureStation.name,
@@ -362,9 +375,16 @@ export function CommuterConfigModal({
 
   const handleSaveInit = () => {
     if (!isInitComplete || !initDepartureStation || !initArrivalStation) return;
-    const ceilDriveMinutes = initDrivingEstimate?.durationMinutes
-      ? Math.ceil(initDrivingEstimate.durationMinutes)
-      : 15;
+    const baseMin = Math.ceil(
+      initDrivingEstimate?.baseDurationMinutes ||
+        initDrivingEstimate?.durationMinutes ||
+        15,
+    );
+    const trafficDelay = Math.max(
+      0,
+      Math.ceil(initDrivingEstimate?.trafficDelayMinutes || 0),
+    );
+    const totalDuration = Math.max(2, baseMin + trafficDelay);
     const newConfig: CommuterConfig = {
       ...config,
       enabled: true,
@@ -372,7 +392,11 @@ export function CommuterConfigModal({
       originCoords: initOriginCoords,
       carLeg: {
         enabled: initCarMode === "yes",
-        durationMinutes: ceilDriveMinutes,
+        durationMinutes: totalDuration,
+        baseDurationMinutes: baseMin,
+        trafficDelayMinutes: trafficDelay,
+        trafficCondition: initDrivingEstimate?.trafficCondition,
+        trafficFluency: initDrivingEstimate?.fluencyStatus,
         distanceKm: initDrivingEstimate?.distanceKm || 6.2,
         parkingBufferMinutes: initParkingBufferMinutes ?? 7,
         stationAddress: getStationNavigationQuery(
@@ -388,12 +412,34 @@ export function CommuterConfigModal({
   };
 
   const handleSave = () => {
+    const baseDuration = Math.ceil(
+      localConfig.carLeg.baseDurationMinutes ||
+        localConfig.carLeg.durationMinutes ||
+        15,
+    );
+    const trafficDelay = Math.max(
+      0,
+      Math.ceil(
+        localConfig.carLeg.trafficDelayMinutes ??
+          drivingEstimate?.trafficDelayMinutes ??
+          0,
+      ),
+    );
+    const totalDuration = Math.max(2, baseDuration + trafficDelay);
+
     onSave({
       ...localConfig,
       enabled: true,
       carLeg: {
         ...localConfig.carLeg,
-        durationMinutes: Math.ceil(localConfig.carLeg.durationMinutes || 15),
+        durationMinutes: totalDuration,
+        baseDurationMinutes: baseDuration,
+        trafficDelayMinutes: trafficDelay,
+        trafficCondition:
+          localConfig.carLeg.trafficCondition ||
+          drivingEstimate?.trafficCondition,
+        trafficFluency:
+          localConfig.carLeg.trafficFluency || drivingEstimate?.fluencyStatus,
         stationAddress: getStationNavigationQuery(
           localConfig.departureStation.shortName ||
             localConfig.departureStation.name,

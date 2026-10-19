@@ -31,7 +31,7 @@ export interface AppUpdateInfo {
 // Versioni che sono state rilasciate come aggiornamenti bloccanti obbligatori.
 // Qualsiasi versione installata precedente a una di queste riceverà l'aggiornamento come bloccante,
 // anche se nel frattempo è uscita una versione successiva non bloccante.
-export const KNOWN_BLOCKING_VERSIONS = ['1.8.4', '1.8.5', '1.8.7', '1.8.8'];
+export const KNOWN_BLOCKING_VERSIONS = ['1.8.4', '1.8.5', '1.8.7'];
 
 /**
  * Verifica se le note o il titolo di una singola release indicano un aggiornamento bloccante

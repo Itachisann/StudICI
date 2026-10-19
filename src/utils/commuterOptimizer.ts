@@ -333,20 +333,26 @@ async function computeOutboundItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDuration = Math.ceil(drivingEst.durationMinutes || config.carLeg.durationMinutes || 24);
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
-    carTrafficNote = drivingEst.trafficCondition;
-    carTrafficFluency = drivingEst.fluencyStatus;
+    carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
+    carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
-    carTrafficBaseline = drivingEst.baseDurationMinutes || carDuration;
-    carTrafficDelay = drivingEst.trafficDelayMinutes || 0;
+    carTrafficBaseline = Math.ceil(drivingEst.baseDurationMinutes || config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(drivingEst.trafficDelayMinutes ?? 0, config.carLeg.trafficDelayMinutes ?? 0);
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
+  } else if (carEnabled) {
+    carTrafficBaseline = Math.ceil(config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(0, config.carLeg.trafficDelayMinutes ?? 0);
+    carTrafficNote = config.carLeg.trafficCondition;
+    carTrafficFluency = config.carLeg.trafficFluency;
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
   }
 
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
 
   // Orario in cui essere in stazione per il treno
   const stationReachMins = trainDepMins - parkDuration;
-  // Orario di partenza da casa
+  // Orario di partenza da casa (anticipato dell'intera durata auto comprensiva di ritardo traffico)
   const homeDepartureMins = stationReachMins - carDuration;
 
   const targetDateStr = targetDate.toISOString().slice(0, 10);
@@ -356,11 +362,12 @@ async function computeOutboundItinerary(
 
   // Leg 1: Auto (se abilitata)
   if (carEnabled) {
+    const trafficSubText = carTrafficDelay > 0 ? ` • +${carTrafficDelay}m traffico` : '';
     legs.push({
       id: 'car-leg',
       type: 'car',
       title: `Partenza da ${config.originAddress}`,
-      subtitle: `Tragitto verso ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km)`,
+      subtitle: `Tragitto verso ${config.departureStation.shortName || config.departureStation.name} (~${carDuration} min • ${carDistanceKm} km${trafficSubText})`,
       startTime: minutesToTime(homeDepartureMins),
       endTime: minutesToTime(homeDepartureMins + carDuration),
       durationMinutes: carDuration,
@@ -625,13 +632,19 @@ async function computeReturnItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDuration = Math.ceil(drivingEst.durationMinutes || config.carLeg.durationMinutes || 24);
     carDistanceKm = drivingEst.distanceKm || carDistanceKm;
-    carTrafficNote = drivingEst.trafficCondition;
-    carTrafficFluency = drivingEst.fluencyStatus;
+    carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
+    carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
-    carTrafficBaseline = drivingEst.baseDurationMinutes || carDuration;
-    carTrafficDelay = drivingEst.trafficDelayMinutes || 0;
+    carTrafficBaseline = Math.ceil(drivingEst.baseDurationMinutes || config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(drivingEst.trafficDelayMinutes ?? 0, config.carLeg.trafficDelayMinutes ?? 0);
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
+  } else if (carEnabled) {
+    carTrafficBaseline = Math.ceil(config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(0, config.carLeg.trafficDelayMinutes ?? 0);
+    carTrafficNote = config.carLeg.trafficCondition;
+    carTrafficFluency = config.carLeg.trafficFluency;
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
   }
 
   const homeArrivalMins = trainArrMins + carWalkBuffer + carDuration;
@@ -712,11 +725,12 @@ async function computeReturnItinerary(
 
   // Leg 4: Auto verso Casa
   if (carEnabled) {
+    const returnTrafficSubText = carTrafficDelay > 0 ? ` • +${carTrafficDelay}m traffico` : '';
     legs.push({
       id: 'return-car-leg',
       type: 'car',
       title: `Rientro in Auto verso ${config.originAddress}`,
-      subtitle: `Dalla Stazione di ${config.departureStation.shortName || config.departureStation.name} a casa (~${carDuration} min • ${carDistanceKm} km${carTrafficNote ? ` • ${carTrafficNote}` : ''})`,
+      subtitle: `Dalla Stazione di ${config.departureStation.shortName || config.departureStation.name} a casa (~${carDuration} min • ${carDistanceKm} km${returnTrafficSubText})`,
       startTime: minutesToTime(trainArrMins + carWalkBuffer),
       endTime: minutesToTime(homeArrivalMins),
       durationMinutes: carDuration,

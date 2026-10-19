@@ -11,6 +11,10 @@ export interface CommuterConfig {
   carLeg: {
     enabled: boolean;
     durationMinutes: number; // es. 24
+    baseDurationMinutes?: number;
+    trafficDelayMinutes?: number;
+    trafficCondition?: string;
+    trafficFluency?: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
     parkingBufferMinutes: number; // es. 7
     stationAddress?: string; // es. "Stazione di Orte, Piazza XXV Aprile, Orte"
     distanceKm?: number; // es. 17.2
