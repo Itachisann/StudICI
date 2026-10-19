@@ -149,6 +149,7 @@ export function NativeSheetModal({
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      onDismiss={onClose}
     >
       <NavigationIndependentTree>
         <NavigationContainer theme={theme}>

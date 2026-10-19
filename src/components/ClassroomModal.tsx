@@ -2,9 +2,11 @@ import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import * as Clipboard from "expo-clipboard";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Animated,
   Modal,
+  PanResponder,
   Platform,
   Share,
   StyleSheet,
@@ -34,6 +36,45 @@ export function ClassroomModal({
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const [copied, setCopied] = useState(false);
+  const [panY] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    if (visible) {
+      panY.setValue(0);
+    }
+  }, [visible, panY]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gesture) => gesture.dy > 4,
+        onPanResponderMove: (_, gesture) => {
+          if (gesture.dy > 0) {
+            panY.setValue(gesture.dy);
+          }
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dy > 70 || gesture.vy > 0.5) {
+            Animated.timing(panY, {
+              toValue: 500,
+              duration: 180,
+              useNativeDriver: true,
+            }).start(() => {
+              panY.setValue(0);
+              onClose();
+            });
+          } else {
+            Animated.spring(panY, {
+              toValue: 0,
+              bounciness: 4,
+              useNativeDriver: true,
+            }).start();
+          }
+        },
+      }),
+    [onClose, panY],
+  );
 
   if (!classroom) return null;
 
@@ -66,6 +107,7 @@ export function ClassroomModal({
       animationType="slide"
       presentationStyle="overFullScreen"
       onRequestClose={onClose}
+      onDismiss={onClose}
     >
       <View style={styles.overlay}>
         {/* Backdrop con Blur iOS */}
@@ -83,19 +125,22 @@ export function ClassroomModal({
         </TouchableOpacity>
 
         {/* Apple Style Floating Sheet */}
-        <View
+        <Animated.View
           style={[
             styles.sheetContainer,
-            { paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : 28 },
+            {
+              paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : 28,
+              transform: [{ translateY: panY }],
+            },
           ]}
         >
-          {/* Grabber Handle iOS */}
-          <View style={styles.grabberContainer}>
+          {/* Grabber Handle iOS con supporto trascinamento verso il basso */}
+          <View style={styles.grabberContainer} {...panResponder.panHandlers}>
             <View style={styles.grabber} />
           </View>
 
           {/* Header con Titolo, Campus Badge e Tasto Chiudi Circolare */}
-          <View style={styles.headerRow}>
+          <View style={styles.headerRow} {...panResponder.panHandlers}>
             <View
               style={[
                 styles.roomIconSquircle,
@@ -351,7 +396,7 @@ export function ClassroomModal({
               <Text style={styles.secondaryButtonText}>Condividi</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

@@ -32,6 +32,7 @@ import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
+import { subscribeToLiveSync } from "../utils/cloudSync";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -440,6 +441,17 @@ export default function ViaggioScreen() {
       return () => clearInterval(id);
     }, [loadData]),
   );
+
+  useEffect(() => {
+    const unsubscribe = subscribeToLiveSync((_status, updated) => {
+      if (updated) {
+        loadData(false, true);
+      }
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [loadData]);
 
   const handleDayChange = (dayIdx: number) => {
     setSelectedDayIdx(dayIdx);

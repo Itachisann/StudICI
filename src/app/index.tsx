@@ -11,6 +11,7 @@ import {
   Animated,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   RefreshControl,
   ScrollView,
@@ -145,6 +146,44 @@ export default function ScheduleScreen() {
     Record<string, ScheduleData>
   >({});
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
+  const [alertsPanY] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    if (alertsModalVisible) {
+      alertsPanY.setValue(0);
+    }
+  }, [alertsModalVisible, alertsPanY]);
+
+  const [alertsPanResponder] = useState(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => gesture.dy > 4,
+      onPanResponderMove: (_, gesture) => {
+        if (gesture.dy > 0) {
+          alertsPanY.setValue(gesture.dy);
+        }
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dy > 60 || gesture.vy > 0.5) {
+          Animated.timing(alertsPanY, {
+            toValue: 500,
+            duration: 180,
+            useNativeDriver: true,
+          }).start(() => {
+            alertsPanY.setValue(0);
+            setAlertsModalVisible(false);
+          });
+        } else {
+          Animated.spring(alertsPanY, {
+            toValue: 0,
+            bounciness: 4,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  );
+
   const [selectedRoomModal, setSelectedRoomModal] =
     useState<ResolvedClassroom | null>(null);
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>(
@@ -805,18 +844,28 @@ export default function ScheduleScreen() {
         transparent={true}
         animationType="slide"
         onRequestClose={() => setAlertsModalVisible(false)}
+        onDismiss={() => setAlertsModalVisible(false)}
       >
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}
           onPress={() => setAlertsModalVisible(false)}
         >
-          <View
-            style={styles.modalContent}
+          <Animated.View
+            style={[
+              styles.modalContent,
+              { transform: [{ translateY: alertsPanY }] },
+            ]}
             onStartShouldSetResponder={() => true}
           >
-            <View style={styles.modalGrabber} />
-            <View style={styles.modalHeader}>
+            <View
+              style={styles.modalGrabber}
+              {...alertsPanResponder.panHandlers}
+            />
+            <View
+              style={styles.modalHeader}
+              {...alertsPanResponder.panHandlers}
+            >
               <View style={styles.modalHeaderIconBox}>
                 <Ionicons name="megaphone" size={18} color="#ff9f0a" />
               </View>
@@ -849,7 +898,7 @@ export default function ScheduleScreen() {
                 </View>
               ))}
             </ScrollView>
-          </View>
+          </Animated.View>
         </TouchableOpacity>
       </Modal>
 
