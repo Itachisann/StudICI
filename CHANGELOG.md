@@ -8,13 +8,23 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.9.0
 
 > **[Aggiornamento Obbligatorio / Bloccante]**
-> Risoluzione della reattività dei tasti di sincronizzazione e gestione dispositivi, pulsante Salva nativo rosso in Specifiche e aggiornamento sorgente SideStore.
+> Adozione uniforme dei pulsanti nativi di sistema, integrazione di Host SwiftUI per l'IPA, controlli di salvataggio allineati e nuova gestione Master/Slave per la sincronizzazione cloud multi-dispositivo.
 
-### Interfaccia e Sincronizzazione
+### Sincronizzazione Cloud & Ruoli Master / Slave
 
-- **Reattività controlli Cloud Sync**: Ripristinata la piena responsività dei pulsanti Sincronizza, Copia codice, Dissocia, Scollega e Collega.
-- **Salva in Specifiche**: Posizionato in basso come pulsante nativo ad alta visibilità con colore rosso e glow, mantenendo la barra di navigazione con tasto Indietro.
-- **Sorgente SideStore**: Aggiornato `apps.json` alla versione 1.9.0 per il download e l'aggiornamento automatico con un tap.
+- **Ruolo Master (Generatore del Gruppo)**:
+  - Solo il dispositivo che genera il codice e crea il gruppo di associazione ha i privilegi per collegare nuovi dispositivi, rimuovere singoli dispositivi associati o sciogliere l'intero gruppo ("Rompi gruppo").
+- **Ruolo Dispositivo Associato (Slave)**:
+  - I dispositivi associati a un master non possono collegare ulteriori dispositivi.
+  - Possono solo dissociarsi dal dispositivo master: al momento della dissociazione, il dispositivo viene rimosso dal gruppo e riparte pulito da zero senza dati (azzeramento locale di corso, orario, presenze e viaggio).
+- **Risoluzione Tasti nel Foglio Modale**:
+  - Risolto il problema che impediva la risposta al tocco dei tasti *Sincronizza*, *Copia codice*, *Dissocia*, *Scollega* e *Collega* eliminando il ciclo di rimontaggio del navigatore nativo e rendendo istantanea la copia negli appunti.
+
+### Interfaccia e Navigazione Nativa
+
+- **Pulsante Salva in Specifiche**: Spostato nella barra di navigazione nativa in alto a destra con stile prominente e colore rosso (`#ef4444`), identico a quello delle impostazioni di viaggio.
+- **Configura & Salva Viaggio**: Uniformati tutti i pulsanti di configurazione e salvataggio con pulsanti nativi SwiftUI (`Host` di `@expo/ui`), sia a viaggio non configurato che nelle modifiche successive.
+- **Supporto SideStore & Aggiornamenti**: Aggiornato il manifest ufficiale della sorgente SideStore/AltStore (`apps.json`) alla versione 1.9.0 per il download e aggiornamento automatico con un tap.
 
 ## 1.8.9
 

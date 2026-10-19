@@ -21,7 +21,6 @@ export interface DefaultTabPickerProps {
   title?: string;
   subtitle?: string;
   confirmButtonText?: string;
-  confirmButtonColor?: string;
   hideFooterButton?: boolean;
   onActiveTabChange?: (tab: Tab) => void;
   onConfirm: (tab: Tab) => void;
@@ -35,7 +34,6 @@ export function DefaultTabPicker({
   title = "Scegli Anno e Canale",
   subtitle = "Verranno mostrati in automatico all'apertura dell'app.",
   confirmButtonText = "Conferma e Inizia",
-  confirmButtonColor,
   hideFooterButton = false,
   onActiveTabChange,
   onConfirm,
@@ -258,9 +256,9 @@ export function DefaultTabPicker({
             label={confirmButtonText}
             variant="filled"
             glow
-            accentColor={confirmButtonColor || theme.primary}
-            glowColor={confirmButtonColor || theme.primary}
-            style={{ height: 50, alignSelf: "stretch" }}
+            accentColor={theme.primary}
+            glowColor={theme.primary}
+            style={{ height: 52, alignSelf: "stretch" }}
             onPress={handleConfirm}
           />
         </View>
