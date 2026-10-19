@@ -482,7 +482,14 @@ export function CommuterConfigModal({
       backgroundColor="#16181d"
       rightActions={
         !isUnconfigured && !stationPickerType
-          ? [{ label: "Salva", onPress: handleSave, prominent: true }]
+          ? [
+              {
+                label: "Salva",
+                onPress: handleSave,
+                prominent: true,
+                tintColor: "#ef4444",
+              },
+            ]
           : undefined
       }
     >
@@ -1235,8 +1242,8 @@ export function CommuterConfigModal({
                   label="Salva"
                   variant="filled"
                   glow
-                  accentColor={theme.primary}
-                  glowColor={theme.primary}
+                  accentColor="#ef4444"
+                  glowColor="#ef4444"
                   disabled={!isInitComplete}
                   style={{ flex: 1, height: 44 }}
                   onPress={handleSaveInit}

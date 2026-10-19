@@ -29,6 +29,8 @@ export interface SheetAction {
   disabled?: boolean;
   /** Pulsante evidenziato (stile "Fine/Salva" di iOS 26) */
   prominent?: boolean;
+  /** Colore personalizzato del pulsante (es. rosso per Salva) */
+  tintColor?: string;
 }
 
 export interface NativeSheetModalProps {
@@ -91,7 +93,7 @@ export function NativeSheetModal({
                 >
                   <Text
                     style={{
-                      color: tintColor,
+                      color: a.tintColor || tintColor,
                       fontWeight: '600',
                       opacity: a.disabled ? 0.4 : 1,
                     }}
@@ -137,7 +139,7 @@ export function NativeSheetModal({
         ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
         : undefined,
       variant: a.prominent ? ('prominent' as const) : ('plain' as const),
-      tintColor: a.prominent ? undefined : tintColor,
+      tintColor: a.tintColor || (a.prominent ? undefined : tintColor),
       disabled: a.disabled,
       onPress: a.onPress,
       accessibilityLabel: a.label,

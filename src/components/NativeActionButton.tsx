@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Button as ExpoUIButton, type UniversalStyle } from '@expo/ui';
+import { Host } from '@expo/ui/swift-ui';
 
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -43,13 +44,13 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   const isFilled = variant === 'filled';
   const isOutlined = variant === 'outlined';
 
-  // Se su iOS Nativo (IPA), usa il Button nativo SwiftUI da @expo/ui
+  // Se su iOS Nativo (IPA), usa il Button nativo SwiftUI racchiuso nell'Host di @expo/ui
   if (isNativeButtonAvailable) {
     const flat = StyleSheet.flatten(style) || {};
     const uStyle: UniversalStyle = {
       borderRadius: typeof flat.borderRadius === 'number' ? flat.borderRadius : 9999,
-      width: flat.width,
-      height: flat.height,
+      width: typeof flat.width === 'number' ? flat.width : undefined,
+      height: typeof flat.height === 'number' ? flat.height : undefined,
       opacity: disabled ? 0.45 : flat.opacity,
     };
 
@@ -65,28 +66,19 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           style,
         ]}
       >
-        <ExpoUIButton
-          label={label}
-          onPress={onPress}
-          variant={variant}
-          disabled={disabled}
-          style={uStyle}
+        <Host
+          matchContents
+          seedColor={accentColor}
+          style={{ width: '100%', height: '100%' }}
         >
-          {icon ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-              {icon}
-              <Text
-                style={[
-                  styles.nativeLabel,
-                  isFilled ? styles.filledText : { color: accentColor },
-                  textStyle,
-                ]}
-              >
-                {label}
-              </Text>
-            </View>
-          ) : undefined}
-        </ExpoUIButton>
+          <ExpoUIButton
+            label={label}
+            onPress={onPress}
+            variant={variant}
+            disabled={disabled}
+            style={uStyle}
+          />
+        </Host>
       </View>
     );
   }
