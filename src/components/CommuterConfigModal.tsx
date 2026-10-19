@@ -481,12 +481,13 @@ export function CommuterConfigModal({
       title={sheetTitle}
       backgroundColor="#16181d"
       rightActions={
-        !isUnconfigured && !stationPickerType
+        !stationPickerType
           ? [
               {
                 label: "Salva",
-                onPress: handleSave,
+                onPress: isUnconfigured ? handleSaveInit : handleSave,
                 prominent: true,
+                disabled: isUnconfigured ? !isInitComplete : false,
                 tintColor: "#ef4444",
               },
             ]

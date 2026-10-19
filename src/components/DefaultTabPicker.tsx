@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -21,6 +21,8 @@ export interface DefaultTabPickerProps {
   title?: string;
   subtitle?: string;
   confirmButtonText?: string;
+  hideFooterButton?: boolean;
+  onActiveTabChange?: (tab: Tab) => void;
   onConfirm: (tab: Tab) => void;
   onCancel?: () => void;
 }
@@ -32,6 +34,8 @@ export function DefaultTabPicker({
   title = "Scegli Anno e Canale",
   subtitle = "Verranno mostrati in automatico all'apertura dell'app.",
   confirmButtonText = "Conferma e Inizia",
+  hideFooterButton = false,
+  onActiveTabChange,
   onConfirm,
   onCancel,
 }: DefaultTabPickerProps) {
@@ -101,6 +105,12 @@ export function DefaultTabPicker({
       onConfirm(activeTabInfo.tab);
     }
   };
+
+  useEffect(() => {
+    if (activeTabInfo?.tab && onActiveTabChange) {
+      onActiveTabChange(activeTabInfo.tab);
+    }
+  }, [activeTabInfo, onActiveTabChange]);
 
   // Se c'è solo un tab in tutto il corso, non serve scegliere
   if (tabs.length === 0) return null;
@@ -240,17 +250,19 @@ export function DefaultTabPicker({
       </ScrollView>
 
       {/* ── Footer con Pulsante Azione ── */}
-      <View style={styles.footer}>
-        <NativeActionButton
-          label={confirmButtonText}
-          variant="filled"
-          glow
-          accentColor={theme.primary}
-          glowColor={theme.primary}
-          style={{ height: 52, alignSelf: "stretch" }}
-          onPress={handleConfirm}
-        />
-      </View>
+      {!hideFooterButton && (
+        <View style={styles.footer}>
+          <NativeActionButton
+            label={confirmButtonText}
+            variant="filled"
+            glow
+            accentColor={theme.primary}
+            glowColor={theme.primary}
+            style={{ height: 52, alignSelf: "stretch" }}
+            onPress={handleConfirm}
+          />
+        </View>
+      )}
     </View>
   );
 }

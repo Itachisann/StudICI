@@ -110,6 +110,7 @@ export default function ProfiloScreen() {
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
+  const [selectedChannelTab, setSelectedChannelTab] = useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
@@ -1883,11 +1884,23 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Fallback Cambio Canale / Anno (usato in Expo Go o cliccando 'Personalizza...') */}
+      {/* Modal Specifiche (Anno e Canale) con tasto Salva nativo nell'header */}
       <NativeSheetModal
         visible={channelModalVisible}
         onClose={() => setChannelModalVisible(false)}
-        title="Anno e canale"
+        title="Specifiche"
+        rightActions={[
+          {
+            label: "Salva",
+            prominent: true,
+            onPress: async () => {
+              if (selectedChannelTab) {
+                await selectDefaultTab(selectedChannelTab);
+              }
+              setChannelModalVisible(false);
+            },
+          },
+        ]}
       >
         <View style={{ flex: 1, backgroundColor: "#111111" }}>
           <DefaultTabPicker
@@ -1896,9 +1909,13 @@ export default function ProfiloScreen() {
             degreeName={degreeName}
             title="Personalizza il tuo corso"
             subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
-            confirmButtonText="Salva"
+            hideFooterButton={true}
+            onActiveTabChange={(tab) => {
+              setSelectedChannelTab(tab);
+            }}
             onConfirm={async (tab) => {
               await selectDefaultTab(tab);
+              setChannelModalVisible(false);
             }}
           />
         </View>

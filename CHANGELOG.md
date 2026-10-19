@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.0
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Adozione uniforme dei pulsanti nativi di sistema, integrazione di Host SwiftUI per l'IPA e controlli di salvataggio allineati su tutte le schermate.
+
+### Interfaccia e Navigazione Nativa
+
+- **Pulsante Salva in Specifiche**: Spostato nella barra di navigazione nativa in alto a destra con stile prominente, identico a quello delle impostazioni di viaggio.
+- **Configura & Salva Viaggio**: Uniformati tutti i pulsanti di configurazione e salvataggio con pulsanti nativi SwiftUI (`Host` di `@expo/ui`), sia a viaggio non configurato che nelle modifiche successive.
+- **Supporto SideStore & Aggiornamenti**: Aggiornato il manifest ufficiale della sorgente SideStore/AltStore (`apps.json`) alla versione 1.9.0 per il download e aggiornamento automatico con un tap.
+
 ## 1.8.9
 
 > **[Aggiornamento Obbligatorio / Bloccante]**
