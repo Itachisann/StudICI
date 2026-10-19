@@ -110,7 +110,6 @@ export default function ProfiloScreen() {
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
-  const [selectedChannelTab, setSelectedChannelTab] = useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
@@ -1385,35 +1384,37 @@ export default function ProfiloScreen() {
         <Text style={styles.sectionHeader}>SINCRONIZZAZIONE</Text>
         <View style={styles.groupedCard}>
           {/* Riga 1: Sincronizzazione */}
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={() => setCloudModalVisible(true)}
-          >
-            <View
-              style={[
-                styles.iconBox,
-                { backgroundColor: theme.subtle, borderColor: theme.border },
-              ]}
+          <View style={styles.tableRow}>
+            <TouchableOpacity
+              style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
+              activeOpacity={0.7}
+              onPress={() => setCloudModalVisible(true)}
             >
-              {isSyncingCloud ? (
-                <ActivityIndicator size="small" color={theme.accent} />
-              ) : (
-                <Ionicons
-                  name="cloud-outline"
-                  size={17}
-                  color={theme.accent}
-                />
-              )}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Sincronizzazione</Text>
-              <Text style={styles.rowSubTitle}>
-                {pairedDevices?.isPaired && pairedDevices.otherDevice
-                  ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
-                  : "Non attiva"}
-              </Text>
-            </View>
+              <View
+                style={[
+                  styles.iconBox,
+                  { backgroundColor: theme.subtle, borderColor: theme.border },
+                ]}
+              >
+                {isSyncingCloud ? (
+                  <ActivityIndicator size="small" color={theme.accent} />
+                ) : (
+                  <Ionicons
+                    name="cloud-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>Sincronizzazione</Text>
+                <Text style={styles.rowSubTitle}>
+                  {pairedDevices?.isPaired && pairedDevices.otherDevice
+                    ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
+                    : "Non attiva"}
+                </Text>
+              </View>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[
                 styles.inlineActionBtn,
@@ -1431,13 +1432,18 @@ export default function ProfiloScreen() {
                 {isSyncingCloud ? "In corso..." : "Sincronizza"}
               </Text>
             </TouchableOpacity>
-            <Ionicons
-              name="chevron-forward"
-              size={15}
-              color="#48484a"
-              style={{ marginLeft: 6 }}
-            />
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCloudModalVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+            >
+              <Ionicons
+                name="chevron-forward"
+                size={15}
+                color="#48484a"
+                style={{ marginLeft: 6 }}
+              />
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.separator} />
 
@@ -1884,23 +1890,11 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Specifiche (Anno e Canale) con tasto Salva nativo nell'header */}
+      {/* Modal Specifiche (Anno e Canale) */}
       <NativeSheetModal
         visible={channelModalVisible}
         onClose={() => setChannelModalVisible(false)}
         title="Specifiche"
-        rightActions={[
-          {
-            label: "Salva",
-            prominent: true,
-            onPress: async () => {
-              if (selectedChannelTab) {
-                await selectDefaultTab(selectedChannelTab);
-              }
-              setChannelModalVisible(false);
-            },
-          },
-        ]}
       >
         <View style={{ flex: 1, backgroundColor: "#111111" }}>
           <DefaultTabPicker
@@ -1909,10 +1903,9 @@ export default function ProfiloScreen() {
             degreeName={degreeName}
             title="Personalizza il tuo corso"
             subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
-            hideFooterButton={true}
-            onActiveTabChange={(tab) => {
-              setSelectedChannelTab(tab);
-            }}
+            confirmButtonText="Salva"
+            confirmButtonColor="#ef4444"
+            hideFooterButton={false}
             onConfirm={async (tab) => {
               await selectDefaultTab(tab);
               setChannelModalVisible(false);
