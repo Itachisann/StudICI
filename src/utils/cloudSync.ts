@@ -349,6 +349,10 @@ export async function setICloudAutoSyncEnabled(
 
 const COURSE_MODIFIED_KEY = "studici_course_modified_at";
 const COURSE_SNAPSHOT_KEY = "studici_course_snapshot";
+// Impostazioni di viaggio (stessa chiave usata da commuterStorage.ts)
+const COMMUTER_CONFIG_KEY = "studici_commuter_config_v1";
+const COMMUTER_MODIFIED_KEY = "studici_commuter_modified_at";
+const COMMUTER_SNAPSHOT_KEY = "studici_commuter_snapshot";
 const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 8000;
 
@@ -363,6 +367,8 @@ interface RemoteDoc {
   updatedAt?: number;
   course?: Partial<CourseData>;
   courseModified?: number;
+  commuter?: Record<string, any> | null;
+  commuterModified?: number;
   attendance?: AttendanceRecord[];
   tombstones?: Record<string, number>;
   devices?: Record<string, SyncDeviceInfo>;
@@ -748,6 +754,82 @@ async function writeLocalCourse(c: CourseData): Promise<void> {
   }
 }
 
+function stableStringify(value: any): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(value)
+    .filter((k) => value[k] !== undefined && value[k] !== null)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+}
+
+async function readLocalCommuter(): Promise<Record<string, any> | null> {
+  try {
+    const raw = await AsyncStorage.getItem(COMMUTER_CONFIG_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Impostazioni di viaggio: vince la modifica più recente (come per il corso).
+ * Se `adoptRemote` è true (collegamento di un nuovo dispositivo) le impostazioni
+ * remote, se presenti, sostituiscono sempre quelle locali.
+ */
+async function mergeCommuter(
+  remote: RemoteDoc | null | undefined,
+  adoptRemote = false,
+): Promise<{
+  config: Record<string, any> | null;
+  modified: number;
+  changed: boolean;
+}> {
+  const local = await readLocalCommuter();
+  const localStable = local ? stableStringify(local) : null;
+  const snap = await AsyncStorage.getItem(COMMUTER_SNAPSHOT_KEY);
+  let localMod =
+    parseInt((await AsyncStorage.getItem(COMMUTER_MODIFIED_KEY)) || "0", 10) ||
+    0;
+  if (localStable !== snap) localMod = local ? Date.now() : 0;
+
+  const remoteCfg =
+    remote?.commuter && typeof remote.commuter === "object"
+      ? remote.commuter
+      : null;
+  const remoteMod = remote?.commuterModified || 0;
+
+  let finalCfg = local;
+  let finalMod = localMod;
+  let changed = false;
+  if (remoteCfg && (adoptRemote || remoteMod > localMod)) {
+    changed = stableStringify(remoteCfg) !== localStable;
+    if (changed) {
+      await AsyncStorage.setItem(
+        COMMUTER_CONFIG_KEY,
+        JSON.stringify(remoteCfg),
+      );
+    }
+    finalCfg = remoteCfg;
+    finalMod = remoteMod || Date.now();
+  } else if (adoptRemote && local) {
+    finalMod = Date.now();
+  }
+
+  if (finalCfg) {
+    await AsyncStorage.setItem(
+      COMMUTER_SNAPSHOT_KEY,
+      stableStringify(finalCfg),
+    );
+  } else {
+    await AsyncStorage.removeItem(COMMUTER_SNAPSHOT_KEY);
+  }
+  await AsyncStorage.setItem(COMMUTER_MODIFIED_KEY, String(finalMod));
+  return { config: finalCfg, modified: finalMod, changed };
+}
+
 function idsKey(list: AttendanceRecord[]): string {
   return list
     .map((r) => `${r.id}:${r.timestamp}`)
@@ -826,10 +908,13 @@ async function runSync(): Promise<CloudSyncResult> {
       const localCourse = await readLocalCourse();
       const localAtt = await getAttendanceRecords();
       const localTomb = await getAttendanceTombstones();
+      const unpairedCommuter = await mergeCommuter(null);
       await pushRemote(syncId, {
         updatedAt: Date.now(),
         course: localCourse,
         courseModified: Date.now(),
+        commuter: unpairedCommuter.config,
+        commuterModified: unpairedCommuter.modified,
         attendance: localAtt,
         tombstones: localTomb,
         devices: devicesMap,
@@ -871,6 +956,9 @@ async function runSync(): Promise<CloudSyncResult> {
       JSON.stringify(finalCourse),
     );
     await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
+
+    // ── Impostazioni di viaggio: vince la modifica più recente ──
+    const commuterMerge = await mergeCommuter(remote);
 
     // ── Presenze: unione per ID con tombstone per le cancellazioni ──
     const localAtt = await getAttendanceRecords();
@@ -915,6 +1003,8 @@ async function runSync(): Promise<CloudSyncResult> {
       updatedAt: now,
       course: finalCourse,
       courseModified: finalMod,
+      commuter: commuterMerge.config,
+      commuterModified: commuterMerge.modified,
       attendance: merged,
       tombstones,
       devices: devicesMap,
@@ -922,7 +1012,7 @@ async function runSync(): Promise<CloudSyncResult> {
     });
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
-    const updated = attChanged || courseChanged;
+    const updated = attChanged || courseChanged || commuterMerge.changed;
     return {
       success: true,
       updated,
@@ -1040,6 +1130,9 @@ export async function linkDeviceWithCode(
     );
     await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
 
+    // Impostazioni di viaggio: se il gruppo le ha già, le adotta
+    const commuterLink = await mergeCommuter(remote, true);
+
     // Merge presenze
     const localAtt = await getAttendanceRecords();
     const remoteAtt: AttendanceRecord[] = Array.isArray(remote.attendance)
@@ -1071,6 +1164,8 @@ export async function linkDeviceWithCode(
       updatedAt: Date.now(),
       course: finalCourse,
       courseModified: finalMod,
+      commuter: commuterLink.config,
+      commuterModified: commuterLink.modified,
       attendance: merged,
       tombstones,
       devices: updatedDevices,
@@ -1109,9 +1204,9 @@ export async function linkDeviceWithCode(
   }
 }
 
-// Invio automatico (con debounce) dopo ogni modifica locale alle presenze
+// Invio automatico (con debounce) dopo ogni modifica locale (presenze, impostazioni viaggio)
 let autoPushTimer: ReturnType<typeof setTimeout> | null = null;
-setAttendanceChangeListener(() => {
+export function scheduleAutoPush(): void {
   if (autoPushTimer) clearTimeout(autoPushTimer);
   autoPushTimer = setTimeout(async () => {
     autoPushTimer = null;
@@ -1125,7 +1220,8 @@ setAttendanceChangeListener(() => {
       }
     } catch {}
   }, 1500);
-});
+}
+setAttendanceChangeListener(scheduleAutoPush);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale

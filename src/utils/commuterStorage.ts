@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommuterConfig } from '../types/commuter';
 import { normalizeStationInfo } from './trenitaliaApi';
 import { getStationNavigationQuery } from './drivingRouter';
+import { scheduleAutoPush } from './cloudSync';
 
 const COMMUTER_CONFIG_KEY = 'studici_commuter_config_v1';
 
@@ -96,6 +97,7 @@ export async function saveCommuterConfig(config: Partial<CommuterConfig>): Promi
       },
     };
     await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
+    scheduleAutoPush();
     return updated;
   } catch {
     return DEFAULT_COMMUTER_CONFIG;

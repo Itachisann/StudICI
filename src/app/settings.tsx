@@ -29,6 +29,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
+import { NativeSheetModal } from "../components/NativeSheetModal";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
 import {
@@ -1735,28 +1736,15 @@ export default function ProfiloScreen() {
       </ScrollView>
 
       {/* Modal Selezione Corso di Laurea in stile App / iOS */}
-      <Modal
+      <NativeSheetModal
         visible={courseModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setCourseModalVisible(false)}
+        onClose={() => setCourseModalVisible(false)}
+        title="Corso di Laurea"
       >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity
-              style={styles.modalCloseCircle}
-              activeOpacity={0.7}
-              onPress={() => setCourseModalVisible(false)}
-            >
-              <Ionicons name="chevron-back" size={20} color="#ffffff" />
-            </TouchableOpacity>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.modalTitle}>Corso di Laurea</Text>
-              <Text style={styles.modalSubtitle}>
-                Facoltà di Ingegneria Civile e Industriale
-              </Text>
-            </View>
-          </View>
+        <View style={styles.modalContainer}>
+          <Text style={styles.sheetSubtitle}>
+            Facoltà di Ingegneria Civile e Industriale
+          </Text>
 
           {/* Barra di Ricerca in stile iOS */}
           <View style={styles.searchBarContainer}>
@@ -1892,33 +1880,16 @@ export default function ProfiloScreen() {
               })}
             </ScrollView>
           )}
-        </SafeAreaView>
-      </Modal>
+        </View>
+      </NativeSheetModal>
 
       {/* Modal Fallback Cambio Canale / Anno (usato in Expo Go o cliccando 'Personalizza...') */}
-      <Modal
+      <NativeSheetModal
         visible={channelModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setChannelModalVisible(false)}
+        onClose={() => setChannelModalVisible(false)}
+        title="Anno e canale"
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: "#111111" }}>
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "flex-start",
-              paddingHorizontal: 20,
-              paddingTop: 16,
-            }}
-          >
-            <TouchableOpacity
-              style={styles.modalCloseCircle}
-              activeOpacity={0.7}
-              onPress={() => setChannelModalVisible(false)}
-            >
-              <Ionicons name="chevron-back" size={20} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
+        <View style={{ flex: 1, backgroundColor: "#111111" }}>
           <DefaultTabPicker
             tabs={availableTabs}
             initialTabUrl={defaultTabUrl}
@@ -1930,45 +1901,34 @@ export default function ProfiloScreen() {
               await selectDefaultTab(tab);
             }}
           />
-        </SafeAreaView>
-      </Modal>
+        </View>
+      </NativeSheetModal>
 
       {/* Modal Registro presenze Completo */}
-      <Modal
+      <NativeSheetModal
         visible={attendanceModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setAttendanceModalVisible(false)}
+        onClose={() => setAttendanceModalVisible(false)}
+        title="Registro presenze"
+        rightActions={
+          attendanceRecords.length > 0
+            ? [
+                {
+                  label: "Esporta",
+                  sfSymbol: "square.and.arrow.up",
+                  onPress: handleExportAttendancePdf,
+                },
+              ]
+            : undefined
+        }
       >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity
-              style={styles.modalCloseCircle}
-              activeOpacity={0.7}
-              onPress={() => setAttendanceModalVisible(false)}
-            >
-              <Ionicons name="chevron-back" size={20} color="#ffffff" />
-            </TouchableOpacity>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.modalTitle}>Registro presenze</Text>
-              <Text style={styles.modalSubtitle}>
-                {attendanceRecords.length}{" "}
-                {attendanceRecords.length === 1
-                  ? "lezione frequentata"
-                  : "lezioni frequentate"}{" "}
-                · {attendanceStats?.totalHours || 0} ore
-              </Text>
-            </View>
-            {attendanceRecords.length > 0 && (
-              <TouchableOpacity
-                style={styles.modalExportHeaderBtn}
-                activeOpacity={0.7}
-                onPress={handleExportAttendancePdf}
-              >
-                <Ionicons name="share-outline" size={19} color="#ffffff" />
-              </TouchableOpacity>
-            )}
-          </View>
+        <View style={styles.modalContainer}>
+          <Text style={styles.sheetSubtitle}>
+            {attendanceRecords.length}{" "}
+            {attendanceRecords.length === 1
+              ? "lezione frequentata"
+              : "lezioni frequentate"}{" "}
+            · {attendanceStats?.totalHours || 0} ore
+          </Text>
 
           <ScrollView
             style={styles.modalScroll}
@@ -2076,32 +2036,19 @@ export default function ProfiloScreen() {
               </TouchableOpacity>
             )}
           </ScrollView>
-        </SafeAreaView>
-      </Modal>
+        </View>
+      </NativeSheetModal>
 
       {/* Modal Gestione Sincronizzazione */}
-      <Modal
+      <NativeSheetModal
         visible={cloudModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setCloudModalVisible(false)}
+        onClose={() => setCloudModalVisible(false)}
+        title="Sincronizzazione"
       >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity
-              style={styles.modalCloseCircle}
-              activeOpacity={0.7}
-              onPress={() => setCloudModalVisible(false)}
-            >
-              <Ionicons name="chevron-back" size={20} color="#ffffff" />
-            </TouchableOpacity>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.modalTitle}>Sincronizzazione</Text>
-              <Text style={styles.modalSubtitle}>
-                Backup e ripristino di corsi, preferenze e presenze
-              </Text>
-            </View>
-          </View>
+        <View style={styles.modalContainer}>
+          <Text style={styles.sheetSubtitle}>
+            Backup e ripristino di corsi, preferenze, viaggio e presenze
+          </Text>
 
           <ScrollView
             style={styles.modalScroll}
@@ -2522,8 +2469,8 @@ export default function ProfiloScreen() {
               </View>
             </View>
           </ScrollView>
-        </SafeAreaView>
-      </Modal>
+        </View>
+      </NativeSheetModal>
 
       {/* Modal Schermata Download Unificato */}
       <Modal
@@ -2730,6 +2677,13 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: "#111111",
+  },
+  sheetSubtitle: {
+    fontSize: 13,
+    color: "#8e8e93",
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 12,
   },
   modalHeader: {
     flexDirection: "row",

@@ -1,13 +1,10 @@
 import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
-  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -17,6 +14,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { NativeActionButton } from "./NativeActionButton";
+import { NativeSheetModal } from "./NativeSheetModal";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
   calculateDrivingEstimate,
@@ -457,80 +456,44 @@ export function CommuterConfigModal({
     (s) => s.code === localConfig.arrivalStation.code,
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 4,
-        onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dy > 30 || gestureState.vy > 0.35) {
-            onClose();
-          }
-        },
-      }),
-    [onClose],
-  );
+  const handleSheetBack = () => {
+    if (stationPickerType) {
+      setStationPickerType(null);
+      setStationSearchQuery("");
+    } else {
+      onClose();
+    }
+  };
+
+  const sheetTitle = stationPickerType
+    ? stationPickerType === "departure"
+      ? "Stazione di partenza"
+      : "Stazione di arrivo (Roma)"
+    : isUnconfigured
+      ? "Configura viaggio"
+      : "Impostazioni viaggio";
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={true}>
+    <NativeSheetModal
+      visible={visible}
+      onClose={onClose}
+      onBack={handleSheetBack}
+      title={sheetTitle}
+      backgroundColor="#16181d"
+      rightActions={
+        !isUnconfigured && !stationPickerType
+          ? [{ label: "Salva", onPress: handleSave, prominent: true }]
+          : undefined
+      }
+    >
       <KeyboardAvoidingView
-        style={styles.modalOverlay}
+        style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <BlurView tint="dark" intensity={90} style={StyleSheet.absoluteFill} />
-
         <View style={styles.modalContainer}>
-          {/* Sheet Handle - trascina verso il basso per chiudere */}
-          <View
-            style={styles.sheetHandleContainer}
-            {...panResponder.panHandlers}
-          >
-            <View style={styles.sheetHandle} />
-          </View>
-
-          {/* Header (visibile solo in modalità modifica impostazioni esistenti) */}
-          {!isUnconfigured && !stationPickerType && (
-            <View style={styles.header}>
-              <TouchableOpacity
-                onPress={onClose}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Text style={styles.cancelText}>Annulla</Text>
-              </TouchableOpacity>
-              <Text style={styles.title}>Impostazioni viaggio</Text>
-              <TouchableOpacity
-                onPress={handleSave}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Text style={[styles.saveText, { color: theme.accent }]}>
-                  Salva
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
           {stationPickerType ? (
             /* Picker Stazione A-Z con tutti i risultati */
             <View style={{ flex: 1, padding: 16 }}>
-              <View style={styles.pickerHeader}>
-                <TouchableOpacity
-                  style={styles.backBtn}
-                  onPress={() => {
-                    setStationPickerType(null);
-                    setStationSearchQuery("");
-                  }}
-                >
-                  <Ionicons name="arrow-back" size={20} color={theme.accent} />
-                  <Text style={[styles.backBtnText, { color: theme.accent }]}>
-                    Indietro
-                  </Text>
-                </TouchableOpacity>
-                <Text style={styles.pickerTitle}>
-                  {stationPickerType === "departure"
-                    ? "Stazione di partenza"
-                    : "Stazione di arrivo (Roma)"}
-                </Text>
-              </View>
 
               <View style={styles.searchBar}>
                 <Ionicons
@@ -1261,49 +1224,23 @@ export function CommuterConfigModal({
 
               {/* Barra inferiore con pulsanti "Configura più tardi" e "Salva" */}
               <View style={styles.initBottomButtonsRow}>
-                <TouchableOpacity
-                  style={styles.laterBtnPill}
-                  activeOpacity={0.75}
+                <NativeActionButton
+                  label="Configura più tardi"
+                  variant="outlined"
+                  accentColor="#a1a1aa"
+                  style={{ flex: 1, height: 44 }}
                   onPress={onClose}
-                >
-                  <Text style={styles.laterBtnPillText}>
-                    Configura più tardi
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.saveBtnPill,
-                    isInitComplete
-                      ? {
-                          backgroundColor: theme.primary,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                          shadowOpacity: 0.6,
-                          shadowRadius: 10,
-                          elevation: 6,
-                        }
-                      : styles.saveBtnPillDisabled,
-                  ]}
+                />
+                <NativeActionButton
+                  label="Salva"
+                  variant="filled"
+                  glow
+                  accentColor={theme.primary}
+                  glowColor={theme.primary}
                   disabled={!isInitComplete}
-                  activeOpacity={0.85}
+                  style={{ flex: 1, height: 44 }}
                   onPress={handleSaveInit}
-                >
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={17}
-                    color={isInitComplete ? "#ffffff" : "#52525b"}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={[
-                      styles.saveBtnPillText,
-                      !isInitComplete && { color: "#52525b" },
-                    ]}
-                  >
-                    Salva
-                  </Text>
-                </TouchableOpacity>
+                />
               </View>
             </>
           ) : (
@@ -2032,7 +1969,7 @@ export function CommuterConfigModal({
           )}
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </NativeSheetModal>
   );
 }
 
@@ -2043,15 +1980,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.65)",
   },
   modalContainer: {
-    height: "92%",
+    flex: 1,
     backgroundColor: "#16181d",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    overflow: "hidden",
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
   },
   sheetHandleContainer: {
     width: "100%",

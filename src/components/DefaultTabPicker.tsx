@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Tab } from "../utils/scraper";
 import { parseTabHierarchy } from "./YearChannelSelector";
+import { NativeActionButton } from "./NativeActionButton";
 import { useTheme } from "@/context/ThemeContext";
 
 const SAPIENZA_RED = "#822433";
@@ -240,19 +241,15 @@ export function DefaultTabPicker({
 
       {/* ── Footer con Pulsante Azione ── */}
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.confirmButton, { backgroundColor: theme.primary, shadowColor: theme.primary }]}
-          activeOpacity={0.8}
+        <NativeActionButton
+          label={confirmButtonText}
+          variant="filled"
+          glow
+          accentColor={theme.primary}
+          glowColor={theme.primary}
+          style={{ height: 52, alignSelf: "stretch" }}
           onPress={handleConfirm}
-        >
-          <Text style={styles.confirmButtonText}>{confirmButtonText}</Text>
-          <Ionicons
-            name="arrow-forward"
-            size={18}
-            color="#ffffff"
-            style={{ marginLeft: 8 }}
-          />
-        </TouchableOpacity>
+        />
       </View>
     </View>
   );

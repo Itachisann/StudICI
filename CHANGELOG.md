@@ -5,6 +5,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.8.9
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Cambia il modo in cui vengono salvate e sincronizzate le impostazioni di viaggio: serve la nuova versione su tutti i dispositivi collegati.
+
+### Sincronizzazione
+
+- Le impostazioni di viaggio (indirizzo, stazioni, auto, margini) ora si sincronizzano tra i dispositivi collegati. Vale l'ultima modifica, e al collegamento di un nuovo dispositivo vengono importate quelle già presenti.
+
+### Interfaccia
+
+- I fogli di Profilo e Impostazioni viaggio usano la barra di navigazione nativa iOS (`native-stack`): freccia indietro, Salva ed Esporta sono pulsanti di sistema e il foglio si chiude trascinando verso il basso.
+- Salva, Configura più tardi e Conferma usano il pulsante nativo SwiftUI nell'IPA.
+
 ## 1.8.8
 
 ### Viaggio Pendolare & Traffico
