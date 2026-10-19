@@ -2,14 +2,14 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.9.0",
+    "version": "1.9.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "64",
+      "buildNumber": "65",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -40,7 +40,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 58,
+      "versionCode": 59,
       "usesCleartextTraffic": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [

@@ -738,7 +738,8 @@ export default function ProfiloScreen() {
                 setPairedDevices(updatedPairs);
                 setICloudAutoSync(false);
                 setLastCloudSyncTime(null);
-                setCloudSyncId(updatedPairs.myDevice.id);
+                const freshCode = await getCloudSyncId();
+                setCloudSyncId(freshCode);
                 Alert.alert("Dispositivo Scollegato", res.message);
               } catch {
                 Alert.alert("Errore", "Impossibile dissociarsi dal master.");
@@ -771,6 +772,8 @@ export default function ProfiloScreen() {
                 setPairedDevices(updatedPairs);
                 setICloudAutoSync(false);
                 await loadProfileData();
+                const freshCode = await getCloudSyncId();
+                setCloudSyncId(freshCode);
                 Alert.alert("Gruppo Sciolto", res.message);
               } catch {
                 Alert.alert("Errore", "Impossibile sciogliere il gruppo.");
@@ -803,6 +806,8 @@ export default function ProfiloScreen() {
                   setICloudAutoSync(false);
                 }
                 await loadProfileData();
+                const freshCode = await getCloudSyncId();
+                setCloudSyncId(freshCode);
                 Alert.alert("Dispositivo Dissociato", res.message);
               } catch {
                 Alert.alert("Errore", "Impossibile dissociare il dispositivo.");
@@ -817,6 +822,13 @@ export default function ProfiloScreen() {
   };
 
   const handleChangeCustomSyncCode = () => {
+    if (pairedDevices?.isPaired && !pairedDevices?.isGenerator) {
+      Alert.alert(
+        "Modifica non consentita",
+        "Questo dispositivo è associato a un master. Solo il generatore del gruppo può modificare l'identificativo cloud.",
+      );
+      return;
+    }
     if (Platform.OS === "ios") {
       Alert.prompt(
         "Personalizza Codice Cloud",
@@ -865,6 +877,14 @@ export default function ProfiloScreen() {
   const handleRestoreFromCloud = async () => {
     if (!restoreCodeInput.trim()) {
       Alert.alert("Codice mancante", "Incolla il codice nel campo di testo.");
+      return;
+    }
+
+    if (pairedDevices?.isPaired && !pairedDevices?.isGenerator) {
+      Alert.alert(
+        "Operazione non consentita",
+        "Questo dispositivo è associato a un master. Solo il generatore del gruppo può collegare altri dispositivi.",
+      );
       return;
     }
 
@@ -2204,7 +2224,11 @@ export default function ProfiloScreen() {
                           borderColor: theme.border,
                         },
                       ]}
-                      activeOpacity={0.7}
+                      activeOpacity={
+                        pairedDevices?.isPaired && !pairedDevices?.isGenerator
+                          ? 1
+                          : 0.7
+                      }
                       onPress={handleChangeCustomSyncCode}
                     >
                       <Ionicons
@@ -2219,12 +2243,15 @@ export default function ProfiloScreen() {
                       >
                         {cloudSyncId}
                       </Text>
-                      <Ionicons
-                        name="pencil"
-                        size={11}
-                        color={theme.accent}
-                        style={{ marginLeft: 6, opacity: 0.8 }}
-                      />
+                      {(!pairedDevices?.isPaired ||
+                        pairedDevices?.isGenerator) && (
+                        <Ionicons
+                          name="pencil"
+                          size={11}
+                          color={theme.accent}
+                          style={{ marginLeft: 6, opacity: 0.8 }}
+                        />
+                      )}
                     </TouchableOpacity>
                   ) : null}
                 </View>

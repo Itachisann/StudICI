@@ -5,6 +5,25 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.1
+
+> **[Aggiornamento Obbligatorio / Bloccante]**
+> Risoluzione della risposta al tocco dei pulsanti nel foglio di sincronizzazione, tasto Salva rosso nelle specifiche e rafforzamento delle regole Master / Slave.
+
+### Sincronizzazione Cloud & Risoluzione Tasti
+
+- **Risoluzione Completa Tasti Fogli Modali (Touch Events)**:
+  - Risolto il problema che impediva ai pulsanti del foglio di Sincronizzazione (*Sincronizza*, *Copia codice*, *Dissocia*, *Scollega* e *Collega*) di ricevere i tocchi su iOS. Il foglio ora impiega la presentazione nativa `pageSheet` con header personalizzato privo di conflitti con i responder di sistema, garantendo interattività istantanea su tutti i controlli.
+- **Regole e Ruoli Master / Slave**:
+  - **Solo il Generatore (Master)**: può sciogliere il gruppo ("Rompi gruppo"), dissociare singoli dispositivi slave, collegare altri dispositivi e personalizzare il codice identificativo cloud.
+  - **Dispositivo Associato (Slave)**: non può collegare altri dispositivi né modificare il codice identificativo. Può esclusivamente dissociarsi dal master ("Scollegati"): al momento del distacco, la sincronizzazione viene interrotta e tutti i dati sincronizzati (corso, canale, orario, registro presenze, impostazioni di viaggio) vengono azzerati localmente per consentire di ripartire puliti da zero.
+  - Quando il Master scioglie il gruppo o dissocia uno slave, lo slave viene notificato e ripulito automaticamente da tutti i dati sincronizzati.
+
+### Interfaccia e Specifiche
+
+- **Tasto Salva in Specifiche di Colore Rosso**:
+  - Il pulsante "Salva" posizionato nella testata del foglio modale "Specifiche" (anno e canale) è ora evidenziato in colore rosso (`#ef4444`) con stile iOS prominente, perfettamente allineato al tasto Salva delle impostazioni di viaggio.
+
 ## 1.9.0
 
 > **[Aggiornamento Obbligatorio / Bloccante]**
