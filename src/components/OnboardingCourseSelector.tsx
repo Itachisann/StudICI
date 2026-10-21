@@ -159,27 +159,10 @@ function CourseSelectScreen({ navigation }: any) {
     setSearch,
     filteredDegrees,
     handleSelectDegree,
+    pendingDegree,
   } = useOnboarding();
 
-  // Search bar autentica nativa di @react-navigation/native-stack (Apple UISearchBar)
-  useEffect(() => {
-    navigation.setOptions({
-      headerSearchBarOptions:
-        setupMode === "normal"
-          ? {
-              placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-              tintColor: theme.primary,
-              textColor: "#ffffff",
-              headerIconColor: "#8e8e93",
-              hintTextColor: "#71717a",
-              hideWhenScrolling: false,
-              autoCapitalize: "none",
-              onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-              onCancelButtonPress: () => setSearch(""),
-            }
-          : undefined,
-    });
-  }, [navigation, setupMode, theme.primary, setSearch]);
+
 
   return (
     <View style={styles.screenRoot}>
@@ -395,6 +378,34 @@ function CourseSelectScreen({ navigation }: any) {
               contentInsetAdjustmentBehavior="automatic"
               keyboardShouldPersistTaps="handled"
             >
+              {/* Inline search bar (no native-stack header) */}
+              <View style={styles.inlineSearchWrapper}>
+                <Ionicons
+                  name="search"
+                  size={16}
+                  color="#8e8e93"
+                  style={{ marginRight: 8 }}
+                />
+                <TextInput
+                  style={styles.inlineSearchInput}
+                  value={search}
+                  onChangeText={setSearch}
+                  placeholder="Cerca corso o classe (es. Informatica, L-8)..."
+                  placeholderTextColor="#71717a"
+                  returnKeyType="search"
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  clearButtonMode="while-editing"
+                />
+                {search.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => setSearch("")}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle" size={17} color="#71717a" />
+                  </TouchableOpacity>
+                )}
+              </View>
               {filteredDegrees.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="search-outline" size={40} color="#3a3a3c" />
@@ -413,10 +424,20 @@ function CourseSelectScreen({ navigation }: any) {
                   const isMagistrale =
                     deg.name.toLowerCase().includes("magistrale") ||
                     deg.className?.toUpperCase().startsWith("LM");
+                  const isSelected = pendingDegree?.url === deg.url;
                   return (
                     <TouchableOpacity
                       key={i}
-                      style={styles.modalItem}
+                      style={[
+                        styles.modalItem,
+                        isSelected && {
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                          shadowOpacity: 0.45,
+                          shadowRadius: 8,
+                          backgroundColor: theme.subtle,
+                        },
+                      ]}
                       activeOpacity={0.7}
                       onPress={() => handleSelectDegree(deg, navigation)}
                     >
@@ -494,11 +515,19 @@ function CourseSelectScreen({ navigation }: any) {
                           })() : null}
                         </View>
                       </View>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={18}
-                        color="#71717a"
-                      />
+                      {isSelected ? (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={20}
+                          color={theme.primary}
+                        />
+                      ) : (
+                        <Ionicons
+                          name="chevron-forward"
+                          size={18}
+                          color="#71717a"
+                        />
+                      )}
                     </TouchableOpacity>
                   );
                 })
@@ -1182,7 +1211,7 @@ function PostDownloadScreen() {
                 ) ? (
                   <TouchableOpacity
                     style={[
-                      styles.stationActionPill,
+                      styles.stationAltroChip,
                       styles.chipActive,
                       {
                         backgroundColor: theme.bg,
@@ -1196,9 +1225,9 @@ function PostDownloadScreen() {
                   >
                     <Ionicons
                       name="checkmark-circle"
-                      size={14}
+                      size={13}
                       color="#ffffff"
-                      style={{ marginRight: 5 }}
+                      style={{ marginRight: 4 }}
                     />
                     <Text
                       style={[styles.chipText, styles.chipTextActive]}
@@ -1209,27 +1238,27 @@ function PostDownloadScreen() {
                     </Text>
                     <Ionicons
                       name="chevron-down"
-                      size={12}
+                      size={11}
                       color="#ffffff"
                       style={{ marginLeft: 4 }}
                     />
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={styles.stationActionPill}
+                    style={styles.stationAltroChip}
                     activeOpacity={0.7}
                     onPress={() => setStationPickerType("departure")}
                   >
                     <Ionicons
                       name="search"
-                      size={14}
+                      size={13}
                       color={theme.accent}
-                      style={{ marginRight: 5 }}
+                      style={{ marginRight: 4 }}
                     />
                     <Text
                       style={[styles.chipText, { color: theme.accent }]}
                     >
-                      Altra stazione...
+                      Altro...
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1287,7 +1316,7 @@ function PostDownloadScreen() {
                 ) ? (
                   <TouchableOpacity
                     style={[
-                      styles.stationActionPill,
+                      styles.stationAltroChip,
                       styles.chipActive,
                       {
                         backgroundColor: theme.bg,
@@ -1301,9 +1330,9 @@ function PostDownloadScreen() {
                   >
                     <Ionicons
                       name="checkmark-circle"
-                      size={14}
+                      size={13}
                       color="#ffffff"
-                      style={{ marginRight: 5 }}
+                      style={{ marginRight: 4 }}
                     />
                     <Text
                       style={[styles.chipText, styles.chipTextActive]}
@@ -1313,27 +1342,27 @@ function PostDownloadScreen() {
                     </Text>
                     <Ionicons
                       name="chevron-down"
-                      size={12}
+                      size={11}
                       color="#ffffff"
                       style={{ marginLeft: 4 }}
                     />
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={styles.stationActionPill}
+                    style={styles.stationAltroChip}
                     activeOpacity={0.7}
                     onPress={() => setStationPickerType("arrival")}
                   >
                     <Ionicons
                       name="search"
-                      size={14}
+                      size={13}
                       color={theme.accent}
-                      style={{ marginRight: 5 }}
+                      style={{ marginRight: 4 }}
                     />
                     <Text
                       style={[styles.chipText, { color: theme.accent }]}
                     >
-                      Altra stazione...
+                      Altro...
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1530,20 +1559,17 @@ function PostDownloadScreen() {
               pointerEvents={currentPage === 1 ? "auto" : "none"}
             >
               {isChannelSelectionComplete ? (
-                <NativeActionButton
-                  label="Salva"
-                  onPress={() => finalizeOnboarding(false)}
-                  accentColor={theme.primary}
-                  glow={true}
-                  icon={
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={17}
-                      color="#ffffff"
-                    />
-                  }
-                  style={{ width: "100%", maxWidth: 300 }}
-                />
+                <View style={styles.swipeHintRow}>
+                  <Ionicons
+                    name="arrow-forward-circle-outline"
+                    size={18}
+                    color={theme.primary}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={[styles.swipeHintTextActive, { color: theme.primary }]}>
+                    Scorri per continuare
+                  </Text>
+                </View>
               ) : (
                 <View style={styles.swipeHintRow}>
                   <Text style={styles.swipeHintTextLocked}>
@@ -2259,17 +2285,6 @@ export function OnboardingCourseSelector({
                     fontSize: 17,
                     fontWeight: "700",
                   },
-                  headerSearchBarOptions: {
-                    placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-                    tintColor: theme.primary,
-                    textColor: "#ffffff",
-                    headerIconColor: "#8e8e93",
-                    hintTextColor: "#71717a",
-                    hideWhenScrolling: false,
-                    autoCapitalize: "none",
-                    onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-                    onCancelButtonPress: () => setSearch(""),
-                  },
                 }}
               />
               <OnboardingStack.Screen
@@ -2724,10 +2739,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   stationActionPill: {
-    width: "100%",
+    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     backgroundColor: "#1c1c1e",
     height: 36,
     borderRadius: 18,
@@ -2736,6 +2751,39 @@ const styles = StyleSheet.create({
     borderStyle: "dashed",
     paddingHorizontal: 12,
     marginTop: 8,
+  },
+  stationAltroChip: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    backgroundColor: "#1c1c1e",
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    borderStyle: "dashed",
+    paddingHorizontal: 10,
+    marginTop: 8,
+  },
+  inlineSearchWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  inlineSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#ffffff",
+    paddingVertical: 0,
   },
   subPillGroup: {
     marginTop: 14,
