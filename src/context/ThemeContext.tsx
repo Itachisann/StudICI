@@ -1,5 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  ThemeProvider as NavigationThemeProvider,
+  DarkTheme as NavDarkTheme,
+  Theme as NavTheme,
+} from '@react-navigation/native';
 import { AppTheme, APP_THEMES, DEFAULT_THEME } from '@/constants/theme';
 
 interface ThemeContextType {
@@ -44,6 +49,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const currentTheme = APP_THEMES[themeId] || DEFAULT_THEME;
 
+  const navTheme: NavTheme = useMemo(() => ({
+    ...NavDarkTheme,
+    colors: {
+      ...NavDarkTheme.colors,
+      primary: currentTheme.primary,
+      border: currentTheme.border,
+    },
+  }), [currentTheme]);
+
   return (
     <ThemeContext.Provider
       value={{
@@ -53,7 +67,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         availableThemes: Object.values(APP_THEMES),
       }}
     >
-      {children}
+      <NavigationThemeProvider value={navTheme}>
+        {children}
+      </NavigationThemeProvider>
     </ThemeContext.Provider>
   );
 }

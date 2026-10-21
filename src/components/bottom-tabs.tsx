@@ -1,12 +1,37 @@
+import React, { useMemo } from 'react';
 import { withLayoutContext } from 'expo-router';
 import {
   createNativeBottomTabNavigator,
   NativeBottomTabNavigationOptions,
   NativeBottomTabNavigationEventMap,
 } from '@bottom-tabs/react-navigation';
-import { ParamListBase, TabNavigationState } from '@react-navigation/native';
+import {
+  ParamListBase,
+  TabNavigationState,
+  ThemeProvider as NavigationThemeProvider,
+  DarkTheme,
+} from '@react-navigation/native';
+import { useTheme as useAppTheme } from '@/context/ThemeContext';
 
-const BottomTabNavigator = createNativeBottomTabNavigator().Navigator;
+const BaseBottomTabNavigator = createNativeBottomTabNavigator().Navigator;
+
+const BottomTabNavigator: typeof BaseBottomTabNavigator = (props) => {
+  const { theme } = useAppTheme();
+  const navTheme = useMemo(() => ({
+    ...DarkTheme,
+    colors: {
+      ...DarkTheme.colors,
+      primary: theme.primary,
+      border: theme.border,
+    },
+  }), [theme]);
+
+  return (
+    <NavigationThemeProvider value={navTheme}>
+      <BaseBottomTabNavigator {...props} />
+    </NavigationThemeProvider>
+  );
+};
 
 export const NativeTabs = withLayoutContext<
   NativeBottomTabNavigationOptions,
