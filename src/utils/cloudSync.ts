@@ -4,6 +4,7 @@ import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
 import { AppState, AppStateStatus, Platform } from "react-native";
 import { SYNC_DB_URL } from "../config/syncConfig";
+import { CommuterConfig } from "../types/commuter";
 import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
 import {
   AttendanceRecord,
@@ -12,13 +13,30 @@ import {
   setAttendanceChangeListener,
   setAttendanceTombstones,
 } from "./attendance";
+import {
+  DEFAULT_COMMUTER_CONFIG,
+  getCommuterConfig,
+  saveCommuterConfig,
+  setCommuterChangeListener,
+} from "./commuterStorage";
 
 const CLOUD_SYNC_ID_KEY = "studici_cloud_sync_id";
+const MASTER_SYNC_CODE_KEY = "studici_master_sync_code";
+const PARENT_CODE_KEY = "studici_parent_sync_code";
+const PARENT_DEVICE_ID_KEY = "studici_parent_device_id";
+const PRE_ASSOCIATION_BACKUP_KEY = "studici_pre_association_backup";
 const LAST_CLOUD_SYNC_KEY = "studici_last_cloud_sync";
 const CLOUD_BACKUP_DATA_KEY = "studici_cloud_backup_data";
 const ICLOUD_AUTO_SYNC_KEY = "studici_icloud_auto_sync_enabled";
 const ICLOUD_BACKUP_FILENAME = "studici_icloud_sync.json";
 const LOCAL_DEVICE_ID_KEY = "studici_local_device_instance_id";
+
+const COURSE_MODIFIED_KEY = "studici_course_modified_at";
+const COURSE_SNAPSHOT_KEY = "studici_course_snapshot";
+const COMMUTER_MODIFIED_KEY = "studici_commuter_modified_at";
+const COMMUTER_SNAPSHOT_KEY = "studici_commuter_snapshot";
+const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 8000;
 
 export interface SyncDeviceInfo {
   id: string;
@@ -28,6 +46,10 @@ export interface SyncDeviceInfo {
   osVersion: string;
   pairedAt: number;
   lastActive: number;
+  code?: string;
+  role?: "master" | "slave";
+  parentDeviceId?: string | null;
+  parentCode?: string | null;
 }
 
 export interface PairedDevicesStatus {
@@ -36,8 +58,16 @@ export interface PairedDevicesStatus {
   otherDevice: SyncDeviceInfo | null;
   isPaired: boolean;
   totalDevices: number;
-  isGenerator: boolean;
-  masterDevice: SyncDeviceInfo | null;
+  isSlave: boolean;
+  masterCode: string | null;
+}
+
+export interface PreAssociationBackup {
+  course: CourseData;
+  attendance: AttendanceRecord[];
+  tombstones: Record<string, number>;
+  commuter: CommuterConfig;
+  timestamp: number;
 }
 
 export interface CloudBackupPayload {
@@ -52,6 +82,39 @@ export interface CloudBackupPayload {
     defaultTabUrl: string | null;
   };
   attendanceRecords: AttendanceRecord[];
+  commuter?: CommuterConfig;
+}
+
+export interface CourseData {
+  url: string | null;
+  name: string | null;
+  className: string | null;
+  defaultTabUrl: string | null;
+}
+
+interface RemoteDoc {
+  updatedAt?: number;
+  forwardToMaster?: string | null;
+  masterId?: string | null;
+  parentCode?: string | null;
+  course?: Partial<CourseData>;
+  courseModified?: number;
+  cachedSchedule?: string;
+  cachedTabs?: string;
+  attendance?: AttendanceRecord[];
+  tombstones?: Record<string, number>;
+  commuter?: CommuterConfig;
+  commuterModified?: number;
+  devices?: Record<string, SyncDeviceInfo>;
+  dissociatedDevices?: Record<string, number>;
+}
+
+export interface CloudSyncResult {
+  success: boolean;
+  message: string;
+  updated: boolean;
+  notPaired?: boolean;
+  partnerName?: string;
 }
 
 /** Normalizza un codice digitato dall'utente (spazi, minuscole) */
@@ -98,7 +161,8 @@ export async function generateUniqueInitialSyncCode(): Promise<string> {
 }
 
 /**
- * Ottiene o genera il Codice Dispositivo univoco (formato ST + 4 cifre + 1 lettera, es. ST7412K).
+ * Ottiene o genera il Codice Dispositivo univoco (personale del dispositivo, es. ST7412K).
+ * Questo codice è permanente e non cambia mai, neanche quando il dispositivo è associato come slave.
  */
 export async function getCloudSyncId(): Promise<string> {
   try {
@@ -114,8 +178,37 @@ export async function getCloudSyncId(): Promise<string> {
 }
 
 /**
- * Permette di impostare un codice/nome personalizzato.
- * Include il controllo di non-conflittualità: non si possono inserire nomi già esistenti usati da altri.
+ * Ritorna il codice master se il dispositivo è associato come slave, altrimenti null.
+ */
+export async function getMasterSyncCode(): Promise<string | null> {
+  try {
+    const master = await AsyncStorage.getItem(MASTER_SYNC_CODE_KEY);
+    return master && isValidSyncCode(master) ? master.toUpperCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verifica se questo dispositivo è attualmente uno slave collegato a un master.
+ */
+export async function isCurrentDeviceSlave(): Promise<boolean> {
+  const master = await getMasterSyncCode();
+  return Boolean(master);
+}
+
+/**
+ * Ritorna il codice dello spazio di sincronizzazione attivo:
+ * se slave ritorna il codice del master (gruppo), altrimenti il proprio codice.
+ */
+export async function getActiveSyncId(): Promise<string> {
+  const master = await getMasterSyncCode();
+  if (master) return master;
+  return await getCloudSyncId();
+}
+
+/**
+ * Permette di impostare un codice/nome personalizzato per questo dispositivo.
  */
 export async function setCustomCloudSyncId(
   newId: string,
@@ -134,7 +227,6 @@ export async function setCustomCloudSyncId(
     return { success: true, message: "Nome già impostato." };
   }
 
-  // Non-conflittualità: verifica se il nome è già registrato sul cloud da altri dispositivi
   try {
     const existing = await fetchRemote(norm);
     if (existing && existing.devices) {
@@ -149,12 +241,9 @@ export async function setCustomCloudSyncId(
         };
       }
     }
-  } catch {
-    // continua in assenza di rete o se non trovato
-  }
+  } catch {}
 
   await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, norm);
-  await AsyncStorage.setItem(IS_SYNC_GENERATOR_KEY, "true");
   await syncWithICloudStorage();
   return {
     success: true,
@@ -162,9 +251,6 @@ export async function setCustomCloudSyncId(
   };
 }
 
-/**
- * Ritorna il timestamp dell'ultima sincronizzazione cloud (in ms)
- */
 export async function getLastCloudSync(): Promise<number | null> {
   try {
     const val = await AsyncStorage.getItem(LAST_CLOUD_SYNC_KEY);
@@ -175,8 +261,88 @@ export async function getLastCloudSync(): Promise<number | null> {
 }
 
 /**
- * Esegue la sincronizzazione Cloud:
- * Raccoglie i dati attuali (corso, canale, presenze), genera il payload cifrato/codificato e aggiorna il timestamp.
+ * Salva lo snapshot locale prima di associarsi come slave a un master.
+ * Se lo slave si dissocia, questo stato viene interamente ripristinato.
+ */
+export async function savePreAssociationBackup(): Promise<void> {
+  const existing = await AsyncStorage.getItem(PRE_ASSOCIATION_BACKUP_KEY);
+  if (!existing) {
+    const [course, attendance, tombstones, commuter] = await Promise.all([
+      readLocalCourse(),
+      getAttendanceRecords(),
+      getAttendanceTombstones(),
+      readLocalCommuter(),
+    ]);
+    const backup: PreAssociationBackup = {
+      course,
+      attendance,
+      tombstones,
+      commuter,
+      timestamp: Date.now(),
+    };
+    await AsyncStorage.setItem(
+      PRE_ASSOCIATION_BACKUP_KEY,
+      JSON.stringify(backup),
+    );
+  }
+}
+
+/**
+ * Ripristina lo stato precedente all'associazione con il master:
+ * perde tutti gli elementi ereditati dal master e ritorna a dove era prima (o a 0 se era vuoto).
+ */
+export async function restorePreAssociationBackup(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(PRE_ASSOCIATION_BACKUP_KEY);
+    if (raw) {
+      const backup: PreAssociationBackup = JSON.parse(raw);
+      if (backup.course) {
+        await writeLocalCourse(backup.course);
+      }
+      if (Array.isArray(backup.attendance)) {
+        await AsyncStorage.setItem(
+          "studici_attendance_records",
+          JSON.stringify(backup.attendance),
+        );
+      }
+      if (backup.tombstones) {
+        await setAttendanceTombstones(backup.tombstones);
+      }
+      if (backup.commuter) {
+        await writeLocalCommuter(backup.commuter);
+      }
+      await AsyncStorage.removeItem(PRE_ASSOCIATION_BACKUP_KEY);
+    } else {
+      // Nessun elemento precedente: pulizia completa (parte da 0)
+      await writeLocalCourse({
+        url: null,
+        name: null,
+        className: null,
+        defaultTabUrl: null,
+      });
+      await AsyncStorage.setItem("studici_attendance_records", JSON.stringify([]));
+      await setAttendanceTombstones({});
+      await writeLocalCommuter(DEFAULT_COMMUTER_CONFIG);
+    }
+    await AsyncStorage.removeItem(COURSE_SNAPSHOT_KEY);
+    await AsyncStorage.setItem(COURSE_MODIFIED_KEY, "0");
+    await AsyncStorage.removeItem(COMMUTER_SNAPSHOT_KEY);
+    await AsyncStorage.setItem(COMMUTER_MODIFIED_KEY, "0");
+  } catch (err) {
+    console.warn("Errore ripristino stato pre-associazione:", err);
+  }
+}
+
+export async function readLocalCommuter(): Promise<CommuterConfig> {
+  return await getCommuterConfig();
+}
+
+export async function writeLocalCommuter(config: CommuterConfig): Promise<void> {
+  await saveCommuterConfig(config);
+}
+
+/**
+ * Esegue la sincronizzazione manuale Cloud: raccoglie corso, presenze e impostazioni di viaggio.
  */
 export async function performCloudSync(): Promise<{
   success: boolean;
@@ -190,17 +356,19 @@ export async function performCloudSync(): Promise<{
   const timestamp = Date.now();
   const formattedDate = new Date(timestamp).toLocaleString("it-IT");
 
-  const [url, name, className, defaultTabUrl, records] = await Promise.all([
-    AsyncStorage.getItem("selectedDegreeUrl"),
-    AsyncStorage.getItem("selectedDegreeName"),
-    AsyncStorage.getItem("selectedDegreeClassName"),
-    AsyncStorage.getItem("defaultTabUrl"),
-    getAttendanceRecords(),
-  ]);
+  const [url, name, className, defaultTabUrl, records, commuter] =
+    await Promise.all([
+      AsyncStorage.getItem("selectedDegreeUrl"),
+      AsyncStorage.getItem("selectedDegreeName"),
+      AsyncStorage.getItem("selectedDegreeClassName"),
+      AsyncStorage.getItem("defaultTabUrl"),
+      getAttendanceRecords(),
+      readLocalCommuter(),
+    ]);
 
   const payload: CloudBackupPayload = {
     syncId,
-    version: "1.5.6",
+    version: "1.8.8",
     timestamp,
     formattedDate,
     course: {
@@ -210,6 +378,7 @@ export async function performCloudSync(): Promise<{
       defaultTabUrl,
     },
     attendanceRecords: records,
+    commuter,
   };
 
   const jsonStr = JSON.stringify(payload);
@@ -219,35 +388,26 @@ export async function performCloudSync(): Promise<{
   try {
     const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
     await FileSystem.writeAsStringAsync(filePath, jsonStr);
-  } catch {
-    // Non interrompere se il filesystem è temporaneamente occupato
-  }
+  } catch {}
 
-  // Codice compatto di ripristino cloud per passaggio rapido tra dispositivi
   const backupCode = `STUDICI_CLOUD:${btoa(unescape(encodeURIComponent(jsonStr)))}`;
 
   return {
     success: true,
     syncId,
     timestamp,
-    message: `Sincronizzazione completata con successo! Salvate ${records.length} presenze e configurazione corso.`,
+    message: `Sincronizzazione completata con successo! Salvate ${records.length} presenze, corso e impostazioni di viaggio.`,
     backupCode,
     payload,
   };
 }
 
-/**
- * Copia il codice di sincronizzazione cloud negli appunti per trasferirlo su un altro dispositivo
- */
 export async function copyCloudSyncCodeToClipboard(): Promise<string> {
   const res = await performCloudSync();
   await Clipboard.setStringAsync(res.backupCode);
   return res.backupCode;
 }
 
-/**
- * Ripristina i dati da un codice di sincronizzazione o payload JSON
- */
 export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
   success: boolean;
   message: string;
@@ -255,7 +415,7 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
   recordsCount?: number;
 }> {
   try {
-    let clean = codeOrJson.trim();
+    const clean = codeOrJson.trim();
     let jsonStr = "";
 
     if (clean.startsWith("STUDICI_CLOUD:")) {
@@ -266,7 +426,6 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
     }
 
     const data: CloudBackupPayload = JSON.parse(jsonStr);
-
     if (!data || !data.course) {
       throw new Error("Formato di backup non valido.");
     }
@@ -294,19 +453,21 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
       );
     }
 
+    if (data.commuter) {
+      await writeLocalCommuter(data.commuter);
+    }
+
     const timestamp = Date.now();
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, timestamp.toString());
 
     try {
       const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
       await FileSystem.writeAsStringAsync(filePath, jsonStr);
-    } catch {
-      // Non bloccare
-    }
+    } catch {}
 
     return {
       success: true,
-      message: `Ripristino completato con successo: ${data.course.name || "Corso"} e ${data.attendanceRecords?.length || 0} presenze ripristinate.`,
+      message: `Ripristino completato con successo: ${data.course.name || "Corso"}, ${data.attendanceRecords?.length || 0} presenze e impostazioni di viaggio ripristinate.`,
       courseName: data.course.name || undefined,
       recordsCount: data.attendanceRecords?.length || 0,
     };
@@ -318,9 +479,6 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
   }
 }
 
-/**
- * Verifica se la sincronizzazione automatica iCloud è abilitata
- */
 export async function getICloudAutoSyncEnabled(): Promise<boolean> {
   try {
     const val = await AsyncStorage.getItem(ICLOUD_AUTO_SYNC_KEY);
@@ -330,12 +488,7 @@ export async function getICloudAutoSyncEnabled(): Promise<boolean> {
   }
 }
 
-/**
- * Attiva o disattiva la sincronizzazione automatica tra dispositivi
- */
-export async function setICloudAutoSyncEnabled(
-  enabled: boolean,
-): Promise<void> {
+export async function setICloudAutoSyncEnabled(enabled: boolean): Promise<void> {
   try {
     await AsyncStorage.setItem(
       ICLOUD_AUTO_SYNC_KEY,
@@ -346,49 +499,6 @@ export async function setICloudAutoSyncEnabled(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sincronizzazione reale tra dispositivi (Firebase Realtime Database via REST)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const IS_SYNC_GENERATOR_KEY = "studici_is_sync_generator";
-const COURSE_MODIFIED_KEY = "studici_course_modified_at";
-const COURSE_SNAPSHOT_KEY = "studici_course_snapshot";
-// Impostazioni di viaggio (stessa chiave usata da commuterStorage.ts)
-const COMMUTER_CONFIG_KEY = "studici_commuter_config_v1";
-const COMMUTER_MODIFIED_KEY = "studici_commuter_modified_at";
-const COMMUTER_SNAPSHOT_KEY = "studici_commuter_snapshot";
-const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 8000;
-
-interface CourseData {
-  url: string | null;
-  name: string | null;
-  className: string | null;
-  defaultTabUrl: string | null;
-}
-
-interface RemoteDoc {
-  updatedAt?: number;
-  creatorDeviceId?: string;
-  course?: Partial<CourseData>;
-  courseModified?: number;
-  commuter?: Record<string, any> | null;
-  commuterModified?: number;
-  attendance?: AttendanceRecord[];
-  tombstones?: Record<string, number>;
-  devices?: Record<string, SyncDeviceInfo>;
-  dissociatedDevices?: Record<string, number>;
-}
-
-export interface CloudSyncResult {
-  success: boolean;
-  message: string;
-  updated: boolean;
-  notPaired?: boolean;
-  partnerName?: string;
-}
-
-/** True se il backend cloud è stato configurato in src/config/syncConfig.ts */
 export function isCloudConfigured(): boolean {
   return SYNC_DB_URL.trim().length > 0;
 }
@@ -415,7 +525,7 @@ async function fetchRemote(syncId: string): Promise<RemoteDoc | null> {
   if (!res.ok) {
     throw new Error(
       res.status === 401 || res.status === 403
-        ? "Accesso al database negato: controlla le regole di Firebase (vedi README)."
+        ? "Accesso al database negato: controlla le regole di Firebase."
         : `Errore server cloud (${res.status}).`,
     );
   }
@@ -433,10 +543,6 @@ async function pushRemote(syncId: string, doc: RemoteDoc): Promise<void> {
     throw new Error(`Impossibile salvare sul cloud (${res.status}).`);
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dispositivo locale & Gestione Associazione (Pairing)
-// ─────────────────────────────────────────────────────────────────────────────
 
 export async function getLocalDeviceId(): Promise<string> {
   try {
@@ -469,10 +575,6 @@ export function getFriendlyDeviceName(): string {
       : "Dispositivo";
 }
 
-/**
- * Garantisce la non-conflittualità dei nomi dei dispositivi all'interno dello stesso gruppo.
- * Se esiste già un dispositivo con lo stesso nome, aggiunge un suffisso progressivo (es. "iPhone (2)").
- */
 export function ensureUniqueDeviceName(
   candidateName: string,
   existingDevices: SyncDeviceInfo[],
@@ -506,78 +608,68 @@ export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
         ? "Android"
         : "Web";
   const osVersion = Device.osVersion || "";
+  const ownCode = await getCloudSyncId();
+  const isSlave = await isCurrentDeviceSlave();
+
   return {
     id,
     name,
     model,
     platform,
     osVersion,
+    code: ownCode,
+    role: isSlave ? "slave" : "master",
     pairedAt: Date.now(),
     lastActive: Date.now(),
   };
 }
 
-/**
- * Pulisce tutti i dati locali sincronizzati (corso, canale, presenze, impostazioni di viaggio).
- * Usato quando un dispositivo slave si dissocia dal master o viene espulso, ripartendo da zero senza dati.
- */
-export async function clearAllLocalSyncData(): Promise<void> {
-  try {
-    const keysToRemove = [
-      "selectedDegreeUrl",
-      "selectedDegreeName",
-      "selectedDegreeClassName",
-      "defaultTabUrl",
-      COURSE_SNAPSHOT_KEY,
-      COURSE_MODIFIED_KEY,
-      "studici_attendance_records",
-      "studici_attendance_tombstones",
-      COMMUTER_CONFIG_KEY,
-      COMMUTER_SNAPSHOT_KEY,
-      COMMUTER_MODIFIED_KEY,
-      LAST_CLOUD_SYNC_KEY,
-      CLOUD_BACKUP_DATA_KEY,
-    ];
-    await AsyncStorage.multiRemove(keysToRemove);
-    await setICloudAutoSyncEnabled(false);
-  } catch (err) {
-    console.warn("Error clearing local sync data:", err);
-  }
-}
-
 export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
   const myDevice = await getLocalDeviceInfo();
+  const isSlave = await isCurrentDeviceSlave();
+  const masterCode = await getMasterSyncCode();
+  const ownCode = await getCloudSyncId();
+
   if (!isCloudConfigured()) {
     return {
-      myDevice,
+      myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
       otherDevices: [],
       otherDevice: null,
       isPaired: false,
       totalDevices: 1,
-      isGenerator: true,
-      masterDevice: null,
+      isSlave,
+      masterCode,
     };
   }
-  try {
-    const syncId = await getCloudSyncId();
-    const remote = await fetchRemote(syncId);
-    const localIsGenStored = await AsyncStorage.getItem(IS_SYNC_GENERATOR_KEY);
-    const isLocalGenDefault = localIsGenStored !== "false";
 
+  try {
+    const activeSyncId = await getActiveSyncId();
+    const remote = await fetchRemote(activeSyncId);
     if (!remote || !remote.devices) {
       return {
-        myDevice,
+        myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
         otherDevices: [],
         otherDevice: null,
         isPaired: false,
         totalDevices: 0,
-        isGenerator: isLocalGenDefault,
-        masterDevice: null,
+        isSlave,
+        masterCode,
       };
     }
+
     const devicesMap: Record<string, SyncDeviceInfo> =
       typeof remote.devices === "object" ? remote.devices : {};
-    const registeredMy = devicesMap[myDevice.id] || myDevice;
+    const registeredMy = devicesMap[myDevice.id] || {
+      ...myDevice,
+      code: ownCode,
+      role: isSlave ? "slave" : "master",
+    };
+
+    const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
+    const isDissociated = Boolean(
+      remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
+    );
+
     const others: SyncDeviceInfo[] = Object.entries(devicesMap)
       .filter(
         ([k, d]) =>
@@ -589,48 +681,19 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
       }));
     const otherDevice = others.length > 0 ? others[0] : null;
 
-    const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
-    const isDissociated = Boolean(
-      remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
-    );
-
     if (isDissociated || (!isCurrentDeviceRegistered && others.length > 0)) {
       setTimeout(() => {
         handleLocalDeviceWasKickedOut(myDevice).catch(() => {});
       }, 0);
       return {
-        myDevice,
+        myDevice: registeredMy,
         otherDevices: [],
         otherDevice: null,
         isPaired: false,
         totalDevices: 1,
-        isGenerator: true,
-        masterDevice: null,
+        isSlave: false,
+        masterCode: null,
       };
-    }
-
-    // Determina se questo dispositivo è il GENERATORE (Master)
-    let isGenerator = true;
-    if (remote.creatorDeviceId) {
-      isGenerator = remote.creatorDeviceId === myDevice.id;
-    } else if (localIsGenStored !== null) {
-      isGenerator = localIsGenStored !== "false";
-    } else {
-      const allDevs = Object.values(devicesMap).filter(Boolean);
-      const earliest = allDevs.sort(
-        (a, b) => (a.pairedAt || 0) - (b.pairedAt || 0),
-      )[0];
-      isGenerator = earliest ? earliest.id === myDevice.id : true;
-    }
-
-    let masterDevice: SyncDeviceInfo | null = null;
-    if (isGenerator) {
-      masterDevice = registeredMy;
-    } else {
-      masterDevice =
-        others.find((d) => d.id === remote.creatorDeviceId) ||
-        others[0] ||
-        null;
     }
 
     return {
@@ -639,19 +702,18 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
       otherDevice,
       isPaired: others.length > 0,
       totalDevices: Object.keys(devicesMap).length,
-      isGenerator,
-      masterDevice,
+      isSlave,
+      masterCode,
     };
   } catch {
-    const localIsGenStored = await AsyncStorage.getItem(IS_SYNC_GENERATOR_KEY);
     return {
-      myDevice,
+      myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
       otherDevices: [],
       otherDevice: null,
       isPaired: false,
       totalDevices: 1,
-      isGenerator: localIsGenStored !== "false",
-      masterDevice: null,
+      isSlave,
+      masterCode,
     };
   }
 }
@@ -664,9 +726,8 @@ export async function isDevicePaired(): Promise<boolean> {
 let isKickingOut = false;
 
 /**
- * Gestisce l'uscita forzata o la rimozione di questo dispositivo dal gruppo.
- * Se questo dispositivo era associato a un master (slave), azzera tutti i dati locali.
- * Genera un nuovo ID privato, registra lo stato locale isolato e disattiva la sincronizzazione automatica.
+ * Gestisce l'uscita forzata o la dissociazione di questo dispositivo dal gruppo.
+ * Se era uno slave, ripristina lo stato a prima dell'associazione (perde tutti gli elementi ereditati).
  */
 async function handleLocalDeviceWasKickedOut(
   myDevice: SyncDeviceInfo,
@@ -674,39 +735,43 @@ async function handleLocalDeviceWasKickedOut(
   if (isKickingOut) return;
   isKickingOut = true;
   try {
-    const wasSlave =
-      (await AsyncStorage.getItem(IS_SYNC_GENERATOR_KEY)) === "false";
-    if (wasSlave) {
-      await clearAllLocalSyncData();
+    const isSlave = await isCurrentDeviceSlave();
+    if (isSlave) {
+      await restorePreAssociationBackup();
+      await AsyncStorage.removeItem(MASTER_SYNC_CODE_KEY);
+      await AsyncStorage.removeItem(PARENT_CODE_KEY);
+      await AsyncStorage.removeItem(PARENT_DEVICE_ID_KEY);
     }
-    const newDeviceId = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, newDeviceId);
-    const newId = await generateUniqueInitialSyncCode();
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newId);
-    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
-    await AsyncStorage.setItem(IS_SYNC_GENERATOR_KEY, "true");
     await setICloudAutoSyncEnabled(false);
     lastKnownDevicesHash = "";
     lastKnownRemoteUpdatedAt = 0;
 
+    const ownId = await getCloudSyncId();
     const freshMyDevice: SyncDeviceInfo = {
       ...myDevice,
-      id: newDeviceId,
+      code: ownId,
+      role: "master",
+      parentDeviceId: null,
+      parentCode: null,
       pairedAt: Date.now(),
       lastActive: Date.now(),
     };
 
     try {
-      await pushRemote(newId, {
+      await pushRemote(ownId, {
         updatedAt: Date.now(),
-        creatorDeviceId: newDeviceId,
+        forwardToMaster: null,
+        masterId: null,
         course: await readLocalCourse(),
         courseModified: Date.now(),
         attendance: await getAttendanceRecords(),
         tombstones: await getAttendanceTombstones(),
+        commuter: await readLocalCommuter(),
+        commuterModified: Date.now(),
         devices: {
-          [newDeviceId]: freshMyDevice,
+          [myDevice.id]: freshMyDevice,
         },
+        dissociatedDevices: {},
       });
     } catch {}
 
@@ -717,180 +782,140 @@ async function handleLocalDeviceWasKickedOut(
 }
 
 /**
- * Dissocia questo dispositivo da un master e resetta tutti i dati locali.
- * Solo i dispositivi associati a un master (slave) possono chiamare questa funzione:
- * azzera corso, presenze, orari e viaggio, ripartendo da zero senza sincronizzazione e senza dati.
- */
-export async function dissociateFromMasterAndReset(): Promise<{
-  success: boolean;
-  message: string;
-}> {
-  try {
-    const syncId = await getCloudSyncId();
-    const myDevice = await getLocalDeviceInfo();
-    const remote = await fetchRemote(syncId);
-
-    if (remote && remote.devices) {
-      const updatedDevices = { ...remote.devices };
-      delete updatedDevices[myDevice.id];
-      const updatedDissociated: Record<string, number> = {
-        ...(remote.dissociatedDevices || {}),
-        [myDevice.id]: Date.now(),
-      };
-      await pushRemote(syncId, {
-        ...remote,
-        updatedAt: Date.now(),
-        devices: updatedDevices,
-        dissociatedDevices: updatedDissociated,
-      }).catch(() => {});
-    }
-
-    // Pulisce tutti i dati sincronizzati (corso, presenze, viaggio)
-    await clearAllLocalSyncData();
-
-    // Genera una nuova identità locale indipendente
-    const newDeviceId = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, newDeviceId);
-    const newCode = await generateUniqueInitialSyncCode();
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newCode);
-    await AsyncStorage.setItem(IS_SYNC_GENERATOR_KEY, "true");
-    lastKnownDevicesHash = "";
-    lastKnownRemoteUpdatedAt = 0;
-
-    const freshMyDevice: SyncDeviceInfo = {
-      ...myDevice,
-      id: newDeviceId,
-      pairedAt: Date.now(),
-      lastActive: Date.now(),
-    };
-    try {
-      await pushRemote(newCode, {
-        updatedAt: Date.now(),
-        creatorDeviceId: newDeviceId,
-        devices: { [newDeviceId]: freshMyDevice },
-      });
-    } catch {}
-
-    await notifyLiveSyncListeners(true);
-    return {
-      success: true,
-      message:
-        "Dispositivo dissociato dal master. La sincronizzazione e tutti i dati sono stati azzerati.",
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      message: err?.message || "Errore durante la dissociazione dal master.",
-    };
-  }
-}
-
-/**
  * Dissocia questo dispositivo o un altro dispositivo associato.
- * REGOLA:
- * - Se questo dispositivo è il GENERATORE (Master):
- *     - Può rompere il gruppo (!targetDeviceId || targetDeviceId === myDevice.id): scollega tutti gli slave, che ripartiranno senza dati. Il master mantiene i propri dati locali.
- *     - Può dissociare un singolo dispositivo slave (targetDeviceId !== myDevice.id).
- * - Se questo dispositivo è ASSOCIATO a un master (Slave):
- *     - NON può rompere il gruppo né dissociare altri dispositivi.
- *     - Può solo dissociarsi dal master (dissociateFromMasterAndReset()), ripartendo da zero senza sincronizzazione e senza dati.
+ * Se lo slave si dissocia dal master (o viene dissociato), perde tutti gli elementi ereditati
+ * e torna allo stato in cui era rimasto prima di associarsi (oppure a 0).
+ * Se lo slave ha a sua volta altri dispositivi collegati a catena, anche questi vengono dissociati.
  */
 export async function dissociateDevice(
   targetDeviceId?: string,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const status = await getPairedDevicesInfo();
-    const myDevice = status.myDevice;
+    const activeSyncId = await getActiveSyncId();
+    const myDevice = await getLocalDeviceInfo();
+    const isSlave = await isCurrentDeviceSlave();
+    const remote = await fetchRemote(activeSyncId);
 
-    if (!status.isGenerator) {
-      // È uno slave: può solo dissociarsi dal master ripartendo da zero senza dati
-      return await dissociateFromMasterAndReset();
+    if (!remote || !remote.devices) {
+      if (isSlave) {
+        await handleLocalDeviceWasKickedOut(myDevice);
+      }
+      return {
+        success: true,
+        message: "Dispositivo dissociato con successo.",
+      };
     }
 
-    // È il GENERATORE (Master)
-    const syncId = await getCloudSyncId();
-    const remote = await fetchRemote(syncId);
+    const devicesMap = { ...remote.devices };
+    const updatedDissociated: Record<string, number> = {
+      ...(remote.dissociatedDevices || {}),
+    };
 
-    if (remote && remote.devices) {
-      const updatedDevices = { ...remote.devices };
-      const updatedDissociated: Record<string, number> = {
-        ...(remote.dissociatedDevices || {}),
-      };
+    const parentDeviceId = await AsyncStorage.getItem(PARENT_DEVICE_ID_KEY);
 
-      const isBreakGroup = !targetDeviceId || targetDeviceId === myDevice.id;
+    // Caso A: l'utente sta dissociando il proprio master (o se stesso da slave)
+    const isDissociatingMaster =
+      isSlave &&
+      (!targetDeviceId ||
+        targetDeviceId === myDevice.id ||
+        (parentDeviceId && targetDeviceId === parentDeviceId) ||
+        devicesMap[targetDeviceId]?.role === "master");
 
-      if (isBreakGroup) {
-        // Il generatore rompe l'intero gruppo: scollega tutti gli altri dispositivi
-        for (const [k, d] of Object.entries(updatedDevices)) {
-          if (k !== myDevice.id && d && d.id !== myDevice.id) {
-            delete updatedDevices[k];
-            updatedDissociated[d.id || k] = Date.now();
+    if (isDissociatingMaster) {
+      // Effetto a catena: rimuove me stesso e tutti i dispositivi che discendono da me
+      const descendantIds = new Set<string>([myDevice.id]);
+      let added = true;
+      while (added) {
+        added = false;
+        for (const d of Object.values(devicesMap)) {
+          if (
+            d &&
+            d.parentDeviceId &&
+            descendantIds.has(d.parentDeviceId) &&
+            !descendantIds.has(d.id)
+          ) {
+            descendantIds.add(d.id);
+            added = true;
           }
         }
-        await pushRemote(syncId, {
+      }
+
+      for (const id of descendantIds) {
+        delete devicesMap[id];
+        updatedDissociated[id] = Date.now();
+      }
+
+      try {
+        await pushRemote(activeSyncId, {
           ...remote,
           updatedAt: Date.now(),
-          creatorDeviceId: myDevice.id,
-          devices: { [myDevice.id]: myDevice },
+          devices: devicesMap,
           dissociatedDevices: updatedDissociated,
         });
+      } catch {}
 
-        await setICloudAutoSyncEnabled(false);
-        lastKnownDevicesHash = `${myDevice.id}:${myDevice.name}`;
-        lastKnownRemoteUpdatedAt = Date.now();
-        await notifyLiveSyncListeners(true);
+      // Ripristina lo stato locale precedente all'associazione
+      await handleLocalDeviceWasKickedOut(myDevice);
 
-        return {
-          success: true,
-          message:
-            "Gruppo di sincronizzazione sciolto. I dispositivi collegati sono stati dissociati.",
-        };
-      }
+      return {
+        success: true,
+        message:
+          "Dispositivo dissociato con successo dal master. Ripristinati i dati precedenti all'associazione.",
+      };
+    }
 
-      // Il generatore rimuove uno specifico dispositivo slave
-      delete updatedDevices[targetDeviceId];
-      for (const [k, d] of Object.entries(updatedDevices)) {
-        if (k === targetDeviceId || (d && d.id === targetDeviceId)) {
-          delete updatedDevices[k];
+    // Caso B: l'utente sta dissociando un dispositivo specifico (targetDeviceId)
+    if (targetDeviceId && targetDeviceId !== myDevice.id) {
+      // Trova tutti i discendenti di questo targetDeviceId a catena
+      const toRemoveIds = new Set<string>([targetDeviceId]);
+      let added = true;
+      while (added) {
+        added = false;
+        for (const d of Object.values(devicesMap)) {
+          if (
+            d &&
+            d.parentDeviceId &&
+            toRemoveIds.has(d.parentDeviceId) &&
+            !toRemoveIds.has(d.id)
+          ) {
+            toRemoveIds.add(d.id);
+            added = true;
+          }
         }
       }
-      updatedDissociated[targetDeviceId] = Date.now();
 
-      await pushRemote(syncId, {
+      for (const id of toRemoveIds) {
+        delete devicesMap[id];
+        updatedDissociated[id] = Date.now();
+      }
+
+      await pushRemote(activeSyncId, {
         ...remote,
         updatedAt: Date.now(),
-        creatorDeviceId: myDevice.id,
-        devices: updatedDevices,
+        devices: devicesMap,
         dissociatedDevices: updatedDissociated,
       });
 
       await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
-      lastKnownDevicesHash = Object.values(updatedDevices)
+      lastKnownDevicesHash = Object.values(devicesMap)
         .filter(Boolean)
-        .map((d) => `${d.id}:${d.name}`)
+        .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
         .sort()
         .join("|");
       lastKnownRemoteUpdatedAt = Date.now();
 
-      const remaining = Object.values(updatedDevices).filter(
-        (d) => d && d.id !== myDevice.id,
-      );
-      if (remaining.length === 0) {
-        await setICloudAutoSyncEnabled(false);
-      }
       await notifyLiveSyncListeners(true);
       return {
         success: true,
-        message:
-          remaining.length > 0
-            ? "Dispositivo rimosso con successo. La sincronizzazione rimane attiva con gli altri dispositivi."
-            : "Dispositivo rimosso con successo. La sincronizzazione è ora disattivata.",
+        message: "Dispositivo dissociato con successo.",
       };
     }
 
+    // Caso C: dissociazione locale generica
+    await handleLocalDeviceWasKickedOut(myDevice);
     return {
       success: true,
-      message: "Nessun dispositivo remoto da dissociare.",
+      message: "Dispositivo dissociato con successo.",
     };
   } catch (err: any) {
     return {
@@ -909,7 +934,7 @@ function normalizeCourse(c?: Partial<CourseData> | null): CourseData {
   };
 }
 
-async function readLocalCourse(): Promise<CourseData> {
+export async function readLocalCourse(): Promise<CourseData> {
   const [url, name, className, defaultTabUrl] = await Promise.all([
     AsyncStorage.getItem("selectedDegreeUrl"),
     AsyncStorage.getItem("selectedDegreeName"),
@@ -919,7 +944,7 @@ async function readLocalCourse(): Promise<CourseData> {
   return { url, name, className, defaultTabUrl };
 }
 
-async function writeLocalCourse(c: CourseData): Promise<void> {
+export async function writeLocalCourse(c: CourseData): Promise<void> {
   const pairs: [string, string | null][] = [
     ["selectedDegreeUrl", c.url],
     ["selectedDegreeName", c.name],
@@ -930,82 +955,6 @@ async function writeLocalCourse(c: CourseData): Promise<void> {
     if (val) await AsyncStorage.setItem(key, val);
     else await AsyncStorage.removeItem(key);
   }
-}
-
-function stableStringify(value: any): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(value)
-    .filter((k) => value[k] !== undefined && value[k] !== null)
-    .sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-}
-
-async function readLocalCommuter(): Promise<Record<string, any> | null> {
-  try {
-    const raw = await AsyncStorage.getItem(COMMUTER_CONFIG_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Impostazioni di viaggio: vince la modifica più recente (come per il corso).
- * Se `adoptRemote` è true (collegamento di un nuovo dispositivo) le impostazioni
- * remote, se presenti, sostituiscono sempre quelle locali.
- */
-async function mergeCommuter(
-  remote: RemoteDoc | null | undefined,
-  adoptRemote = false,
-): Promise<{
-  config: Record<string, any> | null;
-  modified: number;
-  changed: boolean;
-}> {
-  const local = await readLocalCommuter();
-  const localStable = local ? stableStringify(local) : null;
-  const snap = await AsyncStorage.getItem(COMMUTER_SNAPSHOT_KEY);
-  let localMod =
-    parseInt((await AsyncStorage.getItem(COMMUTER_MODIFIED_KEY)) || "0", 10) ||
-    0;
-  if (localStable !== snap) localMod = local ? Date.now() : 0;
-
-  const remoteCfg =
-    remote?.commuter && typeof remote.commuter === "object"
-      ? remote.commuter
-      : null;
-  const remoteMod = remote?.commuterModified || 0;
-
-  let finalCfg = local;
-  let finalMod = localMod;
-  let changed = false;
-  if (remoteCfg && (adoptRemote || remoteMod > localMod)) {
-    changed = stableStringify(remoteCfg) !== localStable;
-    if (changed) {
-      await AsyncStorage.setItem(
-        COMMUTER_CONFIG_KEY,
-        JSON.stringify(remoteCfg),
-      );
-    }
-    finalCfg = remoteCfg;
-    finalMod = remoteMod || Date.now();
-  } else if (adoptRemote && local) {
-    finalMod = Date.now();
-  }
-
-  if (finalCfg) {
-    await AsyncStorage.setItem(
-      COMMUTER_SNAPSHOT_KEY,
-      stableStringify(finalCfg),
-    );
-  } else {
-    await AsyncStorage.removeItem(COMMUTER_SNAPSHOT_KEY);
-  }
-  await AsyncStorage.setItem(COMMUTER_MODIFIED_KEY, String(finalMod));
-  return { config: finalCfg, modified: finalMod, changed };
 }
 
 function idsKey(list: AttendanceRecord[]): string {
@@ -1027,11 +976,13 @@ async function runSync(): Promise<CloudSyncResult> {
   }
 
   try {
-    const syncId = await getCloudSyncId();
-    const remote = await fetchRemote(syncId);
+    const activeSyncId = await getActiveSyncId();
+    const ownId = await getCloudSyncId();
+    const isSlave = await isCurrentDeviceSlave();
+    const remote = await fetchRemote(activeSyncId);
     const myDevice = await getLocalDeviceInfo();
 
-    // Verifica se questo dispositivo è stato dissociato o rimosso dal gruppo da un altro dispositivo
+    // Verifica se questo dispositivo è stato dissociato o rimosso
     const isDissociated = Boolean(
       remote?.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
     );
@@ -1049,56 +1000,63 @@ async function runSync(): Promise<CloudSyncResult> {
         updated: true,
         notPaired: true,
         message:
-          "Questo dispositivo è stato rimosso dal gruppo di sincronizzazione.",
+          "Questo dispositivo è stato dissociato dal gruppo di sincronizzazione.",
       };
     }
 
-    // Mappa dispositivi registrati nel cloud
     const devicesMap: Record<string, SyncDeviceInfo> =
       remote?.devices && typeof remote.devices === "object"
         ? { ...remote.devices }
         : {};
 
-    // Aggiorna lo stato e l'attività di questo dispositivo con nome non in conflitto
     const uniqueName = ensureUniqueDeviceName(
       myDevice.name,
       Object.values(devicesMap),
       myDevice.id,
     );
+
     devicesMap[myDevice.id] = {
       ...myDevice,
       name: uniqueName,
+      code: ownId,
+      role: isSlave ? "slave" : "master",
+      parentDeviceId: devicesMap[myDevice.id]?.parentDeviceId || null,
+      parentCode: devicesMap[myDevice.id]?.parentCode || null,
       pairedAt: devicesMap[myDevice.id]?.pairedAt || Date.now(),
-      lastActive:
-        Date.now() - (devicesMap[myDevice.id]?.lastActive || 0) > 60000
-          ? Date.now()
-          : devicesMap[myDevice.id].lastActive,
+      lastActive: Date.now(),
     };
 
-    // Verifica se c'è un altro dispositivo associato
     const otherDevices = Object.values(devicesMap).filter(
       (d) => d && d.id !== myDevice.id,
     );
     const otherDevice = otherDevices.length > 0 ? otherDevices[0] : null;
     const isPaired = otherDevice !== null;
 
-    // Regola fondamentale: la sincronizzazione tra dispositivi può avvenire SOLO se due dispositivi sono associati
     if (!isPaired) {
-      // Salva lo snapshot iniziale e la registrazione di questo dispositivo sul cloud
-      // affinché il secondo dispositivo possa collegarsi e associarsi
       const localCourse = await readLocalCourse();
       const localAtt = await getAttendanceRecords();
       const localTomb = await getAttendanceTombstones();
-      const unpairedCommuter = await mergeCommuter(null);
-      await pushRemote(syncId, {
+      const localCommuter = await readLocalCommuter();
+      let localCachedSchedule: string | undefined = undefined;
+      let localCachedTabs: string | undefined = undefined;
+      if (localCourse.url) {
+        try {
+          localCachedSchedule = (await AsyncStorage.getItem(`allSchedules_v8_${localCourse.url}`)) || undefined;
+          localCachedTabs = (await AsyncStorage.getItem(`tabsCache_${localCourse.url}`)) || undefined;
+        } catch {}
+      }
+      await pushRemote(activeSyncId, {
         updatedAt: Date.now(),
         course: localCourse,
         courseModified: Date.now(),
-        commuter: unpairedCommuter.config,
-        commuterModified: unpairedCommuter.modified,
+        cachedSchedule: localCachedSchedule || remote?.cachedSchedule,
+        cachedTabs: localCachedTabs || remote?.cachedTabs,
         attendance: localAtt,
         tombstones: localTomb,
+        commuter: localCommuter,
+        commuterModified: Date.now(),
         devices: devicesMap,
+        dissociatedDevices: remote?.dissociatedDevices || {},
       });
 
       return {
@@ -1106,11 +1064,11 @@ async function runSync(): Promise<CloudSyncResult> {
         updated: false,
         notPaired: true,
         message:
-          "Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo con AirDrop o Codice.",
+          "Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo.",
       };
     }
 
-    // ── Corso / canale predefinito: vince la modifica più recente ──
+    // 1. Sincronizzazione Corso (LWW)
     const localCourse = await readLocalCourse();
     const localSnap = await AsyncStorage.getItem(COURSE_SNAPSHOT_KEY);
     let localMod =
@@ -1138,10 +1096,7 @@ async function runSync(): Promise<CloudSyncResult> {
     );
     await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
 
-    // ── Impostazioni di viaggio: vince la modifica più recente ──
-    const commuterMerge = await mergeCommuter(remote);
-
-    // ── Presenze: unione per ID con tombstone per le cancellazioni ──
+    // 2. Sincronizzazione Presenze (Union con tombstones)
     const localAtt = await getAttendanceRecords();
     const remoteAtt: AttendanceRecord[] = Array.isArray(remote?.attendance)
       ? remote!.attendance!.filter(Boolean)
@@ -1161,8 +1116,9 @@ async function runSync(): Promise<CloudSyncResult> {
     const byId = new Map<string, AttendanceRecord>();
     for (const r of [...remoteAtt, ...localAtt]) {
       const prev = byId.get(r.id);
-      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0))
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) {
         byId.set(r.id, r);
+      }
     }
     const merged = Array.from(byId.values())
       .filter(
@@ -1179,29 +1135,97 @@ async function runSync(): Promise<CloudSyncResult> {
     }
     await setAttendanceTombstones(tombstones);
 
-    // ── Pubblica sempre devicesMap aggiornato e dati unificati ──
-    const isGenStored = await AsyncStorage.getItem(IS_SYNC_GENERATOR_KEY);
-    const isGenerator = remote?.creatorDeviceId
-      ? remote.creatorDeviceId === myDevice.id
-      : isGenStored !== "false";
-    const creatorDeviceId =
-      remote?.creatorDeviceId || (isGenerator ? myDevice.id : undefined);
+    // 3. Sincronizzazione Impostazioni di Viaggio (LWW)
+    const localCommuter = await readLocalCommuter();
+    const localCommuterSnap = await AsyncStorage.getItem(COMMUTER_SNAPSHOT_KEY);
+    let localCommuterMod =
+      parseInt(
+        (await AsyncStorage.getItem(COMMUTER_MODIFIED_KEY)) || "0",
+        10,
+      ) || 0;
+    if (JSON.stringify(localCommuter) !== localCommuterSnap) {
+      localCommuterMod = localCommuter.enabled ? Date.now() : 0;
+    }
 
-    await pushRemote(syncId, {
+    const remoteCommuterMod = remote?.commuterModified || 0;
+    const remoteCommuter = remote?.commuter;
+    let finalCommuter = localCommuter;
+    let finalCommuterMod = localCommuterMod;
+    let commuterChanged = false;
+
+    if (
+      remoteCommuter &&
+      remoteCommuter.enabled &&
+      remoteCommuterMod > localCommuterMod
+    ) {
+      commuterChanged =
+        JSON.stringify(remoteCommuter) !== JSON.stringify(localCommuter);
+      if (commuterChanged) {
+        await writeLocalCommuter(remoteCommuter);
+      }
+      finalCommuter = remoteCommuter;
+      finalCommuterMod = remoteCommuterMod;
+    }
+    await AsyncStorage.setItem(
+      COMMUTER_SNAPSHOT_KEY,
+      JSON.stringify(finalCommuter),
+    );
+    await AsyncStorage.setItem(
+      COMMUTER_MODIFIED_KEY,
+      String(finalCommuterMod),
+    );
+
+    let activeCachedSchedule: string | undefined = undefined;
+    let activeCachedTabs: string | undefined = undefined;
+    if (finalCourse.url) {
+      try {
+        activeCachedSchedule = (await AsyncStorage.getItem(`allSchedules_v8_${finalCourse.url}`)) || undefined;
+        activeCachedTabs = (await AsyncStorage.getItem(`tabsCache_${finalCourse.url}`)) || undefined;
+      } catch {}
+    }
+    // Se lo slave non ha la cache ma il master l'ha salvata sul cloud, ereditiamola subito in locale!
+    if (isSlave && finalCourse.url) {
+      if (!activeCachedSchedule && remote?.cachedSchedule) {
+        await AsyncStorage.setItem(`allSchedules_v8_${finalCourse.url}`, remote.cachedSchedule).catch(() => {});
+        activeCachedSchedule = remote.cachedSchedule;
+      }
+      if (!activeCachedTabs && remote?.cachedTabs) {
+        await AsyncStorage.setItem(`tabsCache_${finalCourse.url}`, remote.cachedTabs).catch(() => {});
+        activeCachedTabs = remote.cachedTabs;
+      }
+    }
+
+    // Pubblica al gruppo attivo
+    await pushRemote(activeSyncId, {
       updatedAt: now,
-      creatorDeviceId,
       course: finalCourse,
       courseModified: finalMod,
-      commuter: commuterMerge.config,
-      commuterModified: commuterMerge.modified,
+      cachedSchedule: activeCachedSchedule || remote?.cachedSchedule,
+      cachedTabs: activeCachedTabs || remote?.cachedTabs,
       attendance: merged,
       tombstones,
+      commuter: finalCommuter,
+      commuterModified: finalCommuterMod,
       devices: devicesMap,
       dissociatedDevices: remote?.dissociatedDevices || {},
     });
 
+    // Se sono slave, mantieni aggiornato il mio spazio personale per consentire ad altri di associarsi a me
+    if (isSlave) {
+      try {
+        await pushRemote(ownId, {
+          updatedAt: now,
+          forwardToMaster: activeSyncId,
+          masterId: activeSyncId,
+          devices: {
+            [myDevice.id]: devicesMap[myDevice.id],
+          },
+        });
+      } catch {}
+    }
+
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
-    const updated = attChanged || courseChanged || commuterMerge.changed;
+    const updated = attChanged || courseChanged || commuterChanged;
     return {
       success: true,
       updated,
@@ -1223,10 +1247,6 @@ async function runSync(): Promise<CloudSyncResult> {
   }
 }
 
-/**
- * Sincronizzazione bidirezionale con il cloud (merge di corso, canale e presenze).
- * Nome storico mantenuto per compatibilità con le schermate esistenti.
- */
 export function syncWithICloudStorage(): Promise<CloudSyncResult> {
   if (!syncInFlight) {
     syncInFlight = runSync().finally(() => {
@@ -1237,8 +1257,9 @@ export function syncWithICloudStorage(): Promise<CloudSyncResult> {
 }
 
 /**
- * Collega questo dispositivo a uno spazio cloud esistente tramite Codice Dispositivo
- * (generato su un altro dispositivo) e scarica subito i dati.
+ * Collega questo dispositivo a un altro dispositivo tramite Codice.
+ * Se il target fa già parte di un gruppo, il collegamento eredita tutto a catena.
+ * Uno slave già associato non può collegarsi ad altri dispositivi prima di dissociarsi.
  */
 export async function linkDeviceWithCode(
   rawCode: string,
@@ -1250,6 +1271,17 @@ export async function linkDeviceWithCode(
       message: "Sincronizzazione cloud non configurata in questa build.",
     };
   }
+
+  const currentIsSlave = await isCurrentDeviceSlave();
+  if (currentIsSlave) {
+    return {
+      success: false,
+      updated: false,
+      message:
+        "Questo dispositivo è già associato come slave a un master. Per collegarti a un altro dispositivo devi prima dissociarti dal master attuale.",
+    };
+  }
+
   const code = normalizeSyncCode(rawCode);
   if (!isValidSyncCode(code)) {
     return {
@@ -1260,37 +1292,55 @@ export async function linkDeviceWithCode(
     };
   }
 
-  // Se questo dispositivo è già associato a un master come slave, non può collegare altri dispositivi
-  const currentStatus = await getPairedDevicesInfo();
-  if (currentStatus.isPaired && !currentStatus.isGenerator) {
+  const ownId = await getCloudSyncId();
+  if (code === ownId) {
     return {
       success: false,
       updated: false,
-      message:
-        "Questo dispositivo è associato a un master. Solo il generatore del gruppo può collegare altri dispositivi.",
+      message: "Non puoi collegare questo dispositivo al suo stesso codice.",
     };
   }
 
   const myDevice = await getLocalDeviceInfo();
-  const previousId = await getCloudSyncId();
 
   try {
-    const remote = await fetchRemote(code);
-    if (!remote) {
+    const targetRemote = await fetchRemote(code);
+    if (!targetRemote) {
       return {
         success: false,
         updated: false,
         message:
-          "Codice non trovato. Esegui prima una sincronizzazione o condividi da un dispositivo attivo.",
+          "Codice non trovato. Esegui prima una sincronizzazione sul dispositivo master.",
       };
     }
 
-    const existingDevices: SyncDeviceInfo[] =
-      remote.devices && typeof remote.devices === "object"
-        ? Object.values(remote.devices).filter(Boolean)
-        : [];
+    // Effetto a catena: se il target è a sua volta uno slave, reindirizza al root master!
+    const rootMasterCode = targetRemote.forwardToMaster || code;
+    const parentCode = code;
 
-    const otherDevices = existingDevices.filter((d) => d.id !== myDevice.id);
+    const rootRemote =
+      rootMasterCode === code
+        ? targetRemote
+        : (await fetchRemote(rootMasterCode)) || targetRemote;
+
+    // Salva lo stato locale corrente prima dell'associazione (così se ci si dissocia si torna qui)
+    await savePreAssociationBackup();
+
+    const parentDevice = Object.values(rootRemote.devices || {}).find(
+      (d) => d && (d.code === parentCode || d.id === parentCode),
+    );
+    const parentDeviceId = parentDevice?.id || null;
+
+    await AsyncStorage.setItem(MASTER_SYNC_CODE_KEY, rootMasterCode);
+    await AsyncStorage.setItem(PARENT_CODE_KEY, parentCode);
+    if (parentDeviceId) {
+      await AsyncStorage.setItem(PARENT_DEVICE_ID_KEY, parentDeviceId);
+    }
+
+    const existingDevices: SyncDeviceInfo[] =
+      rootRemote.devices && typeof rootRemote.devices === "object"
+        ? Object.values(rootRemote.devices).filter(Boolean)
+        : [];
 
     const uniqueName = ensureUniqueDeviceName(
       myDevice.name,
@@ -1299,58 +1349,67 @@ export async function linkDeviceWithCode(
     );
 
     const updatedDissociated: Record<string, number> = {
-      ...(remote.dissociatedDevices || {}),
+      ...(rootRemote.dissociatedDevices || {}),
     };
     delete updatedDissociated[myDevice.id];
 
     const updatedDevices: Record<string, SyncDeviceInfo> = {
-      ...(remote.devices || {}),
+      ...(rootRemote.devices || {}),
       [myDevice.id]: {
         ...myDevice,
         name: uniqueName,
+        code: ownId,
+        role: "slave",
+        parentDeviceId,
+        parentCode,
         pairedAt: Date.now(),
         lastActive: Date.now(),
       },
     };
 
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, code);
-    // Questo dispositivo si sta associando al gruppo generato dal master: diventa slave
-    await AsyncStorage.setItem(IS_SYNC_GENERATOR_KEY, "false");
-
-    // Merge corso
-    const localCourse = await readLocalCourse();
-    const remoteCourse = normalizeCourse(remote.course);
-    let finalCourse = localCourse;
-    let finalMod = Date.now();
+    // 1. Corso: adotta corso del master
+    const remoteCourse = normalizeCourse(rootRemote.course);
+    let finalCourse = await readLocalCourse();
+    const finalCourseMod = Date.now();
     if (remoteCourse.url) {
       finalCourse = remoteCourse;
       await writeLocalCourse(remoteCourse);
+      // Eredita immediatamente dati di orari e lezioni già elaborati dall'altro dispositivo
+      if (rootRemote.cachedSchedule) {
+        await AsyncStorage.setItem(
+          `allSchedules_v8_${remoteCourse.url}`,
+          rootRemote.cachedSchedule,
+        ).catch(() => {});
+      }
+      if (rootRemote.cachedTabs) {
+        await AsyncStorage.setItem(
+          `tabsCache_${remoteCourse.url}`,
+          rootRemote.cachedTabs,
+        ).catch(() => {});
+      }
     }
     await AsyncStorage.setItem(
       COURSE_SNAPSHOT_KEY,
       JSON.stringify(finalCourse),
     );
-    await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalMod));
+    await AsyncStorage.setItem(COURSE_MODIFIED_KEY, String(finalCourseMod));
 
-    // Impostazioni di viaggio: se il gruppo le ha già, le adotta
-    const commuterLink = await mergeCommuter(remote, true);
-
-    // Merge presenze
+    // 2. Presenze: unione
     const localAtt = await getAttendanceRecords();
-    const remoteAtt: AttendanceRecord[] = Array.isArray(remote.attendance)
-      ? remote.attendance
+    const remoteAtt: AttendanceRecord[] = Array.isArray(rootRemote.attendance)
+      ? rootRemote.attendance
       : [];
     const localTomb = await getAttendanceTombstones();
-    const remoteTomb = remote.tombstones || {};
-
+    const remoteTomb = rootRemote.tombstones || {};
     const tombstones: Record<string, number> = { ...localTomb, ...remoteTomb };
     const byId = new Map<string, AttendanceRecord>();
     for (const r of [...remoteAtt, ...localAtt]) {
       const prev = byId.get(r.id);
-      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0))
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) {
         byId.set(r.id, r);
+      }
     }
-    const merged = Array.from(byId.values())
+    const mergedAtt = Array.from(byId.values())
       .filter(
         (r) => !(tombstones[r.id] && tombstones[r.id] >= (r.timestamp || 0)),
       )
@@ -1358,39 +1417,61 @@ export async function linkDeviceWithCode(
 
     await AsyncStorage.setItem(
       "studici_attendance_records",
-      JSON.stringify(merged),
+      JSON.stringify(mergedAtt),
     );
     await setAttendanceTombstones(tombstones);
 
-    const creatorDeviceId =
-      remote.creatorDeviceId ||
-      otherDevices[0]?.id ||
-      Object.keys(remote.devices || {})[0] ||
-      myDevice.id;
+    // 3. Impostazioni Viaggio Pendolare: adotta impostazioni del master
+    let finalCommuter = await readLocalCommuter();
+    const finalCommuterMod = Date.now();
+    if (rootRemote.commuter && rootRemote.commuter.enabled) {
+      finalCommuter = rootRemote.commuter;
+      await writeLocalCommuter(rootRemote.commuter);
+    }
+    await AsyncStorage.setItem(
+      COMMUTER_SNAPSHOT_KEY,
+      JSON.stringify(finalCommuter),
+    );
+    await AsyncStorage.setItem(
+      COMMUTER_MODIFIED_KEY,
+      String(finalCommuterMod),
+    );
 
-    await pushRemote(code, {
+    // Salva nel gruppo master
+    await pushRemote(rootMasterCode, {
       updatedAt: Date.now(),
-      creatorDeviceId,
       course: finalCourse,
-      courseModified: finalMod,
-      commuter: commuterLink.config,
-      commuterModified: commuterLink.modified,
-      attendance: merged,
+      courseModified: finalCourseMod,
+      attendance: mergedAtt,
       tombstones,
+      commuter: finalCommuter,
+      commuterModified: finalCommuterMod,
       devices: updatedDevices,
       dissociatedDevices: updatedDissociated,
     });
 
-    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
+    // Aggiorna anche il proprio spazio personale con forwardToMaster
+    try {
+      await pushRemote(ownId, {
+        updatedAt: Date.now(),
+        forwardToMaster: rootMasterCode,
+        masterId: rootMasterCode,
+        parentCode,
+        devices: {
+          [myDevice.id]: updatedDevices[myDevice.id],
+        },
+      });
+    } catch {}
 
-    const partner = otherDevices[0];
-    const partnerName = partner ? partner.name : "gli altri dispositivi";
-    const displayMsg =
-      otherDevices.length > 1
-        ? `Dispositivo associato con successo al gruppo (${otherDevices.length + 1} dispositivi)! La sincronizzazione è ora attiva tra tutti i dispositivi.`
-        : partner
-          ? `Dispositivo associato con successo a "${partner.name}"! La sincronizzazione è ora attiva tra i dispositivi.`
-          : `Dispositivo associato con successo! Sincronizzazione attiva.`;
+    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
+    await setICloudAutoSyncEnabled(true);
+
+    const otherDevices = Object.values(updatedDevices).filter(
+      (d) => d.id !== myDevice.id,
+    );
+    const partner =
+      otherDevices.find((d) => d.code === parentCode) || otherDevices[0];
+    const partnerName = partner ? partner.name : "il master";
 
     await notifyLiveSyncListeners(true);
 
@@ -1398,10 +1479,9 @@ export async function linkDeviceWithCode(
       success: true,
       updated: true,
       partnerName,
-      message: displayMsg,
+      message: `Dispositivo associato con successo a "${partnerName}"! Orari, presenze e impostazioni di viaggio sono sincronizzati.`,
     };
   } catch (err: any) {
-    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, previousId);
     return {
       success: false,
       updated: false,
@@ -1413,9 +1493,9 @@ export async function linkDeviceWithCode(
   }
 }
 
-// Invio automatico (con debounce) dopo ogni modifica locale (presenze, impostazioni viaggio)
+// Invio automatico dopo ogni modifica locale alle presenze o alle impostazioni di viaggio
 let autoPushTimer: ReturnType<typeof setTimeout> | null = null;
-export function scheduleAutoPush(): void {
+function scheduleAutoPush() {
   if (autoPushTimer) clearTimeout(autoPushTimer);
   autoPushTimer = setTimeout(async () => {
     autoPushTimer = null;
@@ -1430,7 +1510,9 @@ export function scheduleAutoPush(): void {
     } catch {}
   }, 1500);
 }
+
 setAttendanceChangeListener(scheduleAutoPush);
+setCommuterChangeListener(scheduleAutoPush);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale
@@ -1447,9 +1529,6 @@ export type LiveSyncCallback = (
 ) => void;
 const liveSyncListeners = new Set<LiveSyncCallback>();
 
-/**
- * Notifica manualmente o automaticamente tutti i listener live registrati.
- */
 export async function notifyLiveSyncListeners(updated = false): Promise<void> {
   const currentStatus = await getPairedDevicesInfo();
   for (const cb of liveSyncListeners) {
@@ -1459,14 +1538,9 @@ export async function notifyLiveSyncListeners(updated = false): Promise<void> {
   }
 }
 
-/**
- * Registra un ascoltatore live per aggiornamenti in tempo reale (dispositivi associati, presenze, corsi).
- * Restituisce una funzione di pulizia (unsubscribe).
- */
 export function subscribeToLiveSync(callback: LiveSyncCallback): () => void {
   liveSyncListeners.add(callback);
   startLiveSyncLoop();
-  // Notifica subito lo stato corrente
   getPairedDevicesInfo().then((status) => {
     try {
       callback(status, false);
@@ -1484,8 +1558,8 @@ async function checkRemoteLiveChanges(): Promise<void> {
   if (isPollingInProgress || !isCloudConfigured()) return;
   isPollingInProgress = true;
   try {
-    const syncId = await getCloudSyncId();
-    const remote = await fetchRemote(syncId);
+    const activeSyncId = await getActiveSyncId();
+    const remote = await fetchRemote(activeSyncId);
     if (!remote) return;
 
     const myDevice = await getLocalDeviceInfo();
@@ -1509,7 +1583,7 @@ async function checkRemoteLiveChanges(): Promise<void> {
       Boolean,
     ) as SyncDeviceInfo[];
     const devHash = devEntries
-      .map((d) => `${d.id}:${d.name}`)
+      .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
       .sort()
       .join("|");
 
@@ -1524,17 +1598,14 @@ async function checkRemoteLiveChanges(): Promise<void> {
       lastKnownDevicesHash = devHash;
       lastKnownRemoteUpdatedAt = remoteUpdated;
 
-      // Esegui la sincronizzazione locale e unisci i dati
       const syncResult = await syncWithICloudStorage();
       await notifyLiveSyncListeners(syncResult.updated);
 
-      // Se il corso o orario è cambiato e il calendario apple era attivo, aggiorna anche il calendario apple in live!
       if (syncResult.updated) {
         await refreshAppleCalendarIfConfigured();
       }
     }
   } catch {
-    // Non interrompere il ciclo per errori di rete momentanei
   } finally {
     isPollingInProgress = false;
   }
@@ -1542,7 +1613,6 @@ async function checkRemoteLiveChanges(): Promise<void> {
 
 export function startLiveSyncLoop(): void {
   if (livePollTimer) return;
-  // Polling a intervallo rapido (2.5s) per aggiornamento live
   livePollTimer = setInterval(() => {
     checkRemoteLiveChanges();
   }, 2500);
@@ -1556,7 +1626,6 @@ export function stopLiveSyncLoop(): void {
   }
 }
 
-// Gestione Foreground / Background con AppState
 AppState.addEventListener("change", (nextState: AppStateStatus) => {
   if (nextState === "active") {
     startLiveSyncLoop();
@@ -1564,3 +1633,52 @@ AppState.addEventListener("change", (nextState: AppStateStatus) => {
     stopLiveSyncLoop();
   }
 });
+
+/**
+ * Ripristina l'app dissociandola da tutti gli altri dispositivi,
+ * eliminando il vecchio documento sul cloud Firebase, cancellando
+ * lo storage locale e generando un nuovo codice univoco garantito.
+ */
+export async function resetAppCloudAndStorage(): Promise<string> {
+  try {
+    const ownId = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
+    const activeSyncId = await getActiveSyncId().catch(() => null);
+
+    // 1. Dissocia da master o dispositivi collegati a cascata
+    try {
+      if (activeSyncId) {
+        await dissociateDevice();
+      }
+    } catch (e) {
+      console.warn("Dissociation error during app reset:", e);
+    }
+
+    // 2. Elimina il documento remoto associato al vecchio codice sul cloud Firebase
+    if (isCloudConfigured() && ownId) {
+      try {
+        await fetchWithTimeout(remoteUrl(ownId), { method: "DELETE" });
+      } catch (e) {
+        console.warn("Delete remote document error during app reset:", e);
+      }
+    }
+
+    // 3. Svuota completamente la memoria locale
+    await AsyncStorage.clear();
+
+    // 4. Genera un codice univoco nuovo e pulito
+    const newCode = await generateUniqueInitialSyncCode();
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newCode);
+
+    // 5. Genera un nuovo ID per l'istanza del dispositivo
+    const newDevId = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, newDevId);
+
+    return newCode;
+  } catch (err) {
+    console.error("Critical error in resetAppCloudAndStorage:", err);
+    await AsyncStorage.clear();
+    const fallbackCode = generateInitialSyncCode();
+    await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, fallbackCode);
+    return fallbackCode;
+  }
+}

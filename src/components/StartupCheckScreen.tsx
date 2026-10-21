@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ActivityIndicator, Animated, Image
+  View,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  Animated,
+  Image,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@/context/ThemeContext';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
-
-const SAPIENZA_RED = '#822433';
 
 interface StartupCheckScreenProps {
   degreeUrl: string;
@@ -13,29 +18,70 @@ interface StartupCheckScreenProps {
   onFinish: () => void;
 }
 
-export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupCheckScreenProps) {
+export function StartupCheckScreen({
+  degreeUrl,
+  degreeName,
+  onFinish,
+}: StartupCheckScreenProps) {
+  const { theme } = useTheme();
   const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date'>('checking');
-  const [statusMessage, setStatusMessage] = useState('Verifica aggiornamenti orario...');
+  const [statusMessage, setStatusMessage] = useState('Verifica orario in corso...');
   const [progressDetail, setProgressDetail] = useState('');
 
+  // Entrance & status transitions
   const [fadeAnim] = useState(() => new Animated.Value(0));
+  const [translateYAnim] = useState(() => new Animated.Value(12));
+  const [checkScale] = useState(() => new Animated.Value(0));
+  const [capsulePulse] = useState(() => new Animated.Value(1));
   const finishedRef = useRef(false);
 
   const safeFinish = useCallback(() => {
     if (!finishedRef.current) {
       finishedRef.current = true;
-      onFinish();
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => {
+        onFinish();
+      });
     }
-  }, [onFinish]);
+  }, [fadeAnim, onFinish]);
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 250,
-      useNativeDriver: true,
-    }).start();
+    // Elegant iOS Entrance
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+      Animated.spring(translateYAnim, {
+        toValue: 0,
+        friction: 8,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
 
-    // Safety timeout per il solo controllo: max 3.5s per non far attendere l'utente
+    // Subtle breathing pulse for the dynamic island status capsule
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(capsulePulse, {
+          toValue: 1.025,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(capsulePulse, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulseLoop.start();
+
+    // Safety timeout: max 3.5s per il controllo orari
     const checkTimeout = setTimeout(() => {
       safeFinish();
     }, 3500);
@@ -47,21 +93,28 @@ export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupC
         if (finishedRef.current) return;
 
         if (result.hasChanges) {
-          clearTimeout(checkTimeout); // Rimuovi il timeout breve durante il download
+          clearTimeout(checkTimeout);
           setStatus('updating');
-          setStatusMessage(result.reason || 'Rilevate modifiche sul foglio ufficiale!');
-          
+          setStatusMessage(result.reason || 'Aggiornamento lezioni in corso...');
+
           await fetchAllCourseData(degreeUrl, true, (stepMsg) => {
             setProgressDetail(stepMsg);
           });
 
           setStatus('up_to_date');
-          setStatusMessage('Orario e avvisi aggiornati con successo');
+          setStatusMessage('Orario aggiornato');
+
+          Animated.spring(checkScale, {
+            toValue: 1,
+            friction: 5,
+            tension: 50,
+            useNativeDriver: true,
+          }).start();
+
           setTimeout(() => {
             safeFinish();
-          }, 300);
+          }, 450);
         } else {
-          // Nessuna modifica rilevata: ingresso immediato senza attese!
           clearTimeout(checkTimeout);
           safeFinish();
         }
@@ -75,48 +128,97 @@ export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupC
 
     return () => {
       clearTimeout(checkTimeout);
+      pulseLoop.stop();
     };
-  }, [degreeUrl, fadeAnim, safeFinish]);
+  }, [degreeUrl, fadeAnim, translateYAnim, capsulePulse, checkScale, safeFinish]);
 
   return (
     <View style={styles.container}>
-      <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-        {/* App Logo */}
-        <View style={styles.logoBadge}>
-          <Image
-            source={require('../../assets/images/icon.png')}
-            style={styles.logoImage}
-            resizeMode="cover"
-          />
+      <Animated.View
+        style={[
+          styles.content,
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: translateYAnim }],
+          },
+        ]}
+      >
+        {/* Logo statico pulito senza animazioni (grafica originale apprezzata dall'utente) */}
+        <View style={styles.logoWrapper}>
+          <View
+            style={[
+              styles.logoBadge,
+              {
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+              },
+            ]}
+          >
+            <Image
+              source={require('../../assets/images/icon.png')}
+              style={styles.logoImage}
+              resizeMode="cover"
+            />
+          </View>
         </View>
 
-        {/* Title */}
+        {/* Titolo e Dettaglio Corso con tipografia iOS moderna */}
         <Text style={styles.appTitle}>StudICI</Text>
         <Text style={styles.subtitle} numberOfLines={1}>
           {degreeName || 'Sapienza Università di Roma'}
         </Text>
 
-        {/* Status card */}
-        <View style={styles.statusBox}>
-          {status === 'up_to_date' ? (
-            <Ionicons name="checkmark-circle" size={24} color="#10b981" style={{ marginRight: 10 }} />
-          ) : (
-            <ActivityIndicator size="small" color={SAPIENZA_RED} style={{ marginRight: 10 }} />
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.statusText, status === 'up_to_date' && { color: '#10b981' }]}>
+        {/* Dynamic Island / Liquid Glass Capsule iOS Loader */}
+        <Animated.View
+          style={[
+            styles.capsuleWrapper,
+            {
+              transform: [{ scale: status === 'checking' ? capsulePulse : 1 }],
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.glassCapsule,
+              status === 'up_to_date' && {
+                borderColor: 'rgba(16, 185, 129, 0.35)',
+                backgroundColor: 'rgba(16, 185, 129, 0.12)',
+              },
+            ]}
+          >
+            {status === 'up_to_date' ? (
+              <Animated.View style={{ transform: [{ scale: checkScale }], marginRight: 8 }}>
+                <Ionicons name="checkmark-circle" size={18} color="#10b981" />
+              </Animated.View>
+            ) : (
+              <ActivityIndicator
+                size="small"
+                color={theme.primary}
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <Text
+              style={[
+                styles.capsuleText,
+                status === 'up_to_date' && { color: '#10b981' },
+              ]}
+              numberOfLines={1}
+            >
               {statusMessage}
             </Text>
-            {status === 'updating' && progressDetail ? (
+          </View>
+
+          {/* Dettaglio Avanzamento se in download */}
+          {status === 'updating' && progressDetail ? (
+            <View style={styles.detailBadge}>
               <Text style={styles.progressDetailText} numberOfLines={1}>
                 {progressDetail}
               </Text>
-            ) : null}
-          </View>
-        </View>
+            </View>
+          ) : null}
+        </Animated.View>
       </Animated.View>
 
-      {/* Footer */}
+      {/* Footer Minimal iOS */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>Sapienza Università di Roma</Text>
       </View>
@@ -127,78 +229,98 @@ export function StartupCheckScreen({ degreeUrl, degreeName, onFinish }: StartupC
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#111111',
+    backgroundColor: '#0d0e12',
     justifyContent: 'center',
     alignItems: 'center',
   },
   content: {
     alignItems: 'center',
     width: '100%',
-    paddingHorizontal: 32,
+    paddingHorizontal: 28,
+  },
+  logoWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 22,
   },
   logoBadge: {
-    width: 104,
-    height: 104,
-    borderRadius: 26,
-    backgroundColor: SAPIENZA_RED,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 22,
-    shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 16,
-    elevation: 10,
+    width: 96,
+    height: 96,
+    borderRadius: 22,
+    borderWidth: 1,
     overflow: 'hidden',
+    backgroundColor: '#18181b',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
   },
   logoImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 26,
   },
   appTitle: {
-    fontSize: 32,
-    fontWeight: '800',
+    fontSize: 30,
+    fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: 0.5,
+    letterSpacing: -0.4,
     marginBottom: 4,
   },
   subtitle: {
-    fontSize: 14,
-    color: '#8e8e93',
+    fontSize: 13,
+    color: '#9ca3af',
     fontWeight: '500',
-    marginBottom: 36,
+    marginBottom: 28,
     textAlign: 'center',
+    letterSpacing: -0.2,
   },
-  statusBox: {
+  capsuleWrapper: {
+    alignItems: 'center',
+    width: '100%',
+    minHeight: 52,
+  },
+  glassCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1c1c1e',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 9999,
+    backgroundColor: 'rgba(28, 28, 32, 0.78)',
     borderWidth: 1,
-    borderColor: '#2c2c2e',
-    width: '100%',
-    maxWidth: 320,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  statusText: {
-    fontSize: 13.5,
+  capsuleText: {
+    fontSize: 13,
     fontWeight: '600',
-    color: '#e4e4e7',
+    color: '#f4f4f5',
+    letterSpacing: -0.2,
+  },
+  detailBadge: {
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 9999,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   progressDetailText: {
     fontSize: 11.5,
     color: '#a1a1aa',
-    marginTop: 3,
+    fontWeight: '500',
   },
   footer: {
     position: 'absolute',
-    bottom: 40,
+    bottom: Platform.OS === 'ios' ? 44 : 28,
   },
   footerText: {
     fontSize: 12,
     color: '#52525b',
     fontWeight: '500',
+    letterSpacing: 0.2,
   },
 });

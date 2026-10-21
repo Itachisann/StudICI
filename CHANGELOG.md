@@ -5,59 +5,33 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
-## 1.9.1
-
-> **[Aggiornamento Obbligatorio / Bloccante]**
-> Risoluzione della risposta al tocco dei pulsanti nel foglio di sincronizzazione, tasto Salva rosso nelle specifiche e rafforzamento delle regole Master / Slave.
-
-### Sincronizzazione Cloud & Risoluzione Tasti
-
-- **Risoluzione Completa Tasti Fogli Modali (Touch Events)**:
-  - Risolto il problema che impediva ai pulsanti del foglio di Sincronizzazione (*Sincronizza*, *Copia codice*, *Dissocia*, *Scollega* e *Collega*) di ricevere i tocchi su iOS. Il foglio ora impiega la presentazione nativa `pageSheet` con header personalizzato privo di conflitti con i responder di sistema, garantendo interattività istantanea su tutti i controlli.
-- **Regole e Ruoli Master / Slave**:
-  - **Solo il Generatore (Master)**: può sciogliere il gruppo ("Rompi gruppo"), dissociare singoli dispositivi slave, collegare altri dispositivi e personalizzare il codice identificativo cloud.
-  - **Dispositivo Associato (Slave)**: non può collegare altri dispositivi né modificare il codice identificativo. Può esclusivamente dissociarsi dal master ("Scollegati"): al momento del distacco, la sincronizzazione viene interrotta e tutti i dati sincronizzati (corso, canale, orario, registro presenze, impostazioni di viaggio) vengono azzerati localmente per consentire di ripartire puliti da zero.
-  - Quando il Master scioglie il gruppo o dissocia uno slave, lo slave viene notificato e ripulito automaticamente da tutti i dati sincronizzati.
-
-### Interfaccia e Specifiche
-
-- **Tasto Salva in Specifiche di Colore Rosso**:
-  - Il pulsante "Salva" posizionato nella testata del foglio modale "Specifiche" (anno e canale) è ora evidenziato in colore rosso (`#ef4444`) con stile iOS prominente, perfettamente allineato al tasto Salva delle impostazioni di viaggio.
-
-## 1.9.0
-
-> **[Aggiornamento Obbligatorio / Bloccante]**
-> Adozione uniforme dei pulsanti nativi di sistema, integrazione di Host SwiftUI per l'IPA, controlli di salvataggio allineati e nuova gestione Master/Slave per la sincronizzazione cloud multi-dispositivo.
-
-### Sincronizzazione Cloud & Ruoli Master / Slave
-
-- **Ruolo Master (Generatore del Gruppo)**:
-  - Solo il dispositivo che genera il codice e crea il gruppo di associazione ha i privilegi per collegare nuovi dispositivi, rimuovere singoli dispositivi associati o sciogliere l'intero gruppo ("Rompi gruppo").
-- **Ruolo Dispositivo Associato (Slave)**:
-  - I dispositivi associati a un master non possono collegare ulteriori dispositivi.
-  - Possono solo dissociarsi dal dispositivo master: al momento della dissociazione, il dispositivo viene rimosso dal gruppo e riparte pulito da zero senza dati (azzeramento locale di corso, orario, presenze e viaggio).
-- **Risoluzione Tasti nel Foglio Modale**:
-  - Risolto il problema che impediva la risposta al tocco dei tasti *Sincronizza*, *Copia codice*, *Dissocia*, *Scollega* e *Collega* eliminando il ciclo di rimontaggio del navigatore nativo e rendendo istantanea la copia negli appunti.
-
-### Interfaccia e Navigazione Nativa
-
-- **Pulsante Salva in Specifiche**: Spostato nella barra di navigazione nativa in alto a destra con stile prominente e colore rosso (`#ef4444`), identico a quello delle impostazioni di viaggio.
-- **Configura & Salva Viaggio**: Uniformati tutti i pulsanti di configurazione e salvataggio con pulsanti nativi SwiftUI (`Host` di `@expo/ui`), sia a viaggio non configurato che nelle modifiche successive.
-- **Supporto SideStore & Aggiornamenti**: Aggiornato il manifest ufficiale della sorgente SideStore/AltStore (`apps.json`) alla versione 1.9.0 per il download e aggiornamento automatico con un tap.
-
 ## 1.8.9
 
-> **[Aggiornamento Obbligatorio / Bloccante]**
-> Cambia il modo in cui vengono salvate e sincronizzate le impostazioni di viaggio: serve la nuova versione su tutti i dispositivi collegati.
+### Interfaccia & Modali iOS
+- **Schermata di Avvio & Verifica Orari**:
+  - Logo statico pulito senza animazioni invasive.
+  - Nuovo loader Dynamic Island in stile Liquid Glass con capsula fluttuante, feedback di stato real-time e transizioni morbide iOS.
+- **Pulsanti Nativi Callstack Liquid Glass**:
+  - Implementazione dei pulsanti nativi in basso ("Salva" e "Configura") con `@callstack/liquid-glass` per le build native iOS (IPA), mantenendo pieno supporto su iOS pre-26 e fallback fluido su Expo Go.
+- **Profilo & Ricerca Corsi**:
+  - Colore del testo dei pulsanti di sincronizzazione nel Profilo impostato su bianco per massimo contrasto.
+  - Searchbar di scelta corso riposizionata in alto nella schermata per immediata accessibilità.
+  - Schermata di configurazione/sincronizzazione all'avvio uniformata al tema dell'app.
+  - Aumentato il padding inferiore nel modale Impostazioni Viaggio per raggiungere comodamente i pulsanti buffer minuti.
 
-### Sincronizzazione
+### Sincronizzazione Cloud & Dispositivi
+- **Ripristino Dispositivo**:
+  - Alla reimpostazione dell'app, il dispositivo viene dissociato da tutti gli altri, il vecchio documento cloud viene rimosso da Firebase e viene generato un nuovo codice univoco garantito.
+- **Ereditarietà Immediata Orari e Lezioni**:
+  - Al primo collegamento tra due dispositivi, il nuovo dispositivo eredita istantaneamente la cache completa degli orari e delle aule già calcolata dal master senza dover riscaricare nulla da rete.
+- **Gestione Popup Pulita**:
+  - Rimossi i popup di successo per l'associazione dispositivi e per la copia del codice, mostrati esclusivamente in caso di errore.
 
-- Le impostazioni di viaggio (indirizzo, stazioni, auto, margini) ora si sincronizzano tra i dispositivi collegati. Vale l'ultima modifica, e al collegamento di un nuovo dispositivo vengono importate quelle già presenti.
-
-### Interfaccia
-
-- I fogli di Profilo e Impostazioni viaggio usano la barra di navigazione nativa iOS (`native-stack`): freccia indietro, Salva ed Esporta sono pulsanti di sistema e il foglio si chiude trascinando verso il basso.
-- Salva, Configura più tardi e Conferma usano il pulsante nativo SwiftUI nell'IPA.
+### Parsing Orari & Dati
+- **Colori Materie Settimanali**:
+  - Assegnazione deterministica del colore a ogni materia, mantenendolo identico e fisso per tutti i giorni della settimana.
+- **Fix Estrazione Nomi Professori**:
+  - Risolto il bug che su iPad causava l'errata interpretazione di stringhe come "di calcolo numerico" come nome del docente, con guardrail e istruzioni Gemini per mantenere intatto il titolo della materia.
 
 ## 1.8.8
 

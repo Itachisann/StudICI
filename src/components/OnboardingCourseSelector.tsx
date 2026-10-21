@@ -516,9 +516,7 @@ export function OnboardingCourseSelector({
     try {
       const res = await linkDeviceWithCode(code);
       if (res.success) {
-        Alert.alert("Dispositivi Associati!", res.message, [
-          { text: "Inizia", onPress: () => onComplete() },
-        ]);
+        onComplete();
       } else {
         Alert.alert("Associazione Non Riuscita", res.message);
       }
@@ -875,10 +873,10 @@ export function OnboardingCourseSelector({
                       <Ionicons
                         name="arrow-back"
                         size={18}
-                        color={theme.accent}
+                        color={theme.primary}
                       />
                       <Text
-                        style={[styles.backInlineText, { color: theme.accent }]}
+                        style={[styles.backInlineText, { color: theme.primary }]}
                       >
                         Indietro
                       </Text>
@@ -911,7 +909,7 @@ export function OnboardingCourseSelector({
                   {searchingStations && (
                     <ActivityIndicator
                       size="small"
-                      color={theme.accent}
+                      color={theme.primary}
                       style={{ marginVertical: 10 }}
                     />
                   )}
@@ -945,7 +943,7 @@ export function OnboardingCourseSelector({
                           <Ionicons
                             name="train"
                             size={16}
-                            color={theme.accent}
+                            color={theme.primary}
                           />
                         </View>
                         <View style={{ flex: 1 }}>
@@ -959,7 +957,7 @@ export function OnboardingCourseSelector({
                         <Ionicons
                           name="checkmark-circle-outline"
                           size={18}
-                          color={theme.accent}
+                          color={theme.primary}
                         />
                       </TouchableOpacity>
                     )}
@@ -1880,9 +1878,26 @@ export function OnboardingCourseSelector({
           contentContainerStyle={{ paddingBottom: 40 }}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.syncCard}>
-            <View style={styles.syncIconCircle}>
-              <Ionicons name="link" size={28} color="#38bdf8" />
+          <View
+            style={[
+              styles.syncCard,
+              {
+                backgroundColor: "#18181b",
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.syncIconCircle,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                },
+              ]}
+            >
+              <Ionicons name="link" size={28} color={theme.primary} />
             </View>
             <Text style={styles.syncCardTitle}>Sincronizza via Cloud</Text>
             <Text style={styles.syncCardDesc}>
@@ -1892,7 +1907,15 @@ export function OnboardingCourseSelector({
               dell&apos;altro dispositivo.
             </Text>
 
-            <View style={styles.syncInputWrapper}>
+            <View
+              style={[
+                styles.syncInputWrapper,
+                {
+                  backgroundColor: "#121214",
+                  borderColor: theme.border,
+                },
+              ]}
+            >
               <TextInput
                 style={styles.syncInput}
                 placeholder="es. ST1234A o NOME"
@@ -1903,18 +1926,35 @@ export function OnboardingCourseSelector({
                 autoCorrect={false}
               />
               <TouchableOpacity
-                style={styles.syncPasteBtn}
+                style={[
+                  styles.syncPasteBtn,
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                    borderWidth: 0.5,
+                  },
+                ]}
                 activeOpacity={0.7}
                 onPress={handlePasteSyncCode}
               >
-                <Ionicons name="clipboard-outline" size={16} color="#38bdf8" />
-                <Text style={styles.syncPasteBtnText}>Incolla</Text>
+                <Ionicons name="clipboard-outline" size={16} color={theme.accent} />
+                <Text style={[styles.syncPasteBtnText, { color: theme.accent }]}>
+                  Incolla
+                </Text>
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
               style={[
                 styles.syncSubmitBtn,
+                {
+                  backgroundColor: theme.primary,
+                  shadowColor: theme.primary,
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.35,
+                  shadowRadius: 6,
+                  elevation: 4,
+                },
                 (!syncCodeInput.trim() || isLinkingSync) && { opacity: 0.5 },
               ]}
               activeOpacity={0.8}
@@ -2085,58 +2125,59 @@ const styles = StyleSheet.create({
   /* ── Stili Schermata Scelta Facoltà Originale (con Pill Glow) ── */
   header: {
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
   logoBadge: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
+    width: 52,
+    height: 52,
+    borderRadius: 14,
     backgroundColor: SAPIENZA_RED,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 8,
     shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
     overflow: "hidden",
   },
   logoBadgeImage: {
     width: "100%",
     height: "100%",
-    borderRadius: 20,
+    borderRadius: 14,
   },
   appTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "bold",
     color: "#ffffff",
   },
   appSubtitle: {
-    fontSize: 13,
+    fontSize: 12.5,
     color: SAPIENZA_RED,
     fontWeight: "600",
     marginTop: 2,
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   instruction: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#8e8e93",
-    marginTop: 8,
-    lineHeight: 20,
+    marginTop: 4,
+    lineHeight: 18,
   },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1c1c1e",
-    marginHorizontal: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginHorizontal: 16,
     paddingHorizontal: 14,
-    height: 46,
+    height: 44,
     borderRadius: 12,
-    marginBottom: 14,
+    marginTop: 6,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#2c2c2e",
+    borderColor: "rgba(255, 255, 255, 0.12)",
   },
   searchIcon: {
     marginRight: 10,

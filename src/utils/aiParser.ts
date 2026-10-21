@@ -210,6 +210,7 @@ Per CIASCUNA cella analizza semanticamente il contenuto ed estrai con assoluta p
 
 2. "teacher":
    - Il nome completo del docente nel formato convenzionale "COGNOME Nome" (es. "PISTOIA Angela", "CAPUTO Domenico", "D'ORAZIO Annunziata", "RIZZUTO Emanuele").
+   - ATTENZIONE CRITICA: Parti o continuazioni della materia come "di calcolo numerico", "calcolo numerico", "laboratorio", "modulo", "canale" NON SONO DOCENTI. Fanno parte di "subject" e "teacher" deve essere "".
    - Se non indicato o assente, restituisci "".
 
 3. "room":
@@ -388,10 +389,42 @@ export function validateAndCleanClass(geminiParsed: ParsedClass, rawText: string
 
   // 1. Guardrail contro parole di materia finite erroneamente nel docente
   if (teacher) {
-    const leakedMatch = teacher.match(/^(di|del|della|delle|dei|degli|e|ed|in|per)\s+([a-zA-Zà-öø-ÿ0-9'\s]+?)\s+((?:(?:Prof\.|Prof\.ssa)\s+)?[A-ZÀ-ÖØ-ß]{2,}(?:\s+[A-ZÀ-ÖØ-ß]{2,})*\s+[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+.*)$/i);
+    const leakedMatch = teacher.match(
+      /^(di|del|della|delle|dei|degli|e|ed|in|per)\s+([a-zA-Zà-öø-ÿ0-9'\s]+?)\s+((?:(?:Prof\.|Prof\.ssa)\s+)?[A-ZÀ-ÖØ-ß]{2,}(?:\s+[A-ZÀ-ÖØ-ß]{2,})*\s+[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+.*)$/i
+    );
     if (leakedMatch) {
       subject = (subject + ' ' + leakedMatch[1] + ' ' + leakedMatch[2]).trim();
       teacher = leakedMatch[3].trim();
+    }
+
+    // 1b. Se "teacher" non contiene affatto un docente, ma è una continuazione del subject
+    // (es. "di calcolo numerico", "calcolo numerico", "laboratorio", "modulo 1", "applicata", ecc.)
+    const teacherLower = teacher.toLowerCase().trim();
+    const hasProfPrefix = /\b(prof\.|prof\.ssa|professore|professoressa)\b/i.test(teacher);
+    const startsWithPrep = /^(di|del|della|delle|dei|degli|e|ed|in|per|con|su)\s+/i.test(teacher);
+    const hasAcademicKeywords = /\b(calcolo|numerico|numerica|laboratorio|analisi|algebra|geometria|fisica|chimica|informatica|elettronica|meccanica|bioingegneria|automatica|telecomunicazioni|modulo|canale|teoria|sistemi|algoritmi|strutture|programmazione|statistica|probabilit[àa]|metodi|misure|disegno|clinica|biomedica|scienza|tecnologia)\b/i.test(teacherLower);
+
+    if (!hasProfPrefix) {
+      if (startsWithPrep || hasAcademicKeywords) {
+        const words = teacher.trim().split(/\s+/);
+        const isLegitPerson =
+          words.length >= 2 &&
+          words.every(
+            (w) =>
+              /^[A-ZÀ-ÖØ-öø-ÿ][a-zà-öø-ÿ]+$/.test(w) ||
+              /^[A-ZÀ-ÖØ-ß]{2,}$/.test(w)
+          ) &&
+          !hasAcademicKeywords;
+
+        if (!isLegitPerson) {
+          const cleanFragment = teacher.replace(/^-\s*/, '').trim();
+          const cleanSubj = subject.toLowerCase();
+          if (!cleanSubj.includes(cleanFragment.toLowerCase())) {
+            subject = `${subject} ${cleanFragment}`.trim();
+          }
+          teacher = '';
+        }
+      }
     }
   }
 

@@ -1,16 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { Tab } from "../utils/scraper";
 import { parseTabHierarchy } from "./YearChannelSelector";
-import { NativeActionButton } from "./NativeActionButton";
 import { useTheme } from "@/context/ThemeContext";
+import { NativeActionButton } from "./NativeActionButton";
 
 const SAPIENZA_RED = "#822433";
 
@@ -31,7 +31,7 @@ export function DefaultTabPicker({
   tabs,
   initialTabUrl,
   degreeName,
-  title = "Scegli Anno e Canale",
+  title = "Specifiche",
   subtitle = "Verranno mostrati in automatico all'apertura dell'app.",
   confirmButtonText = "Conferma e Inizia",
   hideFooterButton = false,
@@ -100,17 +100,17 @@ export function DefaultTabPicker({
     setSelectedChannel(channel);
   };
 
+  useEffect(() => {
+    if (activeTabInfo?.tab && onActiveTabChange) {
+      onActiveTabChange(activeTabInfo.tab);
+    }
+  }, [activeTabInfo?.tab, onActiveTabChange]);
+
   const handleConfirm = () => {
     if (activeTabInfo?.tab) {
       onConfirm(activeTabInfo.tab);
     }
   };
-
-  useEffect(() => {
-    if (activeTabInfo?.tab && onActiveTabChange) {
-      onActiveTabChange(activeTabInfo.tab);
-    }
-  }, [activeTabInfo, onActiveTabChange]);
 
   // Se c'è solo un tab in tutto il corso, non serve scegliere
   if (tabs.length === 0) return null;
@@ -122,6 +122,7 @@ export function DefaultTabPicker({
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {/* Header Icon & Title */}
         <View style={styles.header}>
@@ -145,9 +146,9 @@ export function DefaultTabPicker({
               {uniqueYears.map((year, idx) => {
                 const isSelected = year === selectedYear;
                 return (
-                  <TouchableOpacity
+                  <Pressable
                     key={idx}
-                    style={[
+                    style={({ pressed }) => [
                       styles.chip,
                       isSelected && [
                         styles.chipActive,
@@ -157,8 +158,10 @@ export function DefaultTabPicker({
                           shadowColor: theme.primary,
                         },
                       ],
+                      pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] },
                     ]}
-                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    pressRetentionOffset={{ top: 25, bottom: 25, left: 25, right: 25 }}
                     onPress={() => handleSelectYear(year)}
                   >
                     <Ionicons
@@ -177,7 +180,7 @@ export function DefaultTabPicker({
                     >
                       {year}
                     </Text>
-                  </TouchableOpacity>
+                  </Pressable>
                 );
               })}
             </View>
@@ -193,9 +196,9 @@ export function DefaultTabPicker({
                 const isSelected = (item.channel || "") === selectedChannel;
                 const displayName = item.channel || item.tab.name;
                 return (
-                  <TouchableOpacity
+                  <Pressable
                     key={idx}
-                    style={[
+                    style={({ pressed }) => [
                       styles.chipEqual,
                       isSelected && [
                         styles.chipActive,
@@ -205,8 +208,10 @@ export function DefaultTabPicker({
                           shadowColor: theme.primary,
                         },
                       ],
+                      pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] },
                     ]}
-                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    pressRetentionOffset={{ top: 25, bottom: 25, left: 25, right: 25 }}
                     onPress={() => handleSelectChannel(item.channel)}
                   >
                     <Ionicons
@@ -224,7 +229,7 @@ export function DefaultTabPicker({
                     >
                       {displayName}
                     </Text>
-                  </TouchableOpacity>
+                  </Pressable>
                 );
               })}
             </View>
@@ -249,7 +254,7 @@ export function DefaultTabPicker({
         </View>
       </ScrollView>
 
-      {/* ── Footer con Pulsante Azione ── */}
+      {/* ── Footer con Pulsante Azione in basso in stile native-stack ── */}
       {!hideFooterButton && (
         <View style={styles.footer}>
           <NativeActionButton
@@ -258,7 +263,15 @@ export function DefaultTabPicker({
             glow
             accentColor={theme.primary}
             glowColor={theme.primary}
-            style={{ height: 52, alignSelf: "stretch" }}
+            style={{ width: "100%", height: 48 }}
+            icon={
+              <Ionicons
+                name="checkmark-circle"
+                size={18}
+                color="#ffffff"
+                style={{ marginRight: 6 }}
+              />
+            }
             onPress={handleConfirm}
           />
         </View>
@@ -270,7 +283,7 @@ export function DefaultTabPicker({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#111111",
+    backgroundColor: "#16181d",
   },
   scrollContent: {
     padding: 24,

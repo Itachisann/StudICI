@@ -26,14 +26,12 @@ import {
 
 import { useTheme } from "@/context/ThemeContext";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
-import { NativeActionButton } from "../components/NativeActionButton";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
 import { computeCommuterItinerary } from "../utils/commuterOptimizer";
 import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
-import { subscribeToLiveSync } from "../utils/cloudSync";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -443,17 +441,6 @@ export default function ViaggioScreen() {
     }, [loadData]),
   );
 
-  useEffect(() => {
-    const unsubscribe = subscribeToLiveSync((_status, updated) => {
-      if (updated) {
-        loadData(false, true);
-      }
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [loadData]);
-
   const handleDayChange = (dayIdx: number) => {
     setSelectedDayIdx(dayIdx);
     setSelectedClassIndex(null);
@@ -641,11 +628,8 @@ export default function ViaggioScreen() {
     !isWeekend &&
     itinerary?.targetLecture &&
     (itinerary.targetLecture.subject === "Lezioni di oggi terminate" ||
-      (direction === "outbound"
-        ? currentNowMins >
-          parseTimeToMinutes(itinerary.targetLecture.startTime || "08:30")
-        : currentNowMins >
-          parseTimeToMinutes(itinerary.targetLecture.endTime || "18:00"))),
+      currentNowMins >=
+        parseTimeToMinutes(itinerary.targetLecture.endTime || "18:00")),
   );
 
   return (
@@ -901,15 +885,19 @@ export default function ViaggioScreen() {
                 La sezione viaggio non è attiva finché non vengono configurate
                 le impostazioni del tuo tragitto pendolare.
               </Text>
-              <NativeActionButton
-                label="Configura"
-                variant="filled"
-                glow
-                accentColor={theme.primary}
-                glowColor={theme.primary}
-                style={{ width: 140, height: 44, alignSelf: "center" }}
+              <TouchableOpacity
+                style={[
+                  styles.inactiveConfigureBtn,
+                  {
+                    backgroundColor: theme.primary,
+                    shadowColor: theme.primary,
+                  },
+                ]}
+                activeOpacity={0.85}
                 onPress={() => setConfigModalVisible(true)}
-              />
+              >
+                <Text style={styles.inactiveConfigureBtnText}>Configura</Text>
+              </TouchableOpacity>
             </View>
           </View>
         ) : (
@@ -1163,25 +1151,27 @@ export default function ViaggioScreen() {
                       );
                     })()}
 
-                    <View style={styles.durationBadge}>
-                      <Ionicons
-                        name="time-outline"
-                        size={13}
-                        color="#94a3b8"
-                        style={{ marginRight: 4 }}
-                      />
-                      <Text style={styles.durationBadgeText}>
-                        {formatDuration(itinerary.totalDurationMinutes)}
-                      </Text>
+                    <View style={styles.heroTopRowRight}>
+                      <View style={styles.durationBadge}>
+                        <Ionicons
+                          name="time-outline"
+                          size={13}
+                          color="#94a3b8"
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text style={styles.durationBadgeText}>
+                          {formatDuration(itinerary.totalDurationMinutes)}
+                        </Text>
+                      </View>
                     </View>
                   </View>
 
                   <Text style={styles.heroHeadline}>
-                    {isTargetLectureFinished
-                      ? "Prossima partenza"
-                      : direction === "outbound"
-                        ? "Parti da casa alle"
-                        : "Rientro previsto alle"}
+                    {direction === "return"
+                      ? "Rientro stimato alle"
+                      : isTargetLectureFinished
+                        ? "Prossima partenza da casa alle"
+                        : "Parti da casa alle"}
                   </Text>
                   <Text style={styles.heroBigTime}>
                     {direction === "outbound"
@@ -1395,6 +1385,51 @@ export default function ViaggioScreen() {
                                 ]}
                               >
                                 {`Origine corsa • ${displayOrigin}`}
+                              </Text>
+                            </View>
+                          );
+                        })()}
+
+                        {/* Nuova Pill Durata Viaggio Treno */}
+                        {(() => {
+                          const depM = parseTimeToMinutes(
+                            itinerary.liveTrain.departureTimePlanned ||
+                              itinerary.liveTrain.departureTimeActual ||
+                              "00:00",
+                          );
+                          const arrM = parseTimeToMinutes(
+                            itinerary.liveTrain.arrivalTimeActual ||
+                              itinerary.liveTrain.arrivalTimePlanned ||
+                              "00:00",
+                          );
+                          const tDuration =
+                            itinerary.liveTrain.durationMinutes ||
+                            (arrM > depM ? arrM - depM : 0);
+                          if (tDuration <= 0) return null;
+
+                          return (
+                            <View
+                              style={[
+                                styles.trainStatusPill,
+                                {
+                                  backgroundColor: "rgba(56, 189, 248, 0.14)",
+                                  borderColor: "rgba(56, 189, 248, 0.32)",
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="timer-outline"
+                                size={12}
+                                color="#38bdf8"
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.trainStatusPillText,
+                                  { color: "#38bdf8", fontWeight: "600" },
+                                ]}
+                              >
+                                {`Durata: ${formatDuration(tDuration)}`}
                               </Text>
                             </View>
                           );
@@ -1885,6 +1920,40 @@ export default function ViaggioScreen() {
                             {leg.subtitle}
                           </Text>
 
+                          {leg.details?.badgeText && (
+                            <View
+                              style={[
+                                styles.legCustomBadge,
+                                {
+                                  backgroundColor:
+                                    leg.details.badgeBg ||
+                                    "rgba(245, 158, 11, 0.15)",
+                                  borderColor:
+                                    leg.details.badgeColor || "#f59e0b",
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  leg.details.lostLectureMinutes
+                                    ? "alert-circle"
+                                    : "time"
+                                }
+                                size={11}
+                                color={leg.details.badgeColor || "#f59e0b"}
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.legCustomBadgeText,
+                                  { color: leg.details.badgeColor || "#f59e0b" },
+                                ]}
+                              >
+                                {leg.details.badgeText}
+                              </Text>
+                            </View>
+                          )}
+
                           {/* Avviso Evidente Traffico Stradale */}
                           {/* Avviso Dinamico Traffico Stradale */}
                           {leg.type === "car" &&
@@ -1978,30 +2047,22 @@ export default function ViaggioScreen() {
                                     <Text
                                       style={styles.trafficAlertDescription}
                                     >
-                                      {leg.details.trafficCondition ||
-                                        (leg.details.trafficFluency ===
-                                        "scorrevole"
-                                          ? "Tempo ottimale senza rallentamenti"
-                                          : "Viabilità regolare")}
+                                      {(() => {
+                                        const baseCondition =
+                                          leg.details.trafficCondition ||
+                                          (leg.details.trafficFluency ===
+                                          "scorrevole"
+                                            ? "Tempo ottimale senza rallentamenti"
+                                            : "Viabilità regolare");
+                                        const delayInfo =
+                                          leg.details.trafficDelayMinutes &&
+                                          leg.details.trafficDelayMinutes > 0
+                                            ? ` (+${leg.details.trafficDelayMinutes} min rispetto al tempo base)`
+                                            : "";
+                                        return `${baseCondition}${delayInfo}`;
+                                      })()}
                                     </Text>
                                   </View>
-                                  {(leg.details.trafficFluency === "intenso" ||
-                                    leg.details.trafficFluency ===
-                                      "rallentamenti") && (
-                                    <View style={styles.trafficDelayPill}>
-                                      <Ionicons
-                                        name="time"
-                                        size={11}
-                                        color="#ffedd5"
-                                        style={{ marginRight: 3 }}
-                                      />
-                                      <Text style={styles.trafficDelayPillText}>
-                                        {leg.details.trafficDelayMinutes
-                                          ? `+${leg.details.trafficDelayMinutes}m RITARDO`
-                                          : "RITARDO"}
-                                      </Text>
-                                    </View>
-                                  )}
                                 </View>
                               </View>
                             )}
@@ -2501,13 +2562,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 10,
+    marginBottom: 12,
+  },
+  heroTopRowRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 8,
   },
   statusDot: {
@@ -2525,9 +2591,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.3)",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
   },
   durationBadgeText: {
     fontSize: 12,
@@ -2878,6 +2946,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
     marginBottom: 4,
+  },
+  legCustomBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignSelf: "flex-start",
+    marginTop: 3,
+    marginBottom: 4,
+  },
+  legCustomBadgeText: {
+    fontSize: 11,
+    fontWeight: "600",
   },
   stepNotesText: {
     fontSize: 11,

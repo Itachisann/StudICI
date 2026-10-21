@@ -14,7 +14,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
@@ -477,53 +476,72 @@ export function CommuterConfigModal({
     <NativeSheetModal
       visible={visible}
       onClose={onClose}
-      onBack={handleSheetBack}
+      onBack={stationPickerType ? handleSheetBack : undefined}
+      showCloseButton={!stationPickerType}
       title={sheetTitle}
       backgroundColor="#16181d"
+      searchBarOptions={
+        stationPickerType
+          ? {
+              placeholder: "Cerca tra tutte le stazioni italiane...",
+              onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
+              onCancelButtonPress: () => handleStationSearchChange(""),
+              onSearchButtonPress: (e) =>
+                handleStationSearchChange(e.nativeEvent.text),
+              textColor: "#ffffff",
+              tintColor: theme.primary,
+              headerIconColor: "#8e8e93",
+              hintTextColor: "#71717a",
+              hideWhenScrolling: false,
+              autoCapitalize: "words",
+            }
+          : undefined
+      }
       rightActions={
         !stationPickerType
           ? [
               {
                 label: "Salva",
-                onPress: isUnconfigured ? handleSaveInit : handleSave,
                 prominent: true,
+                tintColor: theme.primary,
                 disabled: isUnconfigured ? !isInitComplete : false,
-                tintColor: "#ef4444",
+                onPress: isUnconfigured ? handleSaveInit : handleSave,
               },
             ]
           : undefined
       }
     >
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: "#16181d" }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.modalContainer}>
+        <View style={{ flex: 1, backgroundColor: "#16181d" }}>
           {stationPickerType ? (
             /* Picker Stazione A-Z con tutti i risultati */
             <View style={{ flex: 1, padding: 16 }}>
-
-              <View style={styles.searchBar}>
-                <Ionicons
-                  name="search"
-                  size={17}
-                  color="#8e8e93"
-                  style={{ marginRight: 8 }}
-                />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Cerca tra tutte le stazioni italiane ..."
-                  placeholderTextColor="#666"
-                  value={stationSearchQuery}
-                  onChangeText={handleStationSearchChange}
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  autoFocus
-                />
-                {searchingStations && (
-                  <ActivityIndicator size="small" color={theme.accent} />
-                )}
-              </View>
+              {Platform.OS === "web" && (
+                <View style={styles.searchBar}>
+                  <Ionicons
+                    name="search"
+                    size={17}
+                    color="#8e8e93"
+                    style={{ marginRight: 8 }}
+                  />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Cerca tra tutte le stazioni italiane ..."
+                    placeholderTextColor="#666"
+                    value={stationSearchQuery}
+                    onChangeText={handleStationSearchChange}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    autoFocus
+                  />
+                  {searchingStations && (
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  )}
+                </View>
+              )}
 
               <Text style={styles.sectionLabel}>
                 {stationSearchQuery.trim()
@@ -535,6 +553,7 @@ export function CommuterConfigModal({
                 data={filteredStations}
                 keyExtractor={(item) => `${item.code}_${item.name}`}
                 keyboardShouldPersistTaps="handled"
+                contentInsetAdjustmentBehavior="automatic"
                 initialNumToRender={25}
                 maxToRenderPerBatch={30}
                 windowSize={10}
@@ -571,7 +590,7 @@ export function CommuterConfigModal({
                         <Ionicons
                           name={isCurrentSelected ? "checkmark" : "train"}
                           size={15}
-                          color="#ffffff"
+                          color={isCurrentSelected ? "#ffffff" : theme.primary}
                         />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -579,7 +598,7 @@ export function CommuterConfigModal({
                           style={[
                             styles.stationName,
                             isCurrentSelected && {
-                              color: theme.accent,
+                              color: theme.primary,
                               fontWeight: "700",
                             },
                           ]}
@@ -593,7 +612,7 @@ export function CommuterConfigModal({
                       <Ionicons
                         name="chevron-forward"
                         size={16}
-                        color={isCurrentSelected ? theme.accent : "#52525b"}
+                        color={isCurrentSelected ? theme.primary : "#52525b"}
                       />
                     </TouchableOpacity>
                   );
@@ -1232,23 +1251,49 @@ export function CommuterConfigModal({
 
               {/* Barra inferiore con pulsanti "Configura più tardi" e "Salva" */}
               <View style={styles.initBottomButtonsRow}>
-                <NativeActionButton
-                  label="Configura più tardi"
-                  variant="outlined"
-                  accentColor="#a1a1aa"
-                  style={{ flex: 1, height: 44 }}
+                <TouchableOpacity
+                  style={styles.laterBtnPill}
+                  activeOpacity={0.75}
                   onPress={onClose}
-                />
-                <NativeActionButton
-                  label="Salva"
-                  variant="filled"
-                  glow
-                  accentColor="#ef4444"
-                  glowColor="#ef4444"
+                >
+                  <Text style={styles.laterBtnPillText}>
+                    Configura più tardi
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtnPill,
+                    isInitComplete
+                      ? {
+                          backgroundColor: theme.primary,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                          shadowOpacity: 0.6,
+                          shadowRadius: 10,
+                          elevation: 6,
+                        }
+                      : styles.saveBtnPillDisabled,
+                  ]}
                   disabled={!isInitComplete}
-                  style={{ flex: 1, height: 44 }}
+                  activeOpacity={0.85}
                   onPress={handleSaveInit}
-                />
+                >
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={17}
+                    color={isInitComplete ? "#ffffff" : "#52525b"}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.saveBtnPillText,
+                      !isInitComplete && { color: "#52525b" },
+                    ]}
+                  >
+                    Salva
+                  </Text>
+                </TouchableOpacity>
               </View>
             </>
           ) : (
@@ -1256,7 +1301,7 @@ export function CommuterConfigModal({
             <ScrollView
               style={styles.body}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 40 }}
+              contentContainerStyle={{ paddingBottom: 130 }}
               showsVerticalScrollIndicator={false}
             >
               {/* 1. Partenza da casa */}
@@ -1549,6 +1594,8 @@ export function CommuterConfigModal({
                                 ],
                               ]}
                               activeOpacity={0.7}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
                               onPress={() =>
                                 setLocalConfig((prev) => ({
                                   ...prev,
@@ -1581,6 +1628,8 @@ export function CommuterConfigModal({
                         <View style={styles.stepperControls}>
                           <TouchableOpacity
                             style={styles.stepperBtn}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
                             onPress={() =>
                               setLocalConfig((prev) => ({
                                 ...prev,
@@ -1601,6 +1650,8 @@ export function CommuterConfigModal({
                           </Text>
                           <TouchableOpacity
                             style={styles.stepperBtn}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
                             onPress={() =>
                               setLocalConfig((prev) => ({
                                 ...prev,
@@ -1988,8 +2039,15 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.65)",
   },
   modalContainer: {
-    flex: 1,
+    height: "92%",
     backgroundColor: "#16181d",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: "hidden",
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
   },
   sheetHandleContainer: {
     width: "100%",
@@ -2402,7 +2460,7 @@ const styles = StyleSheet.create({
   initScrollContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 28,
+    paddingBottom: 130,
   },
   channelHeroHeader: {
     alignItems: "center",

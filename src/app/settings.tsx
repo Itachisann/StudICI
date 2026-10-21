@@ -45,6 +45,7 @@ import {
   getAttendanceStats,
 } from "../utils/attendance";
 import {
+  copyCloudSyncCodeToClipboard,
   dissociateDevice,
   getCloudSyncId,
   getICloudAutoSyncEnabled,
@@ -54,6 +55,7 @@ import {
   isValidSyncCode,
   linkDeviceWithCode,
   PairedDevicesStatus,
+  resetAppCloudAndStorage,
   restoreFromCloudBackup,
   setCustomCloudSyncId,
   setICloudAutoSyncEnabled,
@@ -109,7 +111,6 @@ export default function ProfiloScreen() {
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
-  const [selectedChannelTab, setSelectedChannelTab] = useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
@@ -132,14 +133,6 @@ export default function ProfiloScreen() {
     number | null
   >(null);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
-  const [cloudNotice, setCloudNotice] = useState<{
-    text: string;
-    ok: boolean;
-  } | null>(null);
-  const showCloudNotice = useCallback((text: string, ok = true) => {
-    setCloudNotice({ text, ok });
-    setTimeout(() => setCloudNotice(null), 4000);
-  }, []);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [restoreCodeInput, setRestoreCodeInput] = useState("");
@@ -405,7 +398,7 @@ export default function ProfiloScreen() {
           text: "Ripristina",
           style: "destructive",
           onPress: async () => {
-            await AsyncStorage.clear();
+            await resetAppCloudAndStorage();
             router.replace("/");
           },
         },
@@ -580,20 +573,14 @@ export default function ProfiloScreen() {
       if (res.success) {
         setLastCloudSyncTime(await getLastCloudSync());
         if (res.updated) await loadProfileData();
-        showCloudNotice(res.message, true);
         Alert.alert("Sincronizzazione", res.message);
       } else {
         if (res.notPaired) {
-          showCloudNotice(
-            "Nessun dispositivo associato: copia il codice e inseriscilo sul secondo dispositivo.",
-            false,
-          );
           Alert.alert(
             "Nessun Dispositivo Associato",
             "Copia il codice e inseriscilo sul secondo dispositivo per avviare la sincronizzazione.",
           );
         } else {
-          showCloudNotice(res.message, false);
           Alert.alert("Sincronizzazione non riuscita", res.message);
         }
       }
@@ -715,120 +702,46 @@ export default function ProfiloScreen() {
     targetDeviceId?: string,
     deviceName?: string,
   ) => {
-    const isGen = pairedDevices?.isGenerator ?? true;
-    const isSelf =
-      !targetDeviceId || targetDeviceId === pairedDevices?.myDevice?.id;
+    const targetName =
+      deviceName ||
+      pairedDevices?.otherDevice?.name ||
+      "il dispositivo associato";
 
-    if (!isGen) {
-      // Dispositivo associato (slave): può SOLO dissociarsi dal master, ripartendo da zero senza dati
-      Alert.alert(
-        "Scollegati dal Master",
-        "Vuoi dissociarti dal dispositivo master? La sincronizzazione verrà interrotta e tutti i dati sincronizzati (corso, presenze, impostazioni di viaggio) verranno azzerati per ripartire da zero.",
-        [
-          { text: "Annulla", style: "cancel" },
-          {
-            text: "Scollegati e Azzera",
-            style: "destructive",
-            onPress: async () => {
-              setIsSyncingCloud(true);
-              try {
-                const res = await dissociateDevice();
-                await loadProfileData();
-                const updatedPairs = await getPairedDevicesInfo();
-                setPairedDevices(updatedPairs);
+    Alert.alert(
+      "Dissocia Dispositivo",
+      `Vuoi dissociare "${targetName}"? La sincronizzazione con questo dispositivo verrà interrotta e, in caso di dissociazione da un master, verranno rimossi gli elementi ereditati ripristinando lo stato precedente.`,
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Dissocia",
+          style: "destructive",
+          onPress: async () => {
+            setIsSyncingCloud(true);
+            try {
+              const res = await dissociateDevice(targetDeviceId);
+              await loadProfileData();
+              const updatedPairs = await getPairedDevicesInfo();
+              setPairedDevices(updatedPairs);
+              if (!updatedPairs.isPaired) {
+                await setICloudAutoSyncEnabled(false);
                 setICloudAutoSync(false);
-                setLastCloudSyncTime(null);
-                const freshCode = await getCloudSyncId();
-                setCloudSyncId(freshCode);
-                Alert.alert("Dispositivo Scollegato", res.message);
-              } catch {
-                Alert.alert("Errore", "Impossibile dissociarsi dal master.");
-              } finally {
-                setIsSyncingCloud(false);
               }
-            },
+              Alert.alert(
+                res.success ? "Dispositivo Dissociato" : "Errore",
+                res.message,
+              );
+            } catch {
+              Alert.alert("Errore", "Impossibile dissociare il dispositivo.");
+            } finally {
+              setIsSyncingCloud(false);
+            }
           },
-        ],
-      );
-      return;
-    }
-
-    // È il GENERATORE (Master)
-    if (isSelf) {
-      // Rompi l'intero gruppo
-      Alert.alert(
-        "Rompi il gruppo di sincronizzazione",
-        "Vuoi sciogliere il gruppo? Tutti i dispositivi collegati verranno scollegati e ripartiranno senza dati. I tuoi dati su questo iPhone rimarranno invariati.",
-        [
-          { text: "Annulla", style: "cancel" },
-          {
-            text: "Rompi Gruppo",
-            style: "destructive",
-            onPress: async () => {
-              setIsSyncingCloud(true);
-              try {
-                const res = await dissociateDevice();
-                const updatedPairs = await getPairedDevicesInfo();
-                setPairedDevices(updatedPairs);
-                setICloudAutoSync(false);
-                await loadProfileData();
-                const freshCode = await getCloudSyncId();
-                setCloudSyncId(freshCode);
-                Alert.alert("Gruppo Sciolto", res.message);
-              } catch {
-                Alert.alert("Errore", "Impossibile sciogliere il gruppo.");
-              } finally {
-                setIsSyncingCloud(false);
-              }
-            },
-          },
-        ],
-      );
-    } else {
-      // Master dissocia un singolo dispositivo slave
-      const targetName = deviceName || "il dispositivo associato";
-      Alert.alert(
-        "Dissocia Dispositivo",
-        `Vuoi dissociare "${targetName}"? Quel dispositivo verrà rimosso dal gruppo e ripartirà senza dati.`,
-        [
-          { text: "Annulla", style: "cancel" },
-          {
-            text: "Dissocia",
-            style: "destructive",
-            onPress: async () => {
-              setIsSyncingCloud(true);
-              try {
-                const res = await dissociateDevice(targetDeviceId);
-                const updatedPairs = await getPairedDevicesInfo();
-                setPairedDevices(updatedPairs);
-                if (!updatedPairs.isPaired) {
-                  await setICloudAutoSyncEnabled(false);
-                  setICloudAutoSync(false);
-                }
-                await loadProfileData();
-                const freshCode = await getCloudSyncId();
-                setCloudSyncId(freshCode);
-                Alert.alert("Dispositivo Dissociato", res.message);
-              } catch {
-                Alert.alert("Errore", "Impossibile dissociare il dispositivo.");
-              } finally {
-                setIsSyncingCloud(false);
-              }
-            },
-          },
-        ],
-      );
-    }
+        },
+      ],
+    );
   };
 
   const handleChangeCustomSyncCode = () => {
-    if (pairedDevices?.isPaired && !pairedDevices?.isGenerator) {
-      Alert.alert(
-        "Modifica non consentita",
-        "Questo dispositivo è associato a un master. Solo il generatore del gruppo può modificare l'identificativo cloud.",
-      );
-      return;
-    }
     if (Platform.OS === "ios") {
       Alert.prompt(
         "Personalizza Codice Cloud",
@@ -859,16 +772,15 @@ export default function ProfiloScreen() {
   const handleCopyCloudCode = async () => {
     try {
       const code = cloudSyncId || (await getCloudSyncId());
-      await Clipboard.setStringAsync(code);
-      setCloudSyncId(code);
-      showCloudNotice(`Codice ${code} copiato negli appunti`, true);
-      Alert.alert(
-        "Codice Copiato",
-        `Codice ${code} copiato negli appunti. Inseriscilo sull'altro dispositivo per collegarlo.`,
-      );
-      if (isCloudConfigured()) {
-        syncWithICloudStorage().catch(() => {});
+      if (code) {
+        await Clipboard.setStringAsync(code);
+        setCloudSyncId(code);
+        if (isCloudConfigured()) {
+          syncWithICloudStorage().catch(() => {});
+        }
+        return;
       }
+      await copyCloudSyncCodeToClipboard();
     } catch {
       Alert.alert("Errore", "Impossibile copiare il codice.");
     }
@@ -877,14 +789,6 @@ export default function ProfiloScreen() {
   const handleRestoreFromCloud = async () => {
     if (!restoreCodeInput.trim()) {
       Alert.alert("Codice mancante", "Incolla il codice nel campo di testo.");
-      return;
-    }
-
-    if (pairedDevices?.isPaired && !pairedDevices?.isGenerator) {
-      Alert.alert(
-        "Operazione non consentita",
-        "Questo dispositivo è associato a un master. Solo il generatore del gruppo può collegare altri dispositivi.",
-      );
       return;
     }
 
@@ -898,14 +802,14 @@ export default function ProfiloScreen() {
           await loadProfileData();
           const updatedPairs = await getPairedDevicesInfo();
           setPairedDevices(updatedPairs);
+        } else {
+          Alert.alert("Associazione non riuscita", res.message);
         }
-        showCloudNotice(res.message, res.success);
-        Alert.alert(
-          res.success ? "Dispositivi Associati" : "Associazione non riuscita",
-          res.message,
-        );
       } catch (err: any) {
-        showCloudNotice(err?.message || "Collegamento non riuscito.", false);
+        Alert.alert(
+          "Errore",
+          err?.message || "Impossibile associare il dispositivo.",
+        );
       } finally {
         setIsSyncingCloud(false);
       }
@@ -1213,7 +1117,9 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={() => setChannelModalVisible(true)}
+            onPress={() => {
+              setChannelModalVisible(true);
+            }}
           >
             <View
               style={[
@@ -1507,14 +1413,14 @@ export default function ProfiloScreen() {
                 {
                   backgroundColor: theme.subtle,
                   borderColor: theme.border,
-                  shadowColor: theme.accent,
+                  shadowColor: theme.primary,
                 },
               ]}
               activeOpacity={0.7}
               onPress={handleSyncCloud}
               disabled={isSyncingCloud}
             >
-              <Text style={[styles.inlineActionBtnText, { color: theme.accent }]}>
+              <Text style={[styles.inlineActionBtnText, { color: "#ffffff" }]}>
                 {isSyncingCloud ? "In corso..." : "Sincronizza"}
               </Text>
             </TouchableOpacity>
@@ -1563,14 +1469,14 @@ export default function ProfiloScreen() {
                 {
                   backgroundColor: theme.subtle,
                   borderColor: theme.border,
-                  shadowColor: theme.accent,
+                  shadowColor: theme.primary,
                 },
               ]}
               activeOpacity={0.7}
               onPress={handleSyncCalendar}
               disabled={isSyncingCalendar}
             >
-              <Text style={[styles.inlineActionBtnText, { color: theme.accent }]}>
+              <Text style={[styles.inlineActionBtnText, { color: "#ffffff" }]}>
                 {isSyncingCalendar ? "In corso..." : "Sincronizza"}
               </Text>
             </TouchableOpacity>
@@ -1826,36 +1732,49 @@ export default function ProfiloScreen() {
       {/* Modal Selezione Corso di Laurea in stile App / iOS */}
       <NativeSheetModal
         visible={courseModalVisible}
-        onClose={() => setCourseModalVisible(false)}
+        onClose={() => {
+          setCourseModalVisible(false);
+          setSearchCourse("");
+        }}
         title="Corso di Laurea"
+        backgroundColor="#16181d"
+        searchBarOptions={{
+          placeholder: "Cerca corso o classe (es. Meccanica, L-9)...",
+          onChangeText: (e) => setSearchCourse(e.nativeEvent.text),
+          onCancelButtonPress: () => setSearchCourse(""),
+          onSearchButtonPress: (e) => setSearchCourse(e.nativeEvent.text),
+          textColor: "#ffffff",
+          tintColor: theme.primary,
+          headerIconColor: "#8e8e93",
+          hintTextColor: "#71717a",
+          hideWhenScrolling: false,
+          autoCapitalize: "none",
+        }}
       >
         <View style={styles.modalContainer}>
-          <Text style={styles.sheetSubtitle}>
-            Facoltà di Ingegneria Civile e Industriale
-          </Text>
-
-          {/* Barra di Ricerca in stile iOS */}
-          <View style={styles.searchBarContainer}>
-            <Ionicons
-              name="search"
-              size={16}
-              color="#8e8e93"
-              style={{ marginRight: 8 }}
-            />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Cerca corso o classe (es. Meccanica, L-9)..."
-              placeholderTextColor="#71717a"
-              value={searchCourse}
-              onChangeText={setSearchCourse}
-              clearButtonMode="while-editing"
-            />
-            {searchCourse.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchCourse("")}>
-                <Ionicons name="close-circle" size={16} color="#8e8e93" />
-              </TouchableOpacity>
-            )}
-          </View>
+          {Platform.OS === "web" && (
+            <View style={styles.searchBarContainer}>
+              <Ionicons
+                name="search"
+                size={16}
+                color="#8e8e93"
+                style={{ marginRight: 8 }}
+              />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Cerca corso o classe (es. Meccanica, L-9)..."
+                placeholderTextColor="#71717a"
+                value={searchCourse}
+                onChangeText={setSearchCourse}
+                clearButtonMode="while-editing"
+              />
+              {searchCourse.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchCourse("")}>
+                  <Ionicons name="close-circle" size={16} color="#8e8e93" />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           {degrees.length === 0 ? (
             <ActivityIndicator
@@ -1867,6 +1786,8 @@ export default function ProfiloScreen() {
             <ScrollView
               style={styles.modalScroll}
               showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentInsetAdjustmentBehavior="automatic"
             >
               {filteredDegrees.map((deg, i) => {
                 const isSelected = degreeUrl === deg.url;
@@ -1913,7 +1834,7 @@ export default function ProfiloScreen() {
                       <Ionicons
                         name="school"
                         size={18}
-                        color={isSelected ? "#ffffff" : theme.accent}
+                        color={isSelected ? "#ffffff" : theme.primary}
                       />
                     </View>
                     <View style={{ flex: 1 }}>
@@ -1960,7 +1881,7 @@ export default function ProfiloScreen() {
                       <Ionicons
                         name="checkmark-circle"
                         size={22}
-                        color={theme.accent}
+                        color={theme.primary}
                       />
                     )}
                   </TouchableOpacity>
@@ -1971,46 +1892,25 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Specifiche (Anno e Canale) con tasto Salva nativo nell'header */}
+      {/* Modal Fallback Cambio Canale / Anno (usato in Expo Go o cliccando 'Personalizza...') */}
       <NativeSheetModal
         visible={channelModalVisible}
         onClose={() => setChannelModalVisible(false)}
         title="Specifiche"
-        rightActions={[
-          {
-            label: "Salva",
-            prominent: true,
-            tintColor: "#ef4444",
-            onPress: async () => {
-              const tabToSave =
-                selectedChannelTab ||
-                availableTabs.find((t) => t.url === defaultTabUrl) ||
-                availableTabs[0];
-              if (tabToSave) {
-                await selectDefaultTab(tabToSave);
-              }
-              setChannelModalVisible(false);
-            },
-          },
-        ]}
+        backgroundColor="#16181d"
       >
-        <View style={{ flex: 1, backgroundColor: "#111111" }}>
-          <DefaultTabPicker
-            tabs={availableTabs}
-            initialTabUrl={defaultTabUrl}
-            degreeName={degreeName}
-            title="Personalizza il tuo corso"
-            subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
-            hideFooterButton={true}
-            onActiveTabChange={(tab) => {
-              setSelectedChannelTab(tab);
-            }}
-            onConfirm={async (tab) => {
-              await selectDefaultTab(tab);
-              setChannelModalVisible(false);
-            }}
-          />
-        </View>
+        <DefaultTabPicker
+          tabs={availableTabs}
+          initialTabUrl={defaultTabUrl}
+          degreeName={degreeName}
+          title="Specifiche"
+          subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
+          confirmButtonText="Salva"
+          hideFooterButton={false}
+          onConfirm={async (tab) => {
+            await selectDefaultTab(tab);
+          }}
+        />
       </NativeSheetModal>
 
       {/* Modal Registro presenze Completo */}
@@ -2018,6 +1918,7 @@ export default function ProfiloScreen() {
         visible={attendanceModalVisible}
         onClose={() => setAttendanceModalVisible(false)}
         title="Registro presenze"
+        backgroundColor="#16181d"
         rightActions={
           attendanceRecords.length > 0
             ? [
@@ -2025,24 +1926,18 @@ export default function ProfiloScreen() {
                   label: "Esporta",
                   sfSymbol: "square.and.arrow.up",
                   onPress: handleExportAttendancePdf,
+                  tintColor: "#ffffff",
                 },
               ]
             : undefined
         }
       >
         <View style={styles.modalContainer}>
-          <Text style={styles.sheetSubtitle}>
-            {attendanceRecords.length}{" "}
-            {attendanceRecords.length === 1
-              ? "lezione frequentata"
-              : "lezioni frequentate"}{" "}
-            · {attendanceStats?.totalHours || 0} ore
-          </Text>
-
           <ScrollView
             style={styles.modalScroll}
             showsVerticalScrollIndicator={false}
-          >
+            keyboardShouldPersistTaps="handled"
+            >
             {groupedAttendance.length === 0 ? (
               <View style={styles.attendanceEmptyBox}>
                 <Ionicons
@@ -2153,37 +2048,9 @@ export default function ProfiloScreen() {
         visible={cloudModalVisible}
         onClose={() => setCloudModalVisible(false)}
         title="Sincronizzazione"
+        backgroundColor="#16181d"
       >
         <View style={styles.modalContainer}>
-          <Text style={styles.sheetSubtitle}>
-            Backup e ripristino di corsi, preferenze, viaggio e presenze
-          </Text>
-          {cloudNotice ? (
-            <View
-              style={[
-                styles.cloudNoticeBanner,
-                {
-                  backgroundColor: cloudNotice.ok
-                    ? "rgba(52, 199, 89, 0.18)"
-                    : "rgba(245, 158, 11, 0.18)",
-                  borderColor: cloudNotice.ok
-                    ? "rgba(52, 199, 89, 0.4)"
-                    : "rgba(245, 158, 11, 0.4)",
-                },
-              ]}
-            >
-              <Text
-                style={{
-                  color: cloudNotice.ok ? "#34c759" : "#f59e0b",
-                  fontSize: 13,
-                  fontWeight: "600",
-                }}
-              >
-                {cloudNotice.text}
-              </Text>
-            </View>
-          ) : null}
-
           <ScrollView
             style={styles.modalScroll}
             showsVerticalScrollIndicator={false}
@@ -2197,8 +2064,8 @@ export default function ProfiloScreen() {
                   style={[
                     styles.cloudHeroIconBadge,
                     {
-                      backgroundColor: theme.accent,
-                      shadowColor: theme.accent,
+                      backgroundColor: theme.primary,
+                      shadowColor: theme.primary,
                       shadowOpacity: 0.4,
                       shadowRadius: 8,
                       shadowOffset: { width: 0, height: 2 },
@@ -2224,34 +2091,27 @@ export default function ProfiloScreen() {
                           borderColor: theme.border,
                         },
                       ]}
-                      activeOpacity={
-                        pairedDevices?.isPaired && !pairedDevices?.isGenerator
-                          ? 1
-                          : 0.7
-                      }
+                      activeOpacity={0.7}
                       onPress={handleChangeCustomSyncCode}
                     >
                       <Ionicons
                         name="finger-print"
                         size={13}
-                        color={theme.accent}
+                        color={theme.primary}
                         style={{ marginRight: 4 }}
                       />
                       <Text
-                        style={[styles.cloudIdText, { color: theme.accent }]}
+                        style={[styles.cloudIdText, { color: theme.primary }]}
                         selectable
                       >
                         {cloudSyncId}
                       </Text>
-                      {(!pairedDevices?.isPaired ||
-                        pairedDevices?.isGenerator) && (
-                        <Ionicons
-                          name="pencil"
-                          size={11}
-                          color={theme.accent}
-                          style={{ marginLeft: 6, opacity: 0.8 }}
-                        />
-                      )}
+                      <Ionicons
+                        name="pencil"
+                        size={11}
+                        color={theme.primary}
+                        style={{ marginLeft: 6, opacity: 0.8 }}
+                      />
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -2307,8 +2167,8 @@ export default function ProfiloScreen() {
                   style={[
                     styles.cloudPrimaryBtnPill,
                     {
-                      backgroundColor: theme.accent,
-                      shadowColor: theme.accent,
+                      backgroundColor: theme.primary,
+                      shadowColor: theme.primary,
                       shadowOpacity: 0.45,
                       shadowRadius: 8,
                       shadowOffset: { width: 0, height: 2 },
@@ -2338,28 +2198,27 @@ export default function ProfiloScreen() {
                   style={[
                     styles.cloudSecondaryBtnPill,
                     {
-                      borderColor: theme.accent,
+                      borderColor: theme.primary,
                       backgroundColor: theme.subtle,
-                      shadowColor: theme.accent,
+                      shadowColor: theme.primary,
                       shadowOpacity: 0.25,
                       shadowRadius: 6,
                       shadowOffset: { width: 0, height: 1 },
                     },
                   ]}
                   activeOpacity={0.7}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   onPress={handleCopyCloudCode}
                 >
                   <Ionicons
                     name="copy-outline"
                     size={16}
-                    color={theme.accent}
+                    color={theme.primary}
                     style={{ marginRight: 6 }}
                   />
                   <Text
                     style={[
                       styles.cloudSecondaryBtnPillText,
-                      { color: theme.accent },
+                      { color: theme.primary },
                     ]}
                     numberOfLines={1}
                   >
@@ -2371,7 +2230,7 @@ export default function ProfiloScreen() {
 
             {/* Footnote sotto il box principale */}
             <Text style={styles.cloudBoxFootnote}>
-              La sincronizzazione automatica mantiene allineati orari, corsi e registro presenze su tutti i dispositivi associati.
+              La sincronizzazione automatica mantiene allineati orari, corsi, registro presenze e impostazioni di viaggio su tutti i dispositivi associati.
             </Text>
 
             {/* Box 2: I MIEI DISPOSITIVI */}
@@ -2392,7 +2251,7 @@ export default function ProfiloScreen() {
                   <Ionicons
                     name="phone-portrait"
                     size={18}
-                    color={theme.accent}
+                    color={theme.primary}
                   />
                 </View>
                 <View style={{ flex: 1, paddingRight: 4 }}>
@@ -2402,30 +2261,20 @@ export default function ProfiloScreen() {
                     </Text>
                     <View
                       style={[
-                        pairedDevices?.isGenerator
-                          ? styles.masterDeviceBadge
-                          : styles.myDeviceBadge,
+                        styles.myDeviceBadge,
                         {
-                          backgroundColor: pairedDevices?.isGenerator
-                            ? "rgba(59, 130, 246, 0.15)"
-                            : theme.subtle,
-                          borderColor: pairedDevices?.isGenerator
-                            ? "rgba(59, 130, 246, 0.3)"
-                            : theme.border,
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
                         },
                       ]}
                     >
                       <Text
                         style={[
                           styles.myDeviceBadgeText,
-                          {
-                            color: pairedDevices?.isGenerator
-                              ? "#3b82f6"
-                              : theme.accent,
-                          },
+                          { color: theme.primary },
                         ]}
                       >
-                        {pairedDevices?.isGenerator ? "Master" : "Questo iPhone"}
+                        Questo
                       </Text>
                     </View>
                   </View>
@@ -2433,117 +2282,65 @@ export default function ProfiloScreen() {
                     {pairedDevices?.myDevice?.platform || "iOS"} • Attivo adesso
                   </Text>
                 </View>
-                {pairedDevices?.isPaired && (
-                  <TouchableOpacity
-                    style={styles.dissociateBtn}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    onPress={() => handleDissociateDevice()}
-                  >
-                    <Ionicons
-                      name="link-outline"
-                      size={13}
-                      color="#ef4444"
-                      style={{ marginRight: 3 }}
-                    />
-                    <Text style={styles.dissociateBtnText}>
-                      {pairedDevices?.isGenerator ? "Rompi gruppo" : "Scollegati"}
-                    </Text>
-                  </TouchableOpacity>
-                )}
               </View>
 
               {/* Lista Dispositivi Associati oppure Empty Notice */}
               {pairedDevices?.isPaired &&
               pairedDevices.otherDevices &&
               pairedDevices.otherDevices.length > 0 ? (
-                pairedDevices.otherDevices.map((dev) => {
-                  const isDevMaster =
-                    !pairedDevices.isGenerator &&
-                    pairedDevices.masterDevice?.id === dev.id;
-
-                  return (
-                    <Fragment key={dev.id}>
-                      <View style={styles.separator} />
-                      <View style={styles.deviceRow}>
-                        <View
-                          style={[
-                            styles.deviceIconCircle,
-                            {
-                              backgroundColor: isDevMaster
-                                ? "rgba(59, 130, 246, 0.15)"
-                                : "rgba(52, 199, 89, 0.15)",
-                              borderColor: isDevMaster
-                                ? "rgba(59, 130, 246, 0.3)"
-                                : "rgba(52, 199, 89, 0.3)",
-                              borderWidth: 1,
-                            },
-                          ]}
-                        >
-                          <Ionicons
-                            name="phone-portrait"
-                            size={18}
-                            color={isDevMaster ? "#3b82f6" : "#34c759"}
-                          />
-                        </View>
-                        <View style={{ flex: 1, paddingRight: 4 }}>
-                          <View
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                            }}
-                          >
-                            <Text
-                              style={styles.deviceNameText}
-                              numberOfLines={1}
-                            >
-                              {dev.name}
-                            </Text>
-                            <View
-                              style={
-                                isDevMaster
-                                  ? styles.masterDeviceBadge
-                                  : styles.pairedDeviceBadge
-                              }
-                            >
-                              <Text
-                                style={
-                                  isDevMaster
-                                    ? styles.masterDeviceBadgeText
-                                    : styles.pairedDeviceBadgeText
-                                }
-                              >
-                                {isDevMaster ? "Master" : "Associato"}
-                              </Text>
-                            </View>
-                          </View>
-                          <Text style={styles.deviceMetaText}>
-                            {dev.platform} • Sinc: {formatSyncDate(dev.lastActive)}
-                          </Text>
-                        </View>
-                        {/* Solo il generatore/master può dissociare altri dispositivi */}
-                        {pairedDevices.isGenerator ? (
-                          <TouchableOpacity
-                            style={styles.dissociateBtn}
-                            activeOpacity={0.7}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            onPress={() =>
-                              handleDissociateDevice(dev.id, dev.name)
-                            }
-                          >
-                            <Ionicons
-                              name="link-outline"
-                              size={13}
-                              color="#ef4444"
-                              style={{ marginRight: 3 }}
-                            />
-                            <Text style={styles.dissociateBtnText}>Dissocia</Text>
-                          </TouchableOpacity>
-                        ) : null}
+                pairedDevices.otherDevices.map((dev) => (
+                  <Fragment key={dev.id}>
+                    <View style={styles.separator} />
+                    <View style={styles.deviceRow}>
+                      <View
+                        style={[
+                          styles.deviceIconCircle,
+                          {
+                            backgroundColor: "rgba(52, 199, 89, 0.15)",
+                            borderColor: "rgba(52, 199, 89, 0.3)",
+                            borderWidth: 1,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="phone-portrait"
+                          size={18}
+                          color="#34c759"
+                        />
                       </View>
-                    </Fragment>
-                  );
-                })
+                      <View style={{ flex: 1, paddingRight: 4 }}>
+                        <View
+                          style={{ flexDirection: "row", alignItems: "center" }}
+                        >
+                          <Text style={styles.deviceNameText} numberOfLines={1}>
+                            {dev.name}
+                          </Text>
+                          <View style={styles.pairedDeviceBadge}>
+                            <Text style={styles.pairedDeviceBadgeText}>
+                              Associato
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.deviceMetaText}>
+                          {dev.platform} • Sinc: {formatSyncDate(dev.lastActive)}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.dissociateBtn}
+                        activeOpacity={0.7}
+                        onPress={() => handleDissociateDevice(dev.id, dev.name)}
+                      >
+                        <Ionicons
+                          name="link-outline"
+                          size={13}
+                          color="#ef4444"
+                          style={{ marginRight: 3 }}
+                        />
+                        <Text style={styles.dissociateBtnText}>Dissocia</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Fragment>
+                ))
               ) : (
                 <>
                   <View style={styles.separator} />
@@ -2573,32 +2370,30 @@ export default function ProfiloScreen() {
               COLLEGA DISPOSITIVO
             </Text>
             <View style={styles.groupedCard}>
-              {pairedDevices?.isPaired && !pairedDevices?.isGenerator ? (
-                <View style={styles.slaveLockedNoticeBox}>
-                  <View style={styles.slaveLockedHeaderRow}>
-                    <View
-                      style={[
-                        styles.cloudRestoreIconBadge,
-                        {
-                          backgroundColor: theme.subtle,
-                          borderColor: theme.border,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="lock-closed-outline"
-                        size={17}
-                        color={theme.accent}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.cloudRestoreTitle}>
-                        Gestione riservata al Master
-                      </Text>
-                      <Text style={styles.cloudRestoreSub}>
-                        Questo dispositivo è associato a un dispositivo master. Solo il generatore del gruppo può collegare altri dispositivi o gestire l&apos;associazione.
-                      </Text>
-                    </View>
+              {pairedDevices?.isSlave ? (
+                <View style={styles.cloudSlaveNoticeBox}>
+                  <View
+                    style={[
+                      styles.cloudRestoreIconBadge,
+                      {
+                        backgroundColor: theme.subtle,
+                        borderColor: theme.border,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="link-outline"
+                      size={17}
+                      color={theme.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cloudSlaveNoticeTitle}>
+                      Dispositivo associato a un gruppo
+                    </Text>
+                    <Text style={styles.cloudSlaveNoticeSub}>
+                      Questo dispositivo è attualmente collegato come slave a un master. Non puoi collegarti ad altri dispositivi finché non ti dissoci dal master attuale nell&apos;elenco sopra.
+                    </Text>
                   </View>
                 </View>
               ) : (
@@ -2616,7 +2411,7 @@ export default function ProfiloScreen() {
                       <Ionicons
                         name="link-outline"
                         size={17}
-                        color={theme.accent}
+                        color={theme.primary}
                       />
                     </View>
                     <View style={{ flex: 1 }}>
@@ -2624,8 +2419,7 @@ export default function ProfiloScreen() {
                         Collega un altro dispositivo
                       </Text>
                       <Text style={styles.cloudRestoreSub}>
-                        Inserisci il codice del secondo dispositivo per
-                        sincronizzare corso, canale e presenze.
+                        Inserisci il codice di un altro dispositivo per sincronizzare corso, canale, presenze e impostazioni di viaggio.
                       </Text>
                     </View>
                   </View>
@@ -2667,8 +2461,8 @@ export default function ProfiloScreen() {
                       style={[
                         styles.cloudRestoreBtn,
                         {
-                          backgroundColor: theme.accent,
-                          shadowColor: theme.accent,
+                          backgroundColor: theme.primary,
+                          shadowColor: theme.primary,
                           shadowOpacity: 0.4,
                           shadowRadius: 8,
                           shadowOffset: { width: 0, height: 2 },
@@ -2678,7 +2472,6 @@ export default function ProfiloScreen() {
                           styles.cloudRestoreBtnDisabled,
                       ]}
                       activeOpacity={0.7}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       onPress={handleRestoreFromCloud}
                       disabled={!restoreCodeInput.trim() || isSyncingCloud}
                     >
@@ -2896,14 +2689,7 @@ const styles = StyleSheet.create({
   /* Modal styling */
   modalContainer: {
     flex: 1,
-    backgroundColor: "#111111",
-  },
-  sheetSubtitle: {
-    fontSize: 13,
-    color: "#8e8e93",
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 12,
+    backgroundColor: "#16181d",
   },
   modalHeader: {
     flexDirection: "row",
@@ -2951,6 +2737,7 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
   },
   modalScroll: {
+    flex: 1,
     padding: 16,
   },
   modalItem: {
@@ -3272,6 +3059,7 @@ const styles = StyleSheet.create({
   inlineActionBtnText: {
     fontSize: 12.5,
     fontWeight: "600",
+    color: "#ffffff",
     letterSpacing: -0.2,
   },
   modalExportHeaderBtn: {
@@ -3423,20 +3211,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
   },
-  masterDeviceBadge: {
-    backgroundColor: "rgba(59, 130, 246, 0.15)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginLeft: 6,
-    borderWidth: 0.5,
-    borderColor: "rgba(59, 130, 246, 0.3)",
-  },
-  masterDeviceBadgeText: {
-    color: "#3b82f6",
-    fontSize: 10,
-    fontWeight: "700",
-  },
   pairedDeviceBadge: {
     backgroundColor: "rgba(52, 199, 89, 0.15)",
     paddingHorizontal: 6,
@@ -3448,21 +3222,6 @@ const styles = StyleSheet.create({
     color: "#34c759",
     fontSize: 10,
     fontWeight: "700",
-  },
-  cloudNoticeBanner: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  slaveLockedNoticeBox: {
-    padding: 16,
-  },
-  slaveLockedHeaderRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
   },
   dissociateBtn: {
     flexDirection: "row",
@@ -3622,6 +3381,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 12,
     borderWidth: 1,
+  },
+  cloudSlaveNoticeBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    padding: 16,
+  },
+  cloudSlaveNoticeTitle: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  cloudSlaveNoticeSub: {
+    color: "#8e8e93",
+    fontSize: 12.5,
+    lineHeight: 17,
   },
   cloudRestoreTitle: {
     color: "#ffffff",

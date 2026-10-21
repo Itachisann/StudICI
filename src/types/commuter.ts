@@ -99,6 +99,11 @@ export interface TripLeg {
     isTrafficPeak?: boolean;
     trafficBaselineMinutes?: number;
     trafficDelayMinutes?: number;
+    badgeText?: string;
+    badgeColor?: string;
+    badgeBg?: string;
+    remainingLectureMinutes?: number;
+    lostLectureMinutes?: number;
   };
 }
 
@@ -129,4 +134,9 @@ export interface CommuterItinerary {
     isWarning?: boolean;
   };
   summaryMessage: string;
+  lectureTimeStatus?: {
+    type: 'late_arrival' | 'early_departure';
+    minutes: number;
+    badgeText: string;
+  };
 }

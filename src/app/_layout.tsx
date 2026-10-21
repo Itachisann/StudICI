@@ -46,11 +46,6 @@ function AppLayoutContent() {
           const res = await linkDeviceWithCode(code);
           if (res.success) {
             await checkOnboarding();
-            Alert.alert(
-              "Dispositivi Associati!",
-              res.message,
-              [{ text: "OK" }]
-            );
           } else {
             Alert.alert("Errore Collegamento", res.message);
           }

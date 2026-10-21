@@ -1,12 +1,8 @@
 import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
 import * as Clipboard from "expo-clipboard";
-import { useEffect, useMemo, useState } from "react";
 import {
-  Animated,
-  Modal,
-  PanResponder,
+  Alert,
   Platform,
   Share,
   StyleSheet,
@@ -15,8 +11,8 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ResolvedClassroom, openInMaps } from "../utils/classroomLocations";
+import { NativeSheetModal } from "./NativeSheetModal";
 
 const SAPIENZA_RED = "#822433";
 
@@ -34,47 +30,6 @@ export function ClassroomModal({
   onClose,
 }: ClassroomModalProps) {
   const { theme } = useTheme();
-  const insets = useSafeAreaInsets();
-  const [copied, setCopied] = useState(false);
-  const [panY] = useState(() => new Animated.Value(0));
-
-  useEffect(() => {
-    if (visible) {
-      panY.setValue(0);
-    }
-  }, [visible, panY]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, gesture) => gesture.dy > 4,
-        onPanResponderMove: (_, gesture) => {
-          if (gesture.dy > 0) {
-            panY.setValue(gesture.dy);
-          }
-        },
-        onPanResponderRelease: (_, gesture) => {
-          if (gesture.dy > 70 || gesture.vy > 0.5) {
-            Animated.timing(panY, {
-              toValue: 500,
-              duration: 180,
-              useNativeDriver: true,
-            }).start(() => {
-              panY.setValue(0);
-              onClose();
-            });
-          } else {
-            Animated.spring(panY, {
-              toValue: 0,
-              bounciness: 4,
-              useNativeDriver: true,
-            }).start();
-          }
-        },
-      }),
-    [onClose, panY],
-  );
 
   if (!classroom) return null;
 
@@ -94,383 +49,238 @@ export function ClassroomModal({
 
   const handleCopy = async () => {
     try {
-      await Clipboard.setStringAsync(classroom.address);
+      const textToCopy = classroom.address || classroom.displayName;
+      await Clipboard.setStringAsync(textToCopy);
+      Alert.alert("Copiato", "Indirizzo copiato negli appunti.");
     } catch {}
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2200);
   };
 
   return (
-    <Modal
+    <NativeSheetModal
       visible={visible}
-      transparent={true}
-      animationType="slide"
-      presentationStyle="overFullScreen"
-      onRequestClose={onClose}
-      onDismiss={onClose}
+      onClose={onClose}
+      title={classroom.displayName}
+      backgroundColor="#16181d"
+      sheetAllowedDetents={[0.62, 1.0]}
+      rightActions={[
+        {
+          label: "Copia",
+          sfSymbol: "doc.on.doc",
+          onPress: handleCopy,
+          tintColor: "#ffffff",
+        },
+        {
+          label: "Condividi",
+          sfSymbol: "square.and.arrow.up",
+          onPress: handleShare,
+          tintColor: "#ffffff",
+        },
+      ]}
     >
-      <View style={styles.overlay}>
-        {/* Backdrop con Blur iOS */}
-        <TouchableOpacity
-          style={StyleSheet.absoluteFill}
-          activeOpacity={1}
-          onPress={onClose}
-        >
-          <BlurView
-            tint="dark"
-            intensity={35}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.backdropOverlay} />
-        </TouchableOpacity>
-
-        {/* Apple Style Floating Sheet */}
-        <Animated.View
-          style={[
-            styles.sheetContainer,
-            {
-              paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : 28,
-              transform: [{ translateY: panY }],
-            },
-          ]}
-        >
-          {/* Grabber Handle iOS con supporto trascinamento verso il basso */}
-          <View style={styles.grabberContainer} {...panResponder.panHandlers}>
-            <View style={styles.grabber} />
-          </View>
-
-          {/* Header con Titolo, Campus Badge e Tasto Chiudi Circolare */}
-          <View style={styles.headerRow} {...panResponder.panHandlers}>
+      <View style={styles.sheetContent}>
+        {/* Header Sottotitolo Edificio e Campus Badge */}
+        <View style={styles.headerInfoRow}>
+          <Text style={styles.buildingSubtitle} numberOfLines={1}>
+            {classroom.buildingName}
+          </Text>
+          {classroom.campus ? (
             <View
               style={[
-                styles.roomIconSquircle,
-                { backgroundColor: theme.primary, shadowColor: theme.primary },
+                styles.campusBadge,
+                {
+                  backgroundColor: theme.cardTint,
+                  borderColor: theme.border,
+                },
               ]}
             >
-              <Ionicons name="location" size={24} color="#ffffff" />
-            </View>
-
-            <View style={styles.headerInfo}>
-              <View style={styles.titleTopRow}>
-                <Text style={styles.roomTitle} numberOfLines={1}>
-                  {classroom.displayName}
-                </Text>
-                {classroom.campus ? (
-                  <View
-                    style={[
-                      styles.campusBadge,
-                      {
-                        backgroundColor: theme.cardTint,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name="business"
-                      size={11}
-                      color={theme.accent}
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text
-                      style={[styles.campusBadgeText, { color: theme.accent }]}
-                      numberOfLines={1}
-                    >
-                      {classroom.campus}
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.buildingSubtitle} numberOfLines={1}>
-                {classroom.buildingName}
+              <Ionicons
+                name="business"
+                size={11}
+                color={theme.accent}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[styles.campusBadgeText, { color: theme.accent }]}
+                numberOfLines={1}
+              >
+                {classroom.campus}
               </Text>
             </View>
+          ) : null}
+        </View>
 
-            {/* Pulsante Chiudi Circolare Stile Apple */}
-            <TouchableOpacity
-              style={styles.closeCircleButton}
-              onPress={onClose}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        {/* ── Mappa Interattiva Incorporata (Live MapKit Preview) ── */}
+        <View style={styles.mapCard}>
+          {!isWeb ? (
+            <MapView
+              style={styles.mapView}
+              initialRegion={{
+                latitude: lat,
+                longitude: lng,
+                latitudeDelta: 0.0035,
+                longitudeDelta: 0.0035,
+              }}
+              scrollEnabled={true}
+              zoomEnabled={true}
+              pitchEnabled={false}
+              rotateEnabled={false}
+              userInterfaceStyle="dark"
             >
-              <Ionicons name="close" size={18} color="#a1a1aa" />
-            </TouchableOpacity>
-          </View>
-
-          {/* ── Mappa Interattiva Incorporata (Live MapKit Preview) ── */}
-          <View style={styles.mapCard}>
-            {!isWeb ? (
-              <MapView
-                style={styles.mapView}
-                initialRegion={{
-                  latitude: lat,
-                  longitude: lng,
-                  latitudeDelta: 0.0035,
-                  longitudeDelta: 0.0035,
-                }}
-                scrollEnabled={true}
-                zoomEnabled={true}
-                pitchEnabled={false}
-                rotateEnabled={false}
-                userInterfaceStyle="dark"
+              <Marker
+                coordinate={{ latitude: lat, longitude: lng }}
+                title={classroom.displayName}
+                description={classroom.buildingName}
               >
-                <Marker
-                  coordinate={{ latitude: lat, longitude: lng }}
-                  title={classroom.displayName}
-                  description={classroom.buildingName}
-                >
-                  <View style={styles.markerContainer}>
-                    <View
-                      style={[
-                        styles.markerPulse,
-                        { backgroundColor: theme.bg },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.markerBadge,
-                        { backgroundColor: theme.primary },
-                      ]}
-                    >
-                      <Ionicons name="school" size={16} color="#ffffff" />
-                    </View>
+                <View style={styles.markerContainer}>
+                  <View
+                    style={[
+                      styles.markerPulse,
+                      { backgroundColor: theme.bg },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.markerBadge,
+                      { backgroundColor: theme.primary },
+                    ]}
+                  >
+                    <Ionicons name="school" size={16} color="#ffffff" />
                   </View>
-                </Marker>
-              </MapView>
-            ) : (
-              <View style={styles.mapFallback}>
-                <Ionicons name="map-outline" size={40} color="#8e8e93" />
-                <Text style={styles.mapFallbackText}>Mappa Sapienza ICI</Text>
-              </View>
-            )}
+                </View>
+              </Marker>
+            </MapView>
+          ) : (
+            <View style={styles.mapFallback}>
+              <Ionicons name="map-outline" size={40} color="#8e8e93" />
+              <Text style={styles.mapFallbackText}>Mappa Sapienza ICI</Text>
+            </View>
+          )}
 
-            {/* Overlay Inferiore della Mappa con Indirizzo e Tasto Naviga Rapido */}
+          {/* Overlay Inferiore della Mappa con Indirizzo e Tasto Naviga Rapido */}
+          <TouchableOpacity
+            style={styles.mapAddressOverlay}
+            activeOpacity={0.85}
+            onPress={() => {
+              openInMaps(classroom, "apple");
+              onClose();
+            }}
+          >
+            <Ionicons
+              name="navigate-circle"
+              size={20}
+              color={theme.accent}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.mapAddressText} numberOfLines={1}>
+              {classroom.address}
+            </Text>
+            <Ionicons
+              name="open-outline"
+              size={14}
+              color="#94a3b8"
+              style={{ marginLeft: 6 }}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Materie Associate in Quest'Aula ── */}
+        {subjects && subjects.length > 0 && (
+          <View style={styles.subjectsSection}>
+            <Text style={styles.subjectsLabel}>
+              {"INSEGNAMENTI IN QUEST'AULA"}
+            </Text>
+            <View style={styles.subjectsRow}>
+              {subjects.slice(0, 4).map((sub, idx) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.subjectPill,
+                    {
+                      backgroundColor: theme.cardTint,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="book-outline"
+                    size={12}
+                    color={theme.accent}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={styles.subjectText} numberOfLines={1}>
+                    {sub}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ── Ottieni Indicazioni (Apple Mappe & Google Maps) ── */}
+        <View style={styles.directionSection}>
+          <Text style={styles.sectionLabel}>OTTIENI INDICAZIONI</Text>
+          <View style={styles.directionRow}>
+            {/* Apple Mappe */}
             <TouchableOpacity
-              style={styles.mapAddressOverlay}
-              activeOpacity={0.85}
+              style={[
+                styles.directionButton,
+                styles.appleButton,
+                {
+                  backgroundColor: theme.primary,
+                  shadowColor: theme.primary,
+                },
+              ]}
+              activeOpacity={0.8}
               onPress={() => {
                 openInMaps(classroom, "apple");
                 onClose();
               }}
             >
-              <Ionicons
-                name="navigate-circle"
-                size={20}
-                color={theme.accent}
-                style={{ marginRight: 8 }}
-              />
-              <Text style={styles.mapAddressText} numberOfLines={1}>
-                {classroom.address}
-              </Text>
-              <Ionicons
-                name="open-outline"
-                size={14}
-                color="#94a3b8"
-                style={{ marginLeft: 6 }}
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* ── Materie Associate in Quest'Aula ── */}
-          {subjects && subjects.length > 0 && (
-            <View style={styles.subjectsSection}>
-              <Text style={styles.subjectsLabel}>
-                {"INSEGNAMENTI IN QUEST'AULA"}
-              </Text>
-              <View style={styles.subjectsRow}>
-                {subjects.slice(0, 4).map((sub, idx) => (
-                  <View
-                    key={idx}
-                    style={[
-                      styles.subjectPill,
-                      {
-                        backgroundColor: theme.cardTint,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name="book-outline"
-                      size={12}
-                      color={theme.accent}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={styles.subjectText} numberOfLines={1}>
-                      {sub}
-                    </Text>
-                  </View>
-                ))}
+              <View style={styles.directionIconCircle}>
+                <Ionicons name="navigate" size={16} color="#ffffff" />
               </View>
-            </View>
-          )}
-
-          {/* ── Ottieni Indicazioni (Apple Mappe & Google Maps) ── */}
-          <View style={styles.directionSection}>
-            <Text style={styles.sectionLabel}>OTTIENI INDICAZIONI</Text>
-            <View style={styles.directionRow}>
-              {/* Apple Mappe */}
-              <TouchableOpacity
-                style={[
-                  styles.directionButton,
-                  styles.appleButton,
-                  {
-                    backgroundColor: theme.primary,
-                    shadowColor: theme.primary,
-                  },
-                ]}
-                activeOpacity={0.8}
-                onPress={() => {
-                  openInMaps(classroom, "apple");
-                  onClose();
-                }}
-              >
-                <View style={styles.directionIconCircle}>
-                  <Ionicons name="navigate" size={16} color="#ffffff" />
-                </View>
-                <View style={styles.directionTextContainer}>
-                  <Text style={styles.directionMainText}>Apple Mappe</Text>
-                  <Text style={styles.directionSubText}>Avvia itinerario</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Google Maps */}
-              <TouchableOpacity
-                style={[styles.directionButton, styles.googleButton]}
-                activeOpacity={0.8}
-                onPress={() => {
-                  openInMaps(classroom, "google");
-                  onClose();
-                }}
-              >
-                <View
-                  style={[styles.directionIconCircle, styles.googleIconCircle]}
-                >
-                  <Ionicons name="map" size={16} color="#38bdf8" />
-                </View>
-                <View style={styles.directionTextContainer}>
-                  <Text style={styles.directionMainText}>Google Maps</Text>
-                  <Text style={styles.directionSubText}>Avvia itinerario</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* ── Barra Azioni Secondarie: Condividi & Copia Indirizzo ── */}
-          <View style={styles.secondaryActionsRow}>
-            {/* Copia Indirizzo */}
-            <TouchableOpacity
-              style={[
-                styles.secondaryButton,
-                copied && styles.secondaryButtonActive,
-              ]}
-              activeOpacity={0.7}
-              onPress={handleCopy}
-            >
-              <Ionicons
-                name={copied ? "checkmark-circle" : "copy-outline"}
-                size={16}
-                color={copied ? "#10b981" : "#f59e0b"}
-                style={{ marginRight: 8 }}
-              />
-              <Text
-                style={[
-                  styles.secondaryButtonText,
-                  copied && { color: "#10b981" },
-                ]}
-              >
-                {copied ? "Indirizzo copiato!" : "Copia indirizzo"}
-              </Text>
+              <View style={styles.directionTextContainer}>
+                <Text style={styles.directionMainText}>Apple Mappe</Text>
+                <Text style={styles.directionSubText}>Avvia itinerario</Text>
+              </View>
             </TouchableOpacity>
 
-            {/* Condividi Aula */}
+            {/* Google Maps */}
             <TouchableOpacity
-              style={styles.secondaryButton}
-              activeOpacity={0.7}
-              onPress={handleShare}
+              style={[styles.directionButton, styles.googleButton]}
+              activeOpacity={0.8}
+              onPress={() => {
+                openInMaps(classroom, "google");
+                onClose();
+              }}
             >
-              <Ionicons
-                name="share-outline"
-                size={16}
-                color="#a855f7"
-                style={{ marginRight: 8 }}
-              />
-              <Text style={styles.secondaryButtonText}>Condividi</Text>
+              <View
+                style={[styles.directionIconCircle, styles.googleIconCircle]}
+              >
+                <Ionicons name="map" size={16} color="#38bdf8" />
+              </View>
+              <View style={styles.directionTextContainer}>
+                <Text style={styles.directionMainText}>Google Maps</Text>
+                <Text style={styles.directionSubText}>Avvia itinerario</Text>
+              </View>
             </TouchableOpacity>
           </View>
-        </Animated.View>
+        </View>
       </View>
-    </Modal>
+    </NativeSheetModal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
+  sheetContent: {
     flex: 1,
-    justifyContent: "flex-end",
+    padding: 16,
   },
-  backdropOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
-  },
-  sheetContainer: {
-    backgroundColor: "#1c1c1e",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255, 255, 255, 0.12)",
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255, 255, 255, 0.08)",
-    shadowColor: "#000000",
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.45,
-    shadowRadius: 20,
-    elevation: 24,
-  },
-  grabberContainer: {
-    alignItems: "center",
-    paddingBottom: 14,
-  },
-  grabber: {
-    width: 38,
-    height: 4.5,
-    borderRadius: 3,
-    backgroundColor: "rgba(255, 255, 255, 0.28)",
-  },
-  headerRow: {
+  headerInfoRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
-  },
-  roomIconSquircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: SAPIENZA_RED,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-    shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  headerInfo: {
-    flex: 1,
-  },
-  titleTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  roomTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#ffffff",
-    letterSpacing: -0.3,
+    justifyContent: "space-between",
+    marginBottom: 14,
   },
   campusBadge: {
     flexDirection: "row",
@@ -492,15 +302,6 @@ const styles = StyleSheet.create({
     color: "#a1a1aa",
     fontWeight: "500",
     marginTop: 2,
-  },
-  closeCircleButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#2c2c2e",
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 10,
   },
   /* Map View Preview */
   mapCard: {
@@ -672,30 +473,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "500",
     marginTop: 1,
-  },
-  /* Azioni Secondarie Row */
-  secondaryActionsRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  secondaryButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#27272a",
-    height: 42,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
-  },
-  secondaryButtonActive: {
-    borderColor: "#10b981",
-    backgroundColor: "rgba(16, 185, 129, 0.15)",
-  },
-  secondaryButtonText: {
-    color: "#e4e4e7",
-    fontSize: 12.5,
-    fontWeight: "600",
   },
 });

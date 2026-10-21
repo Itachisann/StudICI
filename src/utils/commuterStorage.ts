@@ -2,7 +2,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommuterConfig } from '../types/commuter';
 import { normalizeStationInfo } from './trenitaliaApi';
 import { getStationNavigationQuery } from './drivingRouter';
-import { scheduleAutoPush } from './cloudSync';
 
 const COMMUTER_CONFIG_KEY = 'studici_commuter_config_v1';
 
@@ -70,7 +69,18 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
   }
 }
 
-export async function saveCommuterConfig(config: Partial<CommuterConfig>): Promise<CommuterConfig> {
+export type CommuterChangeListener = (config: CommuterConfig) => void;
+let commuterChangeListener: CommuterChangeListener | null = null;
+
+export function setCommuterChangeListener(
+  listener: CommuterChangeListener | null,
+): void {
+  commuterChangeListener = listener;
+}
+
+export async function saveCommuterConfig(
+  config: Partial<CommuterConfig>,
+): Promise<CommuterConfig> {
   try {
     const current = await getCommuterConfig();
     const depNormalized = normalizeStationInfo({
@@ -87,7 +97,9 @@ export async function saveCommuterConfig(config: Partial<CommuterConfig>): Promi
       carLeg: {
         ...current.carLeg,
         ...(config.carLeg || {}),
-        stationAddress: getStationNavigationQuery(depNormalized.shortName || depNormalized.name),
+        stationAddress: getStationNavigationQuery(
+          depNormalized.shortName || depNormalized.name,
+        ),
       },
       departureStation: depNormalized,
       arrivalStation: arrNormalized,
@@ -97,9 +109,14 @@ export async function saveCommuterConfig(config: Partial<CommuterConfig>): Promi
       },
     };
     await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
-    scheduleAutoPush();
+    if (commuterChangeListener) {
+      try {
+        commuterChangeListener(updated);
+      } catch {}
+    }
     return updated;
   } catch {
     return DEFAULT_COMMUTER_CONFIG;
   }
 }
+

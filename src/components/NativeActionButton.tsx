@@ -9,12 +9,23 @@ import {
   View,
 } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { Button as ExpoUIButton, type UniversalStyle } from '@expo/ui';
-import { Host } from '@expo/ui/swift-ui';
+import { BlurView } from 'expo-blur';
 
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 export const isNativeButtonAvailable = Platform.OS === 'ios' && !isExpoGo;
+
+// Caricamento condizionale sicuro di @callstack/liquid-glass:
+// Attivo SOLO su build nativa iOS (IPA) per evitare qualsiasi conflitto o crash in Expo Go
+let CallstackLiquidGlass: any = null;
+if (isNativeButtonAvailable) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    CallstackLiquidGlass = require('@callstack/liquid-glass');
+  } catch {
+    CallstackLiquidGlass = null;
+  }
+}
 
 export interface NativeActionButtonProps {
   label: string;
@@ -29,6 +40,11 @@ export interface NativeActionButtonProps {
   accentColor?: string;
 }
 
+/**
+ * Pulsante nativo in stile back button di native-stack:
+ * - Su iOS 26 (build IPA): sfrutta @callstack/liquid-glass (LiquidGlassView)
+ * - Su iOS < 26 o Expo Go: fallback fluido con BlurView e capsula glass iOS identica a native-stack
+ */
 export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   label,
   onPress,
@@ -39,117 +55,154 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   icon,
   glow = false,
   glowColor,
-  accentColor = '#007aff',
+  accentColor = '#822433',
 }) => {
   const isFilled = variant === 'filled';
   const isOutlined = variant === 'outlined';
 
-  // Se su iOS Nativo (IPA), usa il Button nativo SwiftUI racchiuso nell'Host di @expo/ui
-  if (isNativeButtonAvailable) {
-    const flat = StyleSheet.flatten(style) || {};
-    const uStyle: UniversalStyle = {
-      borderRadius: typeof flat.borderRadius === 'number' ? flat.borderRadius : 9999,
-      width: typeof flat.width === 'number' ? flat.width : undefined,
-      height: typeof flat.height === 'number' ? flat.height : undefined,
-      opacity: disabled ? 0.45 : flat.opacity,
-    };
+  const isLiquidGlassSupported =
+    isNativeButtonAvailable &&
+    CallstackLiquidGlass &&
+    Boolean(CallstackLiquidGlass.isLiquidGlassSupported) &&
+    Boolean(CallstackLiquidGlass.LiquidGlassView);
 
+  // 1. Modalità iOS 26 nativa tramite Callstack (Liquid Glass) per build IPA
+  if (isLiquidGlassSupported) {
+    const LiquidGlassView = CallstackLiquidGlass.LiquidGlassView;
     return (
-      <View
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={onPress}
+        disabled={disabled}
         style={[
+          styles.containerWrapper,
           glow && {
             shadowColor: glowColor || accentColor,
             shadowOffset: { width: 0, height: 2 },
             shadowOpacity: disabled ? 0 : 0.45,
             shadowRadius: 8,
+            elevation: 4,
           },
+          disabled && { opacity: 0.45 },
           style,
         ]}
       >
-        <Host
-          matchContents
-          seedColor={accentColor}
-          style={{ width: '100%', height: '100%' }}
+        <LiquidGlassView
+          effect="clear"
+          interactive
+          style={[
+            styles.basePill,
+            styles.glassBorder,
+            isFilled && {
+              backgroundColor: accentColor,
+            },
+            isOutlined && {
+              backgroundColor: 'transparent',
+              borderColor: accentColor,
+            },
+          ]}
         >
-          <ExpoUIButton
-            label={label}
-            onPress={onPress}
-            variant={variant}
-            disabled={disabled}
-            style={uStyle}
-          />
-        </Host>
-      </View>
+          {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
+          <Text
+            style={[
+              styles.labelText,
+              isFilled ? styles.filledText : { color: accentColor },
+              textStyle,
+            ]}
+            numberOfLines={1}
+          >
+            {label}
+          </Text>
+        </LiquidGlassView>
+      </TouchableOpacity>
     );
   }
 
-  // Fallback per Expo Go / Android / Web: Pulsante iOS moderno arrotondato con glow
+  // 2. Modalità Nativa iOS < 26 o Fallback Expo Go: Capsula con BlurView in stile back button di native-stack
   return (
     <TouchableOpacity
-      activeOpacity={0.75}
+      activeOpacity={0.78}
       onPress={onPress}
       disabled={disabled}
       style={[
-        styles.baseButton,
-        isFilled && {
-          backgroundColor: accentColor,
+        styles.containerWrapper,
+        glow && {
+          shadowColor: glowColor || accentColor,
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: disabled ? 0 : 0.4,
+          shadowRadius: 8,
+          elevation: 4,
         },
-        isOutlined && {
-          backgroundColor: 'transparent',
-          borderWidth: 1,
-          borderColor: accentColor,
-        },
-        variant === 'text' && {
-          backgroundColor: 'transparent',
-        },
-        glow &&
-          isFilled && {
-            shadowColor: glowColor || accentColor,
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: disabled ? 0 : 0.4,
-            shadowRadius: 8,
-            elevation: 4,
-          },
-        disabled && { opacity: 0.4 },
+        disabled && { opacity: 0.45 },
         style,
       ]}
     >
-      {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
-      <Text
+      <View
         style={[
-          styles.labelText,
-          isFilled ? styles.filledText : { color: accentColor },
-          textStyle,
+          styles.basePill,
+          styles.glassBorder,
+          isFilled && {
+            backgroundColor: accentColor,
+          },
+          isOutlined && {
+            backgroundColor: 'transparent',
+            borderColor: accentColor,
+          },
+          variant === 'text' && {
+            backgroundColor: 'transparent',
+            borderWidth: 0,
+          },
         ]}
-        numberOfLines={1}
       >
-        {label}
-      </Text>
+        {Platform.OS === 'ios' && !isFilled && (
+          <BlurView
+            intensity={25}
+            tint="dark"
+            style={StyleSheet.absoluteFill}
+          />
+        )}
+        {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
+        <Text
+          style={[
+            styles.labelText,
+            isFilled ? styles.filledText : { color: accentColor },
+            textStyle,
+          ]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  baseButton: {
+  containerWrapper: {
+    minHeight: 44,
+    borderRadius: 9999,
+    overflow: 'hidden',
+  },
+  basePill: {
     minHeight: 44,
     borderRadius: 9999,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 10,
+    overflow: 'hidden',
+  },
+  glassBorder: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
   },
   labelText: {
-    fontSize: 14.5,
+    fontSize: 15,
     fontWeight: '600',
     letterSpacing: -0.2,
   },
   filledText: {
     color: '#ffffff',
-  },
-  nativeLabel: {
-    fontSize: 14.5,
-    fontWeight: '600',
-    marginLeft: 6,
   },
 });

@@ -11,7 +11,6 @@ import {
   Animated,
   Linking,
   Modal,
-  PanResponder,
   Platform,
   RefreshControl,
   ScrollView,
@@ -26,6 +25,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { ClassroomModal } from "../components/ClassroomModal";
+import { NativeSheetModal } from "../components/NativeSheetModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
 import { hasDateInfo } from "../utils/aiParser";
@@ -75,6 +75,16 @@ const ACCENT_COLORS = [
   "#ec4899",
   "#6366f1",
 ];
+
+export function getSubjectColor(subject?: string): string {
+  if (!subject) return ACCENT_COLORS[0];
+  const clean = subject.trim().toUpperCase();
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) {
+    hash = clean.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return ACCENT_COLORS[Math.abs(hash) % ACCENT_COLORS.length];
+}
 
 function formatReleaseDate(isoString?: string): string {
   if (!isoString) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
@@ -146,44 +156,6 @@ export default function ScheduleScreen() {
     Record<string, ScheduleData>
   >({});
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
-  const [alertsPanY] = useState(() => new Animated.Value(0));
-
-  useEffect(() => {
-    if (alertsModalVisible) {
-      alertsPanY.setValue(0);
-    }
-  }, [alertsModalVisible, alertsPanY]);
-
-  const [alertsPanResponder] = useState(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gesture) => gesture.dy > 4,
-      onPanResponderMove: (_, gesture) => {
-        if (gesture.dy > 0) {
-          alertsPanY.setValue(gesture.dy);
-        }
-      },
-      onPanResponderRelease: (_, gesture) => {
-        if (gesture.dy > 60 || gesture.vy > 0.5) {
-          Animated.timing(alertsPanY, {
-            toValue: 500,
-            duration: 180,
-            useNativeDriver: true,
-          }).start(() => {
-            alertsPanY.setValue(0);
-            setAlertsModalVisible(false);
-          });
-        } else {
-          Animated.spring(alertsPanY, {
-            toValue: 0,
-            bounciness: 4,
-            useNativeDriver: true,
-          }).start();
-        }
-      },
-    }),
-  );
-
   const [selectedRoomModal, setSelectedRoomModal] =
     useState<ResolvedClassroom | null>(null);
   const [selectedRoomSubjects, setSelectedRoomSubjects] = useState<string[]>(
@@ -678,7 +650,7 @@ export default function ScheduleScreen() {
             )}
 
             {todayClasses.map((cls: ClassEvent, i: number) => {
-              const accentColor = ACCENT_COLORS[i % ACCENT_COLORS.length];
+              const accentColor = getSubjectColor(cls.subject);
               const isLive = isCurrentClass(cls);
               const isAttended = checkIsAttended(cls);
 
@@ -838,69 +810,49 @@ export default function ScheduleScreen() {
         )}
       </ScrollView>
 
-      {/* ── Modal Avvisi (Alerts) Fluttuante iOS ── */}
-      <Modal
+      {/* ── Modal Avvisi (Alerts) Nativo iOS ── */}
+      <NativeSheetModal
         visible={alertsModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setAlertsModalVisible(false)}
-        onDismiss={() => setAlertsModalVisible(false)}
+        onClose={() => setAlertsModalVisible(false)}
+        title="Comunicazioni"
+        backgroundColor="#16181d"
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setAlertsModalVisible(false)}
+        <ScrollView
+          style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}
+          contentContainerStyle={{ paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          <Animated.View
-            style={[
-              styles.modalContent,
-              { transform: [{ translateY: alertsPanY }] },
-            ]}
-            onStartShouldSetResponder={() => true}
-          >
-            <View
-              style={styles.modalGrabber}
-              {...alertsPanResponder.panHandlers}
-            />
-            <View
-              style={styles.modalHeader}
-              {...alertsPanResponder.panHandlers}
-            >
-              <View style={styles.modalHeaderIconBox}>
-                <Ionicons name="megaphone" size={18} color="#ff9f0a" />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.modalTitle}>Comunicazioni</Text>
-                <Text style={styles.modalSubtitle}>
-                  {schedule?.alerts?.length === 1
-                    ? "1 comunicazione ufficiale"
-                    : `${schedule?.alerts?.length || 0} comunicazioni ufficiali`}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.modalCloseIconButton}
-                activeOpacity={0.7}
-                onPress={() => setAlertsModalVisible(false)}
-              >
-                <Ionicons name="close" size={18} color="#a1a1aa" />
-              </TouchableOpacity>
-            </View>
-            <ScrollView
-              style={styles.modalScroll}
-              showsVerticalScrollIndicator={false}
-            >
-              {schedule?.alerts?.map((alert, idx) => (
-                <View key={idx} style={styles.modalAlertItem}>
-                  <View style={styles.alertItemAccent} />
-                  <View style={styles.alertItemContent}>
-                    <Text style={styles.modalAlertText}>{alert}</Text>
-                  </View>
+          {schedule?.alerts && schedule.alerts.length > 0 ? (
+            schedule.alerts.map((alert, idx) => (
+              <View key={idx} style={styles.modalAlertItem}>
+                <View style={styles.alertItemAccent} />
+                <View style={styles.alertItemContent}>
+                  <Text style={styles.modalAlertText}>{alert}</Text>
                 </View>
-              ))}
-            </ScrollView>
-          </Animated.View>
-        </TouchableOpacity>
-      </Modal>
+              </View>
+            ))
+          ) : (
+            <View
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                paddingVertical: 40,
+              }}
+            >
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={40}
+                color="#8e8e93"
+                style={{ marginBottom: 12 }}
+              />
+              <Text style={{ color: "#8e8e93", fontSize: 15 }}>
+                Nessuna comunicazione presente
+              </Text>
+            </View>
+          )}
+        </ScrollView>
+      </NativeSheetModal>
 
       {/* Modal Mappe per l'aula */}
       <ClassroomModal
