@@ -14,7 +14,25 @@ import {
 } from '@react-navigation/native';
 import { useTheme as useAppTheme } from '@/context/ThemeContext';
 
-const BaseBottomTabNavigator = createNativeBottomTabNavigator().Navigator;
+const { Navigator: BaseBottomTabNavigator, Screen: NativeTabScreen } =
+  createNativeBottomTabNavigator();
+
+function mapToNativeScreens(children: React.ReactNode): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (!React.isValidElement(child)) {
+      return child;
+    }
+    const props = child.props as any;
+    if (props && props.children) {
+      return (
+        <NativeTabScreen {...props} key={child.key || props.name}>
+          {mapToNativeScreens(props.children)}
+        </NativeTabScreen>
+      );
+    }
+    return <NativeTabScreen {...props} key={child.key || props.name} />;
+  });
+}
 
 const BottomTabNavigator: typeof BaseBottomTabNavigator = (props) => {
   const { theme } = useAppTheme();
@@ -27,10 +45,14 @@ const BottomTabNavigator: typeof BaseBottomTabNavigator = (props) => {
     },
   }), [theme]);
 
+  const children = useMemo(() => mapToNativeScreens(props.children), [props.children]);
+
   return (
     <NavigationIndependentTree>
       <NavigationContainer theme={navTheme}>
-        <BaseBottomTabNavigator {...props} />
+        <BaseBottomTabNavigator {...props}>
+          {children}
+        </BaseBottomTabNavigator>
       </NavigationContainer>
     </NavigationIndependentTree>
   );
