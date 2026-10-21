@@ -1,7 +1,6 @@
 import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -137,7 +136,7 @@ function WelcomeScreen({ navigation }: any) {
         <View style={styles.cleanWelcomeFooter}>
           <NativeActionButton
             label="Inizia"
-            onPress={() => navigation.navigate("CourseSelect")}
+            onPress={() => navigation.navigate("SetupMode")}
             accentColor={theme.primary}
             glow={true}
             icon={
@@ -156,18 +155,218 @@ function WelcomeScreen({ navigation }: any) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SCHERMATA 2: SCELTA CORSO (con headerSearchBarOptions nativo di native-stack)
+// SCHERMATA 2: SCELTA MODALITÀ DI AVVIO
 // ═══════════════════════════════════════════════════════════════════════════
-function CourseSelectScreen({ navigation }: any) {
+function SetupModeScreen({ navigation }: any) {
+  const { theme } = useOnboarding();
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.setupModeContainer}>
+        <View style={styles.setupModeHeader}>
+          <Text style={styles.setupModeTitle}>Come vuoi iniziare?</Text>
+          <Text style={styles.setupModeSubtitle}>
+            Puoi cambiare idea in qualsiasi momento
+          </Text>
+        </View>
+
+        <View style={styles.setupModeCards}>
+          {/* Card 1 – Configurazione manuale */}
+          <TouchableOpacity
+            style={[styles.setupModeCard, { borderColor: "#27272a" }]}
+            activeOpacity={0.75}
+            onPress={() => navigation.navigate("CourseSelect")}
+          >
+            <View style={styles.setupModeCardLeft}>
+              <View
+                style={[
+                  styles.setupModeIconCircle,
+                  {
+                    backgroundColor: theme.primary + "28",
+                    borderColor: theme.primary + "50",
+                    shadowColor: theme.primary,
+                  },
+                ]}
+              >
+                <Ionicons name="school-outline" size={26} color={theme.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.setupModeCardTitle}>Configura manualmente</Text>
+                <Text style={styles.setupModeCardSubtitle}>
+                  Scegli il tuo corso dalla lista della Sapienza
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#52525b" />
+          </TouchableOpacity>
+
+          {/* Card 2 – Sincronizzazione */}
+          <TouchableOpacity
+            style={[styles.setupModeCard, { borderColor: "#27272a" }]}
+            activeOpacity={0.75}
+            onPress={() => navigation.navigate("Sync")}
+          >
+            <View style={styles.setupModeCardLeft}>
+              <View
+                style={[
+                  styles.setupModeIconCircle,
+                  {
+                    backgroundColor: "#3b82f628",
+                    borderColor: "#3b82f650",
+                    shadowColor: "#3b82f6",
+                  },
+                ]}
+              >
+                <Ionicons name="cloud-download-outline" size={26} color="#3b82f6" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.setupModeCardTitle}>Sincronizza</Text>
+                <Text style={styles.setupModeCardSubtitle}>
+                  Importa la configurazione da un altro dispositivo
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#52525b" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCHERMATA 3: SINCRONIZZAZIONE VIA CLOUD
+// ═══════════════════════════════════════════════════════════════════════════
+function SyncScreen() {
   const {
     theme,
-    setupMode,
-    setSetupMode,
     syncCodeInput,
     setSyncCodeInput,
     handlePasteSyncCode,
     handleLinkFromCloud,
     isLinkingSync,
+  } = useOnboarding();
+
+  return (
+    <View style={styles.screenRoot}>
+      <ScrollView
+        style={styles.syncContainer}
+        contentContainerStyle={{ paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View
+          style={[
+            styles.syncCard,
+            {
+              backgroundColor: "#18181b",
+              borderColor: theme.border,
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.syncIconCircle,
+              {
+                backgroundColor: theme.subtle,
+                borderColor: theme.border,
+                borderWidth: 1,
+              },
+            ]}
+          >
+            <Ionicons name="link" size={28} color={theme.primary} />
+          </View>
+          <Text style={styles.syncCardTitle}>Sincronizza via Cloud</Text>
+          <Text style={styles.syncCardDesc}>
+            Se hai già configurato StudICI su un altro dispositivo, inserisci
+            il codice univoco per sincronizzare corso, canali e presenze. Il
+            codice è visibile nella sezione &quot;Sincronizzazione&quot;
+            dell&apos;altro dispositivo.
+          </Text>
+
+          <View
+            style={[
+              styles.syncInputWrapper,
+              {
+                backgroundColor: "#121214",
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <TextInput
+              style={styles.syncInput}
+              placeholder="es. ST1234A o NOME"
+              placeholderTextColor="#71717a"
+              value={syncCodeInput}
+              onChangeText={setSyncCodeInput}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={[
+                styles.syncPasteBtn,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: 0.5,
+                },
+              ]}
+              activeOpacity={0.7}
+              onPress={handlePasteSyncCode}
+            >
+              <Ionicons name="clipboard-outline" size={16} color={theme.accent} />
+              <Text style={[styles.syncPasteBtnText, { color: theme.accent }]}>
+                Incolla
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.syncSubmitBtn,
+              {
+                backgroundColor: theme.primary,
+                shadowColor: theme.primary,
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.35,
+                shadowRadius: 6,
+                elevation: 4,
+              },
+              (!syncCodeInput.trim() || isLinkingSync) && { opacity: 0.5 },
+            ]}
+            activeOpacity={0.8}
+            onPress={handleLinkFromCloud}
+            disabled={!syncCodeInput.trim() || isLinkingSync}
+          >
+            {isLinkingSync ? (
+              <ActivityIndicator
+                size="small"
+                color="#ffffff"
+                style={{ marginRight: 8 }}
+              />
+            ) : (
+              <Ionicons
+                name="link-outline"
+                size={18}
+                color="#ffffff"
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <Text style={styles.syncSubmitBtnText}>
+              {isLinkingSync ? "Collegamento in corso..." : "Collega"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCHERMATA 4: SCELTA CORSO (con headerSearchBarOptions nativo di native-stack)
+// ═══════════════════════════════════════════════════════════════════════════
+function CourseSelectScreen({ navigation }: any) {
+  const {
+    theme,
     loading,
     search,
     setSearch,
@@ -179,379 +378,176 @@ function CourseSelectScreen({ navigation }: any) {
   // Search bar autentica nativa di @react-navigation/native-stack (Apple UISearchBar)
   useEffect(() => {
     navigation.setOptions({
-      headerSearchBarOptions:
-        setupMode === "normal"
-          ? {
-              placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-              tintColor: theme.primary,
-              textColor: "#ffffff",
-              headerIconColor: "#8e8e93",
-              hintTextColor: "#71717a",
-              hideWhenScrolling: false,
-              autoCapitalize: "none",
-              onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-              onCancelButtonPress: () => setSearch(""),
-            }
-          : undefined,
+      headerSearchBarOptions: isNativeIos ? {
+        placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+        tintColor: theme.primary,
+        textColor: "#ffffff",
+        headerIconColor: "#8e8e93",
+        hintTextColor: "#71717a",
+        hideWhenScrolling: false,
+        autoCapitalize: "none",
+        onChangeText: (e: any) => setSearch(e.nativeEvent.text),
+        onCancelButtonPress: () => setSearch(""),
+      } : undefined,
     });
-  }, [navigation, setupMode, theme.primary, setSearch]);
+  }, [navigation, theme.primary, setSearch]);
 
   return (
     <View style={styles.screenRoot}>
-      {/* Selettore Modalità di Avvio */}
-      {isNativeIos ? (
-        <View style={styles.nativeSegmentedWrapper}>
-          <SegmentedControl
-            values={["Configurazione", "Sincronizzazione"]}
-            selectedIndex={setupMode === "normal" ? 0 : 1}
-            onChange={(event) => {
-              const idx = event.nativeEvent.selectedSegmentIndex;
-              setSetupMode(idx === 0 ? "normal" : "sync");
-            }}
-            appearance="dark"
-            tintColor={theme.primary}
-            fontStyle={{ fontSize: 13, fontWeight: "600", color: "#a1a1aa" }}
-            activeFontStyle={{
-              fontSize: 13,
-              fontWeight: "700",
-              color: "#ffffff",
-            }}
-            style={styles.nativeSegmentedControl}
+      {!isNativeIos && (
+        <View style={styles.expoSearchWrapper}>
+          <Ionicons name="search" size={16} color="#71717a" style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.expoSearchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Cerca corso o classe..."
+            placeholderTextColor="#71717a"
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
           />
         </View>
-      ) : (
-        <View style={styles.modeSelectorContainer}>
-          <TouchableOpacity
-            style={[
-              styles.modeTab,
-              setupMode === "normal" && [
-                styles.modeTabActive,
-                {
-                  backgroundColor: theme.bg,
-                  borderColor: theme.primary,
-                  shadowColor: theme.primary,
-                },
-              ],
-            ]}
-            onPress={() => setSetupMode("normal")}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="school-outline"
-              size={16}
-              color={setupMode === "normal" ? "#ffffff" : "#a1a1aa"}
-              style={{ marginRight: 6 }}
-            />
-            <Text
-              style={[
-                styles.modeTabText,
-                setupMode === "normal" && styles.modeTabTextActive,
-              ]}
-            >
-              Configurazione
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.modeTab,
-              setupMode === "sync" && [
-                styles.modeTabActive,
-                {
-                  backgroundColor: theme.bg,
-                  borderColor: theme.primary,
-                  shadowColor: theme.primary,
-                },
-              ],
-            ]}
-            onPress={() => setSetupMode("sync")}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="cloud-download-outline"
-              size={16}
-              color={setupMode === "sync" ? "#ffffff" : "#a1a1aa"}
-              style={{ marginRight: 6 }}
-            />
-            <Text
-              style={[
-                styles.modeTabText,
-                setupMode === "sync" && styles.modeTabTextActive,
-              ]}
-            >
-              Sincronizzazione
-            </Text>
-          </TouchableOpacity>
-        </View>
       )}
-
-      {setupMode === "sync" ? (
+      {loading ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+          <Text style={styles.loadingText}>
+            Caricamento elenco corsi Sapienza...
+          </Text>
+        </View>
+      ) : (
         <ScrollView
-          style={styles.syncContainer}
+          style={styles.scrollList}
           contentContainerStyle={{ paddingBottom: 40 }}
+          contentInsetAdjustmentBehavior="automatic"
           keyboardShouldPersistTaps="handled"
         >
-          <View
-            style={[
-              styles.syncCard,
-              {
-                backgroundColor: "#18181b",
-                borderColor: theme.border,
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.syncIconCircle,
-                {
-                  backgroundColor: theme.subtle,
-                  borderColor: theme.border,
-                  borderWidth: 1,
-                },
-              ]}
-            >
-              <Ionicons name="link" size={28} color={theme.primary} />
-            </View>
-            <Text style={styles.syncCardTitle}>Sincronizza via Cloud</Text>
-            <Text style={styles.syncCardDesc}>
-              Se hai già configurato StudICI su un altro dispositivo, inserisci
-              il codice univoco per sincronizzare corso, canali e presenze. Il
-              codice è visibile nella sezione &quot;Sincronizzazione&quot;
-              dell&apos;altro dispositivo.
-            </Text>
-
-            <View
-              style={[
-                styles.syncInputWrapper,
-                {
-                  backgroundColor: "#121214",
-                  borderColor: theme.border,
-                },
-              ]}
-            >
-              <TextInput
-                style={styles.syncInput}
-                placeholder="es. ST1234A o NOME"
-                placeholderTextColor="#71717a"
-                value={syncCodeInput}
-                onChangeText={setSyncCodeInput}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                style={[
-                  styles.syncPasteBtn,
-                  {
-                    backgroundColor: theme.subtle,
-                    borderColor: theme.border,
-                    borderWidth: 0.5,
-                  },
-                ]}
-                activeOpacity={0.7}
-                onPress={handlePasteSyncCode}
-              >
-                <Ionicons name="clipboard-outline" size={16} color={theme.accent} />
-                <Text style={[styles.syncPasteBtnText, { color: theme.accent }]}>
-                  Incolla
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.syncSubmitBtn,
-                {
-                  backgroundColor: theme.primary,
-                  shadowColor: theme.primary,
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.35,
-                  shadowRadius: 6,
-                  elevation: 4,
-                },
-                (!syncCodeInput.trim() || isLinkingSync) && { opacity: 0.5 },
-              ]}
-              activeOpacity={0.8}
-              onPress={handleLinkFromCloud}
-              disabled={!syncCodeInput.trim() || isLinkingSync}
-            >
-              {isLinkingSync ? (
-                <ActivityIndicator
-                  size="small"
-                  color="#ffffff"
-                  style={{ marginRight: 8 }}
-                />
-              ) : (
-                <Ionicons
-                  name="link-outline"
-                  size={18}
-                  color="#ffffff"
-                  style={{ marginRight: 8 }}
-                />
-              )}
-              <Text style={styles.syncSubmitBtnText}>
-                {isLinkingSync ? "Collegamento in corso..." : "Collega"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      ) : (
-        <>
-          {!isNativeIos && setupMode === "normal" && (
-            <View style={styles.expoSearchWrapper}>
-              <Ionicons name="search" size={16} color="#71717a" style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.expoSearchInput}
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Cerca corso o classe..."
-                placeholderTextColor="#71717a"
-                autoCapitalize="none"
-                autoCorrect={false}
-                clearButtonMode="while-editing"
-              />
-            </View>
-          )}
-          {loading ? (
-            <View style={styles.centerContainer}>
-              <ActivityIndicator size="large" color={theme.primary} />
-              <Text style={styles.loadingText}>
-                Caricamento elenco corsi Sapienza...
+          {filteredDegrees.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="search-outline" size={40} color="#3a3a3c" />
+              <Text style={styles.emptyText}>
+                Nessun corso trovato per &quot;{search}&quot;
               </Text>
             </View>
           ) : (
-            <ScrollView
-              style={styles.scrollList}
-              contentContainerStyle={{ paddingBottom: 40 }}
-              contentInsetAdjustmentBehavior="automatic"
-              keyboardShouldPersistTaps="handled"
-            >
-              {filteredDegrees.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="search-outline" size={40} color="#3a3a3c" />
-                  <Text style={styles.emptyText}>
-                    Nessun corso trovato per &quot;{search}&quot;
-                  </Text>
-                </View>
-              ) : (
-                filteredDegrees.map((deg: Degree, i: number) => {
-                  const cleanDegreeName = deg.name
-                    .replace(
-                      /\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi,
-                      "",
-                    )
-                    .trim();
-                  const isMagistrale =
-                    deg.name.toLowerCase().includes("magistrale") ||
-                    deg.className?.toUpperCase().startsWith("LM");
-                  const isPendingSelected = pendingDegree?.url === deg.url;
-                  return (
-                    <TouchableOpacity
-                      key={i}
-                      style={[
-                        styles.modalItem,
-                        isPendingSelected && {
-                          borderColor: theme.primary,
-                          borderWidth: 1.5,
-                          backgroundColor: `${theme.primary}18`,
-                          shadowColor: theme.primary,
-                          shadowOpacity: 0.35,
-                          shadowRadius: 10,
-                          shadowOffset: { width: 0, height: 0 },
-                        },
-                      ]}
-                      activeOpacity={0.7}
-                      onPress={() => handleSelectDegree(deg, navigation)}
-                    >
+            filteredDegrees.map((deg: Degree, i: number) => {
+              const cleanDegreeName = deg.name
+                .replace(
+                  /\s*[-–]\s*(?:laurea\s+)?(?:triennale|magistrale|ciclo unico)\b/gi,
+                  "",
+                )
+                .trim();
+              const isMagistrale =
+                deg.name.toLowerCase().includes("magistrale") ||
+                deg.className?.toUpperCase().startsWith("LM");
+              const isPendingSelected = pendingDegree?.url === deg.url;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[
+                    styles.modalItem,
+                    isPendingSelected && {
+                      borderColor: theme.primary,
+                      borderWidth: 1.5,
+                      backgroundColor: `${theme.primary}18`,
+                      shadowColor: theme.primary,
+                      shadowOpacity: 0.35,
+                      shadowRadius: 10,
+                      shadowOffset: { width: 0, height: 0 },
+                    },
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => handleSelectDegree(deg, navigation)}
+                >
+                  <View
+                    style={[
+                      styles.courseIconBox,
+                      {
+                        backgroundColor: theme.subtle,
+                        borderColor: theme.border,
+                        borderWidth: 1,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="school"
+                      size={18}
+                      color={theme.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalItemTitle}>
+                      {cleanDegreeName}
+                    </Text>
+                    <View style={styles.courseBadgesRow}>
                       <View
                         style={[
-                          styles.courseIconBox,
+                          styles.typeBadge,
                           {
-                            backgroundColor: theme.subtle,
-                            borderColor: theme.border,
-                            borderWidth: 1,
+                            backgroundColor: isMagistrale
+                              ? "rgba(168, 85, 247, 0.25)"
+                              : "rgba(59, 130, 246, 0.25)",
+                            borderColor: isMagistrale
+                              ? "#c084fc"
+                              : "#60a5fa",
+                            shadowColor: isMagistrale
+                              ? "#c084fc"
+                              : "#60a5fa",
                           },
                         ]}
                       >
-                        <Ionicons
-                          name="school"
-                          size={18}
-                          color={theme.primary}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.modalItemTitle}>
-                          {cleanDegreeName}
+                        <Text
+                          style={[
+                            styles.typeBadgeText,
+                            {
+                              color: isMagistrale ? "#e9d5ff" : "#bfdbfe",
+                            },
+                          ]}
+                        >
+                          {isMagistrale ? "Magistrale" : "Triennale"}
                         </Text>
-                        <View style={styles.courseBadgesRow}>
+                      </View>
+                      {deg.className ? (() => {
+                        const classTheme = getDegreeClassTheme(deg.className);
+                        return (
                           <View
                             style={[
-                              styles.typeBadge,
+                              styles.classBadge,
                               {
-                                backgroundColor: isMagistrale
-                                  ? "rgba(168, 85, 247, 0.25)"
-                                  : "rgba(59, 130, 246, 0.25)",
-                                borderColor: isMagistrale
-                                  ? "#c084fc"
-                                  : "#60a5fa",
-                                shadowColor: isMagistrale
-                                  ? "#c084fc"
-                                  : "#60a5fa",
+                                backgroundColor: classTheme.backgroundColor,
+                                borderColor: classTheme.borderColor,
+                                shadowColor: classTheme.glowColor,
                               },
                             ]}
                           >
                             <Text
                               style={[
-                                styles.typeBadgeText,
-                                {
-                                  color: isMagistrale ? "#e9d5ff" : "#bfdbfe",
-                                },
+                                styles.classBadgeText,
+                                { color: classTheme.textColor },
                               ]}
                             >
-                              {isMagistrale ? "Magistrale" : "Triennale"}
+                              {deg.className}
                             </Text>
                           </View>
-                          {deg.className ? (() => {
-                            const classTheme = getDegreeClassTheme(deg.className);
-                            return (
-                              <View
-                                style={[
-                                  styles.classBadge,
-                                  {
-                                    backgroundColor: classTheme.backgroundColor,
-                                    borderColor: classTheme.borderColor,
-                                    shadowColor: classTheme.glowColor,
-                                  },
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    styles.classBadgeText,
-                                    { color: classTheme.textColor },
-                                  ]}
-                                >
-                                  {deg.className}
-                                </Text>
-                              </View>
-                            );
-                          })() : null}
-                        </View>
-                      </View>
-                      {isPendingSelected ? (
-                        <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
-                      ) : (
-                        <Ionicons
-                          name="chevron-forward"
-                          size={18}
-                          color="#71717a"
-                        />
-                      )}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-            </ScrollView>
+                        );
+                      })() : null}
+                    </View>
+                  </View>
+                  {isPendingSelected ? (
+                    <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+                  ) : (
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color="#71717a"
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })
           )}
-        </>
+        </ScrollView>
       )}
     </View>
   );
@@ -1745,9 +1741,7 @@ export function OnboardingCourseSelector({
   const [progressText, setProgressText] = useState("");
   const [currentDegreeName, setCurrentDegreeName] = useState("");
 
-  const [setupMode, setSetupMode] = useState<"normal" | "sync">("normal");
-  const [syncCodeInput, setSyncCodeInput] = useState("");
-  const [isLinkingSync, setIsLinkingSync] = useState(false);
+  const [syncCodeInput, setSyncCodeInput] = useState("");  const [isLinkingSync, setIsLinkingSync] = useState(false);
 
   const [currentPage, setCurrentPage] = useState<1 | 2>(1);
 
@@ -2208,8 +2202,6 @@ export function OnboardingCourseSelector({
 
   const contextValue = {
     theme,
-    setupMode,
-    setSetupMode,
     syncCodeInput,
     setSyncCodeInput,
     handlePasteSyncCode,
@@ -2281,62 +2273,39 @@ export function OnboardingCourseSelector({
             <OnboardingStack.Navigator
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: "#111111" },
-                headerBackButtonDisplayMode: "minimal",
-                headerBackTitle: "",
+                contentStyle: { backgroundColor: "#000000" },
               }}
             >
-              <OnboardingStack.Screen
-                name="Welcome"
-                component={WelcomeScreen}
-              />
+              <OnboardingStack.Screen name="Welcome" component={WelcomeScreen} />
+              <OnboardingStack.Screen name="SetupMode" component={SetupModeScreen} />
               <OnboardingStack.Screen
                 name="CourseSelect"
                 component={CourseSelectScreen}
                 options={{
                   headerShown: true,
-                  title: "Scegli il tuo corso",
-                  headerBackButtonDisplayMode: "minimal",
-                  headerBackTitle: "",
+                  headerLargeTitle: true,
+                  headerTitle: "Scegli il tuo corso",
+                  headerLargeTitleStyle: { color: "#ffffff" },
+                  headerStyle: { backgroundColor: "#000000" },
                   headerTintColor: "#ffffff",
-                  headerStyle: { backgroundColor: "#111111" },
-                  headerShadowVisible: false,
-                  headerTitleStyle: {
-                    color: "#ffffff",
-                    fontSize: 17,
-                    fontWeight: "700",
-                  },
-                  headerSearchBarOptions: {
-                    placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-                    tintColor: theme.primary,
-                    textColor: "#ffffff",
-                    headerIconColor: "#8e8e93",
-                    hintTextColor: "#71717a",
-                    hideWhenScrolling: false,
-                    autoCapitalize: "none",
-                    onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-                    onCancelButtonPress: () => setSearch(""),
-                  },
+                  headerTransparent: Platform.OS === "ios",
+                  headerBlurEffect: "dark",
                 }}
               />
               <OnboardingStack.Screen
-                name="PostDownload"
-                component={PostDownloadScreen}
+                name="Sync"
+                component={SyncScreen}
                 options={{
                   headerShown: true,
-                  title: pendingDegree?.name || "Configurazione",
-                  headerBackButtonDisplayMode: "minimal",
-                  headerBackTitle: "",
+                  headerTitle: "Sincronizzazione",
+                  headerLargeTitle: false,
+                  headerStyle: { backgroundColor: "#000000" },
                   headerTintColor: "#ffffff",
-                  headerStyle: { backgroundColor: "#111111" },
-                  headerShadowVisible: false,
-                  headerTitleStyle: {
-                    color: "#ffffff",
-                    fontSize: 16,
-                    fontWeight: "700",
-                  },
+                  headerTransparent: Platform.OS === "ios",
+                  headerBlurEffect: "dark",
                 }}
               />
+              <OnboardingStack.Screen name="PostDownload" component={PostDownloadScreen} />
             </OnboardingStack.Navigator>
           </NavigationContainer>
         </NavigationIndependentTree>
@@ -3057,6 +3026,71 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginBottom: 10,
     marginTop: 4,
+  },
+
+  /* ── Setup Mode Screen ── */
+  setupModeContainer: {
+    flex: 1,
+    paddingHorizontal: 24,
+    justifyContent: "center",
+  },
+  setupModeHeader: {
+    alignItems: "center",
+    marginBottom: 32,
+  },
+  setupModeTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#ffffff",
+    letterSpacing: -0.5,
+    textAlign: "center",
+  },
+  setupModeSubtitle: {
+    fontSize: 14,
+    color: "#71717a",
+    marginTop: 8,
+    textAlign: "center",
+  },
+  setupModeCards: {
+    gap: 14,
+  },
+  setupModeCard: {
+    backgroundColor: "#18181b",
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  setupModeCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 16,
+  },
+  setupModeIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  setupModeCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 4,
+  },
+  setupModeCardSubtitle: {
+    fontSize: 13,
+    color: "#71717a",
+    lineHeight: 18,
   },
 
   /* ── Expo Go fallback search bar ── */
