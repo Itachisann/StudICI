@@ -38,6 +38,7 @@ import {
   DEFAULT_COMMUTER_CONFIG,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
+import { getDegreeClassTheme } from "../utils/degreeColors";
 import {
   calculateDrivingEstimate,
   DrivingEstimate,
@@ -141,7 +142,7 @@ function WelcomeScreen({ navigation }: any) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SCHERMATA 2: SCELTA CORSO (con headerSearchBarOptions di @react-navigation/native-stack)
+// SCHERMATA 2: SCELTA CORSO (con headerSearchBarOptions nativo di native-stack)
 // ═══════════════════════════════════════════════════════════════════════════
 function CourseSelectScreen({ navigation }: any) {
   const {
@@ -155,9 +156,30 @@ function CourseSelectScreen({ navigation }: any) {
     isLinkingSync,
     loading,
     search,
+    setSearch,
     filteredDegrees,
     handleSelectDegree,
   } = useOnboarding();
+
+  // Search bar autentica nativa di @react-navigation/native-stack (Apple UISearchBar)
+  useEffect(() => {
+    navigation.setOptions({
+      headerSearchBarOptions:
+        setupMode === "normal"
+          ? {
+              placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+              tintColor: theme.primary,
+              textColor: "#ffffff",
+              headerIconColor: "#8e8e93",
+              hintTextColor: "#71717a",
+              hideWhenScrolling: false,
+              autoCapitalize: "none",
+              onChangeText: (e: any) => setSearch(e.nativeEvent.text),
+              onCancelButtonPress: () => setSearch(""),
+            }
+          : undefined,
+    });
+  }, [navigation, setupMode, theme.primary, setSearch]);
 
   return (
     <View style={styles.screenRoot}>
@@ -394,13 +416,13 @@ function CourseSelectScreen({ navigation }: any) {
                   return (
                     <TouchableOpacity
                       key={i}
-                      style={styles.courseCard}
-                      activeOpacity={0.75}
+                      style={styles.modalItem}
+                      activeOpacity={0.7}
                       onPress={() => handleSelectDegree(deg, navigation)}
                     >
                       <View
                         style={[
-                          styles.courseIconCircle,
+                          styles.courseIconBox,
                           {
                             backgroundColor: theme.subtle,
                             borderColor: theme.border,
@@ -409,21 +431,23 @@ function CourseSelectScreen({ navigation }: any) {
                         ]}
                       >
                         <Ionicons
-                          name="book-outline"
-                          size={22}
+                          name="school"
+                          size={18}
                           color={theme.primary}
                         />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.courseName}>{cleanDegreeName}</Text>
+                        <Text style={styles.modalItemTitle}>
+                          {cleanDegreeName}
+                        </Text>
                         <View style={styles.courseBadgesRow}>
                           <View
                             style={[
                               styles.typeBadge,
                               {
                                 backgroundColor: isMagistrale
-                                  ? "rgba(168, 85, 247, 0.18)"
-                                  : "rgba(56, 189, 248, 0.18)",
+                                  ? "rgba(168, 85, 247, 0.25)"
+                                  : "rgba(59, 130, 246, 0.25)",
                                 borderColor: isMagistrale
                                   ? "#c084fc"
                                   : "#60a5fa",
@@ -437,59 +461,42 @@ function CourseSelectScreen({ navigation }: any) {
                               style={[
                                 styles.typeBadgeText,
                                 {
-                                  color: isMagistrale ? "#f3e8ff" : "#e0f2fe",
+                                  color: isMagistrale ? "#e9d5ff" : "#bfdbfe",
                                 },
                               ]}
                             >
                               {isMagistrale ? "Magistrale" : "Triennale"}
                             </Text>
                           </View>
-                          {deg.className ? (
-                            <View
-                              style={[
-                                styles.classBadge,
-                                {
-                                  backgroundColor: `${theme.primary}22`,
-                                  borderColor: theme.primary,
-                                  shadowColor: theme.primary,
-                                },
-                              ]}
-                            >
-                              <Text
+                          {deg.className ? (() => {
+                            const classTheme = getDegreeClassTheme(deg.className);
+                            return (
+                              <View
                                 style={[
-                                  styles.classBadgeText,
-                                  { color: "#ffffff" },
+                                  styles.classBadge,
+                                  {
+                                    backgroundColor: classTheme.backgroundColor,
+                                    borderColor: classTheme.borderColor,
+                                    shadowColor: classTheme.glowColor,
+                                  },
                                 ]}
                               >
-                                {deg.className}
-                              </Text>
-                            </View>
-                          ) : (
-                            <View
-                              style={[
-                                styles.classBadge,
-                                {
-                                  backgroundColor: `${theme.primary}20`,
-                                  borderColor: theme.primary,
-                                  shadowColor: theme.primary,
-                                },
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.classBadgeText,
-                                  { color: "#ffffff" },
-                                ]}
-                              >
-                                I.C.I.
-                              </Text>
-                            </View>
-                          )}
+                                <Text
+                                  style={[
+                                    styles.classBadgeText,
+                                    { color: classTheme.textColor },
+                                  ]}
+                                >
+                                  {deg.className}
+                                </Text>
+                              </View>
+                            );
+                          })() : null}
                         </View>
                       </View>
                       <Ionicons
                         name="chevron-forward"
-                        size={19}
+                        size={18}
                         color="#71717a"
                       />
                     </TouchableOpacity>
@@ -506,6 +513,7 @@ function CourseSelectScreen({ navigation }: any) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SCHERMATA 3: POST DOWNLOAD (Orario, Viaggio & Stazioni con NativeSheetModal)
+// Stile originale glowing buttons e layout card da c261508
 // ═══════════════════════════════════════════════════════════════════════════
 function PostDownloadScreen() {
   const {
@@ -521,10 +529,12 @@ function PostDownloadScreen() {
     handleSelectChannel,
     isChannelSelectionComplete,
     missingSelectionMessage,
+    resolvedTab,
     originAddress,
     setOriginAddress,
     setOriginCoords,
     placeSuggestions,
+    setPlaceSuggestions,
     searchingPlaces,
     placeSearchActive,
     setPlaceSearchActive,
@@ -632,7 +642,7 @@ function PostDownloadScreen() {
           style={{ flex: 1 }}
         >
           {/* ──────────────────────────────────────────────────────────────
-              PRIMA PAGINA: PERSONALIZZA IL TUO ORARIO
+              PRIMA PAGINA: PERSONALIZZA IL TUO ORARIO (Stile Glowing Chips)
              ────────────────────────────────────────────────────────────── */}
           <View style={{ width: screenWidth, flex: 1 }}>
             <ScrollView
@@ -649,50 +659,61 @@ function PostDownloadScreen() {
                     },
                   ]}
                 >
-                  <Ionicons name="calendar" size={28} color="#ffffff" />
+                  <Ionicons name="funnel" size={28} color="#ffffff" />
                 </View>
-                <Text style={styles.channelHeroTitle}>Personalizza il tuo orario</Text>
-                <Text style={styles.channelDegreeTitle}>{pendingDegree?.name}</Text>
+                <Text style={styles.channelHeroTitle}>
+                  Personalizza il tuo corso
+                </Text>
+                <Text
+                  style={[styles.channelDegreeTitle, { color: theme.accent }]}
+                  numberOfLines={2}
+                >
+                  {pendingDegree?.name}
+                </Text>
                 <Text style={styles.channelHeroSubtitle}>
-                  Seleziona l&apos;anno di corso e il canale ufficiale per caricare
-                  il tuo calendario lezioni.
+                  Scegli l&apos;anno e il canale che frequenti. Verranno aperti
+                  in automatico ad ogni avvio
                 </Text>
               </View>
 
-              {/* Sezione Selezione Anno */}
-              {hasMultipleYears ? (
-                <View style={styles.channelSection}>
-                  <Text style={styles.channelSectionLabel}>ANNO DI CORSO</Text>
-                  <View style={styles.channelButtonsGrid}>
-                    {uniqueYears.map((year: string) => {
-                      const isSel = selectedYear === year;
+              {/* 1. Selezione Anno di Corso */}
+              {hasMultipleYears && (
+                <View style={styles.pillSection}>
+                  <Text style={styles.pillSectionLabel}>ANNO DI CORSO</Text>
+                  <View style={styles.chipsContainer}>
+                    {uniqueYears.map((year: string, idx: number) => {
+                      const isSelected = year === selectedYear;
                       return (
                         <TouchableOpacity
-                          key={year}
+                          key={idx}
                           style={[
-                            styles.channelButton,
-                            isSel && [
-                              styles.channelButtonActive,
+                            styles.chip,
+                            isSelected && [
+                              styles.chipActive,
                               {
-                                backgroundColor: theme.primary,
+                                backgroundColor: theme.bg,
                                 borderColor: theme.primary,
                                 shadowColor: theme.primary,
                               },
                             ],
                           ]}
-                          activeOpacity={0.75}
+                          activeOpacity={0.7}
                           onPress={() => handleSelectYear(year)}
                         >
                           <Ionicons
-                            name={isSel ? "checkmark-circle" : "calendar-outline"}
-                            size={16}
-                            color={isSel ? "#ffffff" : "#a1a1aa"}
+                            name={
+                              isSelected
+                                ? "checkmark-circle"
+                                : "calendar-outline"
+                            }
+                            size={15}
+                            color={isSelected ? "#ffffff" : "#8e8e93"}
                             style={{ marginRight: 6 }}
                           />
                           <Text
                             style={[
-                              styles.channelButtonText,
-                              isSel && styles.channelButtonTextActive,
+                              styles.chipText,
+                              isSelected && styles.chipTextActive,
                             ]}
                           >
                             {year}
@@ -702,63 +723,101 @@ function PostDownloadScreen() {
                     })}
                   </View>
                 </View>
-              ) : null}
+              )}
 
-              {/* Sezione Selezione Canale */}
-              {hasMultipleChannels ? (
-                <View style={styles.channelSection}>
-                  <Text style={styles.channelSectionLabel}>CANALE / CURRICULUM</Text>
-                  <View style={styles.channelButtonsGrid}>
-                    {channelsToDisplay.map((p: any, idx: number) => {
-                      const chName = p.channel || p.tab.name;
-                      const isSel = selectedChannel === chName;
+              {/* 2. Selezione Canale / Suddivisione */}
+              {hasMultipleChannels && (
+                <View style={styles.pillSection}>
+                  <Text style={styles.pillSectionLabel}>SUDDIVISIONE</Text>
+                  <View style={styles.channelRowEqual}>
+                    {channelsToDisplay.map((item: any, idx: number) => {
+                      const channelVal = item.channel || item.tab.name;
+                      const isSelected =
+                        channelVal === selectedChannel &&
+                        selectedChannel !== "";
+                      const displayName = item.channel || item.tab.name;
                       return (
                         <TouchableOpacity
-                          key={`${chName}_${idx}`}
+                          key={idx}
                           style={[
-                            styles.channelButton,
-                            isSel && [
-                              styles.channelButtonActive,
+                            styles.chipEqual,
+                            isSelected && [
+                              styles.chipActive,
                               {
-                                backgroundColor: theme.primary,
+                                backgroundColor: theme.bg,
                                 borderColor: theme.primary,
                                 shadowColor: theme.primary,
                               },
                             ],
                           ]}
-                          activeOpacity={0.75}
-                          onPress={() => handleSelectChannel(chName)}
+                          activeOpacity={0.7}
+                          onPress={() => handleSelectChannel(channelVal)}
                         >
                           <Ionicons
-                            name={isSel ? "checkmark-circle" : "layers-outline"}
-                            size={16}
-                            color={isSel ? "#ffffff" : "#a1a1aa"}
+                            name={
+                              isSelected
+                                ? "checkmark-circle"
+                                : "people-outline"
+                            }
+                            size={15}
+                            color={isSelected ? "#ffffff" : "#8e8e93"}
                             style={{ marginRight: 6 }}
                           />
                           <Text
                             style={[
-                              styles.channelButtonText,
-                              isSel && styles.channelButtonTextActive,
+                              styles.chipText,
+                              isSelected && styles.chipTextActive,
                             ]}
+                            numberOfLines={1}
                           >
-                            {chName}
+                            {displayName}
                           </Text>
                         </TouchableOpacity>
                       );
                     })}
                   </View>
                 </View>
-              ) : null}
+              )}
 
-              {!isChannelSelectionComplete && (
-                <View style={styles.missingSelectionNotice}>
+              {/* 3. Card Anteprima Selezione o Avviso Selezione Richiesta */}
+              {isChannelSelectionComplete && resolvedTab ? (
+                <View style={styles.summaryCard}>
+                  <View
+                    style={[
+                      styles.summaryIconBox,
+                      {
+                        backgroundColor: theme.subtle,
+                        borderColor: theme.border,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="time" size={24} color={theme.accent} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.summaryOverline}>
+                      ORARIO PREDEFINITO
+                    </Text>
+                    <Text style={styles.summaryValue}>
+                      {selectedYear || uniqueYears[0] || "Corso Unico"}
+                      {selectedChannel ? ` · ${selectedChannel}` : ""}
+                    </Text>
+                    <Text
+                      style={styles.summaryOriginalName}
+                      numberOfLines={1}
+                    >
+                      Foglio: {resolvedTab.name}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.promptSelectCard}>
                   <Ionicons
-                    name="information-circle-outline"
-                    size={16}
-                    color="#f59e0b"
-                    style={{ marginRight: 6 }}
+                    name="lock-closed-outline"
+                    size={20}
+                    color="#71717a"
+                    style={{ marginBottom: 6 }}
                   />
-                  <Text style={styles.missingSelectionNoticeText}>
+                  <Text style={styles.promptSelectText}>
                     {missingSelectionMessage}.
                   </Text>
                 </View>
@@ -767,7 +826,7 @@ function PostDownloadScreen() {
           </View>
 
           {/* ──────────────────────────────────────────────────────────────
-              SECONDA PAGINA: IMPOSTAZIONI VIAGGIO
+              SECONDA PAGINA: IMPOSTAZIONI VIAGGIO (Stile Glowing Chips)
              ────────────────────────────────────────────────────────────── */}
           <View style={{ width: screenWidth, flex: 1 }}>
             <ScrollView
@@ -799,7 +858,9 @@ function PostDownloadScreen() {
 
               {/* ── 1. LUOGO DI PARTENZA ── */}
               <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>LUOGO DI PARTENZA</Text>
+                <Text style={styles.pillSectionLabel}>
+                  LUOGO DI PARTENZA
+                </Text>
                 <View
                   style={[
                     styles.iosPillInputWrapper,
@@ -831,352 +892,537 @@ function PostDownloadScreen() {
                     placeholder="Inserisci indirizzo o città di partenza"
                     placeholderTextColor="#636366"
                   />
-                  {searchingPlaces ? (
+                  {searchingPlaces && (
                     <ActivityIndicator
                       size="small"
-                      color={theme.primary}
+                      color={theme.accent}
                       style={{ marginLeft: 6 }}
                     />
-                  ) : originAddress.trim().length > 0 ? (
+                  )}
+                  {originAddress.length > 0 && !searchingPlaces && (
                     <TouchableOpacity
                       onPress={() => {
                         setOriginAddress("");
                         setOriginCoords(undefined);
-                        setPlaceSearchActive(false);
+                        setPlaceSuggestions([]);
                       }}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Ionicons
                         name="close-circle"
-                        size={17}
+                        size={18}
                         color="#71717a"
                       />
                     </TouchableOpacity>
-                  ) : null}
+                  )}
                 </View>
 
                 {placeSearchActive && placeSuggestions.length > 0 && (
-                  <View style={styles.suggestionsContainer}>
-                    {placeSuggestions.map((item: PlaceSuggestion, idx: number) => (
+                  <View style={styles.suggestionsBox}>
+                    {placeSuggestions.map((place: PlaceSuggestion) => (
                       <TouchableOpacity
-                        key={idx}
-                        style={styles.suggestionItem}
-                        onPress={() => handleSelectPlaceSuggestion(item)}
+                        key={place.id}
+                        style={styles.suggestionRow}
+                        activeOpacity={0.7}
+                        onPress={() => handleSelectPlaceSuggestion(place)}
                       >
                         <Ionicons
-                          name="location-outline"
-                          size={15}
-                          color={theme.primary}
+                          name="navigate-circle-outline"
+                          size={17}
+                          color={theme.accent}
                           style={{ marginRight: 8 }}
                         />
-                        <Text style={styles.suggestionText} numberOfLines={1}>
-                          {item.label}
-                        </Text>
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={styles.suggestionTitle}
+                            numberOfLines={1}
+                          >
+                            {place.title || place.label}
+                          </Text>
+                          {!!place.subtitle && (
+                            <Text
+                              style={styles.suggestionSub}
+                              numberOfLines={1}
+                            >
+                              {place.subtitle}
+                            </Text>
+                          )}
+                        </View>
                       </TouchableOpacity>
                     ))}
                   </View>
                 )}
               </View>
 
-              {/* ── 2. USO DELL'AUTO ── */}
+              {/* ── 2. TRAGITTO VERSO LA STAZIONE (AUTO / NO MEZZI) ── */}
               <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>USI L&apos;AUTO?</Text>
-                <View style={styles.yesNoGrid}>
+                <Text style={styles.pillSectionLabel}>
+                  TRAGITTO VERSO LA STAZIONE
+                </Text>
+                <View style={styles.channelRowEqual}>
                   <TouchableOpacity
                     style={[
-                      styles.yesNoPill,
+                      styles.chipEqual,
                       carMode === "yes" && [
-                        styles.yesNoPillActive,
+                        styles.chipActive,
                         {
+                          backgroundColor: theme.bg,
                           borderColor: theme.primary,
-                          backgroundColor: `${theme.primary}20`,
                           shadowColor: theme.primary,
                         },
                       ],
                     ]}
-                    activeOpacity={0.8}
+                    activeOpacity={0.7}
                     onPress={() => {
                       setCarMode("yes");
                       if (parkingBufferMinutes === null) {
-                        setParkingBufferMinutes(10);
+                        setParkingBufferMinutes(7);
                       }
                     }}
                   >
                     <Ionicons
-                      name="car"
-                      size={17}
-                      color={carMode === "yes" ? theme.accent : "#a1a1aa"}
-                      style={{ marginRight: 8 }}
+                      name={
+                        carMode === "yes"
+                          ? "checkmark-circle"
+                          : "car-sport-outline"
+                      }
+                      size={16}
+                      color={carMode === "yes" ? "#ffffff" : "#8e8e93"}
+                      style={{ marginRight: 6 }}
                     />
                     <Text
                       style={[
-                        styles.yesNoPillText,
-                        carMode === "yes" && {
-                          color: theme.accent,
-                          fontWeight: "800",
-                        },
+                        styles.chipText,
+                        carMode === "yes" && styles.chipTextActive,
                       ]}
                     >
-                      Sì, uso l&apos;auto
+                      Auto
                     </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[
-                      styles.yesNoPill,
+                      styles.chipEqual,
                       carMode === "no" && [
-                        styles.yesNoPillActive,
+                        styles.chipActive,
                         {
+                          backgroundColor: theme.bg,
                           borderColor: theme.primary,
-                          backgroundColor: `${theme.primary}20`,
                           shadowColor: theme.primary,
                         },
                       ],
                     ]}
-                    activeOpacity={0.8}
+                    activeOpacity={0.7}
                     onPress={() => {
                       setCarMode("no");
                       setParkingBufferMinutes(null);
                     }}
                   >
                     <Ionicons
-                      name="walk"
-                      size={17}
-                      color={carMode === "no" ? theme.accent : "#a1a1aa"}
-                      style={{ marginRight: 8 }}
+                      name={
+                        carMode === "no"
+                          ? "checkmark-circle"
+                          : "walk-outline"
+                      }
+                      size={16}
+                      color={carMode === "no" ? "#ffffff" : "#8e8e93"}
+                      style={{ marginRight: 6 }}
                     />
                     <Text
                       style={[
-                        styles.yesNoPillText,
-                        carMode === "no" && {
-                          color: theme.accent,
-                          fontWeight: "800",
-                        },
+                        styles.chipText,
+                        carMode === "no" && styles.chipTextActive,
                       ]}
                     >
-                      No, a piedi / mezzi
+                      No mezzi
                     </Text>
                   </TouchableOpacity>
                 </View>
 
                 {carMode === "yes" && (
-                  <View style={styles.parkingBufferSubSection}>
-                    <Text style={styles.parkingBufferLabel}>
-                      Minuti per parcheggiare alla stazione:
+                  <View style={styles.subPillGroup}>
+                    <Text style={styles.subPillLabel}>
+                      MARGINE DI SICUREZZA
                     </Text>
-                    <View style={styles.bufferChoicesRow}>
-                      {[5, 10, 15, 20].map((mins) => {
+                    <View style={styles.chipsContainer}>
+                      {[5, 7, 10, 15].map((mins) => {
                         const isSel = parkingBufferMinutes === mins;
                         return (
                           <TouchableOpacity
                             key={mins}
                             style={[
-                              styles.smallBufferPill,
+                              styles.chip,
                               isSel && [
-                                styles.smallBufferPillActive,
+                                styles.chipActive,
                                 {
+                                  backgroundColor: theme.bg,
                                   borderColor: theme.primary,
-                                  backgroundColor: theme.primary,
+                                  shadowColor: theme.primary,
                                 },
                               ],
                             ]}
+                            activeOpacity={0.7}
                             onPress={() => setParkingBufferMinutes(mins)}
                           >
                             <Text
                               style={[
-                                styles.smallBufferPillText,
-                                isSel && { color: "#ffffff", fontWeight: "800" },
+                                styles.chipText,
+                                isSel && styles.chipTextActive,
                               ]}
                             >
-                              +{mins} min
+                              {mins} min
                             </Text>
                           </TouchableOpacity>
                         );
                       })}
+
+                      {parkingBufferMinutes !== null && (
+                        <View style={styles.fineStepRow}>
+                          <TouchableOpacity
+                            style={styles.fineStepPill}
+                            onPress={() =>
+                              setParkingBufferMinutes((p: number | null) =>
+                                Math.max(1, (p ?? 7) - 1),
+                              )
+                            }
+                          >
+                            <Ionicons
+                              name="remove"
+                              size={14}
+                              color="#ffffff"
+                            />
+                          </TouchableOpacity>
+                          <View
+                            style={[
+                              styles.fineStepValuePill,
+                              {
+                                borderColor: theme.primary,
+                                backgroundColor: theme.subtle,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.fineStepValueText,
+                                { color: theme.accent },
+                              ]}
+                            >
+                              {parkingBufferMinutes} min
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.fineStepPill}
+                            onPress={() =>
+                              setParkingBufferMinutes((p: number | null) => (p ?? 7) + 1)
+                            }
+                          >
+                            <Ionicons
+                              name="add"
+                              size={14}
+                              color="#ffffff"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
                   </View>
                 )}
               </View>
 
-              {/* ── 3. STAZIONI FERROVIARIE ── */}
+              {/* ── 3. TRATTA FERROVIARIA (PARTENZA & ARRIVO) ── */}
               <View style={styles.pillSection}>
                 <Text style={styles.pillSectionLabel}>
-                  STAZIONE DI PARTENZA (FS / REGIONALE)
+                  STAZIONE DI PARTENZA
                 </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.stationSelectorPill,
-                    departureStation && [
-                      styles.stationSelectorPillFilled,
+                <View style={styles.stationGrid}>
+                  {quickDepartureStations.map((st: StationInfo) => {
+                    const isSel = departureStation?.code === st.code;
+                    return (
+                      <TouchableOpacity
+                        key={st.code}
+                        style={[
+                          styles.stationGridItem,
+                          isSel && [
+                            styles.chipActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() => setDepartureStation(st)}
+                      >
+                        <Ionicons
+                          name={
+                            isSel ? "checkmark-circle" : "train-outline"
+                          }
+                          size={14}
+                          color={isSel ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={[
+                            styles.chipText,
+                            isSel && styles.chipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {st.shortName || st.name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {departureStation &&
+                !quickDepartureStations.some(
+                  (s: StationInfo) => s.code === departureStation.code,
+                ) ? (
+                  <TouchableOpacity
+                    style={[
+                      styles.stationActionPill,
+                      styles.chipActive,
                       {
+                        backgroundColor: theme.bg,
                         borderColor: theme.primary,
-                        backgroundColor: "rgba(28, 28, 30, 0.95)",
+                        shadowColor: theme.primary,
+                        borderStyle: "solid",
                       },
-                    ],
-                  ]}
-                  activeOpacity={0.75}
-                  onPress={() => setStationPickerType("departure")}
-                >
-                  <View style={styles.stationPillLeft}>
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => setStationPickerType("departure")}
+                  >
                     <Ionicons
-                      name="train"
-                      size={18}
-                      color={departureStation ? theme.accent : "#71717a"}
-                      style={{ marginRight: 10 }}
+                      name="checkmark-circle"
+                      size={14}
+                      color="#ffffff"
+                      style={{ marginRight: 5 }}
                     />
                     <Text
-                      style={[
-                        styles.stationPillText,
-                        departureStation && {
-                          color: "#ffffff",
-                          fontWeight: "700",
-                        },
-                      ]}
+                      style={[styles.chipText, styles.chipTextActive]}
+                      numberOfLines={1}
                     >
-                      {departureStation
-                        ? departureStation.shortName || departureStation.name
-                        : "Scegli stazione di partenza..."}
+                      {departureStation.shortName ||
+                        departureStation.name}
                     </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={17} color="#636366" />
-                </TouchableOpacity>
-
-                {/* Stazioni rapide partenza */}
-                <View style={styles.quickStationsRow}>
-                  {quickDepartureStations.slice(0, 4).map((st: StationInfo) => (
-                    <TouchableOpacity
-                      key={st.code}
-                      style={[
-                        styles.quickChip,
-                        departureStation?.code === st.code && [
-                          styles.quickChipActive,
-                          {
-                            borderColor: theme.primary,
-                            backgroundColor: `${theme.primary}25`,
-                          },
-                        ],
-                      ]}
-                      onPress={() => setDepartureStation(st)}
+                    <Ionicons
+                      name="chevron-down"
+                      size={12}
+                      color="#ffffff"
+                      style={{ marginLeft: 4 }}
+                    />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.stationActionPill}
+                    activeOpacity={0.7}
+                    onPress={() => setStationPickerType("departure")}
+                  >
+                    <Ionicons
+                      name="search"
+                      size={14}
+                      color={theme.accent}
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text
+                      style={[styles.chipText, { color: theme.accent }]}
                     >
-                      <Text
-                        style={[
-                          styles.quickChipText,
-                          departureStation?.code === st.code && {
-                            color: theme.accent,
-                            fontWeight: "800",
-                          },
-                        ]}
-                      >
-                        {st.shortName || st.name.replace("ROMA ", "")}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
+                      Altra stazione...
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
-              <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
+                <Text
+                  style={[styles.pillSectionLabel, { marginTop: 18 }]}
+                >
                   STAZIONE DI ARRIVO (ROMA)
                 </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.stationSelectorPill,
-                    arrivalStation && [
-                      styles.stationSelectorPillFilled,
+                <View style={styles.stationGrid}>
+                  {quickArrivalStations.map((st: StationInfo) => {
+                    const isSel = arrivalStation?.code === st.code;
+                    return (
+                      <TouchableOpacity
+                        key={st.code}
+                        style={[
+                          styles.stationGridItem,
+                          isSel && [
+                            styles.chipActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() => setArrivalStation(st)}
+                      >
+                        <Ionicons
+                          name={
+                            isSel ? "checkmark-circle" : "flag-outline"
+                          }
+                          size={14}
+                          color={isSel ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={[
+                            styles.chipText,
+                            isSel && styles.chipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {st.shortName || st.name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {arrivalStation &&
+                !quickArrivalStations.some(
+                  (s: StationInfo) => s.code === arrivalStation.code,
+                ) ? (
+                  <TouchableOpacity
+                    style={[
+                      styles.stationActionPill,
+                      styles.chipActive,
                       {
+                        backgroundColor: theme.bg,
                         borderColor: theme.primary,
-                        backgroundColor: "rgba(28, 28, 30, 0.95)",
+                        shadowColor: theme.primary,
+                        borderStyle: "solid",
                       },
-                    ],
-                  ]}
-                  activeOpacity={0.75}
-                  onPress={() => setStationPickerType("arrival")}
-                >
-                  <View style={styles.stationPillLeft}>
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => setStationPickerType("arrival")}
+                  >
                     <Ionicons
-                      name="flag"
-                      size={18}
-                      color={arrivalStation ? theme.accent : "#71717a"}
-                      style={{ marginRight: 10 }}
+                      name="checkmark-circle"
+                      size={14}
+                      color="#ffffff"
+                      style={{ marginRight: 5 }}
                     />
                     <Text
+                      style={[styles.chipText, styles.chipTextActive]}
+                      numberOfLines={1}
+                    >
+                      {arrivalStation.shortName || arrivalStation.name}
+                    </Text>
+                    <Ionicons
+                      name="chevron-down"
+                      size={12}
+                      color="#ffffff"
+                      style={{ marginLeft: 4 }}
+                    />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.stationActionPill}
+                    activeOpacity={0.7}
+                    onPress={() => setStationPickerType("arrival")}
+                  >
+                    <Ionicons
+                      name="search"
+                      size={14}
+                      color={theme.accent}
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text
+                      style={[styles.chipText, { color: theme.accent }]}
+                    >
+                      Altra stazione...
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Anteprima live distanza e tempi reali se auto=sì e origine+stazione scelte */}
+                {carMode === "yes" &&
+                  originAddress.trim().length >= 2 &&
+                  departureStation && (
+                    <View
                       style={[
-                        styles.stationPillText,
-                        arrivalStation && {
-                          color: "#ffffff",
-                          fontWeight: "700",
+                        styles.liveRoutePreviewPill,
+                        {
+                          backgroundColor: theme.cardTint,
+                          borderColor: theme.border,
                         },
                       ]}
                     >
-                      {arrivalStation
-                        ? arrivalStation.shortName || arrivalStation.name
-                        : "Scegli stazione di arrivo a Roma..."}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={17} color="#636366" />
-                </TouchableOpacity>
-
-                {/* Stazioni rapide arrivo */}
-                <View style={styles.quickStationsRow}>
-                  {quickArrivalStations.map((st: StationInfo) => (
-                    <TouchableOpacity
-                      key={st.code}
-                      style={[
-                        styles.quickChip,
-                        arrivalStation?.code === st.code && [
-                          styles.quickChipActive,
-                          {
-                            borderColor: theme.primary,
-                            backgroundColor: `${theme.primary}25`,
-                          },
-                        ],
-                      ]}
-                      onPress={() => setArrivalStation(st)}
-                    >
-                      <Text
-                        style={[
-                          styles.quickChipText,
-                          arrivalStation?.code === st.code && {
-                            color: theme.accent,
-                            fontWeight: "800",
-                          },
-                        ]}
-                      >
-                        {st.shortName || st.name.replace("ROMA ", "")}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                      <Ionicons
+                        name="car-sport"
+                        size={16}
+                        color={theme.accent}
+                        style={{ marginRight: 8 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.liveRoutePreviewTitle}>
+                          {originAddress} ➔{" "}
+                          {departureStation.shortName ||
+                            departureStation.name}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.liveRoutePreviewStats,
+                            { color: theme.accent },
+                          ]}
+                        >
+                          {calculatingDriving
+                            ? "Calcolo distanza e tempi reali in corso..."
+                            : drivingEstimate
+                              ? `${drivingEstimate.distanceKm || (drivingEstimate.distanceMeters ? (drivingEstimate.distanceMeters / 1000).toFixed(1) : 0)} km stradali • ~${drivingEstimate.durationMinutes} min • ${drivingEstimate.trafficCondition || "Viabilità attuale: traffico scorrevole"}`
+                              : "Percorso stradale pronto"}
+                        </Text>
+                      </View>
+                      {calculatingDriving && (
+                        <ActivityIndicator
+                          size="small"
+                          color={theme.accent}
+                        />
+                      )}
+                    </View>
+                  )}
               </View>
 
-              {/* ── 4. BUFFER ANTICIPO IN AULA ── */}
+              {/* ── 4. ANTICIPO DI SICUREZZA IN AULA ── */}
               <View style={styles.pillSection}>
                 <Text style={styles.pillSectionLabel}>
-                  ANTICIPO DESIDERATO IN AULA
+                  ANTICIPO IN AULA
                 </Text>
-                <View style={styles.bufferChoicesRow}>
-                  {[10, 15, 20, 30].map((mins) => {
+                <View style={styles.chipsContainer}>
+                  {[5, 10, 15, 20].map((mins) => {
                     const isSel = bufferMinutes === mins;
                     return (
                       <TouchableOpacity
                         key={mins}
                         style={[
-                          styles.largeBufferPill,
+                          styles.chip,
                           isSel && [
-                            styles.largeBufferPillActive,
+                            styles.chipActive,
                             {
+                              backgroundColor: theme.bg,
                               borderColor: theme.primary,
-                              backgroundColor: theme.primary,
                               shadowColor: theme.primary,
                             },
                           ],
                         ]}
+                        activeOpacity={0.7}
                         onPress={() => setBufferMinutes(mins)}
                       >
+                        <Ionicons
+                          name={
+                            isSel ? "checkmark-circle" : "time-outline"
+                          }
+                          size={14}
+                          color={isSel ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 5 }}
+                        />
                         <Text
                           style={[
-                            styles.largeBufferPillText,
-                            isSel && { color: "#ffffff", fontWeight: "800" },
+                            styles.chipText,
+                            isSel && styles.chipTextActive,
                           ]}
                         >
                           {mins} min
@@ -1184,70 +1430,58 @@ function PostDownloadScreen() {
                       </TouchableOpacity>
                     );
                   })}
-                </View>
 
-                {bufferMinutes !== null && (
-                  <View style={styles.bufferFineControlsRow}>
-                    <TouchableOpacity
-                      style={[styles.fineStepBtn, { borderColor: theme.border }]}
-                      onPress={() => setBufferMinutes(Math.max(5, bufferMinutes - 1))}
-                    >
-                      <Ionicons name="remove" size={14} color="#ffffff" />
-                    </TouchableOpacity>
-                    <Text style={[styles.fineStepValueText, { color: theme.accent }]}>
-                      {bufferMinutes} min esatti
-                    </Text>
-                    <TouchableOpacity
-                      style={[styles.fineStepBtn, { borderColor: theme.border }]}
-                      onPress={() => setBufferMinutes(Math.min(60, bufferMinutes + 1))}
-                    >
-                      <Ionicons name="add" size={14} color="#ffffff" />
-                    </TouchableOpacity>
-                  </View>
-                )}
+                  {bufferMinutes !== null && (
+                    <View style={styles.fineStepRow}>
+                      <TouchableOpacity
+                        style={styles.fineStepPill}
+                        onPress={() =>
+                          setBufferMinutes((b: number) =>
+                            Math.max(1, (b ?? 10) - 1),
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="remove"
+                          size={14}
+                          color="#ffffff"
+                        />
+                      </TouchableOpacity>
+                      <View
+                        style={[
+                          styles.fineStepValuePill,
+                          {
+                            borderColor: theme.primary,
+                            backgroundColor: theme.subtle,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.fineStepValueText,
+                            { color: theme.accent },
+                          ]}
+                        >
+                          {bufferMinutes} min
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.fineStepPill}
+                        onPress={() =>
+                          setBufferMinutes((b: number) => (b ?? 10) + 1)
+                        }
+                      >
+                        <Ionicons name="add" size={14} color="#ffffff" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
               </View>
-
-              {/* Anteprima stima reale tragitto in auto */}
-              {carMode === "yes" && departureStation && originAddress.trim().length >= 2 && (
-                <View
-                  style={[
-                    styles.liveRoutePreviewPill,
-                    {
-                      borderColor: theme.border,
-                      backgroundColor: "rgba(255, 255, 255, 0.04)",
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name="speedometer-outline"
-                    size={20}
-                    color={theme.accent}
-                    style={{ marginRight: 10 }}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.liveRoutePreviewTitle}>
-                      Stima Stradale Live a {departureStation.shortName || departureStation.name}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.liveRoutePreviewStats,
-                        { color: theme.accent },
-                      ]}
-                    >
-                      {calculatingDriving
-                        ? "Calcolo tempi di percorrenza in corso..."
-                        : drivingEstimate
-                        ? `~${drivingEstimate.durationMinutes} min di tragitto + ${parkingBufferMinutes || 10} min parcheggio (${(drivingEstimate.distanceMeters / 1000).toFixed(1)} km)`
-                        : "Dati stradali disponibili al calcolo"}
-                    </Text>
-                  </View>
-                </View>
-              )}
             </ScrollView>
           </View>
         </Animated.ScrollView>
 
-        {/* Barra inferiore FISSA che non scorre con la pagina */}
+        {/* Barra inferiore FISSA con animazione fluida delle due lineette */}
         <View style={styles.fixedBottomFooter}>
           <View style={styles.twoLinesContainer}>
             <Animated.View
@@ -1295,30 +1529,28 @@ function PostDownloadScreen() {
               ]}
               pointerEvents={currentPage === 1 ? "auto" : "none"}
             >
-              <View style={styles.swipeHintRow}>
-                {isChannelSelectionComplete ? (
-                  <>
-                    <Text
-                      style={[
-                        styles.swipeHintTextActive,
-                        { color: theme.accent },
-                      ]}
-                    >
-                      Scorri per continuare la configurazione
-                    </Text>
+              {isChannelSelectionComplete ? (
+                <NativeActionButton
+                  label="Salva"
+                  onPress={() => finalizeOnboarding(false)}
+                  accentColor={theme.primary}
+                  glow={true}
+                  icon={
                     <Ionicons
-                      name="arrow-forward"
-                      size={14}
-                      color={theme.accent}
-                      style={{ marginLeft: 5 }}
+                      name="checkmark-circle"
+                      size={17}
+                      color="#ffffff"
                     />
-                  </>
-                ) : (
+                  }
+                  style={{ width: "100%", maxWidth: 300 }}
+                />
+              ) : (
+                <View style={styles.swipeHintRow}>
                   <Text style={styles.swipeHintTextLocked}>
                     {missingSelectionMessage}
                   </Text>
-                )}
-              </View>
+                </View>
+              )}
             </Animated.View>
 
             <Animated.View
@@ -1952,10 +2184,12 @@ export function OnboardingCourseSelector({
     handleSelectChannel,
     isChannelSelectionComplete,
     missingSelectionMessage,
+    resolvedTab,
     originAddress,
     setOriginAddress,
     setOriginCoords,
     placeSuggestions,
+    setPlaceSuggestions,
     searchingPlaces,
     placeSearchActive,
     setPlaceSearchActive,
@@ -2001,6 +2235,8 @@ export function OnboardingCourseSelector({
               screenOptions={{
                 headerShown: false,
                 contentStyle: { backgroundColor: "#111111" },
+                headerBackButtonDisplayMode: "minimal",
+                headerBackTitle: "",
               }}
             >
               <OnboardingStack.Screen
@@ -2013,7 +2249,8 @@ export function OnboardingCourseSelector({
                 options={{
                   headerShown: true,
                   title: "Scegli il tuo corso",
-                  headerBackTitle: "Indietro",
+                  headerBackButtonDisplayMode: "minimal",
+                  headerBackTitle: "",
                   headerTintColor: "#ffffff",
                   headerStyle: { backgroundColor: "#111111" },
                   headerShadowVisible: false,
@@ -2022,21 +2259,17 @@ export function OnboardingCourseSelector({
                     fontSize: 17,
                     fontWeight: "700",
                   },
-                  headerSearchBarOptions:
-                    setupMode === "normal"
-                      ? {
-                          placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-                          textColor: "#ffffff",
-                          tintColor: theme.primary,
-                          headerIconColor: "#8e8e93",
-                          hintTextColor: "#71717a",
-                          autoCapitalize: "none",
-                          hideWhenScrolling: false,
-                          placement: "stacked",
-                          onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-                          onCancelButtonPress: () => setSearch(""),
-                        }
-                      : undefined,
+                  headerSearchBarOptions: {
+                    placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+                    tintColor: theme.primary,
+                    textColor: "#ffffff",
+                    headerIconColor: "#8e8e93",
+                    hintTextColor: "#71717a",
+                    hideWhenScrolling: false,
+                    autoCapitalize: "none",
+                    onChangeText: (e: any) => setSearch(e.nativeEvent.text),
+                    onCancelButtonPress: () => setSearch(""),
+                  },
                 }}
               />
               <OnboardingStack.Screen
@@ -2045,7 +2278,8 @@ export function OnboardingCourseSelector({
                 options={{
                   headerShown: true,
                   title: pendingDegree?.name || "Configurazione",
-                  headerBackTitle: "Corsi",
+                  headerBackButtonDisplayMode: "minimal",
+                  headerBackTitle: "",
                   headerTintColor: "#ffffff",
                   headerStyle: { backgroundColor: "#111111" },
                   headerShadowVisible: false,
@@ -2075,6 +2309,9 @@ export function OnboardingCourseSelector({
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// STILI GRAFICI: Pill arrotondate a capsula / stadium, glowing neon e centrati
+// ═══════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -2084,95 +2321,96 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#111111",
   },
-  /* ── Stili Schermata di Benvenuto Pulita Minimal SVG & Transizione ── */
+
+  /* ── Stili Welcome Minimal ── */
   cleanWelcomeContainer: {
     flex: 1,
-    paddingHorizontal: 28,
+    paddingHorizontal: 32,
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 48,
-    paddingBottom: Platform.OS === "ios" ? 36 : 28,
+    paddingTop: Platform.OS === "ios" ? 40 : 28,
+    paddingBottom: Platform.OS === "ios" ? 28 : 24,
   },
   cleanWelcomeCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     maxWidth: 340,
-    width: "100%",
   },
   cleanLogoWrapper: {
+    position: "relative",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 28,
-    position: "relative",
   },
   cleanLogoGlow: {
     position: "absolute",
     width: 140,
     height: 140,
     borderRadius: 70,
-    opacity: 0.18,
-    transform: [{ scale: 1.15 }],
+    opacity: 0.16,
   },
   cleanAppTitle: {
     fontSize: 34,
-    fontWeight: "800",
+    fontWeight: "900",
     color: "#ffffff",
-    letterSpacing: -0.6,
-    marginBottom: 6,
-    textAlign: "center",
+    letterSpacing: -0.5,
   },
   cleanAppSubtitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    textAlign: "center",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 4,
     letterSpacing: 0.2,
-    marginBottom: 16,
   },
   cleanAppDesc: {
-    fontSize: 13.5,
+    fontSize: 14,
     color: "#a1a1aa",
     textAlign: "center",
-    lineHeight: 20,
-    fontWeight: "400",
+    lineHeight: 21,
+    marginTop: 14,
     paddingHorizontal: 8,
   },
   cleanWelcomeFooter: {
     width: "100%",
     alignItems: "center",
-    justifyContent: "center",
-    paddingTop: 16,
+    paddingBottom: 8,
   },
 
-  /* ── Stili Selettore Modalità Normale vs Sync ── */
+  /* ── Segmented Control / Tabs ── */
   nativeSegmentedWrapper: {
     paddingHorizontal: 16,
     paddingTop: 4,
     paddingBottom: 8,
+    backgroundColor: "transparent",
   },
   nativeSegmentedControl: {
-    height: 34,
+    height: 36,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
   },
   modeSelectorContainer: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    paddingTop: 6,
+    paddingTop: 8,
     paddingBottom: 8,
-    gap: 8,
+    gap: 10,
+    backgroundColor: "transparent",
   },
   modeTab: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 9,
-    borderRadius: 12,
+    paddingVertical: 10,
+    borderRadius: 20,
     backgroundColor: "#18181b",
     borderWidth: 1,
     borderColor: "#27272a",
   },
   modeTabActive: {
     borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
     elevation: 3,
   },
   modeTabText: {
@@ -2185,16 +2423,16 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  /* ── Stili Sincronizzazione ── */
+  /* ── Sync Form ── */
   syncContainer: {
     flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingTop: 16,
   },
   syncCard: {
-    borderRadius: 18,
+    padding: 24,
+    borderRadius: 22,
     borderWidth: 1,
-    padding: 20,
     alignItems: "center",
   },
   syncIconCircle: {
@@ -2206,48 +2444,46 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   syncCardTitle: {
-    fontSize: 18,
-    fontWeight: "700",
+    fontSize: 20,
+    fontWeight: "800",
     color: "#ffffff",
     marginBottom: 8,
-    textAlign: "center",
   },
   syncCardDesc: {
-    fontSize: 13,
+    fontSize: 13.5,
     color: "#a1a1aa",
     textAlign: "center",
-    lineHeight: 18,
+    lineHeight: 19,
     marginBottom: 20,
   },
   syncInputWrapper: {
     flexDirection: "row",
     alignItems: "center",
-    width: "100%",
-    borderRadius: 12,
+    borderRadius: 22,
     borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    width: "100%",
+    paddingHorizontal: 16,
     marginBottom: 16,
   },
   syncInput: {
     flex: 1,
+    height: 48,
+    fontSize: 15,
+    fontWeight: "700",
     color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "600",
-    letterSpacing: 1.5,
-    paddingVertical: 10,
+    letterSpacing: 1,
   },
   syncPasteBtn: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 14,
     marginLeft: 8,
   },
   syncPasteBtnText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
     marginLeft: 4,
   },
   syncSubmitBtn: {
@@ -2255,45 +2491,63 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     width: "100%",
-    paddingVertical: 14,
-    borderRadius: 12,
+    height: 48,
+    borderRadius: 24,
   },
   syncSubmitBtnText: {
-    color: "#ffffff",
     fontSize: 15,
-    fontWeight: "600",
+    fontWeight: "800",
+    color: "#ffffff",
   },
 
-  /* ── Lista Corsi di Laurea con Card Raccordate & Pill Interne con Glowing ── */
+  /* ── Course List Screen ── */
   scrollList: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingTop: 4,
   },
-  courseCard: {
-    backgroundColor: "rgba(255, 255, 255, 0.04)",
-    borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+  centerContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 60,
+  },
+  loadingText: {
+    color: "#8e8e93",
+    fontSize: 13,
+    marginTop: 12,
+  },
+  emptyContainer: {
+    alignItems: "center",
+    paddingVertical: 60,
+  },
+  emptyText: {
+    color: "#8e8e93",
+    fontSize: 14,
+    marginTop: 10,
+  },
+  modalItem: {
+    backgroundColor: "#1c1c1e",
+    padding: 14,
+    borderRadius: 16,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "#27272a",
   },
-  courseIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+  courseIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#2c2c2e",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
   },
-  courseName: {
-    fontSize: 15.5,
-    fontWeight: "700",
-    color: "#ffffff",
-    letterSpacing: -0.2,
+  modalItemTitle: {
+    color: "#f4f4f5",
+    fontSize: 15,
+    fontWeight: "600",
     marginBottom: 6,
   },
   courseBadgesRow: {
@@ -2304,312 +2558,217 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   typeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 3.5,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.75,
-    shadowRadius: 7,
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
     elevation: 4,
   },
   typeBadgeText: {
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.2,
   },
   classBadge: {
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 3.5,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
     borderRadius: 999,
+    borderWidth: 1,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.85,
-    shadowRadius: 7,
-    elevation: 5,
+    shadowOpacity: 0.75,
+    shadowRadius: 6,
+    elevation: 4,
   },
   classBadgeText: {
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.2,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingTop: 40,
-  },
-  loadingText: {
-    color: "#a1a1aa",
-    marginTop: 12,
-    fontSize: 14,
-  },
-  emptyContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingTop: 60,
-  },
-  emptyText: {
-    color: "#71717a",
-    marginTop: 12,
-    fontSize: 14,
-    textAlign: "center",
   },
 
-  /* ── Stili Pagine Post-Download (Orario & Impostazioni Viaggio) ── */
+  /* ── Header Schermate Post-Download ── */
   channelScrollContent: {
-    padding: 24,
+    paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 110,
   },
   travelInitScrollContent: {
-    paddingHorizontal: 22,
+    paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 120,
   },
   channelHeroHeader: {
     alignItems: "center",
-    marginBottom: 26,
+    marginBottom: 20,
+    marginTop: 4,
   },
   channelIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 12,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 10,
     elevation: 6,
   },
   channelHeroTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: "800",
     color: "#ffffff",
-    letterSpacing: 0.3,
-    textAlign: "center",
-    marginBottom: 4,
+    letterSpacing: -0.4,
   },
   channelDegreeTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#a1a1aa",
+    fontSize: 15,
+    fontWeight: "700",
     textAlign: "center",
-    marginBottom: 8,
+    marginTop: 4,
+    paddingHorizontal: 16,
   },
   channelHeroSubtitle: {
     fontSize: 13,
-    color: "#71717a",
-    textAlign: "center",
-    lineHeight: 18,
-    paddingHorizontal: 12,
-  },
-  channelSection: {
-    marginBottom: 22,
-  },
-  channelSectionLabel: {
-    fontSize: 11.5,
-    fontWeight: "700",
     color: "#a1a1aa",
-    letterSpacing: 0.8,
-    marginBottom: 10,
-    marginLeft: 4,
-  },
-  channelButtonsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  channelButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 15,
-    paddingVertical: 11,
-    borderRadius: 14,
-    backgroundColor: "#1c1c1e",
-    borderWidth: 1,
-    borderColor: "#2c2c2e",
-  },
-  channelButtonActive: {
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  channelButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#d4d4d8",
-  },
-  channelButtonTextActive: {
-    color: "#ffffff",
-    fontWeight: "700",
-  },
-  missingSelectionNotice: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(245, 158, 11, 0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(245, 158, 11, 0.25)",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    marginTop: 10,
-  },
-  missingSelectionNoticeText: {
-    fontSize: 12.5,
-    color: "#f59e0b",
-    fontWeight: "600",
     textAlign: "center",
+    marginTop: 6,
+    lineHeight: 18,
+    paddingHorizontal: 20,
   },
 
-  /* ── Stili Viaggio (Pill Section iOS 26) ── */
+  /* ── Sezioni e Glowing Chips (Arrotondati a Capsula e Centrati) ── */
   pillSection: {
     marginBottom: 20,
   },
   pillSectionLabel: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "700",
     color: "#71717a",
-    letterSpacing: 0.6,
-    marginBottom: 8,
-    marginLeft: 4,
+    letterSpacing: 0.8,
+    marginBottom: 12,
+    textAlign: "center",
+    textTransform: "uppercase",
   },
-  iosPillInputWrapper: {
+  chipsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+    overflow: "visible",
+    paddingVertical: 4,
+  },
+  chip: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(28, 28, 30, 0.75)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-  },
-  iosPillInput: {
-    flex: 1,
-    fontSize: 14.5,
-    color: "#ffffff",
-    fontWeight: "500",
-  },
-  suggestionsContainer: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 14,
-    marginTop: 6,
+    paddingHorizontal: 14,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "#2c2c2e",
-    overflow: "hidden",
-  },
-  suggestionItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#27272a",
-  },
-  suggestionText: {
-    fontSize: 13,
-    color: "#e4e4e7",
-  },
-  yesNoGrid: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  yesNoPill: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(28, 28, 30, 0.75)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
   },
-  yesNoPillActive: {
+  chipActive: {
     borderWidth: 1.5,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  yesNoPillText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#a1a1aa",
-  },
-  parkingBufferSubSection: {
-    marginTop: 12,
-    backgroundColor: "rgba(28, 28, 30, 0.5)",
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.06)",
-  },
-  parkingBufferLabel: {
-    fontSize: 11.5,
-    fontWeight: "600",
-    color: "#a1a1aa",
-    marginBottom: 8,
-  },
-  bufferChoicesRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  smallBufferPill: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: "#27272a",
-    borderWidth: 1,
-    borderColor: "#3f3f46",
-  },
-  smallBufferPillActive: {
-    borderColor: "transparent",
-  },
-  smallBufferPillText: {
-    fontSize: 11.5,
-    fontWeight: "600",
-    color: "#d4d4d8",
-  },
-  largeBufferPill: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: "rgba(28, 28, 30, 0.75)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-  },
-  largeBufferPillActive: {
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
     shadowRadius: 8,
     elevation: 4,
   },
-  largeBufferPillText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#d4d4d8",
+  chipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#a1a1aa",
   },
-  bufferFineControlsRow: {
+  chipTextActive: {
+    fontWeight: "700",
+    color: "#ffffff",
+  },
+  channelRowEqual: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+    width: "100%",
+  },
+  chipEqual: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 16,
-    marginTop: 12,
+    backgroundColor: "#1c1c1e",
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    paddingHorizontal: 12,
   },
-  fineStepBtn: {
+  stationGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: 8,
+    width: "100%",
+  },
+  stationGridItem: {
+    width: "48.5%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    paddingHorizontal: 6,
+  },
+  stationActionPill: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    borderStyle: "dashed",
+    paddingHorizontal: 12,
+    marginTop: 8,
+  },
+  subPillGroup: {
+    marginTop: 14,
+    alignItems: "center",
+  },
+  subPillLabel: {
+    fontSize: 10.5,
+    fontWeight: "700",
+    color: "#71717a",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  fineStepRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginLeft: 4,
+  },
+  fineStepPill: {
     width: 32,
     height: 32,
     borderRadius: 16,
     backgroundColor: "#27272a",
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fineStepValuePill: {
+    paddingHorizontal: 12,
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
@@ -2618,59 +2777,114 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  stationSelectorPill: {
+
+  /* ── Summary Card & Prompt Card ── */
+  summaryCard: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "rgba(28, 28, 30, 0.75)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  stationSelectorPillFilled: {
-    borderWidth: 1.2,
-  },
-  stationPillLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-  stationPillText: {
-    fontSize: 14,
-    color: "#8e8e93",
-    fontWeight: "500",
-  },
-  quickStationsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: 8,
-  },
-  quickChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    backgroundColor: "rgba(255, 255, 255, 0.03)",
+    borderRadius: 20,
+    padding: 14,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
+    marginTop: 6,
   },
-  quickChipActive: {
+  summaryIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 1,
+    marginRight: 12,
   },
-  quickChipText: {
-    fontSize: 11,
+  summaryOverline: {
+    fontSize: 10.5,
+    fontWeight: "800",
+    color: "#71717a",
+    letterSpacing: 0.6,
+  },
+  summaryValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginTop: 1,
+  },
+  summaryOriginalName: {
+    fontSize: 11.5,
+    color: "#71717a",
+    marginTop: 2,
+  },
+  promptSelectCard: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    backgroundColor: "rgba(255, 255, 255, 0.02)",
+    marginTop: 6,
+  },
+  promptSelectText: {
+    fontSize: 12,
     fontWeight: "600",
-    color: "#a1a1aa",
+    color: "#71717a",
+    textAlign: "center",
   },
+
+  /* ── Pill Input Indirizzo Partenza (Capsula Arrotondata) ── */
+  iosPillInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 22,
+    borderWidth: 1.2,
+    borderColor: "#2c2c2e",
+    paddingHorizontal: 16,
+    height: 44,
+  },
+  iosPillInput: {
+    flex: 1,
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  suggestionsBox: {
+    marginTop: 8,
+    backgroundColor: "#18181b",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    overflow: "hidden",
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+  },
+  suggestionTitle: {
+    color: "#ffffff",
+    fontSize: 13.5,
+    fontWeight: "600",
+  },
+  suggestionSub: {
+    color: "#94a3b8",
+    fontSize: 11.5,
+    marginTop: 1,
+  },
+
+  /* ── Live Route Preview Pill ── */
   liveRoutePreviewPill: {
     flexDirection: "row",
     alignItems: "center",
     marginTop: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
     borderWidth: 1,
   },
   liveRoutePreviewTitle: {
@@ -2684,7 +2898,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  /* ── Barra Inferiore Fissa con Animazione Fluida delle 2 Lineette ── */
+  /* ── Fixed Bottom Footer con Indicatori Fluidi ── */
   fixedBottomFooter: {
     paddingHorizontal: 20,
     paddingTop: 10,
@@ -2744,8 +2958,8 @@ const styles = StyleSheet.create({
   },
   laterBtnPill: {
     flex: 1,
-    height: 42,
-    borderRadius: 21,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#1c1c1e",
     borderWidth: 1,
     borderColor: "#2c2c2e",
@@ -2757,27 +2971,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: "#a1a1aa",
-  },
-  saveBtnPill: {
-    flex: 1,
-    flexDirection: "row",
-    height: 42,
-    borderRadius: 21,
-    borderWidth: 1.5,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  saveBtnPillDisabled: {
-    backgroundColor: "#18181b",
-    borderColor: "#27272a",
-    opacity: 0.55,
-  },
-  saveBtnPillText: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: "#ffffff",
   },
 
   /* ── Stili Stazioni per NativeSheetModal ── */

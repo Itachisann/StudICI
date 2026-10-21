@@ -134,6 +134,119 @@ export interface ScheduleData {
   days: ClassEvent[][]; // 5 arrays, one per day (LUN-VEN)
 }
 
+export const FALLBACK_DEGREES: Degree[] = [
+  {
+    name: "Ingegneria Aeronautica / Aeronautical Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSBa6Z6l2Oy70Zx4X_jqCmd9NtPwuFhmVzGSGu6nyJzVhKagY7ejFc-1n1MCWvVc5-0JwVktIsG2plI/pubhtml",
+    className: "LM-20",
+  },
+  {
+    name: "Ingegneria Aerospaziale - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRQ4bH_T0V78WiwWP_D3QRNauz8izwY7Asu_RSP1OHHqujJfY4U-hHkoLDvIjxm3w/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria Biomedica - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQDqlnYMu5OCu2mKeJDc-Uu8iWRdQekthZDiIckJGIgT4b-j4Ex2Mayk0wdXpgH1QSiJADqPbsfTK4d/pubhtml",
+    className: "LM-21",
+  },
+  {
+    name: "Ingegneria Chimica - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vT0dENfMgvomzmeLh8GXb-JavkpkKOmOKBR_iy257cl7nHRAc1yui4ceFsYotIfcQ/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria Chimica / Chemical Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTezz8ZDG_AOq7T_jJEamR58AoWgX_tms7_q_WF_HqZHyIOe1ZcNqLMzkqoL58uexXXaJbu0QdD6z7C/pubhtml",
+    className: "LM-22",
+  },
+  {
+    name: "Ingegneria Civile - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vS8ODbnYZNffQtQaU3Kb4We7_8tvJ0ME2Xmz6c8XtILL_1MG3AjeFQIT2df2ivi8tGovd8eiMyoVRRt/pubhtml",
+    className: "LM-23",
+  },
+  {
+    name: "Ingegneria Civile - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSFlsygQDWUjWfjnZxBQpjgB1F5awv8zh71EDbJ3Opxrneg9smWesgaqiRQ37t8ow/pubhtml",
+    className: "L-7R",
+  },
+  {
+    name: "Ingegneria Clinica - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vToVbzBu8Xnv6CT3WkjhfG0egQZRw0EN-P3TyCiEBmSj-vRTstO2stWzvC9NTXSsQ/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria dell'Energia Elettrica - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vT0e5dikoNMdEnvd1fBN2aw-VmoeHDbfhlinWuvsNoKbLuU9ZlF3o8Mld67ByXS2A/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria dell'energia Elettrica / Electrical Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSqRYZ1kd0UsmT5UoYxDeh3tk8PxjtqK1SL9tA-njsttxW1FFbBATKn-H6q1-gs4JSLt9Q1yUSXCb5d/pubhtml",
+    className: "LM-28",
+  },
+  {
+    name: "Ingegneria della Sicurezza E Protezione Civile / Safety And Civil Protection Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQgOvLrG1T2CW33BIMCOvZMXaOiC_dDReMH0UD180iZtoB99vGiB6qWg0WTpcaULuZ6j54H9Nr54is4/pubhtml",
+    className: "LM-26",
+  },
+  {
+    name: "Ingegneria delle Nanotecnologie / Nanotechnology Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQEkUNQPLk4jZrN1Hs6oN1TFOM-2ZukjF2I13EPtkfWceRtDJDabpbunK0GPzxcjCLFsvxn1WnC60MC/pubhtml",
+    className: "LM-53",
+  },
+  {
+    name: "Ingegneria Edile-Architettura - Quinquennale Ciclo Unico",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRqRfNrzHB_px_g6rrrob_damXys4UJ0Xlxo7RrjJ_tz6B2fx8FXM2Gbgr9SzhwlEhMk0gv7ASyhBN0/pubhtml",
+    className: "LM-4c.u.R",
+  },
+  {
+    name: "Ingegneria Energetica - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0Rvu4363QL2c7HqgSUZhOmZaZnvJFol-DFVcZMd4kZZYffSJx4qC3o1HL1xVrZw/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria Energetica / Energy Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQmiVd2Yd35lEMygEzCYK2qu_O-Peb2zVc3-6Il1d6Xzdh1LpiKKFoqnYRFzSyrs5mfYzj0qgi_8nyp/pubhtml",
+    className: "LM-30",
+  },
+  {
+    name: "Ingegneria Meccanica - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR43VlYl2ywap93xcKt5adzAtTQkmLQjp5xCvsjVLxGQY4aqc45mZeFqC9F2NIHew/pubhtml",
+    className: "L-9R",
+  },
+  {
+    name: "Ingegneria Meccanica / Mechanical Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRFjKLnk6t2QT9dItq7FNRdAFk0tMtELSjLU7Nm82IB5RlkkONozkx7JB2LGro4lNHtLGHBpNSFIE8z/pubhtml",
+    className: "LM-33",
+  },
+  {
+    name: "Ingegneria per l'Ambiente e il Territorio - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQU6H6YmSSbz6iYSQaImLrCN9wU98ZYTP3JWjaHqNhXZekU3DeFvduOZzCKFwb-cg/pubhtml",
+    className: "L-7",
+  },
+  {
+    name: "Ingegneria per l'Ambiente e il Territorio / Environmental Engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTORKKhFeUXNJMiWopruNLmdn9yX5s7S3ycsqLI-d4qO8USdMrA2i05AEOILib49qm2Vs9N0SyRJKAI/pubhtml",
+    className: "LM-35",
+  },
+  {
+    name: "Ingegneria spaziale e astronautica / Space and astonautical engineering - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vQPWv0vlwQbU9gbni2m3PMJ4gB0-TofZc8XhRwnJH9XRTUNh9ojtmjd4Mu-Zk88YTC3ryD-Jhqo7PmO/pubhtml",
+    className: "LM-20",
+  },
+  {
+    name: "Professioni tecniche per l'edilizia e il territorio - Triennale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTR4x7EpZlOc_oBiJMAMZodPpyEtEYA6Zz2DT6o3GZ2P7uN5D8DSQ-r88z4MX18AQ/pubhtml",
+    className: "L-P01",
+  },
+  {
+    name: "Transport Systems Engineering / Ingegneria Dei Sistemi Di Trasporto - Magistrale",
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR8OO7O6xIRV3feoFLyIK2zlqHIZiecdVXuvcqpbSgn78j_j8IM83n6Zt9fVjDmSnKRI5PC_G2yToFi/pubhtml",
+    className: "LM-23",
+  },
+];
+
 export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
   const cacheKey = 'cached_degrees_list_v2';
   if (!forceRefresh) {
@@ -147,7 +260,7 @@ export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
   }
   try {
     const url = 'https://ici.web.uniroma1.it/node/388';
-    const res = await axios.get(url);
+    const res = await axios.get(url, { timeout: 4000 });
     const html = res.data;
     const degrees: Degree[] = [];
     
@@ -177,11 +290,12 @@ export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
     }
     if (degrees.length > 0) {
       await AsyncStorage.setItem(cacheKey, JSON.stringify(degrees)).catch(() => {});
+      return degrees;
     }
-    return degrees;
+    return FALLBACK_DEGREES;
   } catch (error) {
-    console.error('Error fetching degrees:', error);
-    return [];
+    console.warn('Sapienza website unreachable or timed out, returning fallback degree catalog:', error);
+    return FALLBACK_DEGREES;
   }
 }
 

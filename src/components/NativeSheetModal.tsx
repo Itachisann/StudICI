@@ -137,7 +137,7 @@ export function NativeSheetModal({
     return [
       {
         type: 'button',
-        label: 'Indietro',
+        label: '',
         icon: { type: 'sfSymbol', name: 'chevron.left' } as any,
         tintColor: universalIconColor,
         onPress: backHandler,

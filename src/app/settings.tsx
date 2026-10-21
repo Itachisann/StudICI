@@ -32,6 +32,7 @@ import { DefaultTabPicker } from "../components/DefaultTabPicker";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
+import { getDegreeClassTheme } from "../utils/degreeColors";
 import {
   getLastCalendarSync,
   syncScheduleToAppleCalendar,
@@ -1057,24 +1058,41 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
 
-              {courseMetadata.displayClass ? (
-                <View
-                  style={[
-                    styles.profileBadge,
-                    { backgroundColor: "rgba(255, 159, 10, 0.15)" },
-                  ]}
-                >
-                  <Ionicons
-                    name="ribbon-outline"
-                    size={11}
-                    color="#ff9f0a"
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={[styles.profileBadgeText, { color: "#ff9f0a" }]}>
-                    {courseMetadata.displayClass}
-                  </Text>
-                </View>
-              ) : null}
+              {courseMetadata.displayClass ? (() => {
+                const classTheme = getDegreeClassTheme(courseMetadata.displayClass);
+                return (
+                  <View
+                    style={[
+                      styles.profileBadge,
+                      {
+                        backgroundColor: classTheme.backgroundColor,
+                        borderColor: classTheme.borderColor,
+                        borderWidth: 1,
+                        shadowColor: classTheme.glowColor,
+                        shadowOffset: { width: 0, height: 0 },
+                        shadowOpacity: 0.8,
+                        shadowRadius: 6,
+                        elevation: 3,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="ribbon-outline"
+                      size={11}
+                      color={classTheme.textColor}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text
+                      style={[
+                        styles.profileBadgeText,
+                        { color: classTheme.textColor, fontWeight: "700" },
+                      ]}
+                    >
+                      {courseMetadata.displayClass}
+                    </Text>
+                  </View>
+                );
+              })() : null}
             </View>
           </View>
         </View>
@@ -1842,13 +1860,30 @@ export default function ProfiloScreen() {
                             {isMagistrale ? "Magistrale" : "Triennale"}
                           </Text>
                         </View>
-                        {deg.className ? (
-                          <View style={styles.classBadge}>
-                            <Text style={styles.classBadgeText}>
-                              {deg.className}
-                            </Text>
-                          </View>
-                        ) : null}
+                        {deg.className ? (() => {
+                          const classTheme = getDegreeClassTheme(deg.className);
+                          return (
+                            <View
+                              style={[
+                                styles.classBadge,
+                                {
+                                  backgroundColor: classTheme.backgroundColor,
+                                  borderColor: classTheme.borderColor,
+                                  shadowColor: classTheme.glowColor,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.classBadgeText,
+                                  { color: classTheme.textColor },
+                                ]}
+                              >
+                                {deg.className}
+                              </Text>
+                            </View>
+                          );
+                        })() : null}
                       </View>
                     </View>
                     {isSelected && (
@@ -2771,15 +2806,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   classBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.25)",
-    borderColor: "#ff9f0a",
-    borderWidth: 1,
     paddingHorizontal: 9,
     paddingVertical: 3,
     borderRadius: 999,
-    shadowColor: "#ff9f0a",
+    borderWidth: 1,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.65,
+    shadowOpacity: 0.75,
     shadowRadius: 6,
     elevation: 4,
   },
