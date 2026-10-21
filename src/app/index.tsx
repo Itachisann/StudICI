@@ -1382,10 +1382,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   calendarAccentBar: {
-    width: 3.5,
-    height: "82%",
+    width: 4,
+    alignSelf: "stretch",
+    minHeight: 52,
     borderRadius: 2,
     marginHorizontal: 10,
+    marginVertical: 4,
   },
   cardBody: {
     flex: 1,
