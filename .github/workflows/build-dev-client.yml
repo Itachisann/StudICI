@@ -1,0 +1,182 @@
+name: Build iOS Dev Client (Testing)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_configuration:
+        description: 'Configurazione build (Debug = Dev Client live reload con Metro; Release = test standalone)'
+        required: true
+        default: 'Debug'
+        type: choice
+        options:
+          - 'Debug'
+          - 'Release'
+      publish_release:
+        description: 'Pubblica come Pre-Release su GitHub Releases (tag: dev-client-latest)'
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches:
+      - dev
+      - testing
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build iOS Dev Client IPA
+    runs-on: macos-latest
+    env:
+      EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK: 1
+      FORCE_BUNDLING: 1
+      CI: 1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup environment variables
+        run: |
+          echo "EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1" >> $GITHUB_ENV
+          echo "FORCE_BUNDLING=1" >> $GITHUB_ENV
+          echo "EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1" >> .env
+          echo "FORCE_BUNDLING=1" >> .env
+          if [ -n "${{ secrets.EXPO_PUBLIC_GEMINI_KEY }}" ]; then
+            echo "EXPO_PUBLIC_GEMINI_KEY=${{ secrets.EXPO_PUBLIC_GEMINI_KEY }}" >> .env
+          fi
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Configure app for Development / Testing
+        env:
+          BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
+        run: |
+          node -e '
+          const fs = require("fs");
+          const app = JSON.parse(fs.readFileSync("app.json", "utf8"));
+          const isDebug = process.env.BUILD_CONFIG !== "Release";
+          
+          app.expo.name = isDebug ? "StudICI (Dev)" : "StudICI (Test)";
+          app.expo.ios = app.expo.ios || {};
+          app.expo.ios.bundleIdentifier = isDebug ? "com.vitor.studici.dev" : "com.vitor.studici.test";
+          app.expo.ios.infoPlist = app.expo.ios.infoPlist || {};
+          app.expo.ios.infoPlist.CFBundleDisplayName = isDebug ? "StudICI (Dev)" : "StudICI (Test)";
+          app.expo.scheme = isDebug ? "studici-dev" : "studici-test";
+          
+          if (!app.expo.plugins) app.expo.plugins = [];
+          if (!app.expo.plugins.some(p => (Array.isArray(p) ? p[0] : p) === "expo-dev-client")) {
+            app.expo.plugins.unshift("expo-dev-client");
+          }
+          
+          fs.writeFileSync("app.json", JSON.stringify(app, null, 2));
+          console.log("Configured app.json:", {
+            name: app.expo.name,
+            bundleIdentifier: app.expo.ios.bundleIdentifier,
+            displayName: app.expo.ios.infoPlist.CFBundleDisplayName,
+            scheme: app.expo.scheme
+          });
+          '
+
+      - name: Prebuild iOS native project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build unsigned IPA
+        env:
+          BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
+        run: |
+          export EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1
+          export FORCE_BUNDLING=1
+          cd ios
+          
+          PROJECT_NAME=$(basename -s .xcworkspace *.xcworkspace)
+          echo "Building project: ${PROJECT_NAME} in configuration: ${BUILD_CONFIG}"
+          
+          xcodebuild archive \
+            -workspace "${PROJECT_NAME}.xcworkspace" \
+            -scheme "${PROJECT_NAME}" \
+            -configuration "${BUILD_CONFIG}" \
+            -sdk iphoneos \
+            -archivePath "../build/${PROJECT_NAME}.xcarchive" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package IPA
+        env:
+          BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
+        run: |
+          mkdir -p Payload
+          PROJECT_NAME=$(basename -s .xcworkspace ios/*.xcworkspace)
+          cp -r "build/${PROJECT_NAME}.xcarchive/Products/Applications/${PROJECT_NAME}.app" Payload/
+          
+          OUTPUT_NAME="StudICI-DevClient.ipa"
+          if [ "${BUILD_CONFIG}" = "Release" ]; then
+            OUTPUT_NAME="StudICI-Testing.ipa"
+          fi
+          
+          zip -r "${OUTPUT_NAME}" Payload
+          echo "IPA_NAME=${OUTPUT_NAME}" >> $GITHUB_ENV
+          echo "Successfully packaged: ${OUTPUT_NAME}"
+
+      - name: Upload IPA as GitHub Actions Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IPA_NAME }}
+          path: ${{ env.IPA_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish to GitHub Releases (Dev Client / Testing)
+        if: ${{ github.event_name == 'push' || inputs.publish_release != false }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          TAG_NAME="dev-client-latest"
+          
+          cat << EOF > release_notes.md
+          ## 🧪 StudICI Dev Client (Testing Build)
+          
+          - **Versione**: v${VERSION}
+          - **Configurazione**: ${BUILD_CONFIG}
+          - **File scaricabile**: \`${IPA_NAME}\`
+          - **Bundle ID**: \`com.vitor.studici.dev\` (non sovrascrive la versione principale)
+          
+          ---
+          
+          ### 🚀 Come utilizzare questa versione per testare librerie native (Callstack, ecc.):
+          
+          1. **Installa l'IPA sul tuo iPhone**:
+             Scarica \`${IPA_NAME}\` e firmalo/installalo con **SideStore**, **AltStore** o **LiveContainer**.
+          
+          2. **Avvia Metro Bundler sul tuo PC**:
+             Nel terminale del progetto sul tuo PC, esegui:
+             \`\`\`bash
+             npm run start:tunnel
+             # oppure: npx expo start --tunnel
+             \`\`\`
+          
+          3. **Connetti l'app**:
+             Apri l'app **StudICI (Dev)** sul tuo iPhone. Vedrai la schermata di **expo-dev-client**.
+             Tocca il server visualizzato oppure scansiona il QR code o inserisci l'URL \`exp://...\`.
+          
+          4. **Sviluppa in tempo reale**:
+             L'app caricherà il tuo codice in tempo reale con **Fast Refresh** e tutte le librerie native compilate (incluso **Callstack Liquid Glass** su iOS 26)!
+          EOF
+          
+          # Se il tag esiste già, eliminalo per aggiornare la release
+          gh release delete "$TAG_NAME" --cleanup-tag -y || true
+          
+          gh release create "$TAG_NAME" "${IPA_NAME}" \
+            --title "StudICI Dev Client v${VERSION} (Testing)" \
+            --notes-file release_notes.md \
+            --prerelease

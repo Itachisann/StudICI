@@ -1512,7 +1512,7 @@ export default function ViaggioScreen() {
                             (depPlanM > 0 && depActM > depPlanM) ||
                             (!itinerary.liveTrain.isDepartedFromStation &&
                               itinerary.liveTrain.isStoppedInStation &&
-                              (Boolean(itinerary.liveTrain.stoppedMinutes) || currentNowM >= depPlanM)),
+                              currentNowM > depPlanM),
                           );
                           const showStrike = Boolean(
                             isDepDelayed &&
@@ -1737,10 +1737,10 @@ export default function ViaggioScreen() {
                             const currentNowM =
                               new Date().getHours() * 60 +
                               new Date().getMinutes();
-                            // Il convoglio è evidenziato come fermo oltre l'orario se ha minuti di fermo o ha superato la partenza
+                            // Il convoglio è evidenziato come fermo oltre l'orario SOLO se ha superato la partenza stimata
                             const isStoppedLate = Boolean(
                               at.isStoppedInStation &&
-                              (Boolean(at.stoppedMinutes) || atEstDepM === 0 || currentNowM >= atEstDepM),
+                              (atEstDepM === 0 || currentNowM > atEstDepM),
                             );
 
                             return (
