@@ -8,7 +8,8 @@ import {
 import {
   ParamListBase,
   TabNavigationState,
-  ThemeProvider as NavigationThemeProvider,
+  NavigationIndependentTree,
+  NavigationContainer,
   DarkTheme,
 } from '@react-navigation/native';
 import { useTheme as useAppTheme } from '@/context/ThemeContext';
@@ -27,9 +28,11 @@ const BottomTabNavigator: typeof BaseBottomTabNavigator = (props) => {
   }), [theme]);
 
   return (
-    <NavigationThemeProvider value={navTheme}>
-      <BaseBottomTabNavigator {...props} />
-    </NavigationThemeProvider>
+    <NavigationIndependentTree>
+      <NavigationContainer theme={navTheme}>
+        <BaseBottomTabNavigator {...props} />
+      </NavigationContainer>
+    </NavigationIndependentTree>
   );
 };
 
