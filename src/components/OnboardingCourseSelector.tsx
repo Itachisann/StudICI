@@ -9,8 +9,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
   FlatList,
-  Image,
   KeyboardAvoidingView,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -26,6 +26,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { NativeActionButton } from "./NativeActionButton";
 import { NativeSearchBar } from "./NativeSearchBar";
+import { StudICILogo } from "./StudICILogo";
 import { StationInfo } from "../types/commuter";
 import { isValidSyncCode, linkDeviceWithCode } from "../utils/cloudSync";
 import {
@@ -89,21 +90,29 @@ export function OnboardingCourseSelector({
   const pagerRef = useRef<ScrollView>(null);
   const [scrollX] = useState(() => new Animated.Value(0));
 
-  // Pager orizzontale fase iniziale: Pagina 0 (Welcome Hero) -> Pagina 1 (Scelta Facoltà / Sincronizzazione)
-  const initPagerRef = useRef<ScrollView>(null);
-  const [initScrollX] = useState(() => new Animated.Value(0));
-  const [initPage, setInitPage] = useState<0 | 1>(0);
+  // Transizione fluida tra Schermata di Benvenuto (0) e Scelta Facoltà / Sync (1)
+  const [initStep, setInitStep] = useState<0 | 1>(0);
+  const [initAnim] = useState(() => new Animated.Value(0));
 
-  const handleInitPagerScroll = (
-    e: NativeSyntheticEvent<NativeScrollEvent>,
-  ) => {
-    const x = e.nativeEvent.contentOffset.x;
-    const pageIndex = Math.round(x / screenWidth);
-    if (pageIndex === 0 || pageIndex === 1) {
-      if (initPage !== pageIndex) {
-        setInitPage(pageIndex as 0 | 1);
-      }
-    }
+  const handleGoToFaculty = () => {
+    setInitStep(1);
+    Animated.timing(initAnim, {
+      toValue: 1,
+      duration: 380,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleBackToWelcome = () => {
+    Animated.timing(initAnim, {
+      toValue: 0,
+      duration: 320,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      setInitStep(0);
+    });
   };
 
   const [degrees, setDegrees] = useState<Degree[]>([]);
@@ -1749,26 +1758,37 @@ export function OnboardingCourseSelector({
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // FASE INIZIALE: Pager Orizzontale (Pagina 0: Welcome Hero -> Pagina 1: Scelta Facoltà / Sync)
+  // FASE INIZIALE: Benvenuto Pulito Minimal SVG -> Scelta Facoltà / Sincronizzazione
   // ═══════════════════════════════════════════════════════════════════════════
-  const initLine1Width = initScrollX.interpolate({
-    inputRange: [0, screenWidth],
-    outputRange: [34, 20],
+  const welcomeOpacity = initAnim.interpolate({
+    inputRange: [0, 0.7],
+    outputRange: [1, 0],
     extrapolate: "clamp",
   });
-  const initLine1Color = initScrollX.interpolate({
-    inputRange: [0, screenWidth],
-    outputRange: [theme.primary, "#52525b"],
+  const welcomeTranslateX = initAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -screenWidth * 0.35],
     extrapolate: "clamp",
   });
-  const initLine2Width = initScrollX.interpolate({
-    inputRange: [0, screenWidth],
-    outputRange: [20, 34],
+  const welcomeScale = initAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.94],
     extrapolate: "clamp",
   });
-  const initLine2Color = initScrollX.interpolate({
-    inputRange: [0, screenWidth],
-    outputRange: ["#52525b", theme.primary],
+
+  const facultyOpacity = initAnim.interpolate({
+    inputRange: [0.3, 1],
+    outputRange: [0, 1],
+    extrapolate: "clamp",
+  });
+  const facultyTranslateX = initAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [screenWidth * 0.35, 0],
+    extrapolate: "clamp",
+  });
+  const facultyScale = initAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.96, 1],
     extrapolate: "clamp",
   });
 
@@ -1778,193 +1798,103 @@ export function OnboardingCourseSelector({
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <Animated.ScrollView
-          ref={initPagerRef}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { x: initScrollX } } }],
-            { useNativeDriver: false, listener: handleInitPagerScroll },
-          )}
-          scrollEventThrottle={16}
-          style={{ flex: 1 }}
-        >
+        <View style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           {/* ═════════════════════════════════════════════════════════════════
-              PAGINA 0: SCHERMATA DI INIZIO (HERO WELCOME & SCORRI PER INIZIARE)
+              SCHERMATA 0: BENVENUTO PULITO MINIMAL CON LOGO SVG
              ═════════════════════════════════════════════════════════════════ */}
-          <View style={{ width: screenWidth, flex: 1 }}>
-            <ScrollView
-              contentContainerStyle={styles.welcomeScrollContent}
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Hero Logo + Titolo */}
-              <View style={styles.welcomeHero}>
+          <Animated.View
+            pointerEvents={initStep === 0 ? "auto" : "none"}
+            style={[
+              StyleSheet.absoluteFill,
+              styles.cleanWelcomeContainer,
+              {
+                opacity: welcomeOpacity,
+                transform: [
+                  { translateX: welcomeTranslateX },
+                  { scale: welcomeScale },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.cleanWelcomeCenter}>
+              {/* Logo SVG Minimal senza sfondo pesante */}
+              <View style={styles.cleanLogoWrapper}>
                 <View
                   style={[
-                    styles.welcomeLogoBadge,
-                    {
-                      backgroundColor: theme.primary,
-                      shadowColor: theme.primary,
-                    },
+                    styles.cleanLogoGlow,
+                    { backgroundColor: theme.primary },
                   ]}
-                >
-                  <Image
-                    source={require("../../assets/images/icon.png")}
-                    style={styles.welcomeLogoImage}
-                    resizeMode="cover"
-                  />
-                </View>
-                <Text style={styles.welcomeAppTitle}>Benvenuto in StudICI</Text>
-                <Text
-                  style={[styles.welcomeAppSubtitle, { color: theme.accent }]}
-                >
-                  Sapienza Università di Roma · Facoltà I.C.I.
-                </Text>
-                <View style={styles.welcomeTaglinePill}>
-                  <Ionicons
-                    name="sparkles"
-                    size={13}
-                    color="#f59e0b"
-                    style={{ marginRight: 5 }}
-                  />
-                  <Text style={styles.welcomeTaglineText}>
-                    Esperienza nativa intelligente
-                  </Text>
-                </View>
-              </View>
-
-              {/* Feature Showcase Cards iOS 26 */}
-              <View style={styles.welcomeCardsContainer}>
-                <View style={styles.welcomeFeatureCard}>
-                  <View
-                    style={[
-                      styles.welcomeCardIconCircle,
-                      { backgroundColor: "rgba(56, 189, 248, 0.15)" },
-                    ]}
-                  >
-                    <Ionicons name="calendar" size={22} color="#38bdf8" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.welcomeCardTitle}>
-                      Orari Ufficiali Dinamici
-                    </Text>
-                    <Text style={styles.welcomeCardDesc}>
-                      Tutte le lezioni, i canali e le variazioni d&apos;aula
-                      sempre sincronizzate con i server Sapienza.
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.welcomeFeatureCard}>
-                  <View
-                    style={[
-                      styles.welcomeCardIconCircle,
-                      { backgroundColor: "rgba(245, 158, 11, 0.15)" },
-                    ]}
-                  >
-                    <Ionicons name="train" size={22} color="#f59e0b" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.welcomeCardTitle}>
-                      Tragitto Pendolare Live
-                    </Text>
-                    <Text style={styles.welcomeCardDesc}>
-                      Calcolo coincidenze Trenitalia e tempi di percorrenza
-                      in tempo reale da casa alle aule.
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.welcomeFeatureCard}>
-                  <View
-                    style={[
-                      styles.welcomeCardIconCircle,
-                      { backgroundColor: "rgba(16, 185, 129, 0.15)" },
-                    ]}
-                  >
-                    <Ionicons name="checkbox" size={22} color="#10b981" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.welcomeCardTitle}>
-                      Registro Presenze Smart
-                    </Text>
-                    <Text style={styles.welcomeCardDesc}>
-                      Percentuali di frequenza calcolate in automatico ed
-                      esportazione del report PDF firmato.
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.welcomeFeatureCard}>
-                  <View
-                    style={[
-                      styles.welcomeCardIconCircle,
-                      { backgroundColor: "rgba(168, 85, 247, 0.15)" },
-                    ]}
-                  >
-                    <Ionicons name="sync-circle" size={24} color="#a855f7" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.welcomeCardTitle}>
-                      Sincronizzazione Dispositivi
-                    </Text>
-                    <Text style={styles.welcomeCardDesc}>
-                      Collega all&apos;istante i tuoi dati tra più dispositivi
-                      con un codice univoco senza riscaricare tutto.
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Pulsante Inizia rapido */}
-              <View style={styles.welcomeButtonContainer}>
-                <NativeActionButton
-                  label="Inizia"
-                  onPress={() =>
-                    initPagerRef.current?.scrollTo({
-                      x: screenWidth,
-                      animated: true,
-                    })
-                  }
-                  accentColor={theme.primary}
-                  glow={true}
-                  icon={
-                    <Ionicons
-                      name="arrow-forward"
-                      size={17}
-                      color="#ffffff"
-                    />
-                  }
-                  style={{ width: "100%", maxWidth: 280 }}
+                />
+                <StudICILogo
+                  size={120}
+                  withBackground={false}
+                  primaryColor={theme.primary}
+                  secondaryColor="#a1a1aa"
                 />
               </View>
-            </ScrollView>
-          </View>
+
+              {/* Titoli e Presentazione minimale */}
+              <Text style={styles.cleanAppTitle}>StudICI</Text>
+              <Text style={[styles.cleanAppSubtitle, { color: theme.accent }]}>
+                Sapienza Università di Roma
+              </Text>
+              <Text style={styles.cleanAppDesc}>
+                Orari ufficiali delle lezioni, aule e tragitto pendolare in un&apos;unica app moderna.
+              </Text>
+            </View>
+
+            {/* Pulsante Inizia con stile nativo / glow */}
+            <View style={styles.cleanWelcomeFooter}>
+              <NativeActionButton
+                label="Inizia"
+                onPress={handleGoToFaculty}
+                accentColor={theme.primary}
+                glow={true}
+                icon={
+                  <Ionicons
+                    name="arrow-forward"
+                    size={18}
+                    color="#ffffff"
+                  />
+                }
+                style={{ width: "100%", maxWidth: 300 }}
+              />
+            </View>
+          </Animated.View>
 
           {/* ═════════════════════════════════════════════════════════════════
-              PAGINA 1: SELEZIONE FACOLTÀ & CONFIGURAZIONE / SINCRONIZZAZIONE
+              SCHERMATA 1: SELEZIONE CORSO / SINCRONIZZAZIONE
              ═════════════════════════════════════════════════════════════════ */}
-          <View style={{ width: screenWidth, flex: 1 }}>
-            {/* Header Pagina 1 con tasto Info indietro */}
-            <View style={styles.initPage1Header}>
+          <Animated.View
+            pointerEvents={initStep === 1 ? "auto" : "none"}
+            style={[
+              StyleSheet.absoluteFill,
+              styles.facultySlideContainer,
+              {
+                opacity: facultyOpacity,
+                transform: [
+                  { translateX: facultyTranslateX },
+                  { scale: facultyScale },
+                ],
+              },
+            ]}
+          >
+            {/* Header con pulsante indietro elegante per tornare al Benvenuto */}
+            <View style={styles.facultyHeader}>
               <TouchableOpacity
-                style={styles.backToWelcomeBtn}
+                style={styles.facultyBackBtn}
                 activeOpacity={0.7}
-                onPress={() =>
-                  initPagerRef.current?.scrollTo({ x: 0, animated: true })
-                }
+                onPress={handleBackToWelcome}
               >
-                <Ionicons name="chevron-back" size={17} color={theme.accent} />
+                <Ionicons name="chevron-back" size={20} color={theme.accent} />
                 <Text
-                  style={[styles.backToWelcomeText, { color: theme.accent }]}
+                  style={[styles.facultyBackBtnText, { color: theme.accent }]}
                 >
-                  Info
+                  Indietro
                 </Text>
               </TouchableOpacity>
-              <Text style={styles.initPage1HeaderTitle}>Scegli il tuo corso</Text>
-              <View style={{ width: 60 }} />
+              <Text style={styles.facultyHeaderTitle}>Scegli il tuo corso</Text>
+              <View style={{ width: 68 }} />
             </View>
 
       {/* Selettore Modalità di Avvio */}
@@ -2279,75 +2209,7 @@ export function OnboardingCourseSelector({
                 )}
               </>
             )}
-          </View>
-        </Animated.ScrollView>
-
-        {/* ── Barra Inferiore Fissa con le 2 Lineette e Swipe Hint ── */}
-        <View style={styles.fixedBottomFooter}>
-          <View style={styles.twoLinesContainer}>
-            <Animated.View
-              style={[
-                styles.swipeLineIndicator,
-                { width: initLine1Width, backgroundColor: initLine1Color },
-              ]}
-            />
-            <Animated.View
-              style={[
-                styles.swipeLineIndicator,
-                { width: initLine2Width, backgroundColor: initLine2Color },
-              ]}
-            />
-          </View>
-
-          <View style={styles.bottomFooterActionArea}>
-            {initPage === 0 ? (
-              <TouchableOpacity
-                style={styles.swipeHintRow}
-                activeOpacity={0.75}
-                onPress={() =>
-                  initPagerRef.current?.scrollTo({
-                    x: screenWidth,
-                    animated: true,
-                  })
-                }
-              >
-                <Text
-                  style={[
-                    styles.swipeHintTextActive,
-                    { color: theme.accent, fontSize: 13.5 },
-                  ]}
-                >
-                  Scorri per iniziare
-                </Text>
-                <Ionicons
-                  name="arrow-forward"
-                  size={16}
-                  color={theme.accent}
-                  style={{ marginLeft: 6 }}
-                />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={styles.swipeHintRow}
-                activeOpacity={0.75}
-                onPress={() =>
-                  initPagerRef.current?.scrollTo({ x: 0, animated: true })
-                }
-              >
-                <Ionicons
-                  name="arrow-back"
-                  size={14}
-                  color="#71717a"
-                  style={{ marginRight: 6 }}
-                />
-                <Text
-                  style={[styles.swipeHintTextLocked, { color: "#71717a" }]}
-                >
-                  Scorri a sinistra per le informazioni
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          </Animated.View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -2359,123 +2221,89 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#111111",
   },
-  /* ── Stili Schermata di Benvenuto iOS 26 (Pagina 0) ── */
-  welcomeScrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  welcomeHero: {
+  /* ── Stili Schermata di Benvenuto Pulita Minimal SVG & Transizione ── */
+  cleanWelcomeContainer: {
+    paddingHorizontal: 28,
+    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 20,
+    paddingTop: 48,
+    paddingBottom: Platform.OS === "ios" ? 36 : 28,
   },
-  welcomeLogoBadge: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
+  cleanWelcomeCenter: {
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 12,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
-    elevation: 8,
-    overflow: "hidden",
+    maxWidth: 340,
+    width: "100%",
   },
-  welcomeLogoImage: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
+  cleanLogoWrapper: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 28,
+    position: "relative",
   },
-  welcomeAppTitle: {
-    fontSize: 28,
+  cleanLogoGlow: {
+    position: "absolute",
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    opacity: 0.18,
+    transform: [{ scale: 1.15 }],
+  },
+  cleanAppTitle: {
+    fontSize: 34,
     fontWeight: "800",
     color: "#ffffff",
     letterSpacing: -0.6,
-    marginBottom: 4,
+    marginBottom: 6,
+    textAlign: "center",
   },
-  welcomeAppSubtitle: {
-    fontSize: 13.5,
+  cleanAppSubtitle: {
+    fontSize: 15,
     fontWeight: "600",
     textAlign: "center",
-    marginBottom: 8,
-  },
-  welcomeTaglinePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.12)",
-    marginTop: 2,
-  },
-  welcomeTaglineText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#e4e4e7",
     letterSpacing: 0.2,
+    marginBottom: 16,
   },
-  welcomeCardsContainer: {
-    gap: 10,
-    marginBottom: 20,
-  },
-  welcomeFeatureCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.04)",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
-    padding: 13,
-  },
-  welcomeCardIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-  },
-  welcomeCardTitle: {
-    fontSize: 14.5,
-    fontWeight: "700",
-    color: "#ffffff",
-    marginBottom: 3,
-    letterSpacing: -0.2,
-  },
-  welcomeCardDesc: {
-    fontSize: 12,
+  cleanAppDesc: {
+    fontSize: 13.5,
     color: "#a1a1aa",
-    lineHeight: 16.5,
+    textAlign: "center",
+    lineHeight: 20,
     fontWeight: "400",
+    paddingHorizontal: 8,
   },
-  welcomeButtonContainer: {
+  cleanWelcomeFooter: {
+    width: "100%",
     alignItems: "center",
-    marginTop: 4,
-    marginBottom: 8,
+    justifyContent: "center",
+    paddingTop: 16,
   },
-  initPage1Header: {
+  facultySlideContainer: {
+    flex: 1,
+    paddingTop: 4,
+  },
+  facultyHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 10,
+    paddingTop: 6,
+    paddingBottom: 8,
   },
-  backToWelcomeBtn: {
+  facultyBackBtn: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 6,
     paddingRight: 10,
+    minWidth: 70,
   },
-  backToWelcomeText: {
-    fontSize: 14,
+  facultyBackBtnText: {
+    fontSize: 14.5,
     fontWeight: "600",
     marginLeft: 2,
   },
-  initPage1HeaderTitle: {
+  facultyHeaderTitle: {
     fontSize: 16,
     fontWeight: "700",
     color: "#ffffff",
