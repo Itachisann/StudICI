@@ -9,7 +9,6 @@ import {
   View,
 } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { BlurView } from 'expo-blur';
 
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -41,9 +40,9 @@ export interface NativeActionButtonProps {
 }
 
 /**
- * Pulsante nativo in stile back button di native-stack:
- * - Su iOS 26 (build IPA): sfrutta @callstack/liquid-glass (LiquidGlassView)
- * - Su iOS < 26 o Expo Go: fallback fluido con BlurView e capsula glass iOS identica a native-stack
+ * Pulsante nativo / a tema:
+ * - Su IPA (iOS 26): Callstack Liquid Glass nativo, con la tonalità esatta del tema
+ * - Su Expo Go o non iOS 26: Pulsante a tema stile glowing (shadow neon theme.primary)
  */
 export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   label,
@@ -53,12 +52,12 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   style,
   textStyle,
   icon,
-  glow = false,
+  glow = true,
   glowColor,
   accentColor = '#822433',
 }) => {
   const isFilled = variant === 'filled';
-  const isOutlined = variant === 'outlined';
+  const effectiveGlowColor = glowColor || accentColor;
 
   const isLiquidGlassSupported =
     isNativeButtonAvailable &&
@@ -71,19 +70,20 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
     const LiquidGlassView = CallstackLiquidGlass.LiquidGlassView;
     return (
       <TouchableOpacity
-        activeOpacity={0.8}
+        activeOpacity={0.82}
         onPress={onPress}
         disabled={disabled}
         style={[
           styles.containerWrapper,
-          glow && {
-            shadowColor: glowColor || accentColor,
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: disabled ? 0 : 0.45,
-            shadowRadius: 8,
-            elevation: 4,
-          },
-          disabled && { opacity: 0.45 },
+          glow &&
+            !disabled && {
+              shadowColor: effectiveGlowColor,
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.6,
+              shadowRadius: 10,
+              elevation: 6,
+            },
+          disabled && styles.disabledContainer,
           style,
         ]}
       >
@@ -94,11 +94,12 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             styles.basePill,
             styles.glassBorder,
             isFilled && {
-              backgroundColor: accentColor,
+              backgroundColor: disabled ? '#18181b' : accentColor,
+              borderColor: disabled ? '#27272a' : accentColor,
             },
-            isOutlined && {
+            variant === 'outlined' && {
               backgroundColor: 'transparent',
-              borderColor: accentColor,
+              borderColor: disabled ? '#27272a' : accentColor,
             },
           ]}
         >
@@ -107,6 +108,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             style={[
               styles.labelText,
               isFilled ? styles.filledText : { color: accentColor },
+              disabled && { color: '#52525b' },
               textStyle,
             ]}
             numberOfLines={1}
@@ -118,35 +120,38 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
     );
   }
 
-  // 2. Modalità Nativa iOS < 26 o Fallback Expo Go: Capsula con BlurView in stile back button di native-stack
+  // 2. Modalità Fallback Expo Go o iOS < 26: Pulsante a tema stile glowing
   return (
     <TouchableOpacity
-      activeOpacity={0.78}
+      activeOpacity={0.82}
       onPress={onPress}
       disabled={disabled}
       style={[
         styles.containerWrapper,
-        glow && {
-          shadowColor: glowColor || accentColor,
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: disabled ? 0 : 0.4,
-          shadowRadius: 8,
-          elevation: 4,
-        },
-        disabled && { opacity: 0.45 },
+        glow &&
+          !disabled && {
+            shadowColor: effectiveGlowColor,
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: 0.6,
+            shadowRadius: 10,
+            elevation: 6,
+          },
+        disabled && styles.disabledContainer,
         style,
       ]}
     >
       <View
         style={[
           styles.basePill,
-          styles.glassBorder,
           isFilled && {
-            backgroundColor: accentColor,
+            backgroundColor: disabled ? '#18181b' : accentColor,
+            borderColor: disabled ? '#27272a' : accentColor,
+            borderWidth: 1.5,
           },
-          isOutlined && {
+          variant === 'outlined' && {
             backgroundColor: 'transparent',
-            borderColor: accentColor,
+            borderColor: disabled ? '#27272a' : accentColor,
+            borderWidth: 1.5,
           },
           variant === 'text' && {
             backgroundColor: 'transparent',
@@ -154,18 +159,12 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           },
         ]}
       >
-        {Platform.OS === 'ios' && !isFilled && (
-          <BlurView
-            intensity={25}
-            tint="dark"
-            style={StyleSheet.absoluteFill}
-          />
-        )}
         {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
         <Text
           style={[
             styles.labelText,
             isFilled ? styles.filledText : { color: accentColor },
+            disabled && { color: '#52525b' },
             textStyle,
           ]}
           numberOfLines={1}
@@ -179,27 +178,27 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
 
 const styles = StyleSheet.create({
   containerWrapper: {
-    minHeight: 44,
-    borderRadius: 9999,
-    overflow: 'hidden',
+    height: 44,
+    borderRadius: 22,
+  },
+  disabledContainer: {
+    opacity: 0.5,
   },
   basePill: {
-    minHeight: 44,
-    borderRadius: 9999,
+    height: 44,
+    borderRadius: 22,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
-    paddingVertical: 10,
     overflow: 'hidden',
   },
   glassBorder: {
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderWidth: 1.5,
   },
   labelText: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
     letterSpacing: -0.2,
   },
   filledText: {

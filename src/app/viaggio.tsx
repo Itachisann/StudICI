@@ -26,6 +26,7 @@ import {
 
 import { useTheme } from "@/context/ThemeContext";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
+import { NativeActionButton } from "../components/NativeActionButton";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
 import { computeCommuterItinerary } from "../utils/commuterOptimizer";
 import {
@@ -885,19 +886,21 @@ export default function ViaggioScreen() {
                 La sezione viaggio non è attiva finché non vengono configurate
                 le impostazioni del tuo tragitto pendolare.
               </Text>
-              <TouchableOpacity
-                style={[
-                  styles.inactiveConfigureBtn,
-                  {
-                    backgroundColor: theme.primary,
-                    shadowColor: theme.primary,
-                  },
-                ]}
-                activeOpacity={0.85}
+              <NativeActionButton
+                label="Configura"
                 onPress={() => setConfigModalVisible(true)}
-              >
-                <Text style={styles.inactiveConfigureBtnText}>Configura</Text>
-              </TouchableOpacity>
+                accentColor={theme.primary}
+                glow={true}
+                icon={
+                  <Ionicons
+                    name="settings-outline"
+                    size={16}
+                    color="#ffffff"
+                    style={{ marginRight: 6 }}
+                  />
+                }
+                style={{ alignSelf: "center", minWidth: 160 }}
+              />
             </View>
           </View>
         ) : (

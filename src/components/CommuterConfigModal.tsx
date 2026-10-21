@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { NativeSheetModal } from "./NativeSheetModal";
+import { NativeActionButton } from "./NativeActionButton";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
   calculateDrivingEstimate,
@@ -480,6 +481,20 @@ export function CommuterConfigModal({
       showCloseButton={!stationPickerType}
       title={sheetTitle}
       backgroundColor="#16181d"
+      searchBarOptions={
+        stationPickerType
+          ? {
+              placeholder: "Cerca tra tutte le stazioni italiane...",
+              textColor: "#ffffff",
+              tintColor: theme.primary,
+              headerIconColor: "#8e8e93",
+              hintTextColor: "#71717a",
+              autoCapitalize: "words",
+              onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
+              onCancelButtonPress: () => handleStationSearchChange(""),
+            }
+          : undefined
+      }
       rightActions={
         !stationPickerType
           ? [
@@ -502,27 +517,11 @@ export function CommuterConfigModal({
           {stationPickerType ? (
             /* Picker Stazione A-Z con tutti i risultati */
             <View style={{ flex: 1, padding: 16 }}>
-              <View style={styles.searchBar}>
-                <Ionicons
-                  name="search"
-                  size={17}
-                  color="#8e8e93"
-                  style={{ marginRight: 8 }}
-                />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Cerca tra tutte le stazioni italiane ..."
-                  placeholderTextColor="#666"
-                  value={stationSearchQuery}
-                  onChangeText={handleStationSearchChange}
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  autoFocus
-                />
-                {searchingStations && (
+              {searchingStations && (
+                <View style={{ paddingVertical: 8, alignItems: "center" }}>
                   <ActivityIndicator size="small" color={theme.primary} />
-                )}
-              </View>
+                </View>
+              )}
 
               <Text style={styles.sectionLabel}>
                 {stationSearchQuery.trim()
@@ -1242,49 +1241,32 @@ export function CommuterConfigModal({
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[
-                    styles.saveBtnPill,
-                    isInitComplete
-                      ? {
-                          backgroundColor: theme.primary,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                          shadowOpacity: 0.6,
-                          shadowRadius: 10,
-                          elevation: 6,
-                        }
-                      : styles.saveBtnPillDisabled,
-                  ]}
-                  disabled={!isInitComplete}
-                  activeOpacity={0.85}
+                <NativeActionButton
+                  label="Salva"
                   onPress={handleSaveInit}
-                >
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={17}
-                    color={isInitComplete ? "#ffffff" : "#52525b"}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={[
-                      styles.saveBtnPillText,
-                      !isInitComplete && { color: "#52525b" },
-                    ]}
-                  >
-                    Salva
-                  </Text>
-                </TouchableOpacity>
+                  disabled={!isInitComplete}
+                  accentColor={theme.primary}
+                  glow={true}
+                  icon={
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={17}
+                      color={isInitComplete ? "#ffffff" : "#52525b"}
+                    />
+                  }
+                  style={{ flex: 1 }}
+                />
               </View>
             </>
           ) : (
             /* Form Configurazione iOS 26 */
-            <ScrollView
-              style={styles.body}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 130 }}
-              showsVerticalScrollIndicator={false}
-            >
+            <>
+              <ScrollView
+                style={styles.body}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 160 }}
+                showsVerticalScrollIndicator={false}
+              >
               {/* 1. Partenza da casa */}
               <View style={styles.card}>
                 <View style={styles.cardHeaderRow}>
@@ -2006,7 +1988,24 @@ export function CommuterConfigModal({
                 </View>
               </View>
             </ScrollView>
-          )}
+            <View style={styles.saveBottomBar}>
+              <NativeActionButton
+                label="Salva modifiche"
+                onPress={handleSave}
+                accentColor={theme.primary}
+                glow={true}
+                icon={
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={18}
+                    color="#ffffff"
+                  />
+                }
+                style={{ width: "100%" }}
+              />
+            </View>
+          </>
+        )}
         </View>
       </KeyboardAvoidingView>
     </NativeSheetModal>
@@ -2601,10 +2600,16 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 18 : 14,
-    backgroundColor: "rgba(17, 17, 17, 0.98)",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#27272a",
+    paddingBottom: Platform.OS === "ios" ? 20 : 14,
+    backgroundColor: "#16181d",
+    borderTopWidth: 0,
+  },
+  saveBottomBar: {
+    backgroundColor: "#16181d",
+    borderTopWidth: 0,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 20 : 14,
   },
   laterBtnPill: {
     flex: 1,

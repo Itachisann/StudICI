@@ -24,6 +24,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { NativeActionButton } from "./NativeActionButton";
 import { StationInfo } from "../types/commuter";
 import { isValidSyncCode, linkDeviceWithCode } from "../utils/cloudSync";
 import {
@@ -1713,39 +1714,21 @@ export function OnboardingCourseSelector({
                     </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[
-                      styles.saveBtnPill,
-                      isCommuterFormComplete
-                        ? {
-                            backgroundColor: theme.primary,
-                            borderColor: theme.primary,
-                            shadowColor: theme.primary,
-                            shadowOpacity: 0.6,
-                            shadowRadius: 10,
-                            elevation: 6,
-                          }
-                        : styles.saveBtnPillDisabled,
-                    ]}
-                    disabled={!isCommuterFormComplete}
-                    activeOpacity={0.85}
+                  <NativeActionButton
+                    label="Salva"
                     onPress={() => finalizeOnboarding(true)}
-                  >
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={17}
-                      color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
-                      style={[
-                        styles.saveBtnPillText,
-                        !isCommuterFormComplete && { color: "#52525b" },
-                      ]}
-                    >
-                      Salva
-                    </Text>
-                  </TouchableOpacity>
+                    disabled={!isCommuterFormComplete}
+                    accentColor={theme.primary}
+                    glow={true}
+                    icon={
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={17}
+                        color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
+                      />
+                    }
+                    style={{ flex: 1 }}
+                  />
                 </Animated.View>
               </View>
             </View>
@@ -2707,9 +2690,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 14 : 12,
-    backgroundColor: "rgba(17, 17, 17, 0.98)",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#27272a",
+    backgroundColor: "#111111",
+    borderTopWidth: 0,
     alignItems: "center",
   },
   twoLinesContainer: {

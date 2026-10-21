@@ -153,8 +153,8 @@ export function NativeSheetModal({
       icon: a.sfSymbol
         ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
         : undefined,
-      variant: a.prominent ? ('prominent' as const) : ('plain' as const),
-      tintColor: a.tintColor || (a.prominent ? undefined : universalIconColor),
+      variant: a.prominent && !a.tintColor ? ('prominent' as const) : ('plain' as const),
+      tintColor: a.tintColor || universalIconColor,
       sharesBackground: true,
       disabled: a.disabled,
       onPress: a.onPress,
@@ -220,6 +220,7 @@ export function NativeSheetModal({
                   headerSearchBarOptions: searchBarOptions
                     ? {
                         placement: 'stacked',
+                        allowToolbarIntegration: false,
                         hideWhenScrolling: false,
                         ...searchBarOptions,
                       }
