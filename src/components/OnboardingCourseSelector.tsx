@@ -162,6 +162,16 @@ function SetupModeScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.setupModeTopBar}>
+        <TouchableOpacity
+          style={styles.setupModeBackBtn}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="chevron-back" size={22} color="#ffffff" />
+        </TouchableOpacity>
+      </View>
       <View style={styles.setupModeContainer}>
         <View style={styles.setupModeHeader}>
           <Text style={styles.setupModeTitle}>Come vuoi iniziare?</Text>
@@ -380,12 +390,14 @@ function CourseSelectScreen({ navigation }: any) {
     navigation.setOptions({
       headerSearchBarOptions: isNativeIos ? {
         placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+        placement: "stacked",
+        allowToolbarIntegration: false,
+        hideWhenScrolling: false,
+        autoCapitalize: "none",
         tintColor: theme.primary,
         textColor: "#ffffff",
         headerIconColor: "#8e8e93",
         hintTextColor: "#71717a",
-        hideWhenScrolling: false,
-        autoCapitalize: "none",
         onChangeText: (e: any) => setSearch(e.nativeEvent.text),
         onCancelButtonPress: () => setSearch(""),
       } : undefined,
@@ -1734,6 +1746,13 @@ export function OnboardingCourseSelector({
   const pagerRef = useRef<ScrollView>(null);
   const [scrollX] = useState(() => new Animated.Value(0));
 
+  useEffect(() => {
+    const id = scrollX.addListener(() => {});
+    return () => {
+      scrollX.removeListener(id);
+    };
+  }, [scrollX]);
+
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2273,11 +2292,21 @@ export function OnboardingCourseSelector({
             <OnboardingStack.Navigator
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: "#000000" },
+                contentStyle: { backgroundColor: "#111111" },
+                headerStyle: { backgroundColor: "#111111" },
+                headerShadowVisible: false,
+                headerBackButtonDisplayMode: "minimal",
+                headerBackTitle: "",
               }}
             >
               <OnboardingStack.Screen name="Welcome" component={WelcomeScreen} />
-              <OnboardingStack.Screen name="SetupMode" component={SetupModeScreen} />
+              <OnboardingStack.Screen
+                name="SetupMode"
+                component={SetupModeScreen}
+                options={{
+                  headerBackTitle: "",
+                }}
+              />
               <OnboardingStack.Screen
                 name="CourseSelect"
                 component={CourseSelectScreen}
@@ -2286,10 +2315,27 @@ export function OnboardingCourseSelector({
                   headerLargeTitle: true,
                   headerTitle: "Scegli il tuo corso",
                   headerLargeTitleStyle: { color: "#ffffff" },
-                  headerStyle: { backgroundColor: "#000000" },
+                  headerStyle: { backgroundColor: "#111111" },
+                  headerLargeStyle: { backgroundColor: "#111111" },
                   headerTintColor: "#ffffff",
-                  headerTransparent: Platform.OS === "ios",
-                  headerBlurEffect: "dark",
+                  headerShadowVisible: false,
+                  headerBackButtonDisplayMode: "minimal",
+                  headerBackTitle: "",
+                  headerSearchBarOptions: isNativeIos
+                    ? {
+                        placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+                        placement: "stacked",
+                        allowToolbarIntegration: false,
+                        hideWhenScrolling: false,
+                        autoCapitalize: "none",
+                        tintColor: theme.primary,
+                        textColor: "#ffffff",
+                        headerIconColor: "#8e8e93",
+                        hintTextColor: "#71717a",
+                        onChangeText: (e: any) => setSearch(e.nativeEvent.text),
+                        onCancelButtonPress: () => setSearch(""),
+                      }
+                    : undefined,
                 }}
               />
               <OnboardingStack.Screen
@@ -2299,10 +2345,11 @@ export function OnboardingCourseSelector({
                   headerShown: true,
                   headerTitle: "Sincronizzazione",
                   headerLargeTitle: false,
-                  headerStyle: { backgroundColor: "#000000" },
+                  headerStyle: { backgroundColor: "#111111" },
                   headerTintColor: "#ffffff",
-                  headerTransparent: Platform.OS === "ios",
-                  headerBlurEffect: "dark",
+                  headerShadowVisible: false,
+                  headerBackButtonDisplayMode: "minimal",
+                  headerBackTitle: "",
                 }}
               />
               <OnboardingStack.Screen name="PostDownload" component={PostDownloadScreen} />
@@ -3029,6 +3076,18 @@ const styles = StyleSheet.create({
   },
 
   /* ── Setup Mode Screen ── */
+  setupModeTopBar: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  setupModeBackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   setupModeContainer: {
     flex: 1,
     paddingHorizontal: 24,
