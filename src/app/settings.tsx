@@ -1738,43 +1738,32 @@ export default function ProfiloScreen() {
         }}
         title="Corso di Laurea"
         backgroundColor="#16181d"
-        searchBarOptions={{
-          placeholder: "Cerca corso o classe (es. Meccanica, L-9)...",
-          onChangeText: (e) => setSearchCourse(e.nativeEvent.text),
-          onCancelButtonPress: () => setSearchCourse(""),
-          onSearchButtonPress: (e) => setSearchCourse(e.nativeEvent.text),
-          textColor: "#ffffff",
-          tintColor: theme.primary,
-          headerIconColor: "#8e8e93",
-          hintTextColor: "#71717a",
-          hideWhenScrolling: false,
-          autoCapitalize: "none",
-        }}
       >
         <View style={styles.modalContainer}>
-          {Platform.OS === "web" && (
-            <View style={styles.searchBarContainer}>
-              <Ionicons
-                name="search"
-                size={16}
-                color="#8e8e93"
-                style={{ marginRight: 8 }}
-              />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Cerca corso o classe (es. Meccanica, L-9)..."
-                placeholderTextColor="#71717a"
-                value={searchCourse}
-                onChangeText={setSearchCourse}
-                clearButtonMode="while-editing"
-              />
-              {searchCourse.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchCourse("")}>
-                  <Ionicons name="close-circle" size={16} color="#8e8e93" />
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
+          {/* Barra di ricerca in alto ad alta leggibilità */}
+          <View style={styles.searchBarContainer}>
+            <Ionicons
+              name="search"
+              size={17}
+              color="#8e8e93"
+              style={{ marginRight: 8 }}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Cerca corso o classe (es. Meccanica, L-9)..."
+              placeholderTextColor="#71717a"
+              value={searchCourse}
+              onChangeText={setSearchCourse}
+              clearButtonMode="while-editing"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {searchCourse.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchCourse("")}>
+                <Ionicons name="close-circle" size={17} color="#8e8e93" />
+              </TouchableOpacity>
+            )}
+          </View>
 
           {degrees.length === 0 ? (
             <ActivityIndicator

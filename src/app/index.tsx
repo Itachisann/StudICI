@@ -4,7 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -66,25 +66,22 @@ const isExpoGo =
 const isNativeComponentAvailable = Platform.OS === "ios" && !isExpoGo;
 const DAYS = ["LUN", "MAR", "MER", "GIO", "VEN"];
 const DAYS_FULL = ["LUNEDÌ", "MARTEDÌ", "MERCOLEDÌ", "GIOVEDÌ", "VENERDÌ"];
-const ACCENT_COLORS = [
-  "#3b82f6",
-  "#a855f7",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#ec4899",
-  "#6366f1",
+export const ACCENT_COLORS = [
+  "#3b82f6", // Blue
+  "#8b5cf6", // Violet
+  "#f59e0b", // Amber
+  "#10b981", // Emerald
+  "#ef4444", // Crimson Red
+  "#ec4899", // Pink
+  "#06b6d4", // Cyan
+  "#f97316", // Bright Orange
+  "#14b8a6", // Teal
+  "#6366f1", // Indigo
+  "#84cc16", // Lime
+  "#a855f7", // Purple
+  "#e11d48", // Rose
+  "#0284c7", // Sky Blue
 ];
-
-export function getSubjectColor(subject?: string): string {
-  if (!subject) return ACCENT_COLORS[0];
-  const clean = subject.trim().toUpperCase();
-  let hash = 0;
-  for (let i = 0; i < clean.length; i++) {
-    hash = clean.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return ACCENT_COLORS[Math.abs(hash) % ACCENT_COLORS.length];
-}
 
 function formatReleaseDate(isoString?: string): string {
   if (!isoString) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
@@ -397,6 +394,49 @@ export default function ScheduleScreen() {
   };
 
   const todayClasses = schedule?.days[selectedDay] || [];
+
+  // Mappa deterministica delle materie su colori unici e distinti per tutta la settimana
+  const subjectColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const allDays: ClassEvent[][] = [];
+    if (schedule?.days) allDays.push(...schedule.days);
+    Object.values(schedulesMap).forEach((s) => {
+      if (s?.days) allDays.push(...s.days);
+    });
+
+    const uniqueSubjects: string[] = [];
+    allDays.forEach((dayList) => {
+      dayList.forEach((cls) => {
+        const name = (cls.subject || "").trim().toUpperCase();
+        if (name && !uniqueSubjects.includes(name)) {
+          uniqueSubjects.push(name);
+        }
+      });
+    });
+
+    uniqueSubjects.sort((a, b) => a.localeCompare(b));
+    uniqueSubjects.forEach((subj, idx) => {
+      map.set(subj, ACCENT_COLORS[idx % ACCENT_COLORS.length]);
+    });
+
+    return map;
+  }, [schedule, schedulesMap]);
+
+  const getSubjectColor = useCallback(
+    (subject?: string): string => {
+      if (!subject) return ACCENT_COLORS[0];
+      const key = subject.trim().toUpperCase();
+      if (subjectColorMap.has(key)) {
+        return subjectColorMap.get(key)!;
+      }
+      let hash = 0;
+      for (let i = 0; i < key.length; i++) {
+        hash = key.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      return ACCENT_COLORS[Math.abs(hash) % ACCENT_COLORS.length];
+    },
+    [subjectColorMap],
+  );
 
   const isCurrentClass = useCallback(
     (cls: ClassEvent) => {

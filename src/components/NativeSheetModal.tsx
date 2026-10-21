@@ -217,7 +217,13 @@ export function NativeSheetModal({
                     fontSize: 17,
                     fontWeight: '600',
                   },
-                  headerSearchBarOptions: searchBarOptions,
+                  headerSearchBarOptions: searchBarOptions
+                    ? {
+                        placement: 'stacked',
+                        hideWhenScrolling: false,
+                        ...searchBarOptions,
+                      }
+                    : undefined,
                   contentStyle: { backgroundColor },
                   unstable_headerLeftItems: buildLeftItems,
                   unstable_headerRightItems: buildRightItems,

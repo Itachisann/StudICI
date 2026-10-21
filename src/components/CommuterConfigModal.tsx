@@ -480,23 +480,6 @@ export function CommuterConfigModal({
       showCloseButton={!stationPickerType}
       title={sheetTitle}
       backgroundColor="#16181d"
-      searchBarOptions={
-        stationPickerType
-          ? {
-              placeholder: "Cerca tra tutte le stazioni italiane...",
-              onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
-              onCancelButtonPress: () => handleStationSearchChange(""),
-              onSearchButtonPress: (e) =>
-                handleStationSearchChange(e.nativeEvent.text),
-              textColor: "#ffffff",
-              tintColor: theme.primary,
-              headerIconColor: "#8e8e93",
-              hintTextColor: "#71717a",
-              hideWhenScrolling: false,
-              autoCapitalize: "words",
-            }
-          : undefined
-      }
       rightActions={
         !stationPickerType
           ? [
@@ -519,29 +502,27 @@ export function CommuterConfigModal({
           {stationPickerType ? (
             /* Picker Stazione A-Z con tutti i risultati */
             <View style={{ flex: 1, padding: 16 }}>
-              {Platform.OS === "web" && (
-                <View style={styles.searchBar}>
-                  <Ionicons
-                    name="search"
-                    size={17}
-                    color="#8e8e93"
-                    style={{ marginRight: 8 }}
-                  />
-                  <TextInput
-                    style={styles.searchInput}
-                    placeholder="Cerca tra tutte le stazioni italiane ..."
-                    placeholderTextColor="#666"
-                    value={stationSearchQuery}
-                    onChangeText={handleStationSearchChange}
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                    autoFocus
-                  />
-                  {searchingStations && (
-                    <ActivityIndicator size="small" color={theme.primary} />
-                  )}
-                </View>
-              )}
+              <View style={styles.searchBar}>
+                <Ionicons
+                  name="search"
+                  size={17}
+                  color="#8e8e93"
+                  style={{ marginRight: 8 }}
+                />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Cerca tra tutte le stazioni italiane ..."
+                  placeholderTextColor="#666"
+                  value={stationSearchQuery}
+                  onChangeText={handleStationSearchChange}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  autoFocus
+                />
+                {searchingStations && (
+                  <ActivityIndicator size="small" color={theme.primary} />
+                )}
+              </View>
 
               <Text style={styles.sectionLabel}>
                 {stationSearchQuery.trim()

@@ -7,12 +7,20 @@ import { ScheduleData } from "./scraper";
 const SAPIENZA_RED = "#822433";
 const DAYS_NAMES = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì"];
 const ACCENT_COLORS = [
-  "#3b82f6",
-  "#a855f7",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#6366f1",
+  "#3b82f6", // Blue
+  "#8b5cf6", // Violet
+  "#f59e0b", // Amber
+  "#10b981", // Emerald
+  "#ef4444", // Crimson Red
+  "#ec4899", // Pink
+  "#06b6d4", // Cyan
+  "#f97316", // Bright Orange
+  "#14b8a6", // Teal
+  "#6366f1", // Indigo
+  "#84cc16", // Lime
+  "#a855f7", // Purple
+  "#e11d48", // Rose
+  "#0284c7", // Sky Blue
 ];
 
 const escapeHtml = (s?: string) =>
@@ -78,16 +86,13 @@ export async function exportScheduleToPdf(
   const hourH = Math.max(36, Math.min(60, Math.floor(430 / hours)));
   const gridHeight = hours * hourH;
 
-  // Colore stabile per materia
+  // Colore stabile e univoco per materia ordinato alfabeticamente
   const subjectColors = new Map<string, string>();
-  allClasses.forEach((c) => {
-    const key = (c.subject || "").toUpperCase();
-    if (!subjectColors.has(key)) {
-      subjectColors.set(
-        key,
-        ACCENT_COLORS[subjectColors.size % ACCENT_COLORS.length],
-      );
-    }
+  const uniqueSubjects = Array.from(
+    new Set(allClasses.map((c) => (c.subject || "").trim().toUpperCase()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+  uniqueSubjects.forEach((subj, idx) => {
+    subjectColors.set(subj, ACCENT_COLORS[idx % ACCENT_COLORS.length]);
   });
 
   // Fasce orarie complete (es. 08:00 - 09:00 ... 18:00 - 19:00) così ogni lezione

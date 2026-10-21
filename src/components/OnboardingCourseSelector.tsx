@@ -1760,29 +1760,28 @@ export function OnboardingCourseSelector({
   // ═══════════════════════════════════════════════════════════════════════════
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header Introduttivo Originale */}
+      {/* Header Introduttivo Compatto in Stile iOS */}
       <View style={styles.header}>
-        <View
-          style={[
-            styles.logoBadge,
-            { backgroundColor: theme.primary, shadowColor: theme.primary },
-          ]}
-        >
-          <Image
-            source={require("../../assets/images/icon.png")}
-            style={styles.logoBadgeImage}
-            resizeMode="cover"
-          />
+        <View style={styles.headerTopRow}>
+          <View
+            style={[
+              styles.logoBadge,
+              { backgroundColor: theme.primary, shadowColor: theme.primary },
+            ]}
+          >
+            <Image
+              source={require("../../assets/images/icon.png")}
+              style={styles.logoBadgeImage}
+              resizeMode="cover"
+            />
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.appTitle}>Benvenuto in StudICI</Text>
+            <Text style={[styles.appSubtitle, { color: theme.accent }]}>
+              Sapienza Università di Roma · Facoltà I.C.I.
+            </Text>
+          </View>
         </View>
-        <Text style={styles.appTitle}>Benvenuto in StudICI</Text>
-        <Text style={[styles.appSubtitle, { color: theme.accent }]}>
-          Sapienza Università di Roma · Facoltà I.C.I.
-        </Text>
-        <Text style={styles.instruction}>
-          {setupMode === "normal"
-            ? "Seleziona il tuo corso di laurea per iniziare. Orari e aule verranno memorizzati sul telefono."
-            : "Collega un altro dispositivo per scaricare subito corso, canali e presenze già configurate."}
-        </Text>
       </View>
 
       {/* Selettore Modalità di Avvio */}
@@ -2125,46 +2124,44 @@ const styles = StyleSheet.create({
   /* ── Stili Schermata Scelta Facoltà Originale (con Pill Glow) ── */
   header: {
     paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 8,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   logoBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: SAPIENZA_RED,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
     shadowColor: SAPIENZA_RED,
-    shadowOffset: { width: 0, height: 3 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.35,
-    shadowRadius: 8,
+    shadowRadius: 6,
     elevation: 4,
     overflow: "hidden",
   },
   logoBadgeImage: {
     width: "100%",
     height: "100%",
-    borderRadius: 14,
+    borderRadius: 12,
   },
   appTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "bold",
     color: "#ffffff",
+    letterSpacing: -0.3,
   },
   appSubtitle: {
-    fontSize: 12.5,
+    fontSize: 12,
     color: SAPIENZA_RED,
     fontWeight: "600",
     marginTop: 2,
-    letterSpacing: 0.4,
-  },
-  instruction: {
-    fontSize: 13,
-    color: "#8e8e93",
-    marginTop: 4,
-    lineHeight: 18,
+    letterSpacing: 0.3,
   },
   searchContainer: {
     flexDirection: "row",
@@ -2172,10 +2169,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.08)",
     marginHorizontal: 16,
     paddingHorizontal: 14,
-    height: 44,
+    height: 42,
     borderRadius: 12,
-    marginTop: 6,
-    marginBottom: 12,
+    marginTop: 4,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.12)",
   },
@@ -2277,7 +2274,7 @@ const styles = StyleSheet.create({
   },
   nativeSegmentedWrapper: {
     marginHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 8,
   },
   nativeSegmentedControl: {
     height: 38,
@@ -2288,7 +2285,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 4,
     marginHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: "#2c2c2e",
     overflow: "visible",
