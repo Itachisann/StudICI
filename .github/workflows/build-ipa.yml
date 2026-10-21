@@ -12,6 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK: 1
+      CI: 1
 
     steps:
       - name: Checkout repository
@@ -22,6 +25,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Setup environment variables
+        run: |
+          echo "EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1" >> $GITHUB_ENV
+          echo "EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1" >> .env
+          if [ -n "${{ secrets.EXPO_PUBLIC_GEMINI_KEY }}" ]; then
+            echo "EXPO_PUBLIC_GEMINI_KEY=${{ secrets.EXPO_PUBLIC_GEMINI_KEY }}" >> .env
+          fi
+
       - name: Install dependencies
         run: npm install
 
@@ -30,6 +41,7 @@ jobs:
 
       - name: Build unsigned IPA
         run: |
+          export EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1
           cd ios
           # The scheme is usually the project name (lowercase or CamelCase).
           # Let's dynamically find the workspace/scheme.
