@@ -2312,11 +2312,24 @@ export function OnboardingCourseSelector({
                 component={CourseSelectScreen}
                 options={{
                   headerShown: true,
-                  headerLargeTitle: true,
+                  headerLargeTitle: false,
                   headerTitle: "Scegli il tuo corso",
-                  headerLargeTitleStyle: { color: "#ffffff" },
-                  headerStyle: { backgroundColor: "#111111" },
-                  headerLargeStyle: { backgroundColor: "#111111" },
+                  headerTitleStyle: {
+                    color: "#ffffff",
+                    fontSize: 17,
+                    fontWeight: "600",
+                  },
+                  headerStyle: {
+                    backgroundColor: isNativeIos ? "transparent" : "#111111",
+                  },
+                  headerTransparent: isNativeIos,
+                  headerBlurEffect: isNativeIos ? "dark" : undefined,
+                  scrollEdgeEffects: {
+                    top: "hidden",
+                    bottom: "hidden",
+                    left: "hidden",
+                    right: "hidden",
+                  },
                   headerTintColor: "#ffffff",
                   headerShadowVisible: false,
                   headerBackButtonDisplayMode: "minimal",
