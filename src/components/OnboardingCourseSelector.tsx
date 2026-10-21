@@ -2138,7 +2138,7 @@ export function OnboardingCourseSelector({
                     <TouchableOpacity
                       key={i}
                       style={styles.courseCard}
-                      activeOpacity={0.7}
+                      activeOpacity={0.75}
                       onPress={() => handleSelectDegree(deg)}
                     >
                       <View
@@ -2154,7 +2154,7 @@ export function OnboardingCourseSelector({
                         <Ionicons
                           name="book-outline"
                           size={22}
-                          color={theme.accent}
+                          color={theme.primary}
                         />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -2165,8 +2165,8 @@ export function OnboardingCourseSelector({
                               styles.typeBadge,
                               {
                                 backgroundColor: isMagistrale
-                                  ? "rgba(168, 85, 247, 0.25)"
-                                  : "rgba(59, 130, 246, 0.25)",
+                                  ? "rgba(168, 85, 247, 0.18)"
+                                  : "rgba(56, 189, 248, 0.18)",
                                 borderColor: isMagistrale
                                   ? "#c084fc"
                                   : "#60a5fa",
@@ -2180,7 +2180,7 @@ export function OnboardingCourseSelector({
                               style={[
                                 styles.typeBadgeText,
                                 {
-                                  color: isMagistrale ? "#e9d5ff" : "#bfdbfe",
+                                  color: isMagistrale ? "#f3e8ff" : "#e0f2fe",
                                 },
                               ]}
                             >
@@ -2188,18 +2188,52 @@ export function OnboardingCourseSelector({
                             </Text>
                           </View>
                           {deg.className ? (
-                            <View style={styles.classBadge}>
-                              <Text style={styles.classBadgeText}>
+                            <View
+                              style={[
+                                styles.classBadge,
+                                {
+                                  backgroundColor: `${theme.primary}22`,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.classBadgeText,
+                                  { color: "#ffffff" },
+                                ]}
+                              >
                                 {deg.className}
                               </Text>
                             </View>
-                          ) : null}
+                          ) : (
+                            <View
+                              style={[
+                                styles.classBadge,
+                                {
+                                  backgroundColor: `${theme.primary}20`,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.classBadgeText,
+                                  { color: "#ffffff" },
+                                ]}
+                              >
+                                I.C.I.
+                              </Text>
+                            </View>
+                          )}
                         </View>
                       </View>
                       <Ionicons
                         name="chevron-forward"
-                        size={20}
-                        color="#636366"
+                        size={19}
+                        color="#71717a"
                       />
                     </TouchableOpacity>
                   );
@@ -2376,28 +2410,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   courseCard: {
-    backgroundColor: "#1c1c1e",
-    borderRadius: 14,
-    padding: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2c2c2e",
+    borderColor: "rgba(255, 255, 255, 0.08)",
   },
   courseIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#2c2c2e",
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
   },
   courseName: {
-    fontSize: 16,
-    fontWeight: "600",
+    fontSize: 15.5,
+    fontWeight: "700",
     color: "#ffffff",
+    letterSpacing: -0.2,
     marginBottom: 6,
   },
   courseBadgesRow: {
@@ -2408,36 +2443,34 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   typeBadge: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 3.5,
     borderRadius: 999,
     borderWidth: 1,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.65,
-    shadowRadius: 6,
+    shadowOpacity: 0.75,
+    shadowRadius: 7,
     elevation: 4,
   },
   typeBadgeText: {
     fontSize: 11,
     fontWeight: "700",
+    letterSpacing: 0.2,
   },
   classBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.25)",
-    borderColor: "#ff9f0a",
     borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 3.5,
     borderRadius: 999,
-    shadowColor: "#ff9f0a",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.65,
-    shadowRadius: 6,
-    elevation: 4,
+    shadowOpacity: 0.85,
+    shadowRadius: 7,
+    elevation: 5,
   },
   classBadgeText: {
-    color: "#fde68a",
     fontSize: 11,
     fontWeight: "700",
+    letterSpacing: 0.2,
   },
   centerContainer: {
     flex: 1,
@@ -3015,12 +3048,12 @@ const styles = StyleSheet.create({
   stationListItem: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1c1c1e",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
     padding: 13,
-    borderRadius: 14,
+    borderRadius: 18,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#2c2c2e",
+    borderColor: "rgba(255, 255, 255, 0.08)",
   },
   stationIconBadge: {
     width: 34,
