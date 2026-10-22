@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { BlurView } from 'expo-blur';
 
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -26,6 +27,22 @@ if (isNativeButtonAvailable) {
   }
 }
 
+export const NativeGlassContainer: React.FC<{
+  children: React.ReactNode;
+  style?: ViewStyle;
+  spacing?: number;
+}> = ({ children, style, spacing = 10 }) => {
+  const Container = CallstackLiquidGlass?.LiquidGlassContainerView;
+  if (isNativeButtonAvailable && Container) {
+    return (
+      <Container spacing={spacing} style={style}>
+        {children}
+      </Container>
+    );
+  }
+  return <View style={style}>{children}</View>;
+};
+
 export interface NativeActionButtonProps {
   label: string;
   onPress: () => void;
@@ -41,8 +58,8 @@ export interface NativeActionButtonProps {
 
 /**
  * Pulsante nativo / a tema:
- * - Su IPA (iOS 26): Callstack Liquid Glass nativo, con la tonalità esatta del tema
- * - Su Expo Go o non iOS 26: Pulsante a tema stile glowing (shadow neon theme.primary)
+ * - Su IPA (iOS): Callstack Liquid Glass nativo (LiquidGlassView), con la tonalità esatta del tema
+ * - Su Expo Go o non iOS: Pulsante a tema stile glass con BlurView nativa e glowing neon
  */
 export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   label,
@@ -59,14 +76,13 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   const isFilled = variant === 'filled';
   const effectiveGlowColor = glowColor || accentColor;
 
-  const isLiquidGlassSupported =
+  const isLiquidGlassAvailable =
     isNativeButtonAvailable &&
     CallstackLiquidGlass &&
-    Boolean(CallstackLiquidGlass.isLiquidGlassSupported) &&
     Boolean(CallstackLiquidGlass.LiquidGlassView);
 
-  // 1. Modalità iOS 26 nativa tramite Callstack (Liquid Glass) per build IPA
-  if (isLiquidGlassSupported) {
+  // 1. Modalità iOS nativa tramite Callstack (Liquid Glass) per build IPA
+  if (isLiquidGlassAvailable) {
     const LiquidGlassView = CallstackLiquidGlass.LiquidGlassView;
     return (
       <TouchableOpacity
@@ -88,8 +104,10 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
         ]}
       >
         <LiquidGlassView
-          effect="clear"
-          interactive
+          effect={isFilled ? 'regular' : 'clear'}
+          interactive={!disabled}
+          colorScheme="dark"
+          tintColor={isFilled ? (disabled ? '#27272a' : accentColor) : undefined}
           style={[
             styles.basePill,
             styles.glassBorder,
@@ -98,7 +116,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               borderColor: disabled ? '#27272a' : accentColor,
             },
             variant === 'outlined' && {
-              backgroundColor: 'transparent',
+              backgroundColor: 'rgba(255, 255, 255, 0.04)',
               borderColor: disabled ? '#27272a' : accentColor,
             },
           ]}
@@ -120,7 +138,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
     );
   }
 
-  // 2. Modalità Fallback Expo Go o iOS < 26: Pulsante a tema stile glowing
+  // 2. Modalità Fallback Expo Go o non iOS: Pulsante a tema stile glass con BlurView
   return (
     <TouchableOpacity
       activeOpacity={0.82}
@@ -140,18 +158,19 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
         style,
       ]}
     >
-      <View
+      <BlurView
+        intensity={Platform.OS === 'ios' ? 30 : 0}
+        tint="dark"
         style={[
           styles.basePill,
+          styles.glassBorder,
           isFilled && {
             backgroundColor: disabled ? '#18181b' : accentColor,
             borderColor: disabled ? '#27272a' : accentColor,
-            borderWidth: 1.5,
           },
           variant === 'outlined' && {
-            backgroundColor: 'transparent',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
             borderColor: disabled ? '#27272a' : accentColor,
-            borderWidth: 1.5,
           },
           variant === 'text' && {
             backgroundColor: 'transparent',
@@ -171,7 +190,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
         >
           {label}
         </Text>
-      </View>
+      </BlurView>
     </TouchableOpacity>
   );
 };

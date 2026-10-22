@@ -901,30 +901,31 @@ function PostDownloadScreen() {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
-              <View style={[styles.channelHeroHeader, styles.channelHeroHeaderCompact]}>
+              <View style={styles.channelHeroHeader}>
                 <View
                   style={[
                     styles.channelIconCircle,
-                    styles.channelIconCircleCompact,
                     {
                       backgroundColor: theme.primary,
                       shadowColor: theme.primary,
                     },
                   ]}
                 >
-                  <Ionicons name="train" size={24} color="#ffffff" />
+                  <Ionicons name="train" size={28} color="#ffffff" />
                 </View>
-                <Text style={styles.channelHeroTitleCompact}>
+                <Text style={styles.channelHeroTitle}>
                   Configura il tuo viaggio
                 </Text>
-                <Text style={styles.channelHeroSubtitleCompact}>
-                  Imposta il tragitto pendolare per calcolare treni, coincidenze e traffico, oppure configura più tardi.
+                <Text style={styles.channelHeroSubtitle}>
+                  Imposta il tuo tragitto pendolare per calcolare treni,
+                  traffico e coincidenze verso le aule, oppure configura più
+                  tardi.
                 </Text>
               </View>
 
               {/* ── 1. LUOGO DI PARTENZA ── */}
-              <View style={[styles.pillSection, styles.pillSectionCompact]}>
-                <Text style={styles.pillSectionLabelCompact}>
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
                   LUOGO DI PARTENZA
                 </Text>
                 <View
@@ -1021,8 +1022,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 2. TRAGITTO VERSO LA STAZIONE (AUTO / NO MEZZI) ── */}
-              <View style={[styles.pillSection, styles.pillSectionCompact]}>
-                <Text style={styles.pillSectionLabelCompact}>
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
                   TRAGITTO VERSO LA STAZIONE
                 </Text>
                 <View style={styles.channelRowEqual}>
@@ -1106,8 +1107,8 @@ function PostDownloadScreen() {
                 </View>
 
                 {carMode === "yes" && (
-                  <View style={[styles.subPillGroup, styles.subPillGroupCompact]}>
-                    <Text style={styles.subPillLabelCompact}>
+                  <View style={styles.subPillGroup}>
+                    <Text style={styles.subPillLabel}>
                       MARGINE DI SICUREZZA
                     </Text>
                     <View style={styles.chipsContainer}>
@@ -1196,8 +1197,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 3. TRATTA FERROVIARIA (PARTENZA & ARRIVO) ── */}
-              <View style={[styles.pillSection, styles.pillSectionCompact]}>
-                <Text style={styles.pillSectionLabelCompact}>
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
                   STAZIONE DI PARTENZA
                 </Text>
                 <View style={styles.stationGrid}>
@@ -1291,7 +1292,7 @@ function PostDownloadScreen() {
                 </View>
 
                 <Text
-                  style={[styles.pillSectionLabelCompact, { marginTop: 12 }]}
+                  style={[styles.pillSectionLabel, { marginTop: 18 }]}
                 >
                   STAZIONE DI ARRIVO (ROMA)
                 </Text>
@@ -1434,8 +1435,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 4. ANTICIPO DI SICUREZZA IN AULA ── */}
-              <View style={[styles.pillSection, styles.pillSectionCompact]}>
-                <Text style={styles.pillSectionLabelCompact}>
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
                   ANTICIPO IN AULA
                 </Text>
                 <View style={styles.chipsContainer}>
@@ -2654,57 +2655,7 @@ const styles = StyleSheet.create({
   travelInitScrollContent: {
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 85,
-  },
-  channelHeroHeaderCompact: {
-    alignItems: "center",
-    marginBottom: 10,
-    marginTop: 0,
-  },
-  channelIconCircleCompact: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    marginBottom: 6,
-  },
-  channelHeroTitleCompact: {
-    fontSize: 19,
-    fontWeight: "800",
-    color: "#ffffff",
-    letterSpacing: -0.4,
-    textAlign: "center",
-  },
-  channelHeroSubtitleCompact: {
-    fontSize: 12,
-    color: "#a1a1aa",
-    textAlign: "center",
-    marginTop: 3,
-    lineHeight: 16,
-    paddingHorizontal: 16,
-  },
-  pillSectionCompact: {
-    marginBottom: 11,
-  },
-  pillSectionLabelCompact: {
-    fontSize: 10.5,
-    fontWeight: "700",
-    color: "#71717a",
-    letterSpacing: 0.8,
-    marginBottom: 6,
-    textAlign: "center",
-    textTransform: "uppercase",
-  },
-  subPillGroupCompact: {
-    marginTop: 8,
-    alignItems: "center",
-  },
-  subPillLabelCompact: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#71717a",
-    letterSpacing: 0.8,
-    marginBottom: 6,
-    textAlign: "center",
+    paddingBottom: 110,
   },
   stationGridItemDashed: {
     borderStyle: "dashed",
@@ -3015,8 +2966,8 @@ const styles = StyleSheet.create({
   /* ── Fixed Bottom Footer con Indicatori Fluidi ── */
   fixedBottomFooter: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 14 : 12,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === "ios" ? 22 : 16,
     backgroundColor: "#111111",
     borderTopWidth: 0,
     alignItems: "center",
@@ -3026,7 +2977,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 16,
   },
   swipeLineIndicator: {
     height: 4.5,

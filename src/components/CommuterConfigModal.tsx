@@ -1235,15 +1235,15 @@ export function CommuterConfigModal({
 
               {/* Barra inferiore con pulsanti "Configura più tardi" e "Salva" */}
               <View style={styles.initBottomButtonsRow}>
-                <TouchableOpacity
-                  style={styles.laterBtnPill}
-                  activeOpacity={0.75}
+                <NativeActionButton
+                  label="Configura più tardi"
                   onPress={onClose}
-                >
-                  <Text style={styles.laterBtnPillText}>
-                    Configura più tardi
-                  </Text>
-                </TouchableOpacity>
+                  variant="outlined"
+                  accentColor="#a1a1aa"
+                  glow={false}
+                  style={{ flex: 1 }}
+                  textStyle={{ fontSize: 13, fontWeight: "700" }}
+                />
 
                 <NativeActionButton
                   label="Salva"
