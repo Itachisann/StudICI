@@ -1811,9 +1811,7 @@ export default function ViaggioScreen() {
                                   {isDeparted
                                     ? " (Passato)"
                                     : isStoppedLate
-                                      ? at.isDeparted === false
-                                        ? " (Non partito)"
-                                        : " (Fermo)"
+                                      ? " (Fermo)"
                                       : ""}
                                 </Text>
                               </TouchableOpacity>

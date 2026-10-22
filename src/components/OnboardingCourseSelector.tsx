@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   NativeScrollEvent,
@@ -1611,8 +1612,7 @@ function PostDownloadScreen() {
               <NativeActionButton
                 label="Configura più tardi"
                 onPress={() => finalizeOnboarding(false)}
-                variant="outlined"
-                accentColor="#a1a1aa"
+                variant="glass"
                 glow={false}
                 style={{ flex: 1 }}
                 textStyle={{ fontSize: 13, fontWeight: "700" }}
@@ -1663,25 +1663,39 @@ function PostDownloadScreen() {
           onCancelButtonPress: () => handleStationSearchChange(""),
         }}
       >
-        <View style={{ flex: 1, paddingTop: 8 }}>
-          {searchingStations && (
-            <ActivityIndicator
-              size="small"
-              color={theme.primary}
-              style={{ marginVertical: 10 }}
-            />
-          )}
-          <Text style={styles.stationCountHeader}>
-            {stationSearchQuery.trim()
-              ? `RISULTATI RICERCA (${stationResults.length})`
-              : `TUTTE LE STAZIONI ITALIANE (${stationResults.length})`}
-          </Text>
+        <View collapsable={false} style={{ flex: 1, width: "100%" }}>
+          <View
+            collapsable={false}
+            style={{
+              width: "100%",
+              paddingHorizontal: 16,
+              paddingTop: 8,
+              paddingBottom: 6,
+            }}
+          >
+            {searchingStations && (
+              <ActivityIndicator
+                size="small"
+                color={theme.primary}
+                style={{ marginVertical: 6 }}
+              />
+            )}
+            <Text style={styles.stationCountHeader}>
+              {stationSearchQuery.trim()
+                ? `RISULTATI RICERCA (${stationResults.length})`
+                : `TUTTE LE STAZIONI ITALIANE (${stationResults.length})`}
+            </Text>
+          </View>
           <FlatList
             data={stationResults}
             keyExtractor={(st) => `${st.code}_${st.name}`}
-            style={{ flex: 1, paddingHorizontal: 16 }}
+            style={{ flex: 1, width: "100%" }}
+            contentContainerStyle={{
+              paddingHorizontal: 16,
+              paddingBottom: 36,
+            }}
             keyboardShouldPersistTaps="handled"
-            contentInsetAdjustmentBehavior="automatic"
+            contentInsetAdjustmentBehavior="never"
             initialNumToRender={25}
             maxToRenderPerBatch={30}
             windowSize={10}
@@ -1735,6 +1749,8 @@ export function OnboardingCourseSelector({
   const { width: screenWidth } = useWindowDimensions();
   const pagerRef = useRef<ScrollView>(null);
   const [scrollX] = useState(() => new Animated.Value(0));
+  const [downloadFadeAnim] = useState(() => new Animated.Value(0));
+  const [downloadScaleAnim] = useState(() => new Animated.Value(0.94));
 
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [search, setSearch] = useState("");
@@ -1964,6 +1980,22 @@ export function OnboardingCourseSelector({
     setPendingDegree(degree);
     setDownloading(true);
     setProgressText("Preparazione e analisi canali...");
+    downloadFadeAnim.setValue(0);
+    downloadScaleAnim.setValue(0.94);
+    Animated.parallel([
+      Animated.timing(downloadFadeAnim, {
+        toValue: 1,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(downloadScaleAnim, {
+        toValue: 1,
+        friction: 8,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
 
     try {
       const { tabs } = await fetchAllCourseData(degree.url, true, (stepMsg) => {
@@ -1989,16 +2021,29 @@ export function OnboardingCourseSelector({
           : "",
       );
 
-      setDownloading(false);
-      setCurrentPage(1);
-      scrollX.setValue(0);
-      nav?.navigate("PostDownload");
-      setTimeout(() => {
-        pagerRef.current?.scrollTo({ x: 0, animated: false });
-      }, 40);
+      Animated.timing(downloadFadeAnim, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        setDownloading(false);
+        setCurrentPage(1);
+        scrollX.setValue(0);
+        nav?.navigate("PostDownload");
+        setTimeout(() => {
+          pagerRef.current?.scrollTo({ x: 0, animated: false });
+        }, 40);
+      });
     } catch (err) {
       console.error("Errore durante download iniziale:", err);
-      setDownloading(false);
+      Animated.timing(downloadFadeAnim, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }).start(() => {
+        setDownloading(false);
+      });
       Alert.alert(
         "Errore di Connessione",
         "Impossibile scaricare i dati del corso dal sito Sapienza. Controlla la tua connessione e riprova.",
@@ -2355,15 +2400,23 @@ export function OnboardingCourseSelector({
         </NavigationIndependentTree>
       </OnboardingContext.Provider>
 
-      {/* Overlay Download Unificato */}
+      {/* Overlay Download Unificato con animazione fluida */}
       {downloading && (
-        <View style={StyleSheet.absoluteFill}>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              opacity: downloadFadeAnim,
+              transform: [{ scale: downloadScaleAnim }],
+            },
+          ]}
+        >
           <CourseDownloadView
             courseName={currentDegreeName}
             progressText={progressText}
             title="Configurazione in corso"
           />
-        </View>
+        </Animated.View>
       )}
     </View>
   );

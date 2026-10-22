@@ -46,7 +46,7 @@ export const NativeGlassContainer: React.FC<{
 export interface NativeActionButtonProps {
   label: string;
   onPress: () => void;
-  variant?: 'filled' | 'outlined' | 'text';
+  variant?: 'filled' | 'outlined' | 'text' | 'glass';
   disabled?: boolean;
   style?: ViewStyle;
   textStyle?: TextStyle;
@@ -119,13 +119,21 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               backgroundColor: 'rgba(255, 255, 255, 0.04)',
               borderColor: disabled ? '#27272a' : accentColor,
             },
+            variant === 'glass' && {
+              backgroundColor: 'rgba(255, 255, 255, 0.10)',
+              borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.22)',
+            },
           ]}
         >
           {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
           <Text
             style={[
               styles.labelText,
-              isFilled ? styles.filledText : { color: accentColor },
+              isFilled
+                ? styles.filledText
+                : variant === 'glass'
+                ? styles.glassText
+                : { color: accentColor },
               disabled && { color: '#52525b' },
               textStyle,
             ]}
@@ -172,6 +180,10 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             backgroundColor: 'rgba(255, 255, 255, 0.05)',
             borderColor: disabled ? '#27272a' : accentColor,
           },
+          variant === 'glass' && {
+            backgroundColor: 'rgba(255, 255, 255, 0.08)',
+            borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.20)',
+          },
           variant === 'text' && {
             backgroundColor: 'transparent',
             borderWidth: 0,
@@ -182,7 +194,11 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
         <Text
           style={[
             styles.labelText,
-            isFilled ? styles.filledText : { color: accentColor },
+            isFilled
+              ? styles.filledText
+              : variant === 'glass'
+              ? styles.glassText
+              : { color: accentColor },
             disabled && { color: '#52525b' },
             textStyle,
           ]}
@@ -221,6 +237,9 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   filledText: {
+    color: '#ffffff',
+  },
+  glassText: {
     color: '#ffffff',
   },
 });

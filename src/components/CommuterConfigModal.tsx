@@ -516,24 +516,39 @@ export function CommuterConfigModal({
         <View style={{ flex: 1, backgroundColor: "#16181d" }}>
           {stationPickerType ? (
             /* Picker Stazione A-Z con tutti i risultati */
-            <View style={{ flex: 1, padding: 16 }}>
-              {searchingStations && (
-                <View style={{ paddingVertical: 8, alignItems: "center" }}>
-                  <ActivityIndicator size="small" color={theme.primary} />
-                </View>
-              )}
+            <View collapsable={false} style={{ flex: 1, width: "100%" }}>
+              <View
+                collapsable={false}
+                style={{
+                  width: "100%",
+                  paddingHorizontal: 16,
+                  paddingTop: 8,
+                  paddingBottom: 6,
+                }}
+              >
+                {searchingStations && (
+                  <View style={{ paddingVertical: 4, alignItems: "center" }}>
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  </View>
+                )}
 
-              <Text style={styles.sectionLabel}>
-                {stationSearchQuery.trim()
-                  ? `RISULTATI RICERCA (${filteredStations.length})`
-                  : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
-              </Text>
+                <Text style={styles.sectionLabel}>
+                  {stationSearchQuery.trim()
+                    ? `RISULTATI RICERCA (${filteredStations.length})`
+                    : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
+                </Text>
+              </View>
 
               <FlatList
                 data={filteredStations}
                 keyExtractor={(item) => `${item.code}_${item.name}`}
                 keyboardShouldPersistTaps="handled"
-                contentInsetAdjustmentBehavior="automatic"
+                contentInsetAdjustmentBehavior="never"
+                style={{ flex: 1, width: "100%" }}
+                contentContainerStyle={{
+                  paddingHorizontal: 16,
+                  paddingBottom: 36,
+                }}
                 initialNumToRender={25}
                 maxToRenderPerBatch={30}
                 windowSize={10}
@@ -1238,8 +1253,7 @@ export function CommuterConfigModal({
                 <NativeActionButton
                   label="Configura più tardi"
                   onPress={onClose}
-                  variant="outlined"
-                  accentColor="#a1a1aa"
+                  variant="glass"
                   glow={false}
                   style={{ flex: 1 }}
                   textStyle={{ fontSize: 13, fontWeight: "700" }}
