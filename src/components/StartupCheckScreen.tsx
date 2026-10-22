@@ -34,19 +34,29 @@ export function StartupCheckScreen({
   const [checkScale] = useState(() => new Animated.Value(0));
   const [capsulePulse] = useState(() => new Animated.Value(1));
   const finishedRef = useRef(false);
+  const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const safeFinish = useCallback(() => {
     if (!finishedRef.current) {
       finishedRef.current = true;
+      if (pulseLoopRef.current) {
+        pulseLoopRef.current.stop();
+        pulseLoopRef.current = null;
+      }
+      capsulePulse.stopAnimation();
+      translateYAnim.stopAnimation();
+      checkScale.stopAnimation();
+
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 220,
         useNativeDriver: true,
       }).start(() => {
+        fadeAnim.stopAnimation();
         onFinish();
       });
     }
-  }, [fadeAnim, onFinish]);
+  }, [fadeAnim, capsulePulse, translateYAnim, checkScale, onFinish]);
 
   useEffect(() => {
     // Elegant iOS Entrance
@@ -79,6 +89,7 @@ export function StartupCheckScreen({
         }),
       ])
     );
+    pulseLoopRef.current = pulseLoop;
     pulseLoop.start();
 
     // Safety timeout: max 3.5s per il controllo orari
@@ -128,7 +139,14 @@ export function StartupCheckScreen({
 
     return () => {
       clearTimeout(checkTimeout);
-      pulseLoop.stop();
+      if (pulseLoopRef.current) {
+        pulseLoopRef.current.stop();
+        pulseLoopRef.current = null;
+      }
+      capsulePulse.stopAnimation();
+      translateYAnim.stopAnimation();
+      checkScale.stopAnimation();
+      fadeAnim.stopAnimation();
     };
   }, [degreeUrl, fadeAnim, translateYAnim, capsulePulse, checkScale, safeFinish]);
 

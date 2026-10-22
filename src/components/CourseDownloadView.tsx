@@ -54,7 +54,11 @@ export function CourseDownloadView({
     );
     pulseLoop.start();
 
-    return () => pulseLoop.stop();
+    return () => {
+      pulseLoop.stop();
+      pulseAnim.stopAnimation();
+      glowOpacity.stopAnimation();
+    };
   }, [pulseAnim, glowOpacity]);
 
   return (

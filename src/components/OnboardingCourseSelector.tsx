@@ -21,7 +21,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import {
   DarkTheme,
@@ -162,16 +162,6 @@ function SetupModeScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.setupModeTopBar}>
-        <TouchableOpacity
-          style={styles.setupModeBackBtn}
-          onPress={() => navigation.goBack()}
-          activeOpacity={0.7}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Ionicons name="chevron-back" size={22} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
       <View style={styles.setupModeContainer}>
         <View style={styles.setupModeHeader}>
           <Text style={styles.setupModeTitle}>Come vuoi iniziare?</Text>
@@ -625,6 +615,22 @@ function PostDownloadScreen() {
     screenWidth,
   } = useOnboarding();
 
+  const insets = useSafeAreaInsets();
+  const topInsetPadding = Math.max(insets.top, 24) + 16;
+
+  const isOtherDepartureSelected = Boolean(
+    departureStation &&
+      !quickDepartureStations.some(
+        (s: StationInfo) => s.code === departureStation.code,
+      ),
+  );
+  const isOtherArrivalSelected = Boolean(
+    arrivalStation &&
+      !quickArrivalStations.some(
+        (s: StationInfo) => s.code === arrivalStation.code,
+      ),
+  );
+
   const line1Width = scrollX.interpolate({
     inputRange: [0, screenWidth],
     outputRange: [34, 22],
@@ -701,7 +707,10 @@ function PostDownloadScreen() {
              ────────────────────────────────────────────────────────────── */}
           <View style={{ width: screenWidth, flex: 1 }}>
             <ScrollView
-              contentContainerStyle={styles.channelScrollContent}
+              contentContainerStyle={[
+                styles.channelScrollContent,
+                { paddingTop: topInsetPadding },
+              ]}
               showsVerticalScrollIndicator={false}
             >
               <View style={styles.channelHeroHeader}>
@@ -885,35 +894,37 @@ function PostDownloadScreen() {
              ────────────────────────────────────────────────────────────── */}
           <View style={{ width: screenWidth, flex: 1 }}>
             <ScrollView
-              contentContainerStyle={styles.travelInitScrollContent}
+              contentContainerStyle={[
+                styles.travelInitScrollContent,
+                { paddingTop: topInsetPadding },
+              ]}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
-              <View style={styles.channelHeroHeader}>
+              <View style={[styles.channelHeroHeader, styles.channelHeroHeaderCompact]}>
                 <View
                   style={[
                     styles.channelIconCircle,
+                    styles.channelIconCircleCompact,
                     {
                       backgroundColor: theme.primary,
                       shadowColor: theme.primary,
                     },
                   ]}
                 >
-                  <Ionicons name="train" size={28} color="#ffffff" />
+                  <Ionicons name="train" size={24} color="#ffffff" />
                 </View>
-                <Text style={styles.channelHeroTitle}>
+                <Text style={styles.channelHeroTitleCompact}>
                   Configura il tuo viaggio
                 </Text>
-                <Text style={styles.channelHeroSubtitle}>
-                  Imposta il tuo tragitto pendolare per calcolare treni,
-                  traffico e coincidenze verso le aule, oppure configura
-                  più tardi.
+                <Text style={styles.channelHeroSubtitleCompact}>
+                  Imposta il tragitto pendolare per calcolare treni, coincidenze e traffico, oppure configura più tardi.
                 </Text>
               </View>
 
               {/* ── 1. LUOGO DI PARTENZA ── */}
-              <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
+              <View style={[styles.pillSection, styles.pillSectionCompact]}>
+                <Text style={styles.pillSectionLabelCompact}>
                   LUOGO DI PARTENZA
                 </Text>
                 <View
@@ -1010,8 +1021,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 2. TRAGITTO VERSO LA STAZIONE (AUTO / NO MEZZI) ── */}
-              <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
+              <View style={[styles.pillSection, styles.pillSectionCompact]}>
+                <Text style={styles.pillSectionLabelCompact}>
                   TRAGITTO VERSO LA STAZIONE
                 </Text>
                 <View style={styles.channelRowEqual}>
@@ -1095,8 +1106,8 @@ function PostDownloadScreen() {
                 </View>
 
                 {carMode === "yes" && (
-                  <View style={styles.subPillGroup}>
-                    <Text style={styles.subPillLabel}>
+                  <View style={[styles.subPillGroup, styles.subPillGroupCompact]}>
+                    <Text style={styles.subPillLabelCompact}>
                       MARGINE DI SICUREZZA
                     </Text>
                     <View style={styles.chipsContainer}>
@@ -1185,8 +1196,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 3. TRATTA FERROVIARIA (PARTENZA & ARRIVO) ── */}
-              <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
+              <View style={[styles.pillSection, styles.pillSectionCompact]}>
+                <Text style={styles.pillSectionLabelCompact}>
                   STAZIONE DI PARTENZA
                 </Text>
                 <View style={styles.stationGrid}>
@@ -1232,67 +1243,55 @@ function PostDownloadScreen() {
                     );
                   })}
                   <TouchableOpacity
-                    style={styles.stationGridItem}
-                    activeOpacity={0.7}
-                    onPress={() => setStationPickerType("departure")}
-                  >
-                    <Ionicons
-                      name="search"
-                      size={14}
-                      color={theme.accent}
-                      style={{ marginRight: 5 }}
-                    />
-                    <Text
-                      style={[styles.chipText, { color: theme.accent }]}
-                      numberOfLines={1}
-                    >
-                      Altro...
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {departureStation &&
-                !quickDepartureStations.some(
-                  (s: StationInfo) => s.code === departureStation.code,
-                ) ? (
-                  <TouchableOpacity
                     style={[
-                      styles.stationActionPill,
-                      styles.chipActive,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.primary,
-                        shadowColor: theme.primary,
-                        borderStyle: "solid",
-                      },
+                      styles.stationGridItem,
+                      isOtherDepartureSelected
+                        ? [
+                            styles.chipActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                              borderStyle: "solid",
+                            },
+                          ]
+                        : [
+                            styles.stationGridItemDashed,
+                            { borderColor: theme.primary },
+                          ],
                     ]}
                     activeOpacity={0.7}
                     onPress={() => setStationPickerType("departure")}
                   >
                     <Ionicons
-                      name="checkmark-circle"
+                      name={isOtherDepartureSelected ? "checkmark-circle" : "search"}
                       size={14}
-                      color="#ffffff"
+                      color={isOtherDepartureSelected ? "#ffffff" : theme.accent}
                       style={{ marginRight: 5 }}
                     />
                     <Text
-                      style={[styles.chipText, styles.chipTextActive]}
+                      style={[
+                        styles.chipText,
+                        isOtherDepartureSelected
+                          ? styles.chipTextActive
+                          : { color: theme.accent, fontWeight: "600" },
+                      ]}
                       numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
                     >
-                      {STATION_SHORT_NAMES[departureStation.code] || departureStation.shortName ||
-                        departureStation.name}
+                      {isOtherDepartureSelected
+                        ? (STATION_SHORT_NAMES[departureStation?.code ?? ""] ||
+                            departureStation?.shortName ||
+                            departureStation?.name ||
+                            "Altro...")
+                        : "Altro..."}
                     </Text>
-                    <Ionicons
-                      name="chevron-down"
-                      size={12}
-                      color="#ffffff"
-                      style={{ marginLeft: 4 }}
-                    />
                   </TouchableOpacity>
-                ) : null}
+                </View>
 
                 <Text
-                  style={[styles.pillSectionLabel, { marginTop: 18 }]}
+                  style={[styles.pillSectionLabelCompact, { marginTop: 12 }]}
                 >
                   STAZIONE DI ARRIVO (ROMA)
                 </Text>
@@ -1339,63 +1338,52 @@ function PostDownloadScreen() {
                     );
                   })}
                   <TouchableOpacity
-                    style={styles.stationGridItem}
-                    activeOpacity={0.7}
-                    onPress={() => setStationPickerType("arrival")}
-                  >
-                    <Ionicons
-                      name="search"
-                      size={14}
-                      color={theme.accent}
-                      style={{ marginRight: 5 }}
-                    />
-                    <Text
-                      style={[styles.chipText, { color: theme.accent }]}
-                      numberOfLines={1}
-                    >
-                      Altro...
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {arrivalStation &&
-                !quickArrivalStations.some(
-                  (s: StationInfo) => s.code === arrivalStation.code,
-                ) ? (
-                  <TouchableOpacity
                     style={[
-                      styles.stationActionPill,
-                      styles.chipActive,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.primary,
-                        shadowColor: theme.primary,
-                        borderStyle: "solid",
-                      },
+                      styles.stationGridItem,
+                      isOtherArrivalSelected
+                        ? [
+                            styles.chipActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                              borderStyle: "solid",
+                            },
+                          ]
+                        : [
+                            styles.stationGridItemDashed,
+                            { borderColor: theme.primary },
+                          ],
                     ]}
                     activeOpacity={0.7}
                     onPress={() => setStationPickerType("arrival")}
                   >
                     <Ionicons
-                      name="checkmark-circle"
+                      name={isOtherArrivalSelected ? "checkmark-circle" : "search"}
                       size={14}
-                      color="#ffffff"
+                      color={isOtherArrivalSelected ? "#ffffff" : theme.accent}
                       style={{ marginRight: 5 }}
                     />
                     <Text
-                      style={[styles.chipText, styles.chipTextActive]}
+                      style={[
+                        styles.chipText,
+                        isOtherArrivalSelected
+                          ? styles.chipTextActive
+                          : { color: theme.accent, fontWeight: "600" },
+                      ]}
                       numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
                     >
-                      {STATION_SHORT_NAMES[arrivalStation.code] || arrivalStation.shortName || arrivalStation.name}
+                      {isOtherArrivalSelected
+                        ? (STATION_SHORT_NAMES[arrivalStation?.code ?? ""] ||
+                            arrivalStation?.shortName ||
+                            arrivalStation?.name ||
+                            "Altro...")
+                        : "Altro..."}
                     </Text>
-                    <Ionicons
-                      name="chevron-down"
-                      size={12}
-                      color="#ffffff"
-                      style={{ marginLeft: 4 }}
-                    />
                   </TouchableOpacity>
-                ) : null}
+                </View>
 
                 {/* Anteprima live distanza e tempi reali se auto=sì e origine+stazione scelte */}
                 {carMode === "yes" &&
@@ -1446,8 +1434,8 @@ function PostDownloadScreen() {
               </View>
 
               {/* ── 4. ANTICIPO DI SICUREZZA IN AULA ── */}
-              <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
+              <View style={[styles.pillSection, styles.pillSectionCompact]}>
+                <Text style={styles.pillSectionLabelCompact}>
                   ANTICIPO IN AULA
                 </Text>
                 <View style={styles.chipsContainer}>
@@ -1619,15 +1607,15 @@ function PostDownloadScreen() {
               ]}
               pointerEvents={currentPage === 2 ? "auto" : "none"}
             >
-              <TouchableOpacity
-                style={styles.laterBtnPill}
-                activeOpacity={0.75}
+              <NativeActionButton
+                label="Configura più tardi"
                 onPress={() => finalizeOnboarding(false)}
-              >
-                <Text style={styles.laterBtnPillText}>
-                  Configura più tardi
-                </Text>
-              </TouchableOpacity>
+                variant="outlined"
+                accentColor="#a1a1aa"
+                glow={false}
+                style={{ flex: 1 }}
+                textStyle={{ fontSize: 13, fontWeight: "700" }}
+              />
 
               <NativeActionButton
                 label="Salva"
@@ -1746,13 +1734,6 @@ export function OnboardingCourseSelector({
   const { width: screenWidth } = useWindowDimensions();
   const pagerRef = useRef<ScrollView>(null);
   const [scrollX] = useState(() => new Animated.Value(0));
-
-  useEffect(() => {
-    const id = scrollX.addListener(() => {});
-    return () => {
-      scrollX.removeListener(id);
-    };
-  }, [scrollX]);
 
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [search, setSearch] = useState("");
@@ -2305,7 +2286,14 @@ export function OnboardingCourseSelector({
                 name="SetupMode"
                 component={SetupModeScreen}
                 options={{
+                  headerShown: true,
+                  headerTitle: "",
+                  headerTransparent: true,
+                  headerShadowVisible: false,
+                  headerBackButtonDisplayMode: "minimal",
                   headerBackTitle: "",
+                  headerTintColor: "#ffffff",
+                  headerStyle: { backgroundColor: "transparent" },
                 }}
               />
               <OnboardingStack.Screen
@@ -2666,7 +2654,62 @@ const styles = StyleSheet.create({
   travelInitScrollContent: {
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 120,
+    paddingBottom: 85,
+  },
+  channelHeroHeaderCompact: {
+    alignItems: "center",
+    marginBottom: 10,
+    marginTop: 0,
+  },
+  channelIconCircleCompact: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    marginBottom: 6,
+  },
+  channelHeroTitleCompact: {
+    fontSize: 19,
+    fontWeight: "800",
+    color: "#ffffff",
+    letterSpacing: -0.4,
+    textAlign: "center",
+  },
+  channelHeroSubtitleCompact: {
+    fontSize: 12,
+    color: "#a1a1aa",
+    textAlign: "center",
+    marginTop: 3,
+    lineHeight: 16,
+    paddingHorizontal: 16,
+  },
+  pillSectionCompact: {
+    marginBottom: 11,
+  },
+  pillSectionLabelCompact: {
+    fontSize: 10.5,
+    fontWeight: "700",
+    color: "#71717a",
+    letterSpacing: 0.8,
+    marginBottom: 6,
+    textAlign: "center",
+    textTransform: "uppercase",
+  },
+  subPillGroupCompact: {
+    marginTop: 8,
+    alignItems: "center",
+  },
+  subPillLabelCompact: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#71717a",
+    letterSpacing: 0.8,
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  stationGridItemDashed: {
+    borderStyle: "dashed",
+    borderWidth: 1.5,
+    backgroundColor: "transparent",
   },
   channelHeroHeader: {
     alignItems: "center",
