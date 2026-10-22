@@ -1695,7 +1695,7 @@ function PostDownloadScreen() {
               paddingBottom: 36,
             }}
             keyboardShouldPersistTaps="handled"
-            contentInsetAdjustmentBehavior="never"
+            contentInsetAdjustmentBehavior="automatic"
             initialNumToRender={25}
             maxToRenderPerBatch={30}
             windowSize={10}

@@ -456,165 +456,37 @@ export function CommuterConfigModal({
     (s) => s.code === localConfig.arrivalStation.code,
   );
 
-  const handleSheetBack = () => {
-    if (stationPickerType) {
-      setStationPickerType(null);
-      setStationSearchQuery("");
-    } else {
-      onClose();
-    }
-  };
+  const sheetTitle = isUnconfigured ? "Configura viaggio" : "Impostazioni viaggio";
 
-  const sheetTitle = stationPickerType
-    ? stationPickerType === "departure"
+  const stationSheetTitle =
+    stationPickerType === "departure"
       ? "Stazione di partenza"
-      : "Stazione di arrivo (Roma)"
-    : isUnconfigured
-      ? "Configura viaggio"
-      : "Impostazioni viaggio";
+      : "Stazione di arrivo (Roma)";
 
   return (
-    <NativeSheetModal
-      visible={visible}
-      onClose={onClose}
-      onBack={stationPickerType ? handleSheetBack : undefined}
-      showCloseButton={!stationPickerType}
-      title={sheetTitle}
-      backgroundColor="#16181d"
-      searchBarOptions={
-        stationPickerType
-          ? {
-              placeholder: "Cerca tra tutte le stazioni italiane...",
-              textColor: "#ffffff",
-              tintColor: theme.primary,
-              headerIconColor: "#8e8e93",
-              hintTextColor: "#71717a",
-              autoCapitalize: "words",
-              onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
-              onCancelButtonPress: () => handleStationSearchChange(""),
-            }
-          : undefined
-      }
-      rightActions={
-        !stationPickerType
-          ? [
-              {
-                label: "Salva",
-                prominent: true,
-                tintColor: theme.primary,
-                disabled: isUnconfigured ? !isInitComplete : false,
-                onPress: isUnconfigured ? handleSaveInit : handleSave,
-              },
-            ]
-          : undefined
-      }
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: "#16181d" }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <>
+      {/* ─── MODALE PRINCIPALE: Configura / Impostazioni viaggio ─── */}
+      <NativeSheetModal
+        visible={visible}
+        onClose={onClose}
+        title={sheetTitle}
+        backgroundColor="#16181d"
+        rightActions={[
+          {
+            label: "Salva",
+            prominent: true,
+            tintColor: theme.primary,
+            disabled: isUnconfigured ? !isInitComplete : false,
+            onPress: isUnconfigured ? handleSaveInit : handleSave,
+          },
+        ]}
       >
-        <View style={{ flex: 1, backgroundColor: "#16181d" }}>
-          {stationPickerType ? (
-            /* Picker Stazione A-Z con tutti i risultati */
-            <View collapsable={false} style={{ flex: 1, width: "100%" }}>
-              <View
-                collapsable={false}
-                style={{
-                  width: "100%",
-                  paddingHorizontal: 16,
-                  paddingTop: 8,
-                  paddingBottom: 6,
-                }}
-              >
-                {searchingStations && (
-                  <View style={{ paddingVertical: 4, alignItems: "center" }}>
-                    <ActivityIndicator size="small" color={theme.primary} />
-                  </View>
-                )}
-
-                <Text style={styles.sectionLabel}>
-                  {stationSearchQuery.trim()
-                    ? `RISULTATI RICERCA (${filteredStations.length})`
-                    : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
-                </Text>
-              </View>
-
-              <FlatList
-                data={filteredStations}
-                keyExtractor={(item) => `${item.code}_${item.name}`}
-                keyboardShouldPersistTaps="handled"
-                contentInsetAdjustmentBehavior="never"
-                style={{ flex: 1, width: "100%" }}
-                contentContainerStyle={{
-                  paddingHorizontal: 16,
-                  paddingBottom: 36,
-                }}
-                initialNumToRender={25}
-                maxToRenderPerBatch={30}
-                windowSize={10}
-                renderItem={({ item: st }) => {
-                  const isCurrentSelected = isUnconfigured
-                    ? stationPickerType === "departure"
-                      ? initDepartureStation?.code === st.code
-                      : initArrivalStation?.code === st.code
-                    : stationPickerType === "departure"
-                      ? localConfig.departureStation.code === st.code
-                      : localConfig.arrivalStation.code === st.code;
-                  return (
-                    <TouchableOpacity
-                      style={[
-                        styles.stationRow,
-                        isCurrentSelected && {
-                          borderColor: theme.primary,
-                          backgroundColor: `${theme.primary}18`,
-                        },
-                      ]}
-                      activeOpacity={0.7}
-                      onPress={() => handleSelectStation(st)}
-                    >
-                      <View
-                        style={[
-                          styles.stationIconCircle,
-                          {
-                            backgroundColor: isCurrentSelected
-                              ? theme.primary
-                              : theme.subtle,
-                          },
-                        ]}
-                      >
-                        <Ionicons
-                          name={isCurrentSelected ? "checkmark" : "train"}
-                          size={15}
-                          color={isCurrentSelected ? "#ffffff" : theme.primary}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[
-                            styles.stationName,
-                            isCurrentSelected && {
-                              color: theme.primary,
-                              fontWeight: "700",
-                            },
-                          ]}
-                        >
-                          {st.shortName || st.name}
-                        </Text>
-                        <Text style={styles.stationCode}>
-                          Codice RFI: {st.code}
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={16}
-                        color={isCurrentSelected ? theme.primary : "#52525b"}
-                      />
-                    </TouchableOpacity>
-                  );
-                }}
-              />
-            </View>
-          ) : isUnconfigured ? (
+        <KeyboardAvoidingView
+          style={{ flex: 1, backgroundColor: "#16181d" }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={{ flex: 1, backgroundColor: "#16181d" }}>
+            {isUnconfigured ? (
             /* Form Inizializzazione Primo Avvio (senza nulla di default) */
             <>
               <ScrollView
@@ -2024,9 +1896,129 @@ export function CommuterConfigModal({
             </View>
           </>
         )}
+          </View>
+        </KeyboardAvoidingView>
+      </NativeSheetModal>
+
+      {/* ─── MODALE PICKER STAZIONE (secondo foglio impilato sopra) ─── */}
+      <NativeSheetModal
+        visible={stationPickerType !== null}
+        onClose={() => {
+          setStationPickerType(null);
+          setStationSearchQuery("");
+        }}
+        title={stationSheetTitle}
+        backgroundColor="#16181d"
+        searchBarOptions={{
+          placeholder: "Cerca tra tutte le stazioni italiane...",
+          textColor: "#ffffff",
+          tintColor: theme.primary,
+          headerIconColor: "#8e8e93",
+          hintTextColor: "#71717a",
+          autoCapitalize: "words",
+          onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
+          onCancelButtonPress: () => handleStationSearchChange(""),
+        }}
+      >
+        <View collapsable={false} style={{ flex: 1, width: "100%" }}>
+          <View
+            collapsable={false}
+            style={{
+              width: "100%",
+              paddingHorizontal: 16,
+              paddingTop: 8,
+              paddingBottom: 6,
+            }}
+          >
+            {searchingStations && (
+              <View style={{ paddingVertical: 4, alignItems: "center" }}>
+                <ActivityIndicator size="small" color={theme.primary} />
+              </View>
+            )}
+            <Text style={styles.sectionLabel}>
+              {stationSearchQuery.trim()
+                ? `RISULTATI RICERCA (${filteredStations.length})`
+                : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
+            </Text>
+          </View>
+
+          <FlatList
+            data={filteredStations}
+            keyExtractor={(item) => `${item.code}_${item.name}`}
+            keyboardShouldPersistTaps="handled"
+            contentInsetAdjustmentBehavior="automatic"
+            style={{ flex: 1, width: "100%" }}
+            contentContainerStyle={{
+              paddingHorizontal: 16,
+              paddingBottom: 36,
+            }}
+            initialNumToRender={25}
+            maxToRenderPerBatch={30}
+            windowSize={10}
+            renderItem={({ item: st }) => {
+              const isCurrentSelected = isUnconfigured
+                ? stationPickerType === "departure"
+                  ? initDepartureStation?.code === st.code
+                  : initArrivalStation?.code === st.code
+                : stationPickerType === "departure"
+                  ? localConfig.departureStation.code === st.code
+                  : localConfig.arrivalStation.code === st.code;
+              return (
+                <TouchableOpacity
+                  style={[
+                    styles.stationRow,
+                    isCurrentSelected && {
+                      borderColor: theme.primary,
+                      backgroundColor: `${theme.primary}18`,
+                    },
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => handleSelectStation(st)}
+                >
+                  <View
+                    style={[
+                      styles.stationIconCircle,
+                      {
+                        backgroundColor: isCurrentSelected
+                          ? theme.primary
+                          : theme.subtle,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={isCurrentSelected ? "checkmark" : "train"}
+                      size={15}
+                      color={isCurrentSelected ? "#ffffff" : theme.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.stationName,
+                        isCurrentSelected && {
+                          color: theme.primary,
+                          fontWeight: "700",
+                        },
+                      ]}
+                    >
+                      {st.shortName || st.name}
+                    </Text>
+                    <Text style={styles.stationCode}>
+                      Codice RFI: {st.code}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={isCurrentSelected ? theme.primary : "#52525b"}
+                  />
+                </TouchableOpacity>
+              );
+            }}
+          />
         </View>
-      </KeyboardAvoidingView>
-    </NativeSheetModal>
+      </NativeSheetModal>
+    </>
   );
 }
 

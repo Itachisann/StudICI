@@ -68,15 +68,32 @@ function SheetBodyScreen() {
   const navigation = useNavigation();
 
   useEffect(() => {
-    const unsub = navigation.addListener('beforeRemove', () => {
-      // Chiamato quando la rotta viene rimossa fisicamente (es. swipe down nativo o gesture iOS)
-      onDismiss();
+    let dismissed = false;
+    const safeDismiss = () => {
+      if (!dismissed) {
+        dismissed = true;
+        onDismiss();
+      }
+    };
+
+    const unsubTransition = (navigation as any).addListener('transitionEnd', (e: any) => {
+      if (e?.data?.closing) {
+        safeDismiss();
+      }
     });
-    return unsub;
+
+    const unsubRemove = navigation.addListener('beforeRemove', () => {
+      setTimeout(safeDismiss, 350);
+    });
+
+    return () => {
+      unsubTransition();
+      unsubRemove();
+    };
   }, [navigation, onDismiss]);
 
   return (
-    <View style={[styles.contentRoot, { backgroundColor }]}>
+    <View collapsable={false} style={[styles.contentRoot, { backgroundColor }]}>
       {children}
     </View>
   );
@@ -118,7 +135,7 @@ export function NativeSheetModal({
     [backgroundColor]
   );
 
-  const buildLeftItems = (): NativeStackHeaderItem[] => {
+  const buildLeftItems = (nav: any): NativeStackHeaderItem[] => {
     if (leftActions && leftActions.length > 0) {
       return leftActions.map((action) => ({
         type: 'button',
@@ -133,7 +150,16 @@ export function NativeSheetModal({
       }));
     }
 
-    const backHandler = onBack ?? onClose;
+    const backHandler = () => {
+      if (onBack) {
+        onBack();
+      } else if (nav && nav.canGoBack && nav.canGoBack()) {
+        nav.goBack();
+      } else {
+        onClose();
+      }
+    };
+
     return [
       {
         type: 'button',
@@ -199,7 +225,7 @@ export function NativeSheetModal({
               <Stack.Screen
                 name="SheetModal"
                 component={SheetBodyScreen}
-                options={{
+                options={({ navigation }: any) => ({
                   presentation: 'formSheet',
                   sheetAllowedDetents: sheetAllowedDetents ?? [1.0],
                   sheetInitialDetentIndex: sheetInitialDetentIndex ?? 0,
@@ -226,9 +252,9 @@ export function NativeSheetModal({
                       }
                     : undefined,
                   contentStyle: { backgroundColor },
-                  unstable_headerLeftItems: buildLeftItems,
+                  unstable_headerLeftItems: () => buildLeftItems(navigation),
                   unstable_headerRightItems: buildRightItems,
-                }}
+                })}
               />
             </Stack.Navigator>
           </NavigationContainer>
