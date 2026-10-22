@@ -551,7 +551,7 @@ export async function getLiveStationDepartures(
         } else if (effectiveDelay > 0) {
           statusDescription = `Ritardo di ${effectiveDelay} min`;
         } else {
-          statusDescription = 'In orario';
+          statusDescription = isOriginStation || !isDeparted || nowMins < plannedDepM ? 'Non partito' : 'In orario';
         }
       } else if (isDepartedFromStation) {
         statusDescription = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
@@ -562,7 +562,7 @@ export async function getLiveStationDepartures(
       } else if (effectiveDelay < 0) {
         statusDescription = `Anticipo di ${Math.abs(effectiveDelay)} min`;
       } else {
-        statusDescription = 'In orario';
+        statusDescription = isOriginStation || !isDeparted || nowMins < plannedDepM ? 'Non partito' : 'In orario';
       }
 
       let alertMessage: string | undefined = undefined;
@@ -1146,7 +1146,7 @@ export async function fetchLiveTrenitaliaTimetable(
           } else if (effectiveDelay > 0) {
             statusDescription = `Ritardo di ${effectiveDelay} min`;
           } else {
-            statusDescription = 'In orario';
+            statusDescription = isOriginStation || !isDeparted || nowMins < depPlanM ? 'Non partito' : 'In orario';
           }
         } else if (isDepartedFromStation) {
           statusDescription = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
@@ -1157,7 +1157,7 @@ export async function fetchLiveTrenitaliaTimetable(
         } else if (effectiveDelay < 0) {
           statusDescription = `Anticipo di ${Math.abs(effectiveDelay)} min`;
         } else {
-          statusDescription = 'In orario';
+          statusDescription = isOriginStation || !isDeparted || nowMins < depPlanM ? 'Non partito' : 'In orario';
         }
       } else {
         statusDescription = 'Non partito';
@@ -2599,6 +2599,75 @@ export function evaluateTrainStatus(
       isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : 0
     );
 
+    // CASO SPECIALE: Convoglio fermo alla stazione di partenza/origine e non ancora partito
+    if (train.isDeparted === false || (isAtCommuterStation && train.isOriginStation)) {
+      const lateAccumulated = Math.max(
+        programDelay,
+        nowMins >= plannedDepMins ? nowMins - plannedDepMins : 0,
+        train.stoppedMinutes || 0
+      );
+      const stoppedTime =
+        train.stoppedMinutes ??
+        (nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
+      const stoppedInfo =
+        stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
+
+      if (nowMins >= plannedDepMins) {
+        const delayInfo = lateAccumulated > 0 ? ` (+${lateAccumulated}m)` : '';
+        return {
+          statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'scheduled',
+          badgeLabel: `Non partito${delayInfo}${stoppedInfo}`,
+          badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#94a3b8',
+          badgeBg:
+            lateAccumulated > 5
+              ? 'rgba(239, 68, 68, 0.15)'
+              : lateAccumulated > 0
+              ? 'rgba(245, 158, 11, 0.15)'
+              : 'rgba(148, 163, 184, 0.12)',
+          badgeBorder:
+            lateAccumulated > 5
+              ? 'rgba(239, 68, 68, 0.3)'
+              : lateAccumulated > 0
+              ? 'rgba(245, 158, 11, 0.3)'
+              : 'rgba(148, 163, 184, 0.25)',
+          iconName: 'time-outline',
+          alertMessage: train.alertMessage,
+          capacityWarning: train.capacityWarning,
+        };
+      }
+
+      // Prima della partenza programmata: fermo al binario in attesa dell'orario
+      if (programDelay > 0) {
+        return {
+          statusType: 'delayed',
+          badgeLabel: `Non partito (+${programDelay}m)`,
+          badgeColor: programDelay > 5 ? '#ef4444' : '#f59e0b',
+          badgeBg:
+            programDelay > 5
+              ? 'rgba(239, 68, 68, 0.15)'
+              : 'rgba(245, 158, 11, 0.15)',
+          badgeBorder:
+            programDelay > 5
+              ? 'rgba(239, 68, 68, 0.3)'
+              : 'rgba(245, 158, 11, 0.3)',
+          iconName: 'time-outline',
+          alertMessage: train.alertMessage,
+          capacityWarning: train.capacityWarning,
+        };
+      }
+
+      return {
+        statusType: 'scheduled',
+        badgeLabel: 'Non partito',
+        badgeColor: '#94a3b8',
+        badgeBg: 'rgba(148, 163, 184, 0.12)',
+        badgeBorder: 'rgba(148, 163, 184, 0.25)',
+        iconName: 'time-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
     if (nowMins <= estimatedDepMins) {
       if (programDelay > 0) {
         return {
@@ -2728,14 +2797,42 @@ export function evaluateTrainStatus(
       };
     }
 
-    // 3. Treno in orario rispetto al programma
+    // 3. Treno che parte direttamente da questa stazione o che non è ancora partito dall'origine
+    if (train.isOriginStation || train.isDeparted === false || !train.isLive) {
+      return {
+        statusType: 'scheduled',
+        badgeLabel: 'Non partito',
+        badgeColor: '#94a3b8',
+        badgeBg: 'rgba(148, 163, 184, 0.12)',
+        badgeBorder: 'rgba(148, 163, 184, 0.25)',
+        iconName: 'time-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
+    // 4. Treno passante che è già partito dall'origine remota ed è in viaggio verso qui (in orario)
+    if (train.isLive && train.isDeparted) {
+      return {
+        statusType: 'running',
+        badgeLabel: 'In orario',
+        badgeColor: '#34c759',
+        badgeBg: 'rgba(52, 199, 89, 0.15)',
+        badgeBorder: 'rgba(52, 199, 89, 0.3)',
+        iconName: 'checkmark-circle-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
+    // 5. Default per treni programmati
     return {
-      statusType: 'running',
-      badgeLabel: 'In orario',
-      badgeColor: '#34c759',
-      badgeBg: 'rgba(52, 199, 89, 0.15)',
-      badgeBorder: 'rgba(52, 199, 89, 0.3)',
-      iconName: 'checkmark-circle-outline',
+      statusType: 'scheduled',
+      badgeLabel: 'Non partito',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.12)',
+      badgeBorder: 'rgba(148, 163, 184, 0.25)',
+      iconName: 'time-outline',
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
     };

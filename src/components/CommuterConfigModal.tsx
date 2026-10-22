@@ -1,9 +1,10 @@
 import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -59,6 +60,75 @@ const QUICK_ARRIVALS: StationInfo[] = [
 
 const PARKING_OPTIONS = [3, 5, 8, 10];
 const BUFFER_OPTIONS = [5, 10, 15, 20];
+
+const ITEM_HEIGHT = 70;
+
+interface StationRowProps {
+  station: StationInfo;
+  isSelected: boolean;
+  primaryColor: string;
+  subtleColor: string;
+  onPress: (st: StationInfo) => void;
+}
+
+const StationRowItem = React.memo(function StationRowItem({
+  station,
+  isSelected,
+  primaryColor,
+  subtleColor,
+  onPress,
+}: StationRowProps) {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.stationRow,
+        isSelected && {
+          borderColor: primaryColor,
+          backgroundColor: `${primaryColor}18`,
+        },
+      ]}
+      activeOpacity={0.7}
+      onPress={() => onPress(station)}
+    >
+      <View
+        style={[
+          styles.stationIconCircle,
+          {
+            backgroundColor: isSelected ? primaryColor : subtleColor,
+          },
+        ]}
+      >
+        <Ionicons
+          name={isSelected ? "checkmark" : "train"}
+          size={15}
+          color={isSelected ? "#ffffff" : primaryColor}
+        />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text
+          style={[
+            styles.stationName,
+            isSelected && {
+              color: primaryColor,
+              fontWeight: "700",
+            },
+          ]}
+          numberOfLines={1}
+        >
+          {station.shortName || station.name}
+        </Text>
+        <Text style={styles.stationCode} numberOfLines={1}>
+          Codice RFI: {station.code}
+        </Text>
+      </View>
+      <Ionicons
+        name="chevron-forward"
+        size={16}
+        color={isSelected ? primaryColor : "#52525b"}
+      />
+    </TouchableOpacity>
+  );
+});
 
 export function CommuterConfigModal({
   visible,
@@ -299,6 +369,7 @@ export function CommuterConfigModal({
   };
 
   const handleSelectDeparture = useCallback((station: StationInfo) => {
+    Keyboard.dismiss();
     setLocalConfig((prev) => ({
       ...prev,
       departureStation: station,
@@ -314,6 +385,7 @@ export function CommuterConfigModal({
   }, []);
 
   const handleSelectArrival = useCallback((station: StationInfo) => {
+    Keyboard.dismiss();
     setLocalConfig((prev) => ({
       ...prev,
       arrivalStation: station,
@@ -324,14 +396,13 @@ export function CommuterConfigModal({
 
   const handleSelectStation = useCallback(
     (station: StationInfo) => {
+      Keyboard.dismiss();
       if (isUnconfigured) {
         if (stationPickerType === "departure") {
           setInitDepartureStation(station);
         } else {
           setInitArrivalStation(station);
         }
-        setStationPickerType(null);
-        setStationSearchQuery("");
       } else {
         if (stationPickerType === "departure") {
           handleSelectDeparture(station);
@@ -339,6 +410,8 @@ export function CommuterConfigModal({
           handleSelectArrival(station);
         }
       }
+      setStationPickerType(null);
+      setStationSearchQuery("");
     },
     [
       isUnconfigured,
@@ -346,6 +419,51 @@ export function CommuterConfigModal({
       handleSelectDeparture,
       handleSelectArrival,
     ],
+  );
+
+  const selectedStationCode = useMemo(() => {
+    if (isUnconfigured) {
+      return stationPickerType === "departure"
+        ? initDepartureStation?.code
+        : initArrivalStation?.code;
+    }
+    return stationPickerType === "departure"
+      ? localConfig.departureStation.code
+      : localConfig.arrivalStation.code;
+  }, [
+    isUnconfigured,
+    stationPickerType,
+    initDepartureStation?.code,
+    initArrivalStation?.code,
+    localConfig.departureStation.code,
+    localConfig.arrivalStation.code,
+  ]);
+
+  const renderStationItem = useCallback(
+    ({ item }: { item: StationInfo }) => (
+      <StationRowItem
+        station={item}
+        isSelected={selectedStationCode === item.code}
+        primaryColor={theme.primary}
+        subtleColor={theme.subtle}
+        onPress={handleSelectStation}
+      />
+    ),
+    [selectedStationCode, theme.primary, theme.subtle, handleSelectStation]
+  );
+
+  const stationKeyExtractor = useCallback(
+    (item: StationInfo) => `${item.code}_${item.name}`,
+    []
+  );
+
+  const getStationItemLayout = useCallback(
+    (_: any, index: number) => ({
+      length: ITEM_HEIGHT,
+      offset: ITEM_HEIGHT * index,
+      index,
+    }),
+    []
   );
 
   const openStationPicker = (type: "departure" | "arrival") => {
@@ -1154,7 +1272,7 @@ export function CommuterConfigModal({
               <ScrollView
                 style={styles.body}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 160 }}
+                contentContainerStyle={{ paddingBottom: 40 }}
                 showsVerticalScrollIndicator={false}
               >
               {/* 1. Partenza da casa */}
@@ -1878,22 +1996,6 @@ export function CommuterConfigModal({
                 </View>
               </View>
             </ScrollView>
-            <View style={styles.saveBottomBar}>
-              <NativeActionButton
-                label="Salva modifiche"
-                onPress={handleSave}
-                accentColor={theme.primary}
-                glow={true}
-                icon={
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={18}
-                    color="#ffffff"
-                  />
-                }
-                style={{ width: "100%" }}
-              />
-            </View>
           </>
         )}
           </View>
@@ -1904,6 +2006,7 @@ export function CommuterConfigModal({
       <NativeSheetModal
         visible={stationPickerType !== null}
         onClose={() => {
+          Keyboard.dismiss();
           setStationPickerType(null);
           setStationSearchQuery("");
         }}
@@ -1944,77 +2047,22 @@ export function CommuterConfigModal({
 
           <FlatList
             data={filteredStations}
-            keyExtractor={(item) => `${item.code}_${item.name}`}
-            keyboardShouldPersistTaps="handled"
+            keyExtractor={stationKeyExtractor}
+            renderItem={renderStationItem}
+            getItemLayout={getStationItemLayout}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="on-drag"
             contentInsetAdjustmentBehavior="automatic"
             style={{ flex: 1, width: "100%" }}
             contentContainerStyle={{
               paddingHorizontal: 16,
               paddingBottom: 36,
             }}
-            initialNumToRender={25}
-            maxToRenderPerBatch={30}
-            windowSize={10}
-            renderItem={({ item: st }) => {
-              const isCurrentSelected = isUnconfigured
-                ? stationPickerType === "departure"
-                  ? initDepartureStation?.code === st.code
-                  : initArrivalStation?.code === st.code
-                : stationPickerType === "departure"
-                  ? localConfig.departureStation.code === st.code
-                  : localConfig.arrivalStation.code === st.code;
-              return (
-                <TouchableOpacity
-                  style={[
-                    styles.stationRow,
-                    isCurrentSelected && {
-                      borderColor: theme.primary,
-                      backgroundColor: `${theme.primary}18`,
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                  onPress={() => handleSelectStation(st)}
-                >
-                  <View
-                    style={[
-                      styles.stationIconCircle,
-                      {
-                        backgroundColor: isCurrentSelected
-                          ? theme.primary
-                          : theme.subtle,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={isCurrentSelected ? "checkmark" : "train"}
-                      size={15}
-                      color={isCurrentSelected ? "#ffffff" : theme.primary}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.stationName,
-                        isCurrentSelected && {
-                          color: theme.primary,
-                          fontWeight: "700",
-                        },
-                      ]}
-                    >
-                      {st.shortName || st.name}
-                    </Text>
-                    <Text style={styles.stationCode}>
-                      Codice RFI: {st.code}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={16}
-                    color={isCurrentSelected ? theme.primary : "#52525b"}
-                  />
-                </TouchableOpacity>
-              );
-            }}
+            initialNumToRender={15}
+            maxToRenderPerBatch={20}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS !== "android"}
           />
         </View>
       </NativeSheetModal>

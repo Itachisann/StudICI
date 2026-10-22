@@ -68,28 +68,11 @@ function SheetBodyScreen() {
   const navigation = useNavigation();
 
   useEffect(() => {
-    let dismissed = false;
-    const safeDismiss = () => {
-      if (!dismissed) {
-        dismissed = true;
-        onDismiss();
-      }
-    };
-
-    const unsubTransition = (navigation as any).addListener('transitionEnd', (e: any) => {
-      if (e?.data?.closing) {
-        safeDismiss();
-      }
+    const unsub = navigation.addListener('beforeRemove', () => {
+      // Chiamato quando la rotta viene rimossa fisicamente (es. swipe down nativo o gesture iOS)
+      onDismiss();
     });
-
-    const unsubRemove = navigation.addListener('beforeRemove', () => {
-      setTimeout(safeDismiss, 350);
-    });
-
-    return () => {
-      unsubTransition();
-      unsubRemove();
-    };
+    return unsub;
   }, [navigation, onDismiss]);
 
   return (
@@ -153,8 +136,6 @@ export function NativeSheetModal({
     const backHandler = () => {
       if (onBack) {
         onBack();
-      } else if (nav && nav.canGoBack && nav.canGoBack()) {
-        nav.goBack();
       } else {
         onClose();
       }

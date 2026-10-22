@@ -1694,11 +1694,12 @@ function PostDownloadScreen() {
               paddingHorizontal: 16,
               paddingBottom: 36,
             }}
-            keyboardShouldPersistTaps="handled"
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="on-drag"
             contentInsetAdjustmentBehavior="automatic"
-            initialNumToRender={25}
-            maxToRenderPerBatch={30}
-            windowSize={10}
+            initialNumToRender={20}
+            maxToRenderPerBatch={25}
+            windowSize={7}
             renderItem={({ item: st }) => (
               <TouchableOpacity
                 style={styles.stationListItem}
