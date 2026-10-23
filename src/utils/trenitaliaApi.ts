@@ -2574,99 +2574,104 @@ export function evaluateTrainStatus(
 
   // 5. Se è oggi: verifica orario attuale rispetto alla corsa
   const nowMins = now.getHours() * 60 + now.getMinutes();
+  const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
   const actualArrMins = parseTimeToMinutes(
     train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
   );
+  const isAtCommuterStation =
+    !train.stoppedStationName ||
+    !stationName ||
+    formatStationName(train.stoppedStationName).toLowerCase() ===
+      formatStationName(stationName).toLowerCase();
 
-  // Se il convoglio è fermo in una stazione (es. arrivato ma non ancora partito da quella stazione):
-  if (train.isStoppedInStation) {
-    const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
-    const estimatedDepMins = parseTimeToMinutes(
-      train.stoppedStationEstimatedDep || train.departureTimeActual || train.departureTimePlanned || '00:00'
-    );
-    const stName = train.stoppedStationName || stationName || 'Stazione';
-    const isAtCommuterStation =
-      !train.stoppedStationName ||
-      !stationName ||
-      formatStationName(train.stoppedStationName).toLowerCase() ===
-        formatStationName(stationName).toLowerCase();
+  // ── CASO UNIFICATO: Treno NON ancora partito dalla stazione di partenza/origine ──
+  const isNotYetDepartedFromOrigin =
+    train.isDeparted === false ||
+    (isAtCommuterStation && train.isOriginStation && !train.isDepartedFromStation);
 
-    // Il ritardo segue sempre il programma (plannedDepMins), mentre il badge "Fermo a [Stazione]"
-    // vale SOLO quando si supera la partenza stimata (estimatedDepMins).
+  if (isNotYetDepartedFromOrigin) {
     const programDelay = Math.max(
       0,
       train.delayMinutes || 0,
       isAtCommuterStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : 0
     );
+    const lateAccumulated = Math.max(
+      programDelay,
+      nowMins >= plannedDepMins ? nowMins - plannedDepMins : 0,
+      train.stoppedMinutes || 0
+    );
+    const stoppedTime =
+      train.stoppedMinutes ??
+      (train.isStoppedInStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
+    const stoppedInfo =
+      train.isStoppedInStation && stoppedTime !== undefined && stoppedTime > 0
+        ? ` (da ${stoppedTime}m)`
+        : '';
 
-    // CASO SPECIALE: Convoglio fermo alla stazione di partenza/origine e non ancora partito
-    if (train.isDeparted === false || (isAtCommuterStation && train.isOriginStation)) {
-      const lateAccumulated = Math.max(
-        programDelay,
-        nowMins >= plannedDepMins ? nowMins - plannedDepMins : 0,
-        train.stoppedMinutes || 0
-      );
-      const stoppedTime =
-        train.stoppedMinutes ??
-        (nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
-      const stoppedInfo =
-        stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
-
-      if (nowMins >= plannedDepMins) {
-        const delayInfo = lateAccumulated > 0 ? ` (+${lateAccumulated}m)` : '';
-        return {
-          statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'scheduled',
-          badgeLabel: `Non partito${delayInfo}${stoppedInfo}`,
-          badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#94a3b8',
-          badgeBg:
-            lateAccumulated > 5
-              ? 'rgba(239, 68, 68, 0.15)'
-              : lateAccumulated > 0
-              ? 'rgba(245, 158, 11, 0.15)'
-              : 'rgba(148, 163, 184, 0.12)',
-          badgeBorder:
-            lateAccumulated > 5
-              ? 'rgba(239, 68, 68, 0.3)'
-              : lateAccumulated > 0
-              ? 'rgba(245, 158, 11, 0.3)'
-              : 'rgba(148, 163, 184, 0.25)',
-          iconName: 'time-outline',
-          alertMessage: train.alertMessage,
-          capacityWarning: train.capacityWarning,
-        };
-      }
-
-      // Prima della partenza programmata: fermo al binario in attesa dell'orario
-      if (programDelay > 0) {
-        return {
-          statusType: 'delayed',
-          badgeLabel: `Non partito (+${programDelay}m)`,
-          badgeColor: programDelay > 5 ? '#ef4444' : '#f59e0b',
-          badgeBg:
-            programDelay > 5
-              ? 'rgba(239, 68, 68, 0.15)'
-              : 'rgba(245, 158, 11, 0.15)',
-          badgeBorder:
-            programDelay > 5
-              ? 'rgba(239, 68, 68, 0.3)'
-              : 'rgba(245, 158, 11, 0.3)',
-          iconName: 'time-outline',
-          alertMessage: train.alertMessage,
-          capacityWarning: train.capacityWarning,
-        };
-      }
-
+    // Se l'orario di partenza è già trascorso (corsa ritardata/ferma prima del via)
+    if (nowMins >= plannedDepMins) {
+      const delayInfo = lateAccumulated > 0 ? ` (+${lateAccumulated}m)` : '';
       return {
-        statusType: 'scheduled',
-        badgeLabel: 'Non partito',
-        badgeColor: '#94a3b8',
-        badgeBg: 'rgba(148, 163, 184, 0.12)',
-        badgeBorder: 'rgba(148, 163, 184, 0.25)',
+        statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'scheduled',
+        badgeLabel: `Non partito${delayInfo}${stoppedInfo}`,
+        badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#94a3b8',
+        badgeBg:
+          lateAccumulated > 5
+            ? 'rgba(239, 68, 68, 0.15)'
+            : lateAccumulated > 0
+            ? 'rgba(245, 158, 11, 0.15)'
+            : 'rgba(148, 163, 184, 0.12)',
+        badgeBorder:
+          lateAccumulated > 5
+            ? 'rgba(239, 68, 68, 0.3)'
+            : lateAccumulated > 0
+            ? 'rgba(245, 158, 11, 0.3)'
+            : 'rgba(148, 163, 184, 0.25)',
         iconName: 'time-outline',
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,
       };
     }
+
+    // Prima della partenza programmata: in attesa dell'orario al binario o programmato
+    if (programDelay > 0) {
+      return {
+        statusType: 'delayed',
+        badgeLabel: `Non partito (+${programDelay}m)`,
+        badgeColor: programDelay > 5 ? '#ef4444' : '#f59e0b',
+        badgeBg:
+          programDelay > 5
+            ? 'rgba(239, 68, 68, 0.15)'
+            : 'rgba(245, 158, 11, 0.15)',
+        badgeBorder:
+          programDelay > 5
+            ? 'rgba(239, 68, 68, 0.3)'
+            : 'rgba(245, 158, 11, 0.3)',
+        iconName: 'time-outline',
+        alertMessage: train.alertMessage,
+        capacityWarning: train.capacityWarning,
+      };
+    }
+
+    return {
+      statusType: 'scheduled',
+      badgeLabel: 'Non partito',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.12)',
+      badgeBorder: 'rgba(148, 163, 184, 0.25)',
+      iconName: 'time-outline',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+    };
+  }
+
+  // Se il convoglio è fermo in una stazione intermedia lungo il percorso:
+  if (train.isStoppedInStation) {
+    const estimatedDepMins = parseTimeToMinutes(
+      train.stoppedStationEstimatedDep || train.departureTimeActual || train.departureTimePlanned || '00:00'
+    );
+    const stName = train.stoppedStationName || stationName || 'Stazione';
+    const programDelay = Math.max(0, train.delayMinutes || 0);
 
     if (nowMins <= estimatedDepMins) {
       if (programDelay > 0) {
@@ -2695,9 +2700,7 @@ export function evaluateTrainStatus(
 
     // Se è fermo oltre la partenza stimata: mostra "Fermo a [Stazione]" + l'eventuale ritardo rispetto al programma
     const lateAccumulated = programDelay;
-
-    // Per il badge "Fermo a [Stazione]", il timer indica da quanto tempo effettivo il convoglio è fermo in banchina
-    const stoppedTime = train.stoppedMinutes ?? (isAtCommuterStation && nowMins > estimatedDepMins ? nowMins - estimatedDepMins : undefined);
+    const stoppedTime = train.stoppedMinutes ?? (nowMins > estimatedDepMins ? nowMins - estimatedDepMins : undefined);
     const stoppedInfo = stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
 
     const delayBadge = lateAccumulated > 0 ? {
@@ -2766,8 +2769,7 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5A: Treno deve ancora partire da questa stazione (orario attuale strettamente prima della partenza programmata)
-  const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
+  // Caso 5A: Treno deve ancora passare da questa stazione (orario attuale strettamente prima della partenza programmata)
   if (nowMins < plannedDepMins) {
     // 1. Ha già un ritardo calcolato/comunicato da Trenitalia
     if (train.delayMinutes > 0) {
@@ -2838,38 +2840,7 @@ export function evaluateTrainStatus(
     };
   }
 
-  // Caso 5B: Treno con problemi REALI alla partenza (origine corsa non ancora partita oltre l'orario programmato)
-  const isRealDepartureIssue =
-    train.isDepartedFromStation === false &&
-    train.isDeparted === false &&
-    nowMins >= plannedDepMins &&
-    nowMins - plannedDepMins <= 90;
-
-  if (isRealDepartureIssue) {
-    const effectiveDelay = train.delayMinutes > 0 ? train.delayMinutes : Math.max(0, nowMins - plannedDepMins);
-    const delayInfo = effectiveDelay > 0 ? ` (+${effectiveDelay}m)` : '';
-
-    return {
-      statusType: effectiveDelay > 5 ? 'delayed' : effectiveDelay > 0 ? 'warning' : 'scheduled',
-      badgeLabel: `Non partito${delayInfo}`,
-      badgeColor: effectiveDelay > 5 ? '#ef4444' : effectiveDelay > 0 ? '#f59e0b' : '#94a3b8',
-      badgeBg: effectiveDelay > 5
-        ? 'rgba(239, 68, 68, 0.15)'
-        : effectiveDelay > 0
-        ? 'rgba(245, 158, 11, 0.15)'
-        : 'rgba(148, 163, 184, 0.12)',
-      badgeBorder: effectiveDelay > 5
-        ? 'rgba(239, 68, 68, 0.3)'
-        : effectiveDelay > 0
-        ? 'rgba(245, 158, 11, 0.3)'
-        : 'rgba(148, 163, 184, 0.25)',
-      iconName: 'time-outline',
-      alertMessage: train.alertMessage,
-      capacityWarning: train.capacityWarning,
-    };
-  }
-
-  // Caso 5C: Treno in viaggio (ha già lasciato l'origine ed è in marcia sulla linea o in avvicinamento)
+  // Caso 5B: Treno in viaggio (ha già lasciato l'origine ed è in marcia sulla linea o in avvicinamento)
   if (train.delayMinutes > 0) {
     return {
       statusType: 'delayed',
