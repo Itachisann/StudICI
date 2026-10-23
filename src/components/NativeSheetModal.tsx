@@ -136,6 +136,8 @@ export function NativeSheetModal({
     const backHandler = () => {
       if (onBack) {
         onBack();
+      } else if (nav?.canGoBack?.()) {
+        nav.goBack();
       } else {
         onClose();
       }

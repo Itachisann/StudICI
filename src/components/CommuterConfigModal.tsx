@@ -15,7 +15,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { NativeSheetModal } from "./NativeSheetModal";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import {
+  DarkTheme,
+  NavigationContainer,
+  NavigationIndependentTree,
+  useNavigation,
+} from "@react-navigation/native";
 import { NativeActionButton } from "./NativeActionButton";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
@@ -32,6 +38,73 @@ interface Props {
   config: CommuterConfig;
   onClose: () => void;
   onSave: (newConfig: CommuterConfig) => void;
+}
+
+const RootModalStack = createNativeStackNavigator();
+const CommuterModalStack = createNativeStackNavigator();
+
+interface CommuterModalContextType {
+  theme: any;
+  isUnconfigured: boolean;
+  isInitComplete: boolean;
+  sheetTitle: string;
+  initOriginAddress: string;
+  setInitOriginAddress: React.Dispatch<React.SetStateAction<string>>;
+  initOriginCoords: { lat: number; lon: number } | undefined;
+  setInitOriginCoords: React.Dispatch<
+    React.SetStateAction<{ lat: number; lon: number } | undefined>
+  >;
+  initCarMode: "yes" | "no" | null;
+  setInitCarMode: React.Dispatch<React.SetStateAction<"yes" | "no" | null>>;
+  initParkingBufferMinutes: number | null;
+  setInitParkingBufferMinutes: React.Dispatch<
+    React.SetStateAction<number | null>
+  >;
+  initDepartureStation: StationInfo | null;
+  setInitDepartureStation: React.Dispatch<
+    React.SetStateAction<StationInfo | null>
+  >;
+  initArrivalStation: StationInfo | null;
+  setInitArrivalStation: React.Dispatch<React.SetStateAction<StationInfo | null>>;
+  initBufferMinutes: number | null;
+  setInitBufferMinutes: React.Dispatch<React.SetStateAction<number | null>>;
+  initDrivingEstimate: DrivingEstimate | null;
+  initCalculatingDriving: boolean;
+  localConfig: CommuterConfig;
+  setLocalConfig: React.Dispatch<React.SetStateAction<CommuterConfig>>;
+  drivingEstimate: DrivingEstimate | null;
+  calculatingDriving: boolean;
+  placeSearchActive: boolean;
+  setPlaceSearchActive: React.Dispatch<React.SetStateAction<boolean>>;
+  placeSuggestions: PlaceSuggestion[];
+  setPlaceSuggestions: React.Dispatch<React.SetStateAction<PlaceSuggestion[]>>;
+  searchingPlaces: boolean;
+  searchAddress: string;
+  selectPlace: (place: PlaceSuggestion) => void;
+  handleSelectDeparture: (station: StationInfo) => void;
+  handleSelectArrival: (station: StationInfo) => void;
+  handleSaveInit: () => void;
+  handleSave: () => void;
+  onClose: () => void;
+  isDepartureInQuick: boolean;
+  isArrivalInQuick: boolean;
+  filteredStations: StationInfo[];
+  setFilteredStations: React.Dispatch<React.SetStateAction<StationInfo[]>>;
+  searchingStations: boolean;
+  stationSearchQuery: string;
+  setStationSearchQuery: React.Dispatch<React.SetStateAction<string>>;
+  getSelectedStationCode: (type: "departure" | "arrival") => string | undefined;
+  handleSelectStation: (station: StationInfo, type: "departure" | "arrival") => void;
+  handleStationSearchChange: (text: string) => void;
+}
+
+const CommuterModalContext = React.createContext<CommuterModalContextType>(
+  null as any,
+);
+const useCommuterModal = () => React.useContext(CommuterModalContext);
+
+function RootPlaceholderScreen() {
+  return <View style={{ flex: 1, backgroundColor: "transparent" }} />;
 }
 
 // Stazioni celebri e universalmente note come opzioni rapide
@@ -62,6 +135,14 @@ const PARKING_OPTIONS = [3, 5, 8, 10];
 const BUFFER_OPTIONS = [5, 10, 15, 20];
 
 const ITEM_HEIGHT = 70;
+
+const stationKeyExtractor = (item: StationInfo) => `${item.code}_${item.name}`;
+
+const getStationItemLayout = (_: any, index: number) => ({
+  length: ITEM_HEIGHT,
+  offset: ITEM_HEIGHT * index,
+  index,
+});
 
 interface StationRowProps {
   station: StationInfo;
@@ -139,9 +220,6 @@ export function CommuterConfigModal({
   const { theme } = useTheme();
   const [prevConfig, setPrevConfig] = useState(config);
   const [localConfig, setLocalConfig] = useState<CommuterConfig>(config);
-  const [stationPickerType, setStationPickerType] = useState<
-    "departure" | "arrival" | null
-  >(null);
   const [stationSearchQuery, setStationSearchQuery] = useState("");
   const [filteredStations, setFilteredStations] =
     useState<StationInfo[]>(ALL_STATIONS);
@@ -199,7 +277,6 @@ export function CommuterConfigModal({
       setInitDrivingEstimate(null);
       setPlaceSearchActive(false);
       setPlaceSuggestions([]);
-      setStationPickerType(null);
     }
   }
 
@@ -339,22 +416,25 @@ export function CommuterConfigModal({
     };
   }, [searchAddress, placeSearchActive]);
 
-  const selectPlace = (place: PlaceSuggestion) => {
-    setPlaceSearchActive(false);
-    setPlaceSuggestions([]);
-    if (isUnconfigured) {
-      setInitOriginAddress(place.label);
-      setInitOriginCoords({ lat: place.lat, lon: place.lon });
-    } else {
-      setLocalConfig((prev) => ({
-        ...prev,
-        originAddress: place.label,
-        originCoords: { lat: place.lat, lon: place.lon },
-      }));
-    }
-  };
+  const selectPlace = useCallback(
+    (place: PlaceSuggestion) => {
+      setPlaceSearchActive(false);
+      setPlaceSuggestions([]);
+      if (isUnconfigured) {
+        setInitOriginAddress(place.label);
+        setInitOriginCoords({ lat: place.lat, lon: place.lon });
+      } else {
+        setLocalConfig((prev) => ({
+          ...prev,
+          originAddress: place.label,
+          originCoords: { lat: place.lat, lon: place.lon },
+        }));
+      }
+    },
+    [isUnconfigured],
+  );
 
-  const handleStationSearchChange = (text: string) => {
+  const handleStationSearchChange = useCallback((text: string) => {
     setStationSearchQuery(text);
     if (!text.trim()) {
       setFilteredStations(ALL_STATIONS);
@@ -366,7 +446,7 @@ export function CommuterConfigModal({
       setFilteredStations(res);
       setSearchingStations(false);
     });
-  };
+  }, []);
 
   const handleSelectDeparture = useCallback((station: StationInfo) => {
     Keyboard.dismiss();
@@ -380,7 +460,6 @@ export function CommuterConfigModal({
         ),
       },
     }));
-    setStationPickerType(null);
     setStationSearchQuery("");
   }, []);
 
@@ -390,87 +469,50 @@ export function CommuterConfigModal({
       ...prev,
       arrivalStation: station,
     }));
-    setStationPickerType(null);
     setStationSearchQuery("");
   }, []);
 
   const handleSelectStation = useCallback(
-    (station: StationInfo) => {
+    (station: StationInfo, type: "departure" | "arrival") => {
       Keyboard.dismiss();
       if (isUnconfigured) {
-        if (stationPickerType === "departure") {
+        if (type === "departure") {
           setInitDepartureStation(station);
         } else {
           setInitArrivalStation(station);
         }
       } else {
-        if (stationPickerType === "departure") {
+        if (type === "departure") {
           handleSelectDeparture(station);
         } else {
           handleSelectArrival(station);
         }
       }
-      setStationPickerType(null);
       setStationSearchQuery("");
+      setFilteredStations(ALL_STATIONS);
+    },
+    [isUnconfigured, handleSelectDeparture, handleSelectArrival],
+  );
+
+  const getSelectedStationCode = useCallback(
+    (type: "departure" | "arrival") => {
+      if (isUnconfigured) {
+        return type === "departure"
+          ? initDepartureStation?.code
+          : initArrivalStation?.code;
+      }
+      return type === "departure"
+        ? localConfig.departureStation.code
+        : localConfig.arrivalStation.code;
     },
     [
       isUnconfigured,
-      stationPickerType,
-      handleSelectDeparture,
-      handleSelectArrival,
+      initDepartureStation?.code,
+      initArrivalStation?.code,
+      localConfig.departureStation.code,
+      localConfig.arrivalStation.code,
     ],
   );
-
-  const selectedStationCode = useMemo(() => {
-    if (isUnconfigured) {
-      return stationPickerType === "departure"
-        ? initDepartureStation?.code
-        : initArrivalStation?.code;
-    }
-    return stationPickerType === "departure"
-      ? localConfig.departureStation.code
-      : localConfig.arrivalStation.code;
-  }, [
-    isUnconfigured,
-    stationPickerType,
-    initDepartureStation?.code,
-    initArrivalStation?.code,
-    localConfig.departureStation.code,
-    localConfig.arrivalStation.code,
-  ]);
-
-  const renderStationItem = useCallback(
-    ({ item }: { item: StationInfo }) => (
-      <StationRowItem
-        station={item}
-        isSelected={selectedStationCode === item.code}
-        primaryColor={theme.primary}
-        subtleColor={theme.subtle}
-        onPress={handleSelectStation}
-      />
-    ),
-    [selectedStationCode, theme.primary, theme.subtle, handleSelectStation]
-  );
-
-  const stationKeyExtractor = useCallback(
-    (item: StationInfo) => `${item.code}_${item.name}`,
-    []
-  );
-
-  const getStationItemLayout = useCallback(
-    (_: any, index: number) => ({
-      length: ITEM_HEIGHT,
-      offset: ITEM_HEIGHT * index,
-      index,
-    }),
-    []
-  );
-
-  const openStationPicker = (type: "departure" | "arrival") => {
-    setStationPickerType(type);
-    setStationSearchQuery("");
-    setFilteredStations(ALL_STATIONS);
-  };
 
   const isInitComplete = useMemo(() => {
     const hasOrigin = initOriginAddress.trim().length >= 2;
@@ -490,7 +532,7 @@ export function CommuterConfigModal({
     initBufferMinutes,
   ]);
 
-  const handleSaveInit = () => {
+  const handleSaveInit = useCallback(() => {
     if (!isInitComplete || !initDepartureStation || !initArrivalStation) return;
     const baseMin = Math.ceil(
       initDrivingEstimate?.baseDurationMinutes ||
@@ -526,9 +568,22 @@ export function CommuterConfigModal({
     };
     onSave(newConfig);
     onClose();
-  };
+  }, [
+    isInitComplete,
+    initDepartureStation,
+    initArrivalStation,
+    initDrivingEstimate,
+    config,
+    initOriginAddress,
+    initOriginCoords,
+    initCarMode,
+    initParkingBufferMinutes,
+    initBufferMinutes,
+    onSave,
+    onClose,
+  ]);
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     const baseDuration = Math.ceil(
       localConfig.carLeg.baseDurationMinutes ||
         localConfig.carLeg.durationMinutes ||
@@ -564,7 +619,7 @@ export function CommuterConfigModal({
       },
     });
     onClose();
-  };
+  }, [localConfig, drivingEstimate, onSave, onClose]);
 
   const isDepartureInQuick = QUICK_DEPARTURES.some(
     (s) => s.code === localConfig.departureStation.code,
@@ -576,34 +631,259 @@ export function CommuterConfigModal({
 
   const sheetTitle = isUnconfigured ? "Configura viaggio" : "Impostazioni viaggio";
 
-  const stationSheetTitle =
-    stationPickerType === "departure"
-      ? "Stazione di partenza"
-      : "Stazione di arrivo (Roma)";
+  const contextValue = useMemo(
+    () => ({
+      theme,
+      isUnconfigured,
+      isInitComplete,
+      sheetTitle,
+      initOriginAddress,
+      setInitOriginAddress,
+      initOriginCoords,
+      setInitOriginCoords,
+      initCarMode,
+      setInitCarMode,
+      initParkingBufferMinutes,
+      setInitParkingBufferMinutes,
+      initDepartureStation,
+      setInitDepartureStation,
+      initArrivalStation,
+      setInitArrivalStation,
+      initBufferMinutes,
+      setInitBufferMinutes,
+      initDrivingEstimate,
+      initCalculatingDriving,
+      localConfig,
+      setLocalConfig,
+      drivingEstimate,
+      calculatingDriving,
+      placeSearchActive,
+      setPlaceSearchActive,
+      placeSuggestions,
+      setPlaceSuggestions,
+      searchingPlaces,
+      searchAddress,
+      selectPlace,
+      handleSelectDeparture,
+      handleSelectArrival,
+      handleSaveInit,
+      handleSave,
+      onClose,
+      isDepartureInQuick,
+      isArrivalInQuick,
+      filteredStations,
+      setFilteredStations,
+      searchingStations,
+      stationSearchQuery,
+      setStationSearchQuery,
+      getSelectedStationCode,
+      handleSelectStation,
+      handleStationSearchChange,
+    }),
+    [
+      theme,
+      isUnconfigured,
+      isInitComplete,
+      sheetTitle,
+      initOriginAddress,
+      initOriginCoords,
+      initCarMode,
+      initParkingBufferMinutes,
+      initDepartureStation,
+      initArrivalStation,
+      initBufferMinutes,
+      initDrivingEstimate,
+      initCalculatingDriving,
+      localConfig,
+      drivingEstimate,
+      calculatingDriving,
+      placeSearchActive,
+      placeSuggestions,
+      searchingPlaces,
+      searchAddress,
+      selectPlace,
+      handleSelectDeparture,
+      handleSelectArrival,
+      handleSaveInit,
+      handleSave,
+      onClose,
+      isDepartureInQuick,
+      isArrivalInQuick,
+      filteredStations,
+      searchingStations,
+      stationSearchQuery,
+      getSelectedStationCode,
+      handleSelectStation,
+      handleStationSearchChange,
+    ],
+  );
+
+  const navTheme = useMemo(
+    () => ({
+      ...DarkTheme,
+      colors: {
+        ...DarkTheme.colors,
+        background: "#16181d",
+        card: "#16181d",
+        text: "#ffffff",
+        primary: "#ffffff",
+      },
+    }),
+    [],
+  );
+
+  if (!visible) {
+    return null;
+  }
 
   return (
-    <>
-      {/* ─── MODALE PRINCIPALE: Configura / Impostazioni viaggio ─── */}
-      <NativeSheetModal
-        visible={visible}
-        onClose={onClose}
-        title={sheetTitle}
-        backgroundColor="#16181d"
-        rightActions={[
-          {
-            label: "Salva",
-            prominent: true,
-            tintColor: theme.primary,
-            disabled: isUnconfigured ? !isInitComplete : false,
-            onPress: isUnconfigured ? handleSaveInit : handleSave,
-          },
-        ]}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1, backgroundColor: "#16181d" }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
-          <View style={{ flex: 1, backgroundColor: "#16181d" }}>
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <CommuterModalContext.Provider value={contextValue}>
+        <NavigationIndependentTree>
+          <NavigationContainer
+            theme={navTheme}
+            initialState={{
+              index: 1,
+              routes: [
+                { name: "RootPlaceholder" },
+                { name: "CommuterSheet" },
+              ],
+            }}
+          >
+            <RootModalStack.Navigator
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            >
+              <RootModalStack.Screen
+                name="RootPlaceholder"
+                component={RootPlaceholderScreen}
+              />
+              <RootModalStack.Screen
+                name="CommuterSheet"
+                component={CommuterSheetScreen}
+                options={{
+                  presentation: "formSheet",
+                  sheetAllowedDetents: [1.0],
+                  sheetGrabberVisible: true,
+                  sheetExpandsWhenScrolledToEdge: true,
+                  gestureEnabled: true,
+                  animation: "slide_from_bottom",
+                  contentStyle: { backgroundColor: "#16181d" },
+                }}
+              />
+            </RootModalStack.Navigator>
+          </NavigationContainer>
+        </NavigationIndependentTree>
+      </CommuterModalContext.Provider>
+    </View>
+  );
+}
+
+function MainFormScreen() {
+  const navigation = useNavigation<any>();
+  const {
+    theme,
+    isUnconfigured,
+    isInitComplete,
+    sheetTitle,
+    initOriginAddress,
+    setInitOriginAddress,
+    setInitOriginCoords,
+    initCarMode,
+    setInitCarMode,
+    initParkingBufferMinutes,
+    setInitParkingBufferMinutes,
+    initDepartureStation,
+    setInitDepartureStation,
+    initArrivalStation,
+    setInitArrivalStation,
+    initBufferMinutes,
+    setInitBufferMinutes,
+    initDrivingEstimate,
+    initCalculatingDriving,
+    localConfig,
+    setLocalConfig,
+    drivingEstimate,
+    calculatingDriving,
+    placeSearchActive,
+    setPlaceSearchActive,
+    placeSuggestions,
+    setPlaceSuggestions,
+    searchingPlaces,
+    selectPlace,
+    handleSelectDeparture,
+    handleSelectArrival,
+    handleSaveInit,
+    handleSave,
+    onClose,
+    isDepartureInQuick,
+    isArrivalInQuick,
+    setStationSearchQuery,
+    setFilteredStations,
+  } = useCommuterModal();
+
+  const openStationPicker = useCallback(
+    (type: "departure" | "arrival") => {
+      setStationSearchQuery("");
+      setFilteredStations(ALL_STATIONS);
+      navigation.navigate("StationPicker", { type });
+    },
+    [navigation, setStationSearchQuery, setFilteredStations],
+  );
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerShown: true,
+      title: sheetTitle,
+      headerTintColor: "#ffffff",
+      headerStyle: { backgroundColor: "#16181d" },
+      headerShadowVisible: false,
+      headerTitleStyle: {
+        color: "#ffffff",
+        fontSize: 17,
+        fontWeight: "600",
+      },
+      unstable_headerLeftItems: () => [
+        {
+          type: "button",
+          label: "",
+          icon: { type: "sfSymbol", name: "chevron.left" },
+          tintColor: "#ffffff",
+          onPress: onClose,
+          accessibilityLabel: "Indietro",
+        },
+      ],
+      unstable_headerRightItems: () => [
+        {
+          type: "button",
+          label: "Salva",
+          prominent: true,
+          tintColor: theme.primary,
+          disabled: isUnconfigured ? !isInitComplete : false,
+          onPress: isUnconfigured ? handleSaveInit : handleSave,
+          accessibilityLabel: "Salva",
+        },
+      ],
+    });
+  }, [
+    navigation,
+    sheetTitle,
+    theme.primary,
+    isUnconfigured,
+    isInitComplete,
+    handleSaveInit,
+    handleSave,
+    onClose,
+  ]);
+
+  return (
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: "#16181d" }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <View style={{ flex: 1, backgroundColor: "#16181d" }}>
             {isUnconfigured ? (
             /* Form Inizializzazione Primo Avvio (senza nulla di default) */
             <>
@@ -2000,73 +2280,151 @@ export function CommuterConfigModal({
         )}
           </View>
         </KeyboardAvoidingView>
-      </NativeSheetModal>
+  );
+}
 
-      {/* ─── MODALE PICKER STAZIONE (secondo foglio impilato sopra) ─── */}
-      <NativeSheetModal
-        visible={stationPickerType !== null}
-        onClose={() => {
-          Keyboard.dismiss();
-          setStationPickerType(null);
-          setStationSearchQuery("");
-        }}
-        title={stationSheetTitle}
-        backgroundColor="#16181d"
-        searchBarOptions={{
-          placeholder: "Cerca tra tutte le stazioni italiane...",
-          textColor: "#ffffff",
-          tintColor: theme.primary,
-          headerIconColor: "#8e8e93",
-          hintTextColor: "#71717a",
-          autoCapitalize: "words",
-          onChangeText: (e) => handleStationSearchChange(e.nativeEvent.text),
-          onCancelButtonPress: () => handleStationSearchChange(""),
+function StationPickerScreen({ navigation, route }: any) {
+  const pickerType: "departure" | "arrival" = route.params?.type || "departure";
+  const {
+    theme,
+    filteredStations,
+    searchingStations,
+    stationSearchQuery,
+    getSelectedStationCode,
+    handleSelectStation,
+    handleStationSearchChange,
+  } = useCommuterModal();
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerShown: true,
+      title:
+        pickerType === "departure"
+          ? "Stazione di partenza"
+          : "Stazione di arrivo (Roma)",
+      headerTintColor: "#ffffff",
+      headerStyle: { backgroundColor: "#16181d" },
+      headerShadowVisible: false,
+      headerTitleStyle: {
+        color: "#ffffff",
+        fontSize: 17,
+        fontWeight: "600",
+      },
+      headerBackButtonDisplayMode: "minimal",
+      headerBackTitle: "",
+      headerSearchBarOptions: {
+        placeholder: "Cerca tra tutte le stazioni italiane...",
+        textColor: "#ffffff",
+        tintColor: theme.primary,
+        headerIconColor: "#8e8e93",
+        hintTextColor: "#71717a",
+        autoCapitalize: "words",
+        placement: "stacked",
+        hideWhenScrolling: false,
+        onChangeText: (e: any) => handleStationSearchChange(e.nativeEvent.text),
+        onCancelButtonPress: () => handleStationSearchChange(""),
+      },
+    });
+  }, [navigation, pickerType, theme.primary, handleStationSearchChange]);
+
+  const selectedCode = getSelectedStationCode(pickerType);
+
+  const onPickStation = useCallback(
+    (station: StationInfo) => {
+      handleSelectStation(station, pickerType);
+      navigation.goBack();
+    },
+    [handleSelectStation, pickerType, navigation],
+  );
+
+  return (
+    <View collapsable={false} style={{ flex: 1, width: "100%", backgroundColor: "#16181d" }}>
+      <View
+        collapsable={false}
+        style={{
+          width: "100%",
+          paddingHorizontal: 16,
+          paddingTop: 8,
+          paddingBottom: 6,
         }}
       >
-        <View collapsable={false} style={{ flex: 1, width: "100%" }}>
-          <View
-            collapsable={false}
-            style={{
-              width: "100%",
-              paddingHorizontal: 16,
-              paddingTop: 8,
-              paddingBottom: 6,
-            }}
-          >
-            {searchingStations && (
-              <View style={{ paddingVertical: 4, alignItems: "center" }}>
-                <ActivityIndicator size="small" color={theme.primary} />
-              </View>
-            )}
-            <Text style={styles.sectionLabel}>
-              {stationSearchQuery.trim()
-                ? `RISULTATI RICERCA (${filteredStations.length})`
-                : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
-            </Text>
+        {searchingStations && (
+          <View style={{ paddingVertical: 4, alignItems: "center" }}>
+            <ActivityIndicator size="small" color={theme.primary} />
           </View>
+        )}
+        <Text style={styles.sectionLabel}>
+          {stationSearchQuery.trim()
+            ? `RISULTATI RICERCA (${filteredStations.length})`
+            : `TUTTE LE STAZIONI ITALIANE (${filteredStations.length})`}
+        </Text>
+      </View>
 
-          <FlatList
-            data={filteredStations}
-            keyExtractor={stationKeyExtractor}
-            renderItem={renderStationItem}
-            getItemLayout={getStationItemLayout}
-            keyboardShouldPersistTaps="always"
-            keyboardDismissMode="on-drag"
-            contentInsetAdjustmentBehavior="automatic"
-            style={{ flex: 1, width: "100%" }}
-            contentContainerStyle={{
-              paddingHorizontal: 16,
-              paddingBottom: 36,
-            }}
-            initialNumToRender={15}
-            maxToRenderPerBatch={20}
-            updateCellsBatchingPeriod={50}
-            windowSize={7}
-            removeClippedSubviews={Platform.OS !== "android"}
+      <FlatList
+        data={filteredStations}
+        keyExtractor={stationKeyExtractor}
+        renderItem={({ item }) => (
+          <StationRowItem
+            station={item}
+            isSelected={selectedCode === item.code}
+            primaryColor={theme.primary}
+            subtleColor={theme.subtle}
+            onPress={onPickStation}
           />
-        </View>
-      </NativeSheetModal>
-    </>
+        )}
+        getItemLayout={getStationItemLayout}
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="on-drag"
+        contentInsetAdjustmentBehavior="automatic"
+        style={{ flex: 1, width: "100%" }}
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingBottom: 36,
+        }}
+        initialNumToRender={15}
+        maxToRenderPerBatch={20}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== "android"}
+      />
+    </View>
+  );
+}
+
+function CommuterSheetScreen({ navigation }: any) {
+  const { onClose } = useCommuterModal();
+
+  useEffect(() => {
+    const unsub = navigation.addListener("beforeRemove", () => {
+      onClose();
+    });
+    return unsub;
+  }, [navigation, onClose]);
+
+  return (
+    <CommuterModalStack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: "#16181d" },
+        headerShadowVisible: false,
+        headerTintColor: "#ffffff",
+        headerTitleStyle: {
+          color: "#ffffff",
+          fontSize: 17,
+          fontWeight: "600",
+        },
+        contentStyle: { backgroundColor: "#16181d" },
+        animation: "slide_from_right",
+      }}
+    >
+      <CommuterModalStack.Screen
+        name="MainForm"
+        component={MainFormScreen}
+      />
+      <CommuterModalStack.Screen
+        name="StationPicker"
+        component={StationPickerScreen}
+      />
+    </CommuterModalStack.Navigator>
   );
 }
 
