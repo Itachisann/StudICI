@@ -2252,24 +2252,22 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     }
   }
 
-  // Se è oggi, per treni live che hanno problemi REALI alla partenza o sono fermi in stazione oltre l'orario:
+  // Se è oggi, per treni che hanno problemi REALI alla partenza o sono fermi in stazione oltre l'orario:
   if (isToday) {
     for (const t of allTrains) {
       if (
-        t.isLive &&
         t.isDepartedFromStation === false &&
         (t.isDeparted === false || t.isStoppedInStation === true)
       ) {
         const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-        if (nowMins > depPlanM && nowMins - depPlanM <= 120) {
+        if (nowMins >= depPlanM && nowMins - depPlanM <= 120) {
           const lateM = nowMins - depPlanM;
-          if (!t.delayMinutes || t.delayMinutes < lateM) {
-            t.delayMinutes = lateM;
-            t.departureTimeActual = minutesToTime(depPlanM + lateM);
-            if (t.arrivalTimePlanned) {
-              const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
-              t.arrivalTimeActual = minutesToTime(arrPlanM + lateM);
-            }
+          const effectiveLate = Math.max(t.delayMinutes || 0, lateM);
+          t.delayMinutes = effectiveLate;
+          t.departureTimeActual = minutesToTime(depPlanM + effectiveLate);
+          if (t.arrivalTimePlanned) {
+            const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
+            t.arrivalTimeActual = minutesToTime(arrPlanM + effectiveLate);
           }
         }
       }
@@ -2600,20 +2598,13 @@ export function evaluateTrainStatus(
       nowMins >= plannedDepMins ? nowMins - plannedDepMins : 0,
       train.stoppedMinutes || 0
     );
-    const stoppedTime =
-      train.stoppedMinutes ??
-      (train.isStoppedInStation && nowMins > plannedDepMins ? nowMins - plannedDepMins : undefined);
-    const stoppedInfo =
-      train.isStoppedInStation && stoppedTime !== undefined && stoppedTime > 0
-        ? ` (da ${stoppedTime}m)`
-        : '';
 
     // Se l'orario di partenza è già trascorso (corsa ritardata/ferma prima del via)
     if (nowMins >= plannedDepMins) {
       const delayInfo = lateAccumulated > 0 ? ` (+${lateAccumulated}m)` : '';
       return {
         statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'scheduled',
-        badgeLabel: `Non partito${delayInfo}${stoppedInfo}`,
+        badgeLabel: `Non partito${delayInfo}`,
         badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#94a3b8',
         badgeBg:
           lateAccumulated > 5

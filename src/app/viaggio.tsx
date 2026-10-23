@@ -44,6 +44,7 @@ import {
   clearTrenitaliaCache,
   evaluateTrainStatus,
   formatStationName,
+  minutesToTime,
   parseTimeToMinutes,
 } from "../utils/trenitaliaApi";
 
@@ -1498,28 +1499,44 @@ export default function ViaggioScreen() {
                           const depPlanM = parseTimeToMinutes(
                             itinerary.liveTrain.departureTimePlanned || "00:00",
                           );
-                          const depActM = parseTimeToMinutes(
+                          const currentNowM =
+                            new Date().getHours() * 60 +
+                            new Date().getMinutes();
+                          const isNotDepartedPastTime = Boolean(
+                            !itinerary.liveTrain.isDepartedFromStation &&
+                              (itinerary.liveTrain.isDeparted === false ||
+                                itinerary.liveTrain.isStoppedInStation) &&
+                              currentNowM >= depPlanM,
+                          );
+                          const lateM = isNotDepartedPastTime
+                            ? Math.max(
+                                itinerary.liveTrain.delayMinutes || 0,
+                                currentNowM - depPlanM,
+                              )
+                            : itinerary.liveTrain.delayMinutes || 0;
+
+                          const rawDepActM = parseTimeToMinutes(
                             itinerary.liveTrain.departureTimeActual ||
                               itinerary.liveTrain.departureTimePlanned ||
                               "00:00",
                           );
-                          const currentNowM =
-                            new Date().getHours() * 60 +
-                            new Date().getMinutes();
-                          // Il ritardo segue sempre il programma: la partenza è evidenziata in giallo se depActM > depPlanM
-                          // oppure se il treno è fermo in stazione ed è stato superato l'orario di partenza programmato.
+                          const depActM = Math.max(rawDepActM, depPlanM + lateM);
+                          const displayDepTime =
+                            depActM > depPlanM
+                              ? minutesToTime(depActM)
+                              : itinerary.liveTrain.departureTimeActual ||
+                                itinerary.liveTrain.departureTimePlanned;
+
                           const isDepDelayed = Boolean(
                             (depPlanM > 0 && depActM > depPlanM) ||
-                            (!itinerary.liveTrain.isDepartedFromStation &&
-                              itinerary.liveTrain.isStoppedInStation &&
-                              (Boolean(itinerary.liveTrain.stoppedMinutes) || currentNowM >= depPlanM)),
+                              isNotDepartedPastTime,
                           );
                           const showStrike = Boolean(
                             isDepDelayed &&
-                            itinerary.liveTrain.departureTimePlanned &&
-                            itinerary.liveTrain.departureTimeActual &&
-                            itinerary.liveTrain.departureTimePlanned !==
-                              itinerary.liveTrain.departureTimeActual,
+                              itinerary.liveTrain.departureTimePlanned &&
+                              displayDepTime &&
+                              itinerary.liveTrain.departureTimePlanned !==
+                                displayDepTime,
                           );
 
                           return (
@@ -1530,8 +1547,7 @@ export default function ViaggioScreen() {
                                   isDepDelayed && { color: "#fb923c" },
                                 ]}
                               >
-                                {itinerary.liveTrain.departureTimeActual ||
-                                  itinerary.liveTrain.departureTimePlanned}
+                                {displayDepTime}
                               </Text>
                               {showStrike && (
                                 <Text
@@ -1582,25 +1598,49 @@ export default function ViaggioScreen() {
                               config?.departureStation.name}
                         </Text>
                         {(() => {
+                          const depPlanM = parseTimeToMinutes(
+                            itinerary.liveTrain.departureTimePlanned || "00:00",
+                          );
                           const arrPlanM = parseTimeToMinutes(
                             itinerary.liveTrain.arrivalTimePlanned || "00:00",
                           );
-                          const arrActM = parseTimeToMinutes(
+                          const currentNowM =
+                            new Date().getHours() * 60 +
+                            new Date().getMinutes();
+                          const isNotDepartedPastTime = Boolean(
+                            !itinerary.liveTrain.isDepartedFromStation &&
+                              (itinerary.liveTrain.isDeparted === false ||
+                                itinerary.liveTrain.isStoppedInStation) &&
+                              currentNowM >= depPlanM,
+                          );
+                          const lateM = isNotDepartedPastTime
+                            ? Math.max(
+                                itinerary.liveTrain.delayMinutes || 0,
+                                currentNowM - depPlanM,
+                              )
+                            : itinerary.liveTrain.delayMinutes || 0;
+
+                          const rawArrActM = parseTimeToMinutes(
                             itinerary.liveTrain.arrivalTimeActual ||
                               itinerary.liveTrain.arrivalTimePlanned ||
                               "00:00",
                           );
-                          // L'orario di arrivo è in ritardo SOLO SE l'orario effettivo è successivo a quello programmato (es. 17:50 > 17:46).
-                          // Se l'orario effettivo è in anticipo (es. 17:44 su prog 17:46) o in orario (17:46), è perfettamente in orario!
+                          const arrActM = Math.max(rawArrActM, arrPlanM + lateM);
+                          const displayArrTime =
+                            arrActM > arrPlanM
+                              ? minutesToTime(arrActM)
+                              : itinerary.liveTrain.arrivalTimeActual ||
+                                itinerary.liveTrain.arrivalTimePlanned;
+
                           const isArrDelayed = Boolean(
-                            arrPlanM > 0 && arrActM > arrPlanM,
+                            arrPlanM > 0 && (arrActM > arrPlanM || lateM > 0),
                           );
                           const showArrStrike = Boolean(
                             isArrDelayed &&
-                            itinerary.liveTrain.arrivalTimePlanned &&
-                            itinerary.liveTrain.arrivalTimeActual &&
-                            itinerary.liveTrain.arrivalTimePlanned !==
-                              itinerary.liveTrain.arrivalTimeActual,
+                              itinerary.liveTrain.arrivalTimePlanned &&
+                              displayArrTime &&
+                              itinerary.liveTrain.arrivalTimePlanned !==
+                                displayArrTime,
                           );
 
                           return (
@@ -1613,8 +1653,7 @@ export default function ViaggioScreen() {
                                   },
                                 ]}
                               >
-                                {itinerary.liveTrain.arrivalTimeActual ||
-                                  itinerary.liveTrain.arrivalTimePlanned}
+                                {displayArrTime}
                               </Text>
                               {showArrStrike && (
                                 <Text
