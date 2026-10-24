@@ -144,7 +144,7 @@ const STATION_SHORT_NAMES: Record<string, string> = {
   "S07226": "Terni",
 };
 
-const PARKING_OPTIONS = [3, 5, 8, 10];
+const PARKING_OPTIONS = [5, 10, 15, 20];
 const BUFFER_OPTIONS = [5, 10, 15, 20];
 
 const ITEM_HEIGHT = 70;
@@ -1125,7 +1125,7 @@ function MainFormScreen() {
                       </Text>
                       <View style={styles.timeBufferContainer}>
                         <View style={styles.timeQuickRow}>
-                          {[5, 7, 10, 15].map((mins) => {
+                          {[5, 10, 15, 20].map((mins) => {
                             const isSel = initParkingBufferMinutes === mins;
                             return (
                               <TouchableOpacity
@@ -1144,11 +1144,17 @@ function MainFormScreen() {
                                 activeOpacity={0.7}
                                 onPress={() => setInitParkingBufferMinutes(mins)}
                               >
+                                <Ionicons
+                                  name={isSel ? "checkmark-circle" : "time-outline"}
+                                  size={13}
+                                  color={isSel ? "#ffffff" : "#8e8e93"}
+                                  style={{ marginRight: 4 }}
+                                />
                                 <Text
                                   style={[
                                     styles.chipText,
                                     isSel && styles.chipTextActive,
-                                    { fontSize: 12.5 },
+                                    { fontSize: 12 },
                                   ]}
                                   numberOfLines={1}
                                 >
@@ -1166,7 +1172,7 @@ function MainFormScreen() {
                               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                               onPress={() =>
                                 setInitParkingBufferMinutes((p) =>
-                                  Math.max(1, (p ?? 7) - 1),
+                                  Math.max(1, (p ?? 10) - 1),
                                 )
                               }
                             >
@@ -1182,9 +1188,18 @@ function MainFormScreen() {
                                 {
                                   borderColor: theme.primary,
                                   backgroundColor: theme.subtle,
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  justifyContent: "center",
                                 },
                               ]}
                             >
+                              <Ionicons
+                                name="time-outline"
+                                size={14}
+                                color={theme.accent}
+                                style={{ marginRight: 5 }}
+                              />
                               <Text
                                 style={[
                                   styles.fineStepValueText,
@@ -1198,7 +1213,7 @@ function MainFormScreen() {
                               style={styles.fineStepPill}
                               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                               onPress={() =>
-                                setInitParkingBufferMinutes((p) => (p ?? 7) + 1)
+                                setInitParkingBufferMinutes((p) => (p ?? 10) + 1)
                               }
                             >
                               <Ionicons name="add" size={14} color="#ffffff" />
@@ -1855,6 +1870,12 @@ function MainFormScreen() {
                                   }))
                                 }
                               >
+                                <Ionicons
+                                  name={isSelected ? "checkmark-circle" : "time-outline"}
+                                  size={13}
+                                  color={isSelected ? theme.accent : "#8e8e93"}
+                                  style={{ marginRight: 4 }}
+                                />
                                 <Text
                                   style={[
                                     styles.chipText,
@@ -1862,7 +1883,7 @@ function MainFormScreen() {
                                       styles.chipTextActive,
                                       { color: theme.accent },
                                     ],
-                                    { fontSize: 12.5 },
+                                    { fontSize: 12 },
                                   ]}
                                   numberOfLines={1}
                                 >
@@ -1899,9 +1920,18 @@ function MainFormScreen() {
                               {
                                 borderColor: theme.primary,
                                 backgroundColor: theme.subtle,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                justifyContent: "center",
                               },
                             ]}
                           >
+                            <Ionicons
+                              name="time-outline"
+                              size={14}
+                              color={theme.accent}
+                              style={{ marginRight: 5 }}
+                            />
                             <Text
                               style={[
                                 styles.fineStepValueText,

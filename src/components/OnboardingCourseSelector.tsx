@@ -31,7 +31,7 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from "@react-navigation/native";
-import { NativeActionButton } from "./NativeActionButton";
+import { NativeActionButton, NativeGlassContainer } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
 import { StudICILogo } from "./StudICILogo";
 import { StationInfo } from "../types/commuter";
@@ -623,26 +623,28 @@ function PostDownloadScreen() {
   const topInsetPadding = Math.max(insets.top, 24) + 40;
 
   useEffect(() => {
-    if (currentPage === 2) {
-      navigation?.setOptions({
-        headerLeft: () => (
-          <TouchableOpacity
-            onPress={() => pagerRef.current?.scrollTo({ x: 0, animated: true })}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            style={{
-              padding: 6,
-              marginLeft: Platform.OS === "ios" ? 0 : 4,
-            }}
-          >
-            <Ionicons name="chevron-back" size={28} color="#ffffff" />
-          </TouchableOpacity>
-        ),
-      });
-    } else {
-      navigation?.setOptions({
-        headerLeft: undefined,
-      });
-    }
+    navigation?.setOptions({
+      headerLeft: () => (
+        <TouchableOpacity
+          onPress={() => {
+            if (currentPage === 2) {
+              pagerRef.current?.scrollTo({ x: 0, animated: true });
+            } else {
+              navigation?.goBack();
+            }
+          }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={styles.headerBackBtn}
+          activeOpacity={0.65}
+        >
+          <Ionicons
+            name="chevron-back"
+            size={Platform.OS === "ios" ? 23 : 25}
+            color="#ffffff"
+          />
+        </TouchableOpacity>
+      ),
+    });
   }, [currentPage, navigation, pagerRef]);
 
   useEffect(() => {
@@ -1082,7 +1084,7 @@ function PostDownloadScreen() {
                     onPress={() => {
                       setCarMode("yes");
                       if (parkingBufferMinutes === null) {
-                        setParkingBufferMinutes(7);
+                        setParkingBufferMinutes(10);
                       }
                     }}
                   >
@@ -1152,7 +1154,7 @@ function PostDownloadScreen() {
                     </Text>
                     <View style={styles.timeBufferContainer}>
                       <View style={styles.timeQuickRow}>
-                        {[5, 7, 10, 15].map((mins) => {
+                        {[5, 10, 15, 20].map((mins) => {
                           const isSel = parkingBufferMinutes === mins;
                           return (
                             <TouchableOpacity
@@ -1171,11 +1173,17 @@ function PostDownloadScreen() {
                               activeOpacity={0.7}
                               onPress={() => setParkingBufferMinutes(mins)}
                             >
+                              <Ionicons
+                                name={isSel ? "checkmark-circle" : "time-outline"}
+                                size={13}
+                                color={isSel ? "#ffffff" : "#8e8e93"}
+                                style={{ marginRight: 4 }}
+                              />
                               <Text
                                 style={[
                                   styles.chipText,
                                   isSel && styles.chipTextActive,
-                                  { fontSize: 12.5 },
+                                  { fontSize: 12 },
                                 ]}
                                 numberOfLines={1}
                               >
@@ -1193,7 +1201,7 @@ function PostDownloadScreen() {
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
                               setParkingBufferMinutes((p: number | null) =>
-                                Math.max(1, (p ?? 7) - 1),
+                                Math.max(1, (p ?? 10) - 1),
                               )
                             }
                           >
@@ -1209,9 +1217,18 @@ function PostDownloadScreen() {
                               {
                                 borderColor: theme.primary,
                                 backgroundColor: theme.subtle,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                justifyContent: "center",
                               },
                             ]}
                           >
+                            <Ionicons
+                              name="time-outline"
+                              size={14}
+                              color={theme.accent}
+                              style={{ marginRight: 5 }}
+                            />
                             <Text
                               style={[
                                 styles.fineStepValueText,
@@ -1225,7 +1242,7 @@ function PostDownloadScreen() {
                             style={styles.fineStepPill}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
-                              setParkingBufferMinutes((p: number | null) => (p ?? 7) + 1)
+                              setParkingBufferMinutes((p: number | null) => (p ?? 10) + 1)
                             }
                           >
                             <Ionicons name="add" size={14} color="#ffffff" />
@@ -1664,37 +1681,35 @@ function PostDownloadScreen() {
               ]}
               pointerEvents={currentPage === 2 ? "auto" : "none"}
             >
-              <NativeActionButton
-                label="Configura più tardi"
-                onPress={() => finalizeOnboarding(false)}
-                variant="glass"
-                glow={false}
-                style={{ flex: 1, height: 48, borderRadius: 24 }}
-                pillStyle={{
-                  height: 48,
-                  borderRadius: 24,
-                  paddingHorizontal: 12,
-                  backgroundColor: "#2c2c2e",
-                  borderColor: "rgba(255, 255, 255, 0.12)",
-                }}
-                textStyle={{ color: "#ffffff", fontSize: 13, fontWeight: "600" }}
-              />
+              <NativeGlassContainer style={styles.footerGlassRow}>
+                <NativeActionButton
+                  label="Configura più tardi"
+                  onPress={() => finalizeOnboarding(false)}
+                  variant="glass"
+                  glow={false}
+                  style={{ flex: 1, height: 48, borderRadius: 24 }}
+                  pillStyle={{ height: 48, borderRadius: 24, paddingHorizontal: 14 }}
+                  textStyle={{ color: "#ffffff", fontSize: 13.5, fontWeight: "600" }}
+                />
 
-              <NativeActionButton
-                label="Salva"
-                onPress={() => finalizeOnboarding(true)}
-                disabled={!isCommuterFormComplete}
-                accentColor={theme.primary}
-                glow={true}
-                icon={
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={17}
-                    color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
-                  />
-                }
-                style={{ flex: 1 }}
-              />
+                <NativeActionButton
+                  label="Salva"
+                  onPress={() => finalizeOnboarding(true)}
+                  disabled={!isCommuterFormComplete}
+                  accentColor={theme.primary}
+                  glow={true}
+                  icon={
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={17}
+                      color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
+                    />
+                  }
+                  style={{ flex: 1, height: 48, borderRadius: 24 }}
+                  pillStyle={{ height: 48, borderRadius: 24 }}
+                  textStyle={{ fontSize: 14, fontWeight: "700" }}
+                />
+              </NativeGlassContainer>
             </Animated.View>
           </View>
         </View>
@@ -2973,6 +2988,20 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 10,
     width: "100%",
+  },
+  footerGlassRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    width: "100%",
+  },
+  headerBackBtn: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 4,
+    paddingRight: 8,
+    paddingLeft: Platform.OS === "ios" ? 0 : 2,
   },
   fineStepRow: {
     flexDirection: "row",
