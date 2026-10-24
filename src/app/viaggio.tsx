@@ -708,7 +708,6 @@ export default function ViaggioScreen() {
                       handleDirectionChange(idx === 0 ? "outbound" : "return");
                     }}
                     appearance="dark"
-                    backgroundColor="#1c1c1e"
                     tintColor={theme.primary}
                     fontStyle={{
                       fontSize: 13,

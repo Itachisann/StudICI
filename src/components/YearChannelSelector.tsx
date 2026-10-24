@@ -4,6 +4,7 @@ import SegmentedControl from '@react-native-segmented-control/segmented-control'
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { useTheme } from '@/context/ThemeContext';
+import { NativeActionButton } from './NativeActionButton';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === 'ios' && !isExpoGo;
@@ -157,26 +158,45 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 
   return (
     <View style={styles.container}>
-      {/* ── Riga 1: Selezione Anno (Pillole Staccate, Stessa Larghezza della Riga Canali Sotto) ── */}
+      {/* ── Riga 1: Selezione Anno (Pillole Staccate Callstack Liquid Glass) ── */}
       {uniqueYears.length > 1 && (
         uniqueYears.length <= 4 ? (
           <View style={styles.yearRowEqual}>
             {uniqueYears.map((year, i) => {
               const isYearActive = year === activeYear;
               return (
-                <TouchableOpacity
+                <NativeActionButton
                   key={i}
+                  label={year}
                   onPress={() => handleSelectYear(year)}
-                  style={[
-                    styles.yearChipEqual,
-                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
+                  variant={isYearActive ? "filled" : "glass"}
+                  glow={isYearActive}
+                  glowColor={theme.primary}
+                  accentColor={theme.primary}
+                  style={styles.yearChipEqual}
+                  pillStyle={
+                    isYearActive
+                      ? [
+                          styles.yearPillBase,
+                          styles.yearChipActive,
+                          {
+                            backgroundColor: theme.bg,
+                            borderColor: theme.primary,
+                          },
+                        ]
+                      : [
+                          styles.yearPillBase,
+                          {
+                            backgroundColor: '#1c1c1e',
+                            borderColor: '#2c2c2e',
+                          },
+                        ]
+                  }
+                  textStyle={[
+                    styles.yearChipText,
+                    isYearActive && styles.yearChipTextActive,
                   ]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
-                    {year}
-                  </Text>
-                </TouchableOpacity>
+                />
               );
             })}
           </View>
@@ -190,20 +210,41 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
             {uniqueYears.map((year, i) => {
               const isYearActive = year === activeYear;
               return (
-                <TouchableOpacity
+                <NativeActionButton
                   key={i}
+                  label={year}
                   onPress={() => handleSelectYear(year)}
+                  variant={isYearActive ? "filled" : "glass"}
+                  glow={isYearActive}
+                  glowColor={theme.primary}
+                  accentColor={theme.primary}
                   style={[
                     styles.yearChip,
-                    isYearActive && [styles.yearChipActive, { backgroundColor: theme.bg, borderColor: theme.primary, shadowColor: theme.primary }],
                     i === uniqueYears.length - 1 && { marginRight: 0 },
                   ]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.yearChipText, isYearActive && styles.yearChipTextActive]}>
-                    {year}
-                  </Text>
-                </TouchableOpacity>
+                  pillStyle={
+                    isYearActive
+                      ? [
+                          styles.yearPillBase,
+                          styles.yearChipActive,
+                          {
+                            backgroundColor: theme.bg,
+                            borderColor: theme.primary,
+                          },
+                        ]
+                      : [
+                          styles.yearPillBase,
+                          {
+                            backgroundColor: '#1c1c1e',
+                            borderColor: '#2c2c2e',
+                          },
+                        ]
+                  }
+                  textStyle={[
+                    styles.yearChipText,
+                    isYearActive && styles.yearChipTextActive,
+                  ]}
+                />
               );
             })}
           </ScrollView>
@@ -225,7 +266,6 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                 }
               }}
               appearance="dark"
-              backgroundColor="#1c1c1e"
               tintColor={theme.primary}
               fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
               activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
@@ -317,13 +357,12 @@ const styles = StyleSheet.create({
   },
   yearChipEqual: {
     flex: 1,
-    backgroundColor: '#1c1c1e',
     height: 34,
     borderRadius: 17,
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    justifyContent: 'center',
-    alignItems: 'center',
+  },
+  yearPillBase: {
+    height: 34,
+    borderRadius: 17,
     paddingHorizontal: 6,
   },
   yearScroll: {
@@ -345,16 +384,10 @@ const styles = StyleSheet.create({
   },
   // Pillole Staccate Anno (per liste lunghe > 4)
   yearChip: {
-    backgroundColor: '#1c1c1e',
-    paddingHorizontal: 15,
     minWidth: 84,
     height: 34,
     borderRadius: 17,
     marginRight: 8,
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   yearChipActive: {
     borderWidth: 1.5,

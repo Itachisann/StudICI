@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ViewStyle,
   TextStyle,
+  StyleProp,
   View,
 } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -29,7 +30,7 @@ if (isNativeButtonAvailable) {
 
 export const NativeGlassContainer: React.FC<{
   children: React.ReactNode;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   spacing?: number;
 }> = ({ children, style, spacing = 10 }) => {
   const Container = CallstackLiquidGlass?.LiquidGlassContainerView;
@@ -48,8 +49,9 @@ export interface NativeActionButtonProps {
   onPress: () => void;
   variant?: 'filled' | 'outlined' | 'text' | 'glass';
   disabled?: boolean;
-  style?: ViewStyle;
-  textStyle?: TextStyle;
+  style?: StyleProp<ViewStyle>;
+  pillStyle?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
   icon?: React.ReactNode;
   glow?: boolean;
   glowColor?: string;
@@ -67,6 +69,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
   variant = 'filled',
   disabled = false,
   style,
+  pillStyle,
   textStyle,
   icon,
   glow = true,
@@ -75,6 +78,12 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
 }) => {
   const isFilled = variant === 'filled';
   const effectiveGlowColor = glowColor || accentColor;
+
+  const flattenedStyle = (StyleSheet.flatten(style) || {}) as ViewStyle;
+  const flattenedPillStyle = (StyleSheet.flatten(pillStyle) || {}) as ViewStyle;
+  const customHeight = flattenedPillStyle.height ?? flattenedStyle.height;
+  const customRadius = flattenedPillStyle.borderRadius ?? flattenedStyle.borderRadius;
+  const customPaddingHorizontal = flattenedPillStyle.paddingHorizontal ?? flattenedStyle.paddingHorizontal;
 
   const isLiquidGlassAvailable =
     isNativeButtonAvailable &&
@@ -123,6 +132,14 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               backgroundColor: 'rgba(255, 255, 255, 0.10)',
               borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.22)',
             },
+            variant === 'text' && {
+              backgroundColor: 'transparent',
+              borderWidth: 0,
+            },
+            customHeight !== undefined && { height: customHeight },
+            customRadius !== undefined && { borderRadius: customRadius },
+            customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
+            pillStyle,
           ]}
         >
           {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
@@ -188,6 +205,10 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             backgroundColor: 'transparent',
             borderWidth: 0,
           },
+          customHeight !== undefined && { height: customHeight },
+          customRadius !== undefined && { borderRadius: customRadius },
+          customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
+          pillStyle,
         ]}
       >
         {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
