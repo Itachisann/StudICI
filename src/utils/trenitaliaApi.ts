@@ -2133,6 +2133,27 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     }
   }
 
+  // Se la data richiesta NON è oggi (es. giorni precedenti o successivi),
+  // azzera qualsiasi residuo di stato live, ritardi o soppressioni di oggi:
+  // l'utente deve poter consultare l'orario ufficiale programmato.
+  if (!isToday) {
+    for (const t of allTrains) {
+      t.isLive = false;
+      t.delayMinutes = 0;
+      t.departureTimeActual = t.departureTimePlanned;
+      t.arrivalTimeActual = t.arrivalTimePlanned;
+      t.platformActual = t.platformPlanned;
+      t.statusDescription = 'Programmato';
+      t.isDeparted = false;
+      t.isDepartedFromStation = false;
+      t.isStoppedInStation = false;
+      t.stoppedStationName = undefined;
+      t.stoppedStationEstimatedDep = undefined;
+      t.alertMessage = undefined;
+      t.capacityWarning = undefined;
+    }
+  }
+
   // Ordina tutti i treni cronologicamente per orario di partenza
   allTrains.sort(
     (a, b) =>
@@ -2556,17 +2577,15 @@ export function evaluateTrainStatus(
     };
   }
 
-  // 4. Se la data di ricerca è futura (non oggi, es. domani o un giorno successivo):
+  // 4. Se la data di ricerca non è oggi (es. giorno precedente o successivo):
   if (!isToday) {
     return {
       statusType: 'scheduled',
-      badgeLabel: 'Non partito',
-      badgeColor: '#94a3b8',
-      badgeBg: 'rgba(148, 163, 184, 0.12)',
-      badgeBorder: 'rgba(148, 163, 184, 0.25)',
-      iconName: 'time-outline',
-      alertMessage: train.alertMessage,
-      capacityWarning: train.capacityWarning,
+      badgeLabel: 'Programmato',
+      badgeColor: '#38bdf8',
+      badgeBg: 'rgba(56, 189, 248, 0.12)',
+      badgeBorder: 'rgba(56, 189, 248, 0.25)',
+      iconName: 'calendar-outline',
     };
   }
 

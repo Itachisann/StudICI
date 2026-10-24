@@ -47,6 +47,7 @@ import {
   formatStationName,
   minutesToTime,
   parseTimeToMinutes,
+  TrainStatusResult,
 } from "../utils/trenitaliaApi";
 
 const SAPIENZA_RED = "#822433";
@@ -190,15 +191,25 @@ export default function ViaggioScreen() {
       : config?.arrivalStation.shortName || config?.arrivalStation.name;
 
   const isWeekend = selectedDayIdx === 0 || selectedDayIdx === 6;
+  const isSelectedDayToday = useMemo(() => {
+    return new Date().getDay() === selectedDayIdx;
+  }, [selectedDayIdx]);
 
-  const trainStatus = useMemo(() => {
+  const trainStatus = useMemo<TrainStatusResult | null>(() => {
     if (!liveTrain) return null;
+    if (!isSelectedDayToday) {
+      return {
+        statusType: 'scheduled' as const,
+        badgeLabel: 'Programmato',
+        badgeColor: '#38bdf8',
+        badgeBg: 'rgba(56, 189, 248, 0.12)',
+        badgeBorder: 'rgba(56, 189, 248, 0.25)',
+        iconName: 'calendar-outline',
+      };
+    }
     const targetDate = new Date();
-    const currentDay = targetDate.getDay();
-    let diff = (selectedDayIdx - currentDay + 7) % 7;
-    targetDate.setDate(targetDate.getDate() + diff);
     return evaluateTrainStatus(liveTrain, targetDate, commuterStationName);
-  }, [liveTrain, selectedDayIdx, commuterStationName]);
+  }, [liveTrain, isSelectedDayToday, commuterStationName]);
 
   // Lezioni del giorno selezionato (non presenti nel weekend)
   const dayClasses = useMemo(() => {
@@ -624,7 +635,6 @@ export default function ViaggioScreen() {
   const directionTitles = ["Andata", "Ritorno"];
 
   const now = new Date();
-  const isSelectedDayToday = now.getDay() === selectedDayIdx;
   const currentNowMins = now.getHours() * 60 + now.getMinutes();
   const isTargetLectureFinished = Boolean(
     isSelectedDayToday &&
@@ -1301,8 +1311,8 @@ export default function ViaggioScreen() {
                           </View>
                         )}
 
-                        {/* Badge Dedicato al Ritardo (es. quando il convoglio è fermo in stazione oltre l'orario) */}
-                        {trainStatus?.delayBadge ? (
+                        {/* Badge Dedicato al Ritardo (mostrato solo per la data odierna se presente ritardo live) */}
+                        {isSelectedDayToday && trainStatus?.delayBadge ? (
                           <View
                             style={[
                               styles.trainStatusPill,
@@ -1397,14 +1407,20 @@ export default function ViaggioScreen() {
                         {/* Nuova Pill Durata Viaggio Treno */}
                         {(() => {
                           const depM = parseTimeToMinutes(
-                            itinerary.liveTrain.departureTimePlanned ||
-                              itinerary.liveTrain.departureTimeActual ||
-                              "00:00",
+                            isSelectedDayToday
+                              ? itinerary.liveTrain.departureTimePlanned ||
+                                  itinerary.liveTrain.departureTimeActual ||
+                                  "00:00"
+                              : itinerary.liveTrain.departureTimePlanned ||
+                                  "00:00",
                           );
                           const arrM = parseTimeToMinutes(
-                            itinerary.liveTrain.arrivalTimeActual ||
-                              itinerary.liveTrain.arrivalTimePlanned ||
-                              "00:00",
+                            isSelectedDayToday
+                              ? itinerary.liveTrain.arrivalTimeActual ||
+                                  itinerary.liveTrain.arrivalTimePlanned ||
+                                  "00:00"
+                              : itinerary.liveTrain.arrivalTimePlanned ||
+                                  "00:00",
                           );
                           const tDuration =
                             itinerary.liveTrain.durationMinutes ||
@@ -1441,8 +1457,8 @@ export default function ViaggioScreen() {
                       </View>
                     </View>
 
-                    {/* Eventuale Avviso / Variazione / Interruzione Trenitalia */}
-                    {trainStatus?.alertMessage ? (
+                    {/* Eventuale Avviso / Variazione / Interruzione Trenitalia (solo se oggi) */}
+                    {isSelectedDayToday && trainStatus?.alertMessage ? (
                       <View style={styles.trainAlertBanner}>
                         <Ionicons
                           name="warning-outline"
@@ -1456,8 +1472,8 @@ export default function ViaggioScreen() {
                       </View>
                     ) : null}
 
-                    {/* Eventuale Segnalazione Capienza / Biglietti non acquistabili */}
-                    {trainStatus?.capacityWarning ? (
+                    {/* Eventuale Segnalazione Capienza / Biglietti non acquistabili (solo se oggi) */}
+                    {isSelectedDayToday && trainStatus?.capacityWarning ? (
                       <View
                         style={[
                           styles.trainCapacityBanner,
@@ -1496,9 +1512,17 @@ export default function ViaggioScreen() {
                               config?.arrivalStation.name}
                         </Text>
                         {(() => {
-                          const depPlanM = parseTimeToMinutes(
-                            itinerary.liveTrain.departureTimePlanned || "00:00",
-                          );
+                          const depPlanTime =
+                            itinerary.liveTrain.departureTimePlanned || "00:00";
+                          if (!isSelectedDayToday) {
+                            return (
+                              <Text style={styles.trainTimeText}>
+                                {depPlanTime}
+                              </Text>
+                            );
+                          }
+
+                          const depPlanM = parseTimeToMinutes(depPlanTime);
                           const currentNowM =
                             new Date().getHours() * 60 +
                             new Date().getMinutes();
@@ -1517,15 +1541,14 @@ export default function ViaggioScreen() {
 
                           const rawDepActM = parseTimeToMinutes(
                             itinerary.liveTrain.departureTimeActual ||
-                              itinerary.liveTrain.departureTimePlanned ||
-                              "00:00",
+                              depPlanTime,
                           );
                           const depActM = Math.max(rawDepActM, depPlanM + lateM);
                           const displayDepTime =
                             depActM > depPlanM
                               ? minutesToTime(depActM)
                               : itinerary.liveTrain.departureTimeActual ||
-                                itinerary.liveTrain.departureTimePlanned;
+                                depPlanTime;
 
                           const isDepDelayed = Boolean(
                             (depPlanM > 0 && depActM > depPlanM) ||
@@ -1533,10 +1556,9 @@ export default function ViaggioScreen() {
                           );
                           const showStrike = Boolean(
                             isDepDelayed &&
-                              itinerary.liveTrain.departureTimePlanned &&
+                              depPlanTime &&
                               displayDepTime &&
-                              itinerary.liveTrain.departureTimePlanned !==
-                                displayDepTime,
+                              depPlanTime !== displayDepTime,
                           );
 
                           return (
@@ -1580,11 +1602,15 @@ export default function ViaggioScreen() {
                           BINARIO
                         </Text>
                         <Text style={styles.platformHighlightValue}>
-                          {cleanPlatform(itinerary.liveTrain.platformActual) ||
-                            cleanPlatform(
-                              itinerary.liveTrain.platformPlanned,
-                            ) ||
-                            "-"}
+                          {isSelectedDayToday
+                            ? cleanPlatform(itinerary.liveTrain.platformActual) ||
+                              cleanPlatform(
+                                itinerary.liveTrain.platformPlanned,
+                              ) ||
+                              "-"
+                            : cleanPlatform(
+                                itinerary.liveTrain.platformPlanned,
+                              ) || "-"}
                         </Text>
                       </View>
 
@@ -1598,12 +1624,20 @@ export default function ViaggioScreen() {
                               config?.departureStation.name}
                         </Text>
                         {(() => {
+                          const arrPlanTime =
+                            itinerary.liveTrain.arrivalTimePlanned || "00:00";
+                          if (!isSelectedDayToday) {
+                            return (
+                              <Text style={styles.trainTimeText}>
+                                {arrPlanTime}
+                              </Text>
+                            );
+                          }
+
                           const depPlanM = parseTimeToMinutes(
                             itinerary.liveTrain.departureTimePlanned || "00:00",
                           );
-                          const arrPlanM = parseTimeToMinutes(
-                            itinerary.liveTrain.arrivalTimePlanned || "00:00",
-                          );
+                          const arrPlanM = parseTimeToMinutes(arrPlanTime);
                           const currentNowM =
                             new Date().getHours() * 60 +
                             new Date().getMinutes();
@@ -1622,25 +1656,23 @@ export default function ViaggioScreen() {
 
                           const rawArrActM = parseTimeToMinutes(
                             itinerary.liveTrain.arrivalTimeActual ||
-                              itinerary.liveTrain.arrivalTimePlanned ||
-                              "00:00",
+                              arrPlanTime,
                           );
                           const arrActM = Math.max(rawArrActM, arrPlanM + lateM);
                           const displayArrTime =
                             arrActM > arrPlanM
                               ? minutesToTime(arrActM)
                               : itinerary.liveTrain.arrivalTimeActual ||
-                                itinerary.liveTrain.arrivalTimePlanned;
+                                arrPlanTime;
 
                           const isArrDelayed = Boolean(
                             arrPlanM > 0 && (arrActM > arrPlanM || lateM > 0),
                           );
                           const showArrStrike = Boolean(
                             isArrDelayed &&
-                              itinerary.liveTrain.arrivalTimePlanned &&
+                              arrPlanTime &&
                               displayArrTime &&
-                              itinerary.liveTrain.arrivalTimePlanned !==
-                                displayArrTime,
+                              arrPlanTime !== displayArrTime,
                           );
 
                           return (
@@ -1766,7 +1798,7 @@ export default function ViaggioScreen() {
                                 "",
                               );
                             const isDeparted = Boolean(
-                              at.isDepartedFromStation,
+                              isSelectedDayToday && at.isDepartedFromStation,
                             );
                             const atEstDepM = parseTimeToMinutes(
                               at.stoppedStationEstimatedDep ||
@@ -1778,8 +1810,9 @@ export default function ViaggioScreen() {
                               new Date().getMinutes();
                             // Il convoglio è evidenziato come fermo oltre l'orario se ha minuti di fermo o ha superato la partenza
                             const isStoppedLate = Boolean(
-                              at.isStoppedInStation &&
-                              (Boolean(at.stoppedMinutes) || atEstDepM === 0 || currentNowM >= atEstDepM),
+                              isSelectedDayToday &&
+                                at.isStoppedInStation &&
+                                (Boolean(at.stoppedMinutes) || atEstDepM === 0 || currentNowM >= atEstDepM),
                             );
 
                             return (
@@ -1845,8 +1878,10 @@ export default function ViaggioScreen() {
                                   ]}
                                 >
                                   {at.trainNumber} •{" "}
-                                  {at.departureTimeActual ||
-                                    at.departureTimePlanned}
+                                  {isSelectedDayToday
+                                    ? at.departureTimeActual ||
+                                      at.departureTimePlanned
+                                    : at.departureTimePlanned}
                                   {isDeparted
                                     ? " (Passato)"
                                     : isStoppedLate

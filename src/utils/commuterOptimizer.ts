@@ -332,9 +332,12 @@ async function computeOutboundItinerary(
 
   // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
   // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
-  // L'arrivo effettivo a destinazione incorpora invece il ritardo reale (arrivalTimeActual).
+  // Se la data è oggi, l'arrivo effettivo a destinazione incorpora il ritardo reale (arrivalTimeActual);
+  // altrimenti per giorni futuri o passati si fa riferimento esclusivo all'orario ufficiale programmato.
   const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
-  const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
+  const trainArrMins = isToday
+    ? parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '')
+    : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
 
   // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
   let carDuration = 0;
@@ -437,14 +440,14 @@ async function computeOutboundItinerary(
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
     subtitle: `${config.departureStation.shortName || config.departureStation.name} ➔ ${config.arrivalStation.shortName || config.arrivalStation.name}`,
     startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
-    endTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
+    endTime: (isToday ? train.arrivalTimeActual : train.arrivalTimePlanned) || minutesToTime(trainArrMins),
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,
-      platform: train.platformActual || train.platformPlanned,
-      delayMinutes: train.delayMinutes,
-      isLiveTrain: train.isLive,
-      notes: `${train.category} verso ${train.destination} • ${platformText} • ${train.statusDescription}`,
+      platform: isToday ? (train.platformActual || train.platformPlanned) : train.platformPlanned,
+      delayMinutes: isToday ? train.delayMinutes : 0,
+      isLiveTrain: isToday ? train.isLive : false,
+      notes: `${train.category} verso ${train.destination} • ${platformText} • ${isToday ? train.statusDescription : 'Programmato'}`,
     },
   });
 
@@ -677,9 +680,11 @@ async function computeReturnItinerary(
   const { train, availableTrains, selectedIndex } = optimalTrainResult;
 
   // NOTA COMMUTER: La partenza del treno a cui ancorare il rientro da Roma
-  // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora invece il ritardo reale.
+  // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora il ritardo reale solo se la data è oggi.
   const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
-  const trainArrMins = parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '');
+  const trainArrMins = isToday
+    ? parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '')
+    : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
 
   let carDuration = 0;
   let carDistanceKm = config.carLeg.distanceKm || 17.2;
@@ -918,14 +923,14 @@ async function computeReturnItinerary(
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
     subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${config.departureStation.shortName || config.departureStation.name}`,
     startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
-    endTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
+    endTime: (isToday ? train.arrivalTimeActual : train.arrivalTimePlanned) || minutesToTime(trainArrMins),
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,
-      platform: train.platformActual || train.platformPlanned,
-      delayMinutes: train.delayMinutes,
-      isLiveTrain: train.isLive,
-      notes: `${train.category} verso ${train.destination} • Binario ${train.platformActual || train.platformPlanned || 'in definizione'} • ${train.statusDescription}`,
+      platform: isToday ? (train.platformActual || train.platformPlanned) : train.platformPlanned,
+      delayMinutes: isToday ? train.delayMinutes : 0,
+      isLiveTrain: isToday ? train.isLive : false,
+      notes: `${train.category} verso ${train.destination} • Binario ${isToday ? (train.platformActual || train.platformPlanned || 'in definizione') : (train.platformPlanned || 'in definizione')} • ${isToday ? train.statusDescription : 'Programmato'}`,
     },
   });
 

@@ -5,6 +5,20 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.2
+
+### Sezione Viaggio & Orari Programmati
+- **Modalità Programmata per Giorni Precedenti e Successivi**:
+  - Quando si consulta un giorno diverso da quello odierno (giorni precedenti o successivi), la sezione Viaggio mostra ora l'orario ufficiale programmato pulito (`departureTimePlanned` e `arrivalTimePlanned`).
+  - Rimossi i calcoli di ritardo live e i controlli sull'ora attuale di oggi (`currentNowM >= depPlanM`) per i giorni non odierni, evitando orari barrati o sfasati di ore.
+  - La pill di stato mostra chiaramente **"Programmato"** con icona calendario e binario previsto da tabellone, senza falsi allarmi o badge di convoglio fermo.
+
+### Icona dell'App
+- **Sfondo Rosso Sapienza & Colonna Verticale Bianca Risaltata**:
+  - Ripristinato lo sfondo dell'icona in Rosso Sapienza (`#822433` -> `#4c0519`) con profondità radiale.
+  - La colonna verticale centrale ("I") è ora in bianco puro brillante (`#ffffff`, spessore 7.5) perfettamente nitida e visibile.
+  - Spirale multi-tono argentata con accenti caldi e cuspide di Sant'Ivo in oro brillante (`#fbbf24`), perfettamente centrata a livello sub-pixel.
+
 ## 1.9.1
 
 ### Icona & Grafica Vettoriale

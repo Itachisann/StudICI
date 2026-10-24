@@ -20,7 +20,7 @@ function renderSvgToPng(svgMarkup, outputPath, width, height, transparent = fals
       width: ${width}px;
       height: ${height}px;
       overflow: hidden;
-      background: ${transparent ? 'transparent' : '#0d0e12'};
+      background: ${transparent ? 'transparent' : '#822433'};
     }
     svg {
       display: block;
@@ -63,46 +63,46 @@ function renderSvgToPng(svgMarkup, outputPath, width, height, transparent = fals
   }
 }
 
-// Gradient definitions matching the multi-color variant of first startup ("la variante al primo avvio")
-// Spiral: rich Sapienza crimson (#be123c / #822433) fading into elegant silver (#a1a1aa / #e4e4e7)
-// Column: vibrant Sapienza crimson
-// Cuspide: bright glowing gold (#fbbf24 -> #f59e0b)
-// Bottom dot: silver (#e4e4e7)
-const colorDefs = `
+// Visual definitions:
+// - Red background (#822433 to #4c0519)
+// - Bold, crisp pure white vertical column ("I") so it never blends in or disappears
+// - Multi-tone spiral: luminous silver-white with subtle warm gold/champagne transitions
+// - Cuspide of Sant'Ivo: bright glowing gold (#fde047 to #fbbf24)
+// - Bottom accent: bright gold
+const visualDefs = `
   <defs>
-    <!-- Background Halo Glow (like cleanLogoGlow from first startup) -->
-    <radialGradient id="haloGlow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#be123c" stop-opacity="0.48" />
-      <stop offset="35%" stop-color="#822433" stop-opacity="0.32" />
-      <stop offset="65%" stop-color="#822433" stop-opacity="0.12" />
-      <stop offset="100%" stop-color="#0d0e12" stop-opacity="0" />
+    <!-- Rich Sapienza Red Background Gradient -->
+    <linearGradient id="redBgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#822433" />
+      <stop offset="50%" stop-color="#691522" />
+      <stop offset="100%" stop-color="#4c0519" />
+    </linearGradient>
+
+    <!-- Subtle radial depth glow in the red background -->
+    <radialGradient id="depthGlow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.12" />
+      <stop offset="60%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.25" />
     </radialGradient>
 
-    <!-- Spiral Gradient (Crimson to Silver) -->
+    <!-- Multi-tone Spiral Gradient (White to Platinum/Champagne) -->
     <linearGradient id="spiralGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#e11d48" />
-      <stop offset="35%" stop-color="#be123c" />
-      <stop offset="70%" stop-color="#991b1b" />
-      <stop offset="88%" stop-color="#cbd5e1" />
-      <stop offset="100%" stop-color="#f1f5f9" />
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="30%" stop-color="#fdf4ff" />
+      <stop offset="70%" stop-color="#fef3c7" />
+      <stop offset="100%" stop-color="#ffffff" />
     </linearGradient>
 
-    <!-- Column Gradient (Sapienza Crimson) -->
-    <linearGradient id="columnGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#f43f5e" />
-      <stop offset="100%" stop-color="#9f1239" />
-    </linearGradient>
-
-    <!-- Cuspide Gold Accent -->
+    <!-- Bright Gold Cuspide of Sant'Ivo -->
     <linearGradient id="goldCuspideGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#fde047" />
-      <stop offset="40%" stop-color="#fbbf24" />
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="35%" stop-color="#fbbf24" />
       <stop offset="100%" stop-color="#d97706" />
     </linearGradient>
   </defs>
 `;
 
-// Helper to generate emblem markup with EXACT geometric centering
+// Helper to generate the emblem markup with exact sub-pixel geometric centering
 // Raw bounds: X in [29.75, 90.25] (center 60.0), Y in [19.75, 112.25] (center 66.0)
 // To center at (cx, cy) with scale S: translate(cx, cy) scale(S) translate(-60, -66)
 function generateEmblemMarkup(cx, cy, scale) {
@@ -118,47 +118,44 @@ function generateEmblemMarkup(cx, cy, scale) {
         stroke-linejoin="round"
       />
 
-      <!-- Colonna verticale (la 'I' centrale) -->
+      <!-- Colonna verticale (la 'I' centrale): BIANCA nitida, ben visibile, in primo piano -->
       <path
         d="M 60,40 L 60,82"
         fill="none"
-        stroke="url(#columnGrad)"
-        stroke-width="6.5"
+        stroke="#ffffff"
+        stroke-width="7.5"
         stroke-linecap="round"
       />
 
-      <!-- Cuspide di Sant'Ivo in oro -->
+      <!-- Cuspide di Sant'Ivo in oro brillante -->
       <circle
         cx="60"
         cy="24"
-        r="4"
+        r="4.2"
         fill="url(#goldCuspideGrad)"
       />
 
-      <!-- Accento alla base in argento -->
+      <!-- Accento alla base in oro caldo -->
       <circle
         cx="86"
         cy="84"
-        r="3.5"
-        fill="#e2e8f0"
+        r="3.6"
+        fill="#fde047"
       />
     </g>
   `;
 }
 
 // 1. Full 1024x1024 App Icon (iOS & Expo main icon)
-// Background: #0d0e12 with red radial halo, exactly centered emblem
-// Scale 6.4: width 387.2px, height 592px, left/right margin 318.4px, top/bottom margin 216px
+// Red background (#822433 -> #4c0519), white 'I' column clearly visible, gold accents, centered
 const icon1024Svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  ${colorDefs}
-  <!-- Dark background -->
-  <rect width="1024" height="1024" fill="#0d0e12" />
+  ${visualDefs}
+  <!-- Full-bleed Red Gradient Background -->
+  <rect width="1024" height="1024" fill="url(#redBgGrad)" />
+  <rect width="1024" height="1024" fill="url(#depthGlow)" />
 
-  <!-- Glowing red halo behind the logo -->
-  <circle cx="512" cy="512" r="470" fill="url(#haloGlow)" />
-
-  <!-- Multi-colored emblem perfectly centered -->
+  <!-- Multi-colored emblem with prominent white vertical column, perfectly centered -->
   ${generateEmblemMarkup(512, 512, 6.4)}
 </svg>
 `;
@@ -166,18 +163,16 @@ const icon1024Svg = `
 // 2. Android Adaptive Icon Background (512x512)
 const androidBgSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  ${colorDefs}
-  <rect width="512" height="512" fill="#0d0e12" />
-  <circle cx="256" cy="256" r="235" fill="url(#haloGlow)" />
+  ${visualDefs}
+  <rect width="512" height="512" fill="url(#redBgGrad)" />
+  <rect width="512" height="512" fill="url(#depthGlow)" />
 </svg>
 `;
 
 // 3. Android Adaptive Icon Foreground (512x512 transparent)
-// Android adaptive safe area is inner 66% (338px diameter).
-// Scale 3.2: height 296px, width 193.6px. Fits comfortably in safe circle.
 const androidFgSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  ${colorDefs}
+  ${visualDefs}
   ${generateEmblemMarkup(256, 256, 3.2)}
 </svg>
 `;
@@ -198,21 +193,20 @@ const androidMonoSvg = `
       d="M 60,40 L 60,82"
       fill="none"
       stroke="#ffffff"
-      stroke-width="6.5"
+      stroke-width="7.5"
       stroke-linecap="round"
     />
-    <circle cx="60" cy="24" r="4" fill="#ffffff" />
-    <circle cx="86" cy="84" r="3.5" fill="#ffffff" />
+    <circle cx="60" cy="24" r="4.2" fill="#ffffff" />
+    <circle cx="86" cy="84" r="3.6" fill="#ffffff" />
   </g>
 </svg>
 `;
 
-// 5. Favicon (48x48)
+// 5. Favicon (48x48) with squircle
 const faviconSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-  ${colorDefs}
-  <rect width="48" height="48" rx="10" ry="10" fill="#0d0e12" />
-  <circle cx="24" cy="24" r="22" fill="url(#haloGlow)" />
+  ${visualDefs}
+  <rect width="48" height="48" rx="10" ry="10" fill="url(#redBgGrad)" />
   ${generateEmblemMarkup(24, 24, 0.36)}
 </svg>
 `;
@@ -220,17 +214,17 @@ const faviconSvg = `
 // 6. Splash Icon (256x256)
 const splashIconSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  ${colorDefs}
-  <circle cx="128" cy="128" r="120" fill="url(#haloGlow)" />
+  ${visualDefs}
+  <rect width="256" height="256" rx="56" ry="56" fill="url(#redBgGrad)" />
   ${generateEmblemMarkup(128, 128, 1.8)}
 </svg>
 `;
 
-console.log('Generating assets with colored first-startup variant & perfect centering...');
+console.log('Generating red background icons with prominent vertical column and perfect centering...');
 renderSvgToPng(icon1024Svg, 'assets/images/icon.png', 1024, 1024, false);
 renderSvgToPng(androidBgSvg, 'assets/images/android-icon-background.png', 512, 512, false);
 renderSvgToPng(androidFgSvg, 'assets/images/android-icon-foreground.png', 512, 512, true);
 renderSvgToPng(androidMonoSvg, 'assets/images/android-icon-monochrome.png', 432, 432, true);
 renderSvgToPng(faviconSvg, 'assets/images/favicon.png', 48, 48, true);
 renderSvgToPng(splashIconSvg, 'assets/images/splash-icon.png', 256, 256, true);
-console.log('All icons generated successfully with first-startup styling and perfect centering!');
+console.log('All icons generated successfully!');
