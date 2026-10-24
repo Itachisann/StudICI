@@ -22,6 +22,7 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { UNIFORM_MODAL_BG } from "@/constants/theme";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
@@ -796,6 +797,7 @@ export function CommuterConfigModal({
 }
 
 function MainFormScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const {
     theme,
@@ -917,7 +919,10 @@ function MainFormScreen() {
           /* Form Inizializzazione Primo Avvio (senza nulla di default) */
           <ScrollView
             style={styles.initScrollView}
-            contentContainerStyle={styles.initScrollContent}
+            contentContainerStyle={[
+              styles.initScrollContent,
+              { paddingBottom: Math.max(insets.bottom, 24) + 84 },
+            ]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
@@ -1566,7 +1571,9 @@ function MainFormScreen() {
             <ScrollView
                 style={styles.body}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 40 }}
+                contentContainerStyle={{
+                  paddingBottom: Math.max(insets.bottom, 24) + 84,
+                }}
                 showsVerticalScrollIndicator={false}
               >
               {/* 1. Partenza da casa */}
@@ -2959,7 +2966,7 @@ const styles = StyleSheet.create({
     maxWidth: 380,
   },
   pillSection: {
-    marginBottom: 22,
+    marginBottom: 28,
     overflow: "visible",
   },
   pillSectionLabel: {
@@ -3067,6 +3074,7 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
     marginTop: 4,
+    paddingBottom: 8,
   },
   timeQuickRow: {
     flexDirection: "row",

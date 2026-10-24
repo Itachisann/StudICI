@@ -114,6 +114,8 @@ export default function ProfiloScreen() {
   const [degrees, setDegrees] = useState<Degree[]>([]);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
+  const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
+    useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
@@ -328,6 +330,8 @@ export default function ProfiloScreen() {
       setDownloadingCourse(null);
 
       if (tabs && tabs.length > 1) {
+        const match = tabs.find((t) => t.url === firstTab) || tabs[0];
+        setSelectedTabForSpecifiche(match || null);
         setChannelModalVisible(true);
       } else {
         router.replace("/");
@@ -1126,6 +1130,10 @@ export default function ProfiloScreen() {
             style={styles.tableRow}
             activeOpacity={0.7}
             onPress={() => {
+              const match =
+                availableTabs.find((t) => t.url === defaultTabUrl) ||
+                availableTabs[0];
+              setSelectedTabForSpecifiche(match || null);
               setChannelModalVisible(true);
             }}
           >
@@ -1903,12 +1911,25 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Fallback Cambio Canale / Anno (usato in Expo Go o cliccando 'Personalizza...') */}
+      {/* Modal Cambio Canale / Anno */}
       <NativeSheetModal
         visible={channelModalVisible}
         onClose={() => setChannelModalVisible(false)}
         title="Specifiche"
         backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Salva",
+            prominent: true,
+            tintColor: theme.primary,
+            disabled: !selectedTabForSpecifiche,
+            onPress: async () => {
+              if (selectedTabForSpecifiche) {
+                await selectDefaultTab(selectedTabForSpecifiche);
+              }
+            },
+          },
+        ]}
       >
         <DefaultTabPicker
           tabs={availableTabs}
@@ -1917,7 +1938,10 @@ export default function ProfiloScreen() {
           title="Specifiche"
           subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
           confirmButtonText="Salva"
-          hideFooterButton={false}
+          hideFooterButton={true}
+          onActiveTabChange={(tab) => {
+            setSelectedTabForSpecifiche(tab);
+          }}
           onConfirm={async (tab) => {
             await selectDefaultTab(tab);
           }}
