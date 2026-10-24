@@ -95,12 +95,12 @@ export const StudICILogo: React.FC<StudICILogoProps> = ({
           </>
         )}
 
-        {/* 2. Emblema minimalista vettoriale */}
+        {/* 2. Emblema minimalista vettoriale perfettamente centrato */}
         <G
           transform={
             withBackground
-              ? 'scale(0.82) translate(13, 13)'
-              : 'scale(1) translate(0, 0)'
+              ? 'translate(60, 60) scale(0.82) translate(-60, -66)'
+              : 'translate(0, -6)'
           }
         >
           {/* Spirale / S-Curve continua ed elegante */}

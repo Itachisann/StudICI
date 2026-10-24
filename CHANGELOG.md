@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.1
+
+### Icona & Grafica Vettoriale
+- **Icona App con Stile Primo Avvio & Centratura Geometrica**:
+  - L'icona dell'app adotta ora la variante cromatica completa della schermata di primo avvio: sfondo scuro OLED (`#0d0e12`) con halo glow radiale rosso Sapienza, spirale con gradiente cremisi-argento, colonna verticale cremisi, cuspide in oro vivo e accento argentato.
+  - Calcolata la centratura geometrica sub-pixel perfetta (margini superiore/inferiore e sinistro/destro esattamente identici).
+- **Rimozione Completa Logo Vecchio in Verifica Orari**:
+  - Nella schermata di verifica orari all'avvio (`StartupCheckScreen`), rimosso ogni riferimento al vecchio logo raster sostituendolo con la variante SVG vettoriale e halo glow coordinato identica a quella del primo avvio.
+
 ## 1.9.0
 
 ### Icona & Grafica Vettoriale

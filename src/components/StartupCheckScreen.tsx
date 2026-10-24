@@ -5,12 +5,12 @@ import {
   StyleSheet,
   ActivityIndicator,
   Animated,
-  Image,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
+import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 
 interface StartupCheckScreenProps {
@@ -162,22 +162,20 @@ export function StartupCheckScreen({
           },
         ]}
       >
-        {/* Logo originale con sfondo rosso all'avvio normale dell'app */}
-        <View style={styles.logoWrapper}>
+        {/* Logo moderno SVG con halo glow coordinato come al primo avvio */}
+        <View style={styles.cleanLogoWrapper}>
           <View
             style={[
-              styles.logoBadge,
-              {
-                borderColor: 'rgba(255, 255, 255, 0.12)',
-              },
+              styles.cleanLogoGlow,
+              { backgroundColor: theme.primary },
             ]}
-          >
-            <Image
-              source={require('../../assets/images/original-icon.png')}
-              style={styles.logoImage}
-              resizeMode="cover"
-            />
-          </View>
+          />
+          <StudICILogo
+            size={100}
+            withBackground={false}
+            primaryColor={theme.primary}
+            secondaryColor="#a1a1aa"
+          />
         </View>
 
         {/* Titolo e Dettaglio Corso con tipografia iOS moderna */}
@@ -257,27 +255,19 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingHorizontal: 28,
   },
-  logoWrapper: {
+  cleanLogoWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 22,
+    marginBottom: 26,
+    position: 'relative',
   },
-  logoBadge: {
-    width: 96,
-    height: 96,
-    borderRadius: 22,
-    borderWidth: 1,
-    overflow: 'hidden',
-    backgroundColor: '#18181b',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  logoImage: {
-    width: '100%',
-    height: '100%',
+  cleanLogoGlow: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    opacity: 0.22,
+    transform: [{ scale: 1.15 }],
   },
   appTitle: {
     fontSize: 30,
