@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import {
   ActivityIndicator,
@@ -10,7 +11,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "@/context/ThemeContext";
-import { StudICILogo } from "./StudICILogo";
 
 interface CourseDownloadViewProps {
   courseName: string;
@@ -30,6 +30,8 @@ export function CourseDownloadView({
   const [fadeAnim] = useState(() => new Animated.Value(0));
   const [translateYAnim] = useState(() => new Animated.Value(12));
   const [capsulePulse] = useState(() => new Animated.Value(1));
+  const [pulseAnim] = useState(() => new Animated.Value(1));
+  const [glowOpacity] = useState(() => new Animated.Value(0.35));
 
   useEffect(() => {
     Animated.parallel([
@@ -48,27 +50,53 @@ export function CourseDownloadView({
 
     const pulseLoop = Animated.loop(
       Animated.sequence([
-        Animated.timing(capsulePulse, {
-          toValue: 1.025,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(capsulePulse, {
-          toValue: 1,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: 1.18,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: 0.65,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(capsulePulse, {
+            toValue: 1.025,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: 0.35,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(capsulePulse, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+        ]),
       ]),
     );
     pulseLoop.start();
 
     return () => {
       pulseLoop.stop();
+      pulseAnim.stopAnimation();
+      glowOpacity.stopAnimation();
       capsulePulse.stopAnimation();
       fadeAnim.stopAnimation();
       translateYAnim.stopAnimation();
     };
-  }, [fadeAnim, translateYAnim, capsulePulse]);
+  }, [fadeAnim, translateYAnim, capsulePulse, pulseAnim, glowOpacity]);
 
   return (
     <SafeAreaView style={styles.downloadContainer}>
@@ -82,13 +110,32 @@ export function CourseDownloadView({
           },
         ]}
       >
-        {/* Logo minimalista SVG senza sfondo allineato a StartupCheckScreen */}
-        <View style={styles.logoWrapper}>
-          <StudICILogo
-            size={96}
-            withBackground={false}
-            primaryColor={theme.primary}
+        {/* Glow Aura & Icona di Download animata */}
+        <View style={styles.iconWrapper}>
+          <Animated.View
+            style={[
+              styles.glowAura,
+              {
+                backgroundColor: theme.primary,
+                shadowColor: theme.primary,
+                opacity: glowOpacity,
+                transform: [{ scale: pulseAnim }],
+              },
+            ]}
           />
+
+          <View
+            style={[
+              styles.iconCircle,
+              {
+                backgroundColor: theme.subtle || "rgba(255, 255, 255, 0.05)",
+                borderColor: theme.primary,
+                shadowColor: theme.primary,
+              },
+            ]}
+          >
+            <Ionicons name="cloud-download" size={44} color={theme.primary} />
+          </View>
         </View>
 
         {/* Titolo e Dettaglio Corso */}
@@ -152,10 +199,35 @@ const styles = StyleSheet.create({
     width: "100%",
     paddingHorizontal: 28,
   },
-  logoWrapper: {
-    marginBottom: 24,
-    alignItems: "center",
+  iconWrapper: {
+    width: 120,
+    height: 120,
     justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+    position: "relative",
+  },
+  glowAura: {
+    position: "absolute",
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 26,
+    elevation: 8,
+  },
+  iconCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 1.5,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 6,
   },
   downloadTitle: {
     fontSize: 26,

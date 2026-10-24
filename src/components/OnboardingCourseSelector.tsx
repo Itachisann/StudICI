@@ -30,6 +30,7 @@ import {
   NavigationContainer,
   NavigationIndependentTree,
   useNavigation,
+  usePreventRemove,
 } from "@react-navigation/native";
 import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
@@ -622,15 +623,16 @@ function PostDownloadScreen() {
   const insets = useSafeAreaInsets();
   const topInsetPadding = Math.max(insets.top, 24) + 40;
 
+  usePreventRemove(currentPage === 2, () => {
+    pagerRef.current?.scrollTo({ x: 0, animated: true });
+  });
+
   useEffect(() => {
-    const unsubscribe = navigation?.addListener("beforeRemove", (e: any) => {
-      if (currentPage === 2) {
-        e.preventDefault();
-        pagerRef.current?.scrollTo({ x: 0, animated: true });
-      }
+    navigation.setOptions({
+      gestureEnabled: currentPage === 1,
+      headerBackButtonMenuEnabled: false,
     });
-    return unsubscribe;
-  }, [currentPage, navigation, pagerRef]);
+  }, [currentPage, navigation]);
 
   useEffect(() => {
     const onBackPress = () => {
@@ -1666,6 +1668,16 @@ function PostDownloadScreen() {
               pointerEvents={currentPage === 2 ? "auto" : "none"}
             >
               <NativeActionButton
+                label="Configura più tardi"
+                onPress={() => finalizeOnboarding(false)}
+                variant="glass"
+                glow={false}
+                style={{ flex: 1, height: 48, borderRadius: 24 }}
+                pillStyle={{ height: 48, borderRadius: 24, paddingHorizontal: 12 }}
+                textStyle={{ color: "#ffffff", fontSize: 13.5, fontWeight: "600" }}
+              />
+
+              <NativeActionButton
                 label="Salva"
                 onPress={() => finalizeOnboarding(true)}
                 disabled={!isCommuterFormComplete}
@@ -1680,7 +1692,7 @@ function PostDownloadScreen() {
                 }
                 style={{ flex: 1, height: 48, borderRadius: 24 }}
                 pillStyle={{ height: 48, borderRadius: 24 }}
-                textStyle={{ fontSize: 15, fontWeight: "700" }}
+                textStyle={{ fontSize: 14.5, fontWeight: "700" }}
               />
             </Animated.View>
           </View>
@@ -2375,6 +2387,7 @@ export function OnboardingCourseSelector({
                 headerShadowVisible: false,
                 headerBackButtonDisplayMode: "minimal",
                 headerBackTitle: "",
+                headerBackButtonMenuEnabled: false,
               }}
             >
               <OnboardingStack.Screen name="Welcome" component={WelcomeScreen} />
@@ -2454,6 +2467,7 @@ export function OnboardingCourseSelector({
                   headerShadowVisible: false,
                   headerBackButtonDisplayMode: "minimal",
                   headerBackTitle: "",
+                  headerBackButtonMenuEnabled: false,
                   headerTintColor: "#ffffff",
                   headerStyle: { backgroundColor: "transparent" },
                 }}
