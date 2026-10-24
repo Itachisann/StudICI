@@ -225,6 +225,7 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
                 }
               }}
               appearance="dark"
+              backgroundColor="#1c1c1e"
               tintColor={theme.primary}
               fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
               activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
