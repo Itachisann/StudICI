@@ -104,8 +104,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             !disabled && {
               shadowColor: effectiveGlowColor,
               shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.6,
-              shadowRadius: 10,
+              shadowOpacity: 0.85,
+              shadowRadius: 8,
               elevation: 6,
             },
           disabled && styles.disabledContainer,
@@ -179,8 +179,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           !disabled && {
             shadowColor: effectiveGlowColor,
             shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.6,
-            shadowRadius: 10,
+            shadowOpacity: 0.85,
+            shadowRadius: 8,
             elevation: 6,
           },
         disabled && styles.disabledContainer,
@@ -275,6 +275,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textAlignVertical: 'center',
     includeFontPadding: false,
+    top: Platform.OS === 'ios' ? -0.5 : 0,
   },
   filledText: {
     color: '#ffffff',
