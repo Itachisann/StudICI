@@ -33,7 +33,7 @@ import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
-import { getDegreeClassTheme } from "../utils/degreeColors";
+import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
 import {
   getLastCalendarSync,
   syncScheduleToAppleCalendar,
@@ -908,26 +908,20 @@ export default function ProfiloScreen() {
     /ciclo unico|quinquennale/i.test(rawCourseName) ||
     /ciclo unico/i.test(rawCourseClass);
   const degreeTypeLabel = isCicloUnico
-    ? "Laurea a Ciclo Unico"
+    ? "Ciclo Unico"
     : isMagistrale
-      ? "Laurea Magistrale"
-      : "Laurea Triennale";
+      ? "Magistrale"
+      : "Triennale";
 
-  // Percorso / Classe (es. "LR9", "L-9", "LM-21")
-  let displayClass = rawCourseClass;
-  if (!displayClass && rawCourseName) {
-    const match = rawCourseName.match(/\b(L[MR]?[- ]?\d+|L[- ]\d+)\b/i);
-    if (match) displayClass = match[1].toUpperCase();
-  }
-  if (
-    displayClass &&
-    !displayClass.toLowerCase().startsWith("classe") &&
-    !displayClass.toLowerCase().startsWith("percorso")
-  ) {
-    displayClass = displayClass.startsWith("L")
-      ? `Classe ${displayClass}`
-      : `Percorso ${displayClass}`;
-  }
+  // Risoluzione codice classe (es. "L-9R", "L-9", "LM-20", "L-8")
+  const matchedDegree = degrees.find(
+    (d) =>
+      (degreeUrl && d.url === degreeUrl) ||
+      (degreeName && d.name.toLowerCase() === degreeName.toLowerCase()),
+  );
+  const resolvedClassCode = extractClassCode(
+    degreeClassName || matchedDegree?.className || rawCourseClass || rawCourseName,
+  );
 
   const cleanCourseTitle =
     rawCourseName
@@ -938,7 +932,8 @@ export default function ProfiloScreen() {
     cleanCourseTitle,
     degreeTypeLabel,
     isMagistrale,
-    displayClass,
+    isCicloUnico,
+    resolvedClassCode,
     faculty: "Facoltà di Ingegneria Civile e Industriale",
   };
 
@@ -1023,35 +1018,39 @@ export default function ProfiloScreen() {
               {courseMetadata.faculty}
             </Text>
 
-            {/* Badge Tipologia & Classe/Percorso */}
+            {/* Badge Tipologia & Classe (stesso stile glowing della schermata di scelta facoltà) */}
             <View style={styles.profileBadgesRow}>
               <View
                 style={[
-                  styles.profileBadge,
+                  styles.typeBadge,
                   {
                     backgroundColor: courseMetadata.isMagistrale
-                      ? "rgba(168, 85, 247, 0.15)"
-                      : "rgba(59, 130, 246, 0.15)",
+                      ? "rgba(168, 85, 247, 0.25)"
+                      : courseMetadata.isCicloUnico
+                      ? "rgba(234, 179, 8, 0.25)"
+                      : "rgba(59, 130, 246, 0.25)",
+                    borderColor: courseMetadata.isMagistrale
+                      ? "#c084fc"
+                      : courseMetadata.isCicloUnico
+                      ? "#facc15"
+                      : "#60a5fa",
+                    shadowColor: courseMetadata.isMagistrale
+                      ? "#c084fc"
+                      : courseMetadata.isCicloUnico
+                      ? "#facc15"
+                      : "#60a5fa",
                   },
                 ]}
               >
-                <View
-                  style={[
-                    styles.profileBadgeDot,
-                    {
-                      backgroundColor: courseMetadata.isMagistrale
-                        ? "#c084fc"
-                        : "#60a5fa",
-                    },
-                  ]}
-                />
                 <Text
                   style={[
-                    styles.profileBadgeText,
+                    styles.typeBadgeText,
                     {
                       color: courseMetadata.isMagistrale
-                        ? "#c084fc"
-                        : "#60a5fa",
+                        ? "#e9d5ff"
+                        : courseMetadata.isCicloUnico
+                        ? "#fef08a"
+                        : "#bfdbfe",
                     },
                   ]}
                 >
@@ -1059,37 +1058,26 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
 
-              {courseMetadata.displayClass ? (() => {
-                const classTheme = getDegreeClassTheme(courseMetadata.displayClass);
+              {courseMetadata.resolvedClassCode ? (() => {
+                const classTheme = getDegreeClassTheme(courseMetadata.resolvedClassCode);
                 return (
                   <View
                     style={[
-                      styles.profileBadge,
+                      styles.classBadge,
                       {
                         backgroundColor: classTheme.backgroundColor,
                         borderColor: classTheme.borderColor,
-                        borderWidth: 1,
                         shadowColor: classTheme.glowColor,
-                        shadowOffset: { width: 0, height: 0 },
-                        shadowOpacity: 0.8,
-                        shadowRadius: 6,
-                        elevation: 3,
                       },
                     ]}
                   >
-                    <Ionicons
-                      name="ribbon-outline"
-                      size={11}
-                      color={classTheme.textColor}
-                      style={{ marginRight: 4 }}
-                    />
                     <Text
                       style={[
-                        styles.profileBadgeText,
-                        { color: classTheme.textColor, fontWeight: "700" },
+                        styles.classBadgeText,
+                        { color: classTheme.textColor },
                       ]}
                     >
-                      {courseMetadata.displayClass}
+                      {courseMetadata.resolvedClassCode}
                     </Text>
                   </View>
                 );
@@ -2623,8 +2611,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: 6,
-    marginTop: 6,
+    gap: 8,
+    marginTop: 8,
   },
   profileBadge: {
     flexDirection: "row",

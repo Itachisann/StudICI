@@ -3,25 +3,10 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { AttendanceRecord, AttendanceStats } from "./attendance";
 import { ScheduleData } from "./scraper";
+import { getSubjectColor } from "./subjectColors";
 
 const SAPIENZA_RED = "#822433";
 const DAYS_NAMES = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì"];
-const ACCENT_COLORS = [
-  "#3b82f6", // Blue
-  "#8b5cf6", // Violet
-  "#f59e0b", // Amber
-  "#10b981", // Emerald
-  "#ef4444", // Crimson Red
-  "#ec4899", // Pink
-  "#06b6d4", // Cyan
-  "#f97316", // Bright Orange
-  "#14b8a6", // Teal
-  "#6366f1", // Indigo
-  "#84cc16", // Lime
-  "#a855f7", // Purple
-  "#e11d48", // Rose
-  "#0284c7", // Sky Blue
-];
 
 const escapeHtml = (s?: string) =>
   (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -85,15 +70,6 @@ export async function exportScheduleToPdf(
   const hours = Math.max(1, (gridEnd - gridStart) / 60);
   const hourH = Math.max(36, Math.min(60, Math.floor(430 / hours)));
   const gridHeight = hours * hourH;
-
-  // Colore stabile e univoco per materia ordinato alfabeticamente
-  const subjectColors = new Map<string, string>();
-  const uniqueSubjects = Array.from(
-    new Set(allClasses.map((c) => (c.subject || "").trim().toUpperCase()).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b));
-  uniqueSubjects.forEach((subj, idx) => {
-    subjectColors.set(subj, ACCENT_COLORS[idx % ACCENT_COLORS.length]);
-  });
 
   // Fasce orarie complete (es. 08:00 - 09:00 ... 18:00 - 19:00) così ogni lezione
   // (es. 15:00 - 19:00) riempie esattamente le sue fasce fino alla fine della tabella senza righe vuote.
@@ -180,9 +156,7 @@ export async function exportScheduleToPdf(
 
     const lessonsHtml = placed
       .map((p) => {
-        const color =
-          subjectColors.get((p.c.subject || "").toUpperCase()) ||
-          ACCENT_COLORS[0];
+        const color = getSubjectColor(p.c.subject);
         const top = ((p.s - gridStart) / 60) * hourH + 1;
         const height = ((p.e - p.s) / 60) * hourH - 2;
         const width = 100 / p.lanes;
