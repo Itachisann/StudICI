@@ -104,14 +104,14 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             !disabled && {
               shadowColor: effectiveGlowColor,
               shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.85,
-              shadowRadius: 8,
+              shadowOpacity: 0.6,
+              shadowRadius: 10,
               elevation: 6,
             },
           disabled && styles.disabledContainer,
-          style,
           customHeight !== undefined && { height: customHeight },
           customRadius !== undefined && { borderRadius: customRadius },
+          style,
         ]}
       >
         <LiquidGlassView
@@ -120,7 +120,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           colorScheme="dark"
           tintColor={isFilled ? (disabled ? '#27272a' : accentColor) : undefined}
           style={[
-            styles.basePill,
+            StyleSheet.absoluteFill,
             styles.glassBorder,
             isFilled && {
               backgroundColor: disabled ? '#18181b' : accentColor,
@@ -138,86 +138,20 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               backgroundColor: 'transparent',
               borderWidth: 0,
             },
-            { width: '100%', height: customHeight ?? 44 },
+            styles.glassPill,
+            customHeight !== undefined && { height: customHeight },
             customRadius !== undefined && { borderRadius: customRadius },
-            customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
             pillStyle,
           ]}
+          pointerEvents="none"
+        />
+        <View
+          style={[
+            styles.contentContainer,
+            customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
+          ]}
+          pointerEvents="none"
         >
-          <View style={styles.pillContentRow}>
-            {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
-            <Text
-              style={[
-                styles.labelText,
-                isFilled
-                  ? styles.filledText
-                  : variant === 'glass'
-                  ? styles.glassText
-                  : { color: accentColor },
-                disabled && { color: '#52525b' },
-                textStyle,
-              ]}
-              numberOfLines={1}
-            >
-              {label}
-            </Text>
-          </View>
-        </LiquidGlassView>
-      </TouchableOpacity>
-    );
-  }
-
-  // 2. Modalità Fallback Expo Go o non iOS: Pulsante a tema stile glass con BlurView
-  return (
-    <TouchableOpacity
-      activeOpacity={0.82}
-      onPress={onPress}
-      disabled={disabled}
-      style={[
-        styles.containerWrapper,
-        glow &&
-          !disabled && {
-            shadowColor: effectiveGlowColor,
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.85,
-            shadowRadius: 8,
-            elevation: 6,
-          },
-        disabled && styles.disabledContainer,
-        style,
-        customHeight !== undefined && { height: customHeight },
-        customRadius !== undefined && { borderRadius: customRadius },
-      ]}
-    >
-      <BlurView
-        intensity={Platform.OS === 'ios' ? 30 : 0}
-        tint="dark"
-        style={[
-          styles.basePill,
-          styles.glassBorder,
-          isFilled && {
-            backgroundColor: disabled ? '#18181b' : accentColor,
-            borderColor: disabled ? '#27272a' : accentColor,
-          },
-          variant === 'outlined' && {
-            backgroundColor: 'rgba(255, 255, 255, 0.05)',
-            borderColor: disabled ? '#27272a' : accentColor,
-          },
-          variant === 'glass' && {
-            backgroundColor: 'rgba(255, 255, 255, 0.08)',
-            borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.20)',
-          },
-          variant === 'text' && {
-            backgroundColor: 'transparent',
-            borderWidth: 0,
-          },
-          { width: '100%', height: customHeight ?? 44 },
-          customRadius !== undefined && { borderRadius: customRadius },
-          customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
-          pillStyle,
-        ]}
-      >
-        <View style={styles.pillContentRow}>
           {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
           <Text
             style={[
@@ -235,7 +169,85 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             {label}
           </Text>
         </View>
-      </BlurView>
+      </TouchableOpacity>
+    );
+  }
+
+  // 2. Modalità Fallback Expo Go o non iOS: Pulsante a tema stile glass con BlurView
+  return (
+    <TouchableOpacity
+      activeOpacity={0.82}
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.containerWrapper,
+        glow &&
+          !disabled && {
+            shadowColor: effectiveGlowColor,
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: 0.6,
+            shadowRadius: 10,
+            elevation: 6,
+          },
+        disabled && styles.disabledContainer,
+        customHeight !== undefined && { height: customHeight },
+        customRadius !== undefined && { borderRadius: customRadius },
+        style,
+      ]}
+    >
+      <BlurView
+        intensity={Platform.OS === 'ios' ? 30 : 0}
+        tint="dark"
+        style={[
+          StyleSheet.absoluteFill,
+          styles.glassBorder,
+          isFilled && {
+            backgroundColor: disabled ? '#18181b' : accentColor,
+            borderColor: disabled ? '#27272a' : accentColor,
+          },
+          variant === 'outlined' && {
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderColor: disabled ? '#27272a' : accentColor,
+          },
+          variant === 'glass' && {
+            backgroundColor: 'rgba(255, 255, 255, 0.08)',
+            borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.20)',
+          },
+          variant === 'text' && {
+            backgroundColor: 'transparent',
+            borderWidth: 0,
+          },
+          styles.glassPill,
+          customHeight !== undefined && { height: customHeight },
+          customRadius !== undefined && { borderRadius: customRadius },
+          pillStyle,
+        ]}
+        pointerEvents="none"
+      />
+      <View
+        style={[
+          styles.contentContainer,
+          customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
+        ]}
+        pointerEvents="none"
+      >
+        {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
+        <Text
+          style={[
+            styles.labelText,
+            isFilled
+              ? styles.filledText
+              : variant === 'glass'
+              ? styles.glassText
+              : { color: accentColor },
+            disabled && { color: '#52525b' },
+            textStyle,
+          ]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 };
@@ -244,26 +256,25 @@ const styles = StyleSheet.create({
   containerWrapper: {
     height: 44,
     borderRadius: 22,
+    position: 'relative',
   },
   disabledContainer: {
     opacity: 0.5,
   },
-  basePill: {
-    height: 44,
+  glassPill: {
     borderRadius: 22,
+    overflow: 'hidden',
+  },
+  contentContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
-    overflow: 'hidden',
-  },
-  pillContentRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: '100%',
   },
   glassBorder: {
     borderWidth: 1.5,
@@ -272,10 +283,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: -0.2,
-    textAlign: 'center',
-    textAlignVertical: 'center',
     includeFontPadding: false,
-    top: Platform.OS === 'ios' ? -0.5 : 0,
+    textAlign: 'center',
   },
   filledText: {
     color: '#ffffff',
