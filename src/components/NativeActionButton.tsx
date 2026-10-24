@@ -110,6 +110,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             },
           disabled && styles.disabledContainer,
           style,
+          customHeight !== undefined && { height: customHeight },
+          customRadius !== undefined && { borderRadius: customRadius },
         ]}
       >
         <LiquidGlassView
@@ -136,28 +138,30 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               backgroundColor: 'transparent',
               borderWidth: 0,
             },
-            customHeight !== undefined && { height: customHeight },
+            { width: '100%', height: customHeight ?? 44 },
             customRadius !== undefined && { borderRadius: customRadius },
             customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
             pillStyle,
           ]}
         >
-          {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
-          <Text
-            style={[
-              styles.labelText,
-              isFilled
-                ? styles.filledText
-                : variant === 'glass'
-                ? styles.glassText
-                : { color: accentColor },
-              disabled && { color: '#52525b' },
-              textStyle,
-            ]}
-            numberOfLines={1}
-          >
-            {label}
-          </Text>
+          <View style={styles.pillContentRow}>
+            {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
+            <Text
+              style={[
+                styles.labelText,
+                isFilled
+                  ? styles.filledText
+                  : variant === 'glass'
+                  ? styles.glassText
+                  : { color: accentColor },
+                disabled && { color: '#52525b' },
+                textStyle,
+              ]}
+              numberOfLines={1}
+            >
+              {label}
+            </Text>
+          </View>
         </LiquidGlassView>
       </TouchableOpacity>
     );
@@ -181,6 +185,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           },
         disabled && styles.disabledContainer,
         style,
+        customHeight !== undefined && { height: customHeight },
+        customRadius !== undefined && { borderRadius: customRadius },
       ]}
     >
       <BlurView
@@ -205,28 +211,30 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             backgroundColor: 'transparent',
             borderWidth: 0,
           },
-          customHeight !== undefined && { height: customHeight },
+          { width: '100%', height: customHeight ?? 44 },
           customRadius !== undefined && { borderRadius: customRadius },
           customPaddingHorizontal !== undefined && { paddingHorizontal: customPaddingHorizontal },
           pillStyle,
         ]}
       >
-        {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
-        <Text
-          style={[
-            styles.labelText,
-            isFilled
-              ? styles.filledText
-              : variant === 'glass'
-              ? styles.glassText
-              : { color: accentColor },
-            disabled && { color: '#52525b' },
-            textStyle,
-          ]}
-          numberOfLines={1}
-        >
-          {label}
-        </Text>
+        <View style={styles.pillContentRow}>
+          {icon ? <View style={{ marginRight: 6 }}>{icon}</View> : null}
+          <Text
+            style={[
+              styles.labelText,
+              isFilled
+                ? styles.filledText
+                : variant === 'glass'
+                ? styles.glassText
+                : { color: accentColor },
+              disabled && { color: '#52525b' },
+              textStyle,
+            ]}
+            numberOfLines={1}
+          >
+            {label}
+          </Text>
+        </View>
       </BlurView>
     </TouchableOpacity>
   );
@@ -249,6 +257,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     overflow: 'hidden',
   },
+  pillContentRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+  },
   glassBorder: {
     borderWidth: 1.5,
   },
@@ -256,6 +272,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: -0.2,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
   },
   filledText: {
     color: '#ffffff',

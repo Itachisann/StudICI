@@ -255,22 +255,44 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
       {showChannelRow && (
         <View style={styles.channelContainer}>
           {isNativeIos ? (
-            <SegmentedControl
-              key={`seg-${activeYear}-${channelsForActiveYear.length}-${theme.primary}`}
-              values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
-              selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
-              onChange={(event) => {
-                const idx = event.nativeEvent.selectedSegmentIndex;
-                if (idx !== selectedChannelIdx && channelsForActiveYear[idx]) {
-                  onSelectTab(channelsForActiveYear[idx].tab);
-                }
-              }}
-              appearance="dark"
-              tintColor={theme.primary}
-              fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
-              activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
-              style={styles.nativeSegmentedControl}
-            />
+            <View
+              style={[
+                styles.segmentedGlowWrapper,
+                {
+                  shadowColor: theme.primary,
+                  shadowOffset: { width: 0, height: 0 },
+                  shadowOpacity: 0.85,
+                  shadowRadius: 10,
+                  elevation: 6,
+                },
+              ]}
+            >
+              <SegmentedControl
+                key={`seg-${activeYear}-${channelsForActiveYear.length}-${theme.primary}`}
+                values={channelsForActiveYear.map(c => c.channel || c.tab.name)}
+                selectedIndex={selectedChannelIdx >= 0 ? selectedChannelIdx : 0}
+                onChange={(event) => {
+                  const idx = event.nativeEvent.selectedSegmentIndex;
+                  if (idx !== selectedChannelIdx && channelsForActiveYear[idx]) {
+                    onSelectTab(channelsForActiveYear[idx].tab);
+                  }
+                }}
+                appearance="dark"
+                tintColor={theme.primary}
+                fontStyle={{ fontSize: 13, fontWeight: '600', color: '#a1a1aa' }}
+                activeFontStyle={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}
+                style={[
+                  styles.nativeSegmentedControl,
+                  {
+                    shadowColor: theme.primary,
+                    shadowOffset: { width: 0, height: 0 },
+                    shadowOpacity: 0.85,
+                    shadowRadius: 10,
+                    elevation: 6,
+                  },
+                ]}
+              />
+            </View>
           ) : (
             channelsForActiveYear.length <= 3 ? (
               <View style={styles.channelRowEqual}>
@@ -364,6 +386,8 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     paddingHorizontal: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   yearScroll: {
     maxHeight: 42,
@@ -400,10 +424,18 @@ const styles = StyleSheet.create({
     color: '#a1a1aa',
     fontWeight: '600',
     fontSize: 13,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: 18,
   },
   yearChipTextActive: {
     color: '#ffffff',
     fontWeight: '700',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: 18,
   },
 
   // Container Canali (Identica larghezza e allineamento degli anni)
@@ -415,6 +447,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+  },
+  segmentedGlowWrapper: {
+    width: '100%',
+    maxWidth: 420,
+    height: 36,
+    borderRadius: 9,
   },
   nativeSegmentedControl: {
     width: '100%',
