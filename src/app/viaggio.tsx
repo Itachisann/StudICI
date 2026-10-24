@@ -637,7 +637,6 @@ export default function ViaggioScreen() {
 
   return (
     <View style={styles.container}>
-      <BlurView tint="dark" intensity={80} style={StyleSheet.absoluteFill} />
       <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safeArea}>
         {/* ── Liquid Glass Header: Titolo "Viaggio" + Segmented Control + Giorni della Settimana ── */}
         <View
@@ -870,7 +869,7 @@ export default function ViaggioScreen() {
             <View
               style={[
                 styles.inactiveStateCard,
-                { borderColor: theme.border, backgroundColor: "#161618" },
+                { borderColor: theme.border, backgroundColor: "#1c1c1e" },
               ]}
             >
               <View
