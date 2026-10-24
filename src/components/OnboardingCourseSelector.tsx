@@ -31,7 +31,7 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from "@react-navigation/native";
-import { NativeActionButton, NativeGlassContainer } from "./NativeActionButton";
+import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
 import { StudICILogo } from "./StudICILogo";
 import { StationInfo } from "../types/commuter";
@@ -623,28 +623,13 @@ function PostDownloadScreen() {
   const topInsetPadding = Math.max(insets.top, 24) + 40;
 
   useEffect(() => {
-    navigation?.setOptions({
-      headerLeft: () => (
-        <TouchableOpacity
-          onPress={() => {
-            if (currentPage === 2) {
-              pagerRef.current?.scrollTo({ x: 0, animated: true });
-            } else {
-              navigation?.goBack();
-            }
-          }}
-          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-          style={styles.headerBackBtn}
-          activeOpacity={0.65}
-        >
-          <Ionicons
-            name="chevron-back"
-            size={Platform.OS === "ios" ? 23 : 25}
-            color="#ffffff"
-          />
-        </TouchableOpacity>
-      ),
+    const unsubscribe = navigation?.addListener("beforeRemove", (e: any) => {
+      if (currentPage === 2) {
+        e.preventDefault();
+        pagerRef.current?.scrollTo({ x: 0, animated: true });
+      }
     });
+    return unsubscribe;
   }, [currentPage, navigation, pagerRef]);
 
   useEffect(() => {
@@ -959,8 +944,7 @@ function PostDownloadScreen() {
                 </Text>
                 <Text style={styles.channelHeroSubtitle}>
                   Imposta il tuo tragitto pendolare per calcolare treni,
-                  traffico e coincidenze verso le aule, oppure configura più
-                  tardi.
+                  traffico e coincidenze verso le aule.
                 </Text>
               </View>
 
@@ -1681,35 +1665,23 @@ function PostDownloadScreen() {
               ]}
               pointerEvents={currentPage === 2 ? "auto" : "none"}
             >
-              <NativeGlassContainer style={styles.footerGlassRow}>
-                <NativeActionButton
-                  label="Configura più tardi"
-                  onPress={() => finalizeOnboarding(false)}
-                  variant="glass"
-                  glow={false}
-                  style={{ flex: 1, height: 48, borderRadius: 24 }}
-                  pillStyle={{ height: 48, borderRadius: 24, paddingHorizontal: 14 }}
-                  textStyle={{ color: "#ffffff", fontSize: 13.5, fontWeight: "600" }}
-                />
-
-                <NativeActionButton
-                  label="Salva"
-                  onPress={() => finalizeOnboarding(true)}
-                  disabled={!isCommuterFormComplete}
-                  accentColor={theme.primary}
-                  glow={true}
-                  icon={
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={17}
-                      color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
-                    />
-                  }
-                  style={{ flex: 1, height: 48, borderRadius: 24 }}
-                  pillStyle={{ height: 48, borderRadius: 24 }}
-                  textStyle={{ fontSize: 14, fontWeight: "700" }}
-                />
-              </NativeGlassContainer>
+              <NativeActionButton
+                label="Salva"
+                onPress={() => finalizeOnboarding(true)}
+                disabled={!isCommuterFormComplete}
+                accentColor={theme.primary}
+                glow={true}
+                icon={
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={17}
+                    color={isCommuterFormComplete ? "#ffffff" : "#52525b"}
+                  />
+                }
+                style={{ flex: 1, height: 48, borderRadius: 24 }}
+                pillStyle={{ height: 48, borderRadius: 24 }}
+                textStyle={{ fontSize: 15, fontWeight: "700" }}
+              />
             </Animated.View>
           </View>
         </View>
@@ -2988,20 +2960,6 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 10,
     width: "100%",
-  },
-  footerGlassRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    width: "100%",
-  },
-  headerBackBtn: {
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 4,
-    paddingRight: 8,
-    paddingLeft: Platform.OS === "ios" ? 0 : 2,
   },
   fineStepRow: {
     flexDirection: "row",
