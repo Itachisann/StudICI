@@ -25,6 +25,7 @@ import {
 } from "react-native-safe-area-context";
 
 import { useTheme } from "@/context/ThemeContext";
+import { UNIFORM_SCREEN_BG } from "@/constants/theme";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
@@ -2216,7 +2217,7 @@ export default function ViaggioScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0c0e12",
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
   safeArea: {
     flex: 1,

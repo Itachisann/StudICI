@@ -34,6 +34,7 @@ import {
 } from "@react-navigation/native";
 import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
+import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { StudICILogo } from "./StudICILogo";
 import { StationInfo } from "../types/commuter";
 import { isValidSyncCode, linkDeviceWithCode } from "../utils/cloudSync";
@@ -1711,7 +1712,7 @@ function PostDownloadScreen() {
             ? "Stazione di partenza"
             : "Stazione di arrivo"
         }
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
         searchBarOptions={{
           placeholder: "Cerca tra tutte le stazioni italiane...",
           textColor: "#ffffff",
@@ -2300,8 +2301,8 @@ export function OnboardingCourseSelector({
       ...DarkTheme,
       colors: {
         ...DarkTheme.colors,
-        background: "#111111",
-        card: "#111111",
+        background: UNIFORM_SCREEN_BG,
+        card: UNIFORM_SCREEN_BG,
         text: "#ffffff",
         primary: theme.primary,
       },
@@ -2375,15 +2376,15 @@ export function OnboardingCourseSelector({
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#111111" }}>
+    <View style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
       <OnboardingContext.Provider value={contextValue}>
         <NavigationIndependentTree>
           <NavigationContainer theme={navTheme}>
             <OnboardingStack.Navigator
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: "#111111" },
-                headerStyle: { backgroundColor: "#111111" },
+                contentStyle: { backgroundColor: UNIFORM_SCREEN_BG },
+                headerStyle: { backgroundColor: UNIFORM_SCREEN_BG },
                 headerShadowVisible: false,
                 headerBackButtonDisplayMode: "minimal",
                 headerBackTitle: "",
@@ -2450,7 +2451,7 @@ export function OnboardingCourseSelector({
                   headerShown: true,
                   headerTitle: "Sincronizzazione",
                   headerLargeTitle: false,
-                  headerStyle: { backgroundColor: "#111111" },
+                  headerStyle: { backgroundColor: UNIFORM_SCREEN_BG },
                   headerTintColor: "#ffffff",
                   headerShadowVisible: false,
                   headerBackButtonDisplayMode: "minimal",
@@ -2505,11 +2506,11 @@ export function OnboardingCourseSelector({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#111111",
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
   screenRoot: {
     flex: 1,
-    backgroundColor: "#111111",
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
 
   /* ── Stili Welcome Minimal ── */
@@ -3129,7 +3130,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: Platform.OS === "ios" ? 22 : 16,
-    backgroundColor: "#111111",
+    backgroundColor: UNIFORM_SCREEN_BG,
     borderTopWidth: 0,
     alignItems: "center",
   },

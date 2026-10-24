@@ -26,6 +26,14 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+/**
+ * Colori di sfondo universali dell'applicazione:
+ * - UNIFORM_SCREEN_BG: sfondo uniforme per tutte le schermate principali, tab e onboarding (OLED pitch dark #000000)
+ * - UNIFORM_MODAL_BG: sfondo uniforme per tutti i fogli modali / bottom sheet / sheet stacks (OLED pitch dark #000000)
+ */
+export const UNIFORM_SCREEN_BG = '#000000';
+export const UNIFORM_MODAL_BG = '#000000';
+
 export interface AppTheme {
   id: string;
   name: string;

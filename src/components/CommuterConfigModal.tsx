@@ -22,6 +22,7 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from "@react-navigation/native";
+import { UNIFORM_MODAL_BG } from "@/constants/theme";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
   calculateDrivingEstimate,
@@ -736,8 +737,8 @@ export function CommuterConfigModal({
       ...DarkTheme,
       colors: {
         ...DarkTheme.colors,
-        background: "#16181d",
-        card: "#16181d",
+        background: UNIFORM_MODAL_BG,
+        card: UNIFORM_MODAL_BG,
         text: "#ffffff",
         primary: "#ffffff",
       },
@@ -783,7 +784,7 @@ export function CommuterConfigModal({
                   sheetExpandsWhenScrolledToEdge: true,
                   gestureEnabled: true,
                   animation: "slide_from_bottom",
-                  contentStyle: { backgroundColor: "#16181d" },
+                  contentStyle: { backgroundColor: UNIFORM_MODAL_BG },
                 }}
               />
             </RootModalStack.Navigator>
@@ -865,7 +866,7 @@ function MainFormScreen() {
       headerShown: true,
       title: sheetTitle,
       headerTintColor: "#ffffff",
-      headerStyle: { backgroundColor: "#16181d" },
+      headerStyle: { backgroundColor: UNIFORM_MODAL_BG },
       headerShadowVisible: false,
       headerTitleStyle: {
         color: "#ffffff",
@@ -906,10 +907,10 @@ function MainFormScreen() {
   ]);
 
   return (
-    <View collapsable={false} style={{ flex: 1, backgroundColor: "#16181d" }}>
+    <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
       <KeyboardAvoidingView
         collapsable={false}
-        style={{ flex: 1, backgroundColor: "#16181d" }}
+        style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         {isUnconfigured ? (
@@ -2363,7 +2364,7 @@ function StationPickerScreen({ navigation, route }: any) {
           ? "Stazione di partenza"
           : "Stazione di arrivo (Roma)",
       headerTintColor: "#ffffff",
-      headerStyle: { backgroundColor: "#16181d" },
+      headerStyle: { backgroundColor: UNIFORM_MODAL_BG },
       headerShadowVisible: false,
       headerTitleStyle: {
         color: "#ffffff",
@@ -2398,7 +2399,7 @@ function StationPickerScreen({ navigation, route }: any) {
   );
 
   return (
-    <View collapsable={false} style={{ flex: 1, width: "100%", backgroundColor: "#16181d" }}>
+    <View collapsable={false} style={{ flex: 1, width: "100%", backgroundColor: UNIFORM_MODAL_BG }}>
       <View
         collapsable={false}
         style={{
@@ -2462,10 +2463,10 @@ function CommuterSheetScreen({ navigation }: any) {
   }, [navigation, onClose]);
 
   return (
-    <View collapsable={false} style={{ flex: 1, backgroundColor: "#16181d" }}>
+    <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
       <CommuterModalStack.Navigator
         screenOptions={{
-          headerStyle: { backgroundColor: "#16181d" },
+          headerStyle: { backgroundColor: UNIFORM_MODAL_BG },
           headerShadowVisible: false,
           headerTintColor: "#ffffff",
           headerTitleStyle: {
@@ -2473,7 +2474,7 @@ function CommuterSheetScreen({ navigation }: any) {
             fontSize: 17,
             fontWeight: "600",
           },
-          contentStyle: { backgroundColor: "#16181d" },
+          contentStyle: { backgroundColor: UNIFORM_MODAL_BG },
           animation: "slide_from_right",
         }}
       >
@@ -2498,7 +2499,7 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     height: "92%",
-    backgroundColor: "#16181d",
+    backgroundColor: UNIFORM_MODAL_BG,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     overflow: "hidden",
@@ -3149,11 +3150,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: Platform.OS === "ios" ? 20 : 14,
-    backgroundColor: "#16181d",
+    backgroundColor: UNIFORM_MODAL_BG,
     borderTopWidth: 0,
   },
   saveBottomBar: {
-    backgroundColor: "#16181d",
+    backgroundColor: UNIFORM_MODAL_BG,
     borderTopWidth: 0,
     paddingHorizontal: 16,
     paddingTop: 10,

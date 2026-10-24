@@ -13,6 +13,7 @@ import { linkDeviceWithCode } from '@/utils/cloudSync';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
+import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 
 // In Expo Go i moduli nativi personalizzati non sono inclusi nel runtime condiviso.
 // Nell'IPA (standalone / development build su iOS), i native-bottom-tabs sono compilati e attivi.
@@ -106,7 +107,7 @@ function AppLayoutContent() {
 
   if (!isReady) {
     return (
-      <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#111111', justifyContent: 'center', alignItems: 'center' }}>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color={theme.primary} />
       </GestureHandlerRootView>
     );

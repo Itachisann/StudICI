@@ -5,7 +5,7 @@ import {
   DarkTheme as NavDarkTheme,
   Theme as NavTheme,
 } from '@react-navigation/native';
-import { AppTheme, APP_THEMES, DEFAULT_THEME } from '@/constants/theme';
+import { AppTheme, APP_THEMES, DEFAULT_THEME, UNIFORM_SCREEN_BG } from '@/constants/theme';
 
 interface ThemeContextType {
   theme: AppTheme;
@@ -53,6 +53,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     ...NavDarkTheme,
     colors: {
       ...NavDarkTheme.colors,
+      background: UNIFORM_SCREEN_BG,
+      card: UNIFORM_SCREEN_BG,
       primary: currentTheme.primary,
       border: currentTheme.border,
     },

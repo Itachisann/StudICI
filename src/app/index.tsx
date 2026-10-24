@@ -28,6 +28,7 @@ import { ClassroomModal } from "../components/ClassroomModal";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
+import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { hasDateInfo } from "../utils/aiParser";
 import { ACCENT_COLORS, getSubjectColor } from "../utils/subjectColors";
 import {
@@ -800,7 +801,7 @@ export default function ScheduleScreen() {
         visible={alertsModalVisible}
         onClose={() => setAlertsModalVisible(false)}
         title="Comunicazioni"
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
       >
         <ScrollView
           style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}
@@ -974,7 +975,7 @@ export default function ScheduleScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#111111",
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
   mainScrollView: {
     flex: 1,

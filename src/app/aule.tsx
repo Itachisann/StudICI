@@ -14,6 +14,7 @@ import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 import { useTheme } from '@/context/ThemeContext';
+import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 
 const SAPIENZA_RED = '#822433';
 
@@ -332,7 +333,7 @@ export default function AuleScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#111111',
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
   mainScrollView: {
     flex: 1,

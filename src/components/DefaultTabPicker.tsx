@@ -10,6 +10,7 @@ import {
 import { Tab } from "../utils/scraper";
 import { parseTabHierarchy } from "./YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
+import { UNIFORM_MODAL_BG } from "@/constants/theme";
 import { NativeActionButton } from "./NativeActionButton";
 
 const SAPIENZA_RED = "#822433";
@@ -283,7 +284,7 @@ export function DefaultTabPicker({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#16181d",
+    backgroundColor: UNIFORM_MODAL_BG,
   },
   scrollContent: {
     padding: 24,

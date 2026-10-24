@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
+import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 
@@ -238,7 +239,7 @@ export function StartupCheckScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0d0e12',
+    backgroundColor: UNIFORM_SCREEN_BG,
     justifyContent: 'center',
     alignItems: 'center',
   },

@@ -31,6 +31,7 @@ import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
+import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
 import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
@@ -1756,7 +1757,7 @@ export default function ProfiloScreen() {
           setSearchCourse("");
         }}
         title="Corso di Laurea"
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
         searchBarOptions={{
           placeholder: "Cerca corso o classe (es. Meccanica, L-9)...",
           textColor: "#ffffff",
@@ -1907,7 +1908,7 @@ export default function ProfiloScreen() {
         visible={channelModalVisible}
         onClose={() => setChannelModalVisible(false)}
         title="Specifiche"
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
       >
         <DefaultTabPicker
           tabs={availableTabs}
@@ -1928,7 +1929,7 @@ export default function ProfiloScreen() {
         visible={attendanceModalVisible}
         onClose={() => setAttendanceModalVisible(false)}
         title="Registro presenze"
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
         rightActions={
           attendanceRecords.length > 0
             ? [
@@ -2058,7 +2059,7 @@ export default function ProfiloScreen() {
         visible={cloudModalVisible}
         onClose={() => setCloudModalVisible(false)}
         title="Sincronizzazione"
-        backgroundColor="#16181d"
+        backgroundColor={UNIFORM_MODAL_BG}
       >
         <View style={styles.modalContainer}>
           <ScrollView
@@ -2552,7 +2553,7 @@ export default function ProfiloScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#000000",
+    backgroundColor: UNIFORM_SCREEN_BG,
   },
   header: {
     paddingHorizontal: 20,
@@ -2722,7 +2723,7 @@ const styles = StyleSheet.create({
   /* Modal styling */
   modalContainer: {
     flex: 1,
-    backgroundColor: "#16181d",
+    backgroundColor: UNIFORM_MODAL_BG,
   },
   modalHeader: {
     flexDirection: "row",

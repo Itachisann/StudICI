@@ -13,6 +13,7 @@ import {
 import MapView, { Marker } from "react-native-maps";
 import { ResolvedClassroom, openInMaps } from "../utils/classroomLocations";
 import { NativeSheetModal } from "./NativeSheetModal";
+import { UNIFORM_MODAL_BG } from "@/constants/theme";
 
 const SAPIENZA_RED = "#822433";
 
@@ -60,7 +61,7 @@ export function ClassroomModal({
       visible={visible}
       onClose={onClose}
       title={classroom.displayName}
-      backgroundColor="#16181d"
+      backgroundColor={UNIFORM_MODAL_BG}
       sheetAllowedDetents={[0.62, 1.0]}
       rightActions={[
         {

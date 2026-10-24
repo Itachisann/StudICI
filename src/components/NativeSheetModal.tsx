@@ -14,6 +14,7 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from '@react-navigation/native';
+import { UNIFORM_MODAL_BG } from '@/constants/theme';
 
 export interface SheetAction {
   label: string;
@@ -27,7 +28,7 @@ export interface SheetAction {
   tintColor?: string;
 }
 
-export const UNIFORM_MODAL_BG = '#16181d';
+export { UNIFORM_MODAL_BG };
 
 export interface NativeSheetModalProps {
   visible: boolean;

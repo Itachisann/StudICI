@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "@/context/ThemeContext";
+import { UNIFORM_SCREEN_BG } from "@/constants/theme";
 
 interface CourseDownloadViewProps {
   courseName: string;
@@ -190,7 +191,7 @@ export function CourseDownloadView({
 const styles = StyleSheet.create({
   downloadContainer: {
     flex: 1,
-    backgroundColor: "#0d0e12",
+    backgroundColor: UNIFORM_SCREEN_BG,
     justifyContent: "center",
     alignItems: "center",
   },
