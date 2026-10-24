@@ -5,12 +5,12 @@ import {
   StyleSheet,
   ActivityIndicator,
   Animated,
+  Image,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
-import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 
 interface StartupCheckScreenProps {
@@ -162,13 +162,22 @@ export function StartupCheckScreen({
           },
         ]}
       >
-        {/* Logo minimalista SVG senza sfondo all'avvio dell'app */}
+        {/* Logo originale con sfondo rosso all'avvio normale dell'app */}
         <View style={styles.logoWrapper}>
-          <StudICILogo
-            size={96}
-            withBackground={false}
-            primaryColor={theme.primary}
-          />
+          <View
+            style={[
+              styles.logoBadge,
+              {
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+              },
+            ]}
+          >
+            <Image
+              source={require('../../assets/images/original-icon.png')}
+              style={styles.logoImage}
+              resizeMode="cover"
+            />
+          </View>
         </View>
 
         {/* Titolo e Dettaglio Corso con tipografia iOS moderna */}

@@ -5,6 +5,31 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.0
+
+### Icona & Grafica Vettoriale
+- **Nuova Icona dell'App Vettoriale SVG**:
+  - Logo ufficiale in pura grafica vettoriale SVG impostato come icona dell'applicazione (1024x1024 full-bleed per iOS e Store, icone adattive Android 512x512 con livelli foreground/background e icona monocromatica per Material You).
+- **Logo Originale all'Avvio Normale**:
+  - Nella schermata di verifica orari all'avvio (`StartupCheckScreen`), ripristinato il logo badge originale con lo sfondo rosso Sapienza iconico e bordo sottile.
+
+### Interfaccia Utente & Uniformazione Sfondi
+- **Uniformazione Sfondo Schermate e Modali**:
+  - Sfondo dark profondo calibrato `#0d0e12` (tramite costanti `UNIFORM_SCREEN_BG` e `UNIFORM_MODAL_BG`) esteso su tutte le schermate dell'app, inclusa la schermata Viaggio, le schermate di configurazione e personalizzazione corso, e tutti i modali per un'esperienza visiva coerente.
+- **Configurazione Viaggio & Onboarding**:
+  - Layout unificato tra schermata di avvio e modale viaggio: pill rapide (5, 10, 15, 20 min) per anticipo in aula e margine di sicurezza con icona orologio.
+  - Selettore di precisione (+/-) centrato sotto la riga dei pulsanti rapidi con icona orologio integrata nel badge centrale.
+  - Aumentato lo spazio inferiore nel modale configurazione viaggio per evitare tagli visivi sui pulsanti rapidi.
+  - Pulsante Callstack nativo Liquid Glass "Configura più tardi" affiancato al tasto Salva nella schermata di avvio.
+  - Tasto "Salva" nel modale Specifiche riposizionato nella barra superiore nativa iOS (`headerRight`).
+  - Corretta la navigazione nativa con `usePreventRemove` per prevenire rimozioni dello stack desincronizzate.
+
+### Profilo & Colori Materie
+- **Colori Materie Deterministici**:
+  - Algoritmo di hashing deterministico del nome materia per garantire che ogni materia mantenga esattamente lo stesso colore ad ogni avvio dell'app.
+- **Badge Accademici Glowing**:
+  - Badge glowing per Tipologia di Corso (Laurea Triennale/Magistrale) e pill della Classe di Laurea (es. L-9R) con colori e ombreggiature coordinati al tema.
+
 ## 1.8.9
 
 ### Interfaccia & Modali iOS
