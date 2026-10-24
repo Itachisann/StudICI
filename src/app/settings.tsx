@@ -2220,9 +2220,7 @@ export default function ProfiloScreen() {
                   label="Copia codice"
                   onPress={handleCopyCloudCode}
                   variant="glass"
-                  glow={true}
-                  glowColor={theme.accent}
-                  accentColor={theme.primary}
+                  glow={false}
                   icon={
                     <Ionicons
                       name="copy-outline"
@@ -2234,21 +2232,20 @@ export default function ProfiloScreen() {
                     flex: 1,
                     height: 42,
                     borderRadius: 21,
-                    shadowColor: theme.accent,
-                    shadowOpacity: 0.25,
-                    shadowRadius: 6,
                   }}
                   pillStyle={{
                     height: 42,
                     borderRadius: 21,
                     paddingHorizontal: 14,
-                    backgroundColor: "rgba(255, 255, 255, 0.08)",
-                    borderColor: "rgba(255, 255, 255, 0.18)",
+                    backgroundColor: "#2c2c2e",
+                    borderColor: "rgba(255, 255, 255, 0.12)",
                   }}
-                  textStyle={[
-                    styles.cloudSecondaryBtnPillText,
-                    { color: "#ffffff" },
-                  ]}
+                  textStyle={{
+                    color: "#ffffff",
+                    fontSize: 13.5,
+                    fontWeight: "600",
+                    letterSpacing: -0.2,
+                  }}
                 />
               </View>
             </View>
@@ -2497,7 +2494,8 @@ export default function ProfiloScreen() {
                       style={{
                         height: 44,
                         borderRadius: 22,
-                        minWidth: 96,
+                        minWidth: 104,
+                        flexShrink: 0,
                         ...(restoreCodeInput.trim() && !isSyncingCloud
                           ? {
                               shadowColor: theme.accent,
@@ -2512,8 +2510,8 @@ export default function ProfiloScreen() {
                         paddingHorizontal: 16,
                         ...(!restoreCodeInput.trim() || isSyncingCloud
                           ? {
-                              backgroundColor: "rgba(255, 255, 255, 0.08)",
-                              borderColor: "rgba(255, 255, 255, 0.16)",
+                              backgroundColor: "#2c2c2e",
+                              borderColor: "rgba(255, 255, 255, 0.12)",
                             }
                           : {}),
                       }}

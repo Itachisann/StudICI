@@ -165,6 +165,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               textStyle,
             ]}
             numberOfLines={1}
+            adjustsFontSizeToFit={true}
+            minimumFontScale={0.8}
           >
             {label}
           </Text>
@@ -244,6 +246,8 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             textStyle,
           ]}
           numberOfLines={1}
+          adjustsFontSizeToFit={true}
+          minimumFontScale={0.8}
         >
           {label}
         </Text>
@@ -257,6 +261,7 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     position: 'relative',
+    flexShrink: 0,
   },
   disabledContainer: {
     opacity: 0.5,
