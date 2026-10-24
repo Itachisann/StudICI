@@ -29,6 +29,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
+import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
@@ -1425,23 +1426,24 @@ export default function ProfiloScreen() {
                   : "Non attiva"}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[
-                styles.inlineActionBtn,
-                {
-                  backgroundColor: theme.subtle,
-                  borderColor: theme.border,
-                  shadowColor: theme.primary,
-                },
-              ]}
-              activeOpacity={0.7}
+            <NativeActionButton
+              label={isSyncingCloud ? "In corso..." : "Sincronizza"}
               onPress={handleSyncCloud}
               disabled={isSyncingCloud}
-            >
-              <Text style={[styles.inlineActionBtnText, { color: "#ffffff" }]}>
-                {isSyncingCloud ? "In corso..." : "Sincronizza"}
-              </Text>
-            </TouchableOpacity>
+              variant="glass"
+              glow={true}
+              glowColor={theme.primary}
+              accentColor={theme.primary}
+              style={styles.inlineActionBtnCallstack}
+              pillStyle={{
+                height: 32,
+                borderRadius: 16,
+                paddingHorizontal: 12,
+                backgroundColor: theme.subtle,
+                borderColor: theme.border,
+              }}
+              textStyle={styles.inlineActionBtnText}
+            />
             <Ionicons
               name="chevron-forward"
               size={15}
@@ -1481,23 +1483,24 @@ export default function ProfiloScreen() {
                 {formatSyncDate(lastCalendarSyncTime)}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[
-                styles.inlineActionBtn,
-                {
-                  backgroundColor: theme.subtle,
-                  borderColor: theme.border,
-                  shadowColor: theme.primary,
-                },
-              ]}
-              activeOpacity={0.7}
+            <NativeActionButton
+              label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
               onPress={handleSyncCalendar}
               disabled={isSyncingCalendar}
-            >
-              <Text style={[styles.inlineActionBtnText, { color: "#ffffff" }]}>
-                {isSyncingCalendar ? "In corso..." : "Sincronizza"}
-              </Text>
-            </TouchableOpacity>
+              variant="glass"
+              glow={true}
+              glowColor={theme.primary}
+              accentColor={theme.primary}
+              style={styles.inlineActionBtnCallstack}
+              pillStyle={{
+                height: 32,
+                borderRadius: 16,
+                paddingHorizontal: 12,
+                backgroundColor: theme.subtle,
+                borderColor: theme.border,
+              }}
+              textStyle={styles.inlineActionBtnText}
+            />
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
@@ -2172,68 +2175,57 @@ export default function ProfiloScreen() {
 
               {/* Azioni Principali: Tasti Sincronizza & Copia codice */}
               <View style={styles.cloudHeroActionRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.cloudPrimaryBtnPill,
-                    {
-                      backgroundColor: theme.primary,
-                      shadowColor: theme.primary,
-                      shadowOpacity: 0.45,
-                      shadowRadius: 8,
-                      shadowOffset: { width: 0, height: 2 },
-                      elevation: 4,
-                    },
-                    isSyncingCloud && { opacity: 0.7 },
-                  ]}
-                  activeOpacity={0.7}
+                <NativeActionButton
+                  label={isSyncingCloud ? "In corso..." : "Sincronizza"}
                   onPress={handleSyncCloud}
                   disabled={isSyncingCloud}
-                >
-                  <Ionicons
-                    name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
-                    size={16}
-                    color="#ffffff"
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={styles.cloudPrimaryBtnPillText}
-                    numberOfLines={1}
-                  >
-                    {isSyncingCloud ? "In corso..." : "Sincronizza"}
-                  </Text>
-                </TouchableOpacity>
+                  variant="filled"
+                  glow={true}
+                  glowColor={theme.primary}
+                  accentColor={theme.primary}
+                  icon={
+                    <Ionicons
+                      name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
+                      size={16}
+                      color="#ffffff"
+                    />
+                  }
+                  style={{ flex: 1, height: 42, borderRadius: 21 }}
+                  pillStyle={{
+                    height: 42,
+                    borderRadius: 21,
+                    paddingHorizontal: 14,
+                  }}
+                  textStyle={styles.cloudPrimaryBtnPillText}
+                />
 
-                <TouchableOpacity
-                  style={[
-                    styles.cloudSecondaryBtnPill,
-                    {
-                      borderColor: theme.primary,
-                      backgroundColor: theme.subtle,
-                      shadowColor: theme.primary,
-                      shadowOpacity: 0.25,
-                      shadowRadius: 6,
-                      shadowOffset: { width: 0, height: 1 },
-                    },
-                  ]}
-                  activeOpacity={0.7}
+                <NativeActionButton
+                  label="Copia codice"
                   onPress={handleCopyCloudCode}
-                >
-                  <Ionicons
-                    name="copy-outline"
-                    size={16}
-                    color={theme.primary}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={[
-                      styles.cloudSecondaryBtnPillText,
-                      { color: theme.primary },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    Copia codice
-                  </Text>
-                </TouchableOpacity>
+                  variant="glass"
+                  glow={true}
+                  glowColor={theme.primary}
+                  accentColor={theme.primary}
+                  icon={
+                    <Ionicons
+                      name="copy-outline"
+                      size={16}
+                      color={theme.primary}
+                    />
+                  }
+                  style={{ flex: 1, height: 42, borderRadius: 21 }}
+                  pillStyle={{
+                    height: 42,
+                    borderRadius: 21,
+                    paddingHorizontal: 14,
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.primary,
+                  }}
+                  textStyle={[
+                    styles.cloudSecondaryBtnPillText,
+                    { color: theme.primary },
+                  ]}
+                />
               </View>
             </View>
 
@@ -2466,26 +2458,26 @@ export default function ProfiloScreen() {
                         </TouchableOpacity>
                       )}
                     </View>
-                    <TouchableOpacity
-                      style={[
-                        styles.cloudRestoreBtn,
-                        {
-                          backgroundColor: theme.primary,
-                          shadowColor: theme.primary,
-                          shadowOpacity: 0.4,
-                          shadowRadius: 8,
-                          shadowOffset: { width: 0, height: 2 },
-                          elevation: 4,
-                        },
-                        (!restoreCodeInput.trim() || isSyncingCloud) &&
-                          styles.cloudRestoreBtnDisabled,
-                      ]}
-                      activeOpacity={0.7}
+                    <NativeActionButton
+                      label="Collega"
                       onPress={handleRestoreFromCloud}
                       disabled={!restoreCodeInput.trim() || isSyncingCloud}
-                    >
-                      <Text style={styles.cloudRestoreBtnText}>Collega</Text>
-                    </TouchableOpacity>
+                      variant="filled"
+                      glow={Boolean(restoreCodeInput.trim() && !isSyncingCloud)}
+                      glowColor={theme.primary}
+                      accentColor={theme.primary}
+                      style={{
+                        height: 44,
+                        borderRadius: 22,
+                        minWidth: 84,
+                      }}
+                      pillStyle={{
+                        height: 44,
+                        borderRadius: 22,
+                        paddingHorizontal: 20,
+                      }}
+                      textStyle={styles.cloudRestoreBtnText}
+                    />
                   </View>
                 </View>
               )}
@@ -3067,6 +3059,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#ffffff",
     letterSpacing: -0.2,
+  },
+  inlineActionBtnCallstack: {
+    height: 32,
+    minWidth: 96,
+    borderRadius: 16,
+    marginLeft: 8,
   },
   modalExportHeaderBtn: {
     width: 32,
