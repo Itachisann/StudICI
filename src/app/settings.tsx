@@ -1430,17 +1430,22 @@ export default function ProfiloScreen() {
               label={isSyncingCloud ? "In corso..." : "Sincronizza"}
               onPress={handleSyncCloud}
               disabled={isSyncingCloud}
-              variant="glass"
+              variant="filled"
               glow={true}
-              glowColor={theme.primary}
+              glowColor={theme.accent}
               accentColor={theme.primary}
-              style={styles.inlineActionBtnCallstack}
+              style={[
+                styles.inlineActionBtnCallstack,
+                {
+                  shadowColor: theme.accent,
+                  shadowOpacity: 0.35,
+                  shadowRadius: 5,
+                },
+              ]}
               pillStyle={{
                 height: 32,
                 borderRadius: 16,
-                paddingHorizontal: 12,
-                backgroundColor: theme.subtle,
-                borderColor: theme.border,
+                paddingHorizontal: 13,
               }}
               textStyle={styles.inlineActionBtnText}
             />
@@ -1487,17 +1492,22 @@ export default function ProfiloScreen() {
               label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
               onPress={handleSyncCalendar}
               disabled={isSyncingCalendar}
-              variant="glass"
+              variant="filled"
               glow={true}
-              glowColor={theme.primary}
+              glowColor={theme.accent}
               accentColor={theme.primary}
-              style={styles.inlineActionBtnCallstack}
+              style={[
+                styles.inlineActionBtnCallstack,
+                {
+                  shadowColor: theme.accent,
+                  shadowOpacity: 0.35,
+                  shadowRadius: 5,
+                },
+              ]}
               pillStyle={{
                 height: 32,
                 borderRadius: 16,
-                paddingHorizontal: 12,
-                backgroundColor: theme.subtle,
-                borderColor: theme.border,
+                paddingHorizontal: 13,
               }}
               textStyle={styles.inlineActionBtnText}
             />
@@ -2181,7 +2191,7 @@ export default function ProfiloScreen() {
                   disabled={isSyncingCloud}
                   variant="filled"
                   glow={true}
-                  glowColor={theme.primary}
+                  glowColor={theme.accent}
                   accentColor={theme.primary}
                   icon={
                     <Ionicons
@@ -2190,7 +2200,14 @@ export default function ProfiloScreen() {
                       color="#ffffff"
                     />
                   }
-                  style={{ flex: 1, height: 42, borderRadius: 21 }}
+                  style={{
+                    flex: 1,
+                    height: 42,
+                    borderRadius: 21,
+                    shadowColor: theme.accent,
+                    shadowOpacity: 0.45,
+                    shadowRadius: 8,
+                  }}
                   pillStyle={{
                     height: 42,
                     borderRadius: 21,
@@ -2204,26 +2221,33 @@ export default function ProfiloScreen() {
                   onPress={handleCopyCloudCode}
                   variant="glass"
                   glow={true}
-                  glowColor={theme.primary}
+                  glowColor={theme.accent}
                   accentColor={theme.primary}
                   icon={
                     <Ionicons
                       name="copy-outline"
                       size={16}
-                      color={theme.primary}
+                      color="#ffffff"
                     />
                   }
-                  style={{ flex: 1, height: 42, borderRadius: 21 }}
+                  style={{
+                    flex: 1,
+                    height: 42,
+                    borderRadius: 21,
+                    shadowColor: theme.accent,
+                    shadowOpacity: 0.25,
+                    shadowRadius: 6,
+                  }}
                   pillStyle={{
                     height: 42,
                     borderRadius: 21,
                     paddingHorizontal: 14,
-                    backgroundColor: theme.subtle,
-                    borderColor: theme.primary,
+                    backgroundColor: "rgba(255, 255, 255, 0.08)",
+                    borderColor: "rgba(255, 255, 255, 0.18)",
                   }}
                   textStyle={[
                     styles.cloudSecondaryBtnPillText,
-                    { color: theme.primary },
+                    { color: "#ffffff" },
                   ]}
                 />
               </View>
@@ -2462,21 +2486,43 @@ export default function ProfiloScreen() {
                       label="Collega"
                       onPress={handleRestoreFromCloud}
                       disabled={!restoreCodeInput.trim() || isSyncingCloud}
-                      variant="filled"
+                      variant={
+                        !restoreCodeInput.trim() || isSyncingCloud
+                          ? "glass"
+                          : "filled"
+                      }
                       glow={Boolean(restoreCodeInput.trim() && !isSyncingCloud)}
-                      glowColor={theme.primary}
+                      glowColor={theme.accent}
                       accentColor={theme.primary}
                       style={{
                         height: 44,
                         borderRadius: 22,
-                        minWidth: 84,
+                        minWidth: 96,
+                        ...(restoreCodeInput.trim() && !isSyncingCloud
+                          ? {
+                              shadowColor: theme.accent,
+                              shadowOpacity: 0.45,
+                              shadowRadius: 8,
+                            }
+                          : {}),
                       }}
                       pillStyle={{
                         height: 44,
                         borderRadius: 22,
-                        paddingHorizontal: 20,
+                        paddingHorizontal: 16,
+                        ...(!restoreCodeInput.trim() || isSyncingCloud
+                          ? {
+                              backgroundColor: "rgba(255, 255, 255, 0.08)",
+                              borderColor: "rgba(255, 255, 255, 0.16)",
+                            }
+                          : {}),
                       }}
-                      textStyle={styles.cloudRestoreBtnText}
+                      textStyle={{
+                        color: "#ffffff",
+                        fontSize: 14,
+                        fontWeight: "600",
+                        letterSpacing: -0.2,
+                      }}
                     />
                   </View>
                 </View>

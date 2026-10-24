@@ -123,16 +123,16 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
             StyleSheet.absoluteFill,
             styles.glassBorder,
             isFilled && {
-              backgroundColor: disabled ? '#18181b' : accentColor,
-              borderColor: disabled ? '#27272a' : accentColor,
+              backgroundColor: disabled ? '#2c2c2e' : accentColor,
+              borderColor: disabled ? '#3a3a3c' : accentColor,
             },
             variant === 'outlined' && {
               backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              borderColor: disabled ? '#27272a' : accentColor,
+              borderColor: disabled ? '#3a3a3c' : accentColor,
             },
             variant === 'glass' && {
               backgroundColor: 'rgba(255, 255, 255, 0.10)',
-              borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.22)',
+              borderColor: disabled ? '#3a3a3c' : 'rgba(255, 255, 255, 0.22)',
             },
             variant === 'text' && {
               backgroundColor: 'transparent',
@@ -161,7 +161,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
                 : variant === 'glass'
                 ? styles.glassText
                 : { color: accentColor },
-              disabled && { color: '#52525b' },
+              disabled && { color: 'rgba(255, 255, 255, 0.45)' },
               textStyle,
             ]}
             numberOfLines={1}
@@ -202,16 +202,16 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           StyleSheet.absoluteFill,
           styles.glassBorder,
           isFilled && {
-            backgroundColor: disabled ? '#18181b' : accentColor,
-            borderColor: disabled ? '#27272a' : accentColor,
+            backgroundColor: disabled ? '#2c2c2e' : accentColor,
+            borderColor: disabled ? '#3a3a3c' : accentColor,
           },
           variant === 'outlined' && {
             backgroundColor: 'rgba(255, 255, 255, 0.05)',
-            borderColor: disabled ? '#27272a' : accentColor,
+            borderColor: disabled ? '#3a3a3c' : accentColor,
           },
           variant === 'glass' && {
             backgroundColor: 'rgba(255, 255, 255, 0.08)',
-            borderColor: disabled ? '#27272a' : 'rgba(255, 255, 255, 0.20)',
+            borderColor: disabled ? '#3a3a3c' : 'rgba(255, 255, 255, 0.20)',
           },
           variant === 'text' && {
             backgroundColor: 'transparent',
@@ -240,7 +240,7 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
               : variant === 'glass'
               ? styles.glassText
               : { color: accentColor },
-            disabled && { color: '#52525b' },
+            disabled && { color: 'rgba(255, 255, 255, 0.45)' },
             textStyle,
           ]}
           numberOfLines={1}
