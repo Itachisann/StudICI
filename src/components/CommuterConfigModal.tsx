@@ -1123,42 +1123,47 @@ function MainFormScreen() {
                       <Text style={styles.subPillLabel}>
                         MARGINE DI SICUREZZA
                       </Text>
-                      <View style={styles.chipsContainer}>
-                        {[5, 7, 10, 15].map((mins) => {
-                          const isSel = initParkingBufferMinutes === mins;
-                          return (
-                            <TouchableOpacity
-                              key={mins}
-                              style={[
-                                styles.chip,
-                                isSel && [
-                                  styles.chipActive,
-                                  {
-                                    backgroundColor: theme.bg,
-                                    borderColor: theme.primary,
-                                    shadowColor: theme.primary,
-                                  },
-                                ],
-                              ]}
-                              activeOpacity={0.7}
-                              onPress={() => setInitParkingBufferMinutes(mins)}
-                            >
-                              <Text
+                      <View style={styles.timeBufferContainer}>
+                        <View style={styles.timeQuickRow}>
+                          {[5, 7, 10, 15].map((mins) => {
+                            const isSel = initParkingBufferMinutes === mins;
+                            return (
+                              <TouchableOpacity
+                                key={mins}
                                 style={[
-                                  styles.chipText,
-                                  isSel && styles.chipTextActive,
+                                  styles.timeQuickChip,
+                                  isSel && [
+                                    styles.chipActive,
+                                    {
+                                      backgroundColor: theme.bg,
+                                      borderColor: theme.primary,
+                                      shadowColor: theme.primary,
+                                    },
+                                  ],
                                 ]}
+                                activeOpacity={0.7}
+                                onPress={() => setInitParkingBufferMinutes(mins)}
                               >
-                                {mins} min
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
+                                <Text
+                                  style={[
+                                    styles.chipText,
+                                    isSel && styles.chipTextActive,
+                                    { fontSize: 12.5 },
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  {mins} min
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
 
                         {initParkingBufferMinutes !== null && (
-                          <View style={styles.fineStepRow}>
+                          <View style={styles.timeStepperCenteredRow}>
                             <TouchableOpacity
                               style={styles.fineStepPill}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                               onPress={() =>
                                 setInitParkingBufferMinutes((p) =>
                                   Math.max(1, (p ?? 7) - 1),
@@ -1191,6 +1196,7 @@ function MainFormScreen() {
                             </View>
                             <TouchableOpacity
                               style={styles.fineStepPill}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                               onPress={() =>
                                 setInitParkingBufferMinutes((p) => (p ?? 7) + 1)
                               }
@@ -1439,48 +1445,53 @@ function MainFormScreen() {
                 {/* 4. ANTICIPO IN AULA */}
                 <View style={styles.pillSection}>
                   <Text style={styles.pillSectionLabel}>ANTICIPO IN AULA</Text>
-                  <View style={styles.chipsContainer}>
-                    {[5, 10, 15, 20].map((mins) => {
-                      const isSel = initBufferMinutes === mins;
-                      return (
-                        <TouchableOpacity
-                          key={mins}
-                          style={[
-                            styles.chip,
-                            isSel && [
-                              styles.chipActive,
-                              {
-                                backgroundColor: theme.bg,
-                                borderColor: theme.primary,
-                                shadowColor: theme.primary,
-                              },
-                            ],
-                          ]}
-                          activeOpacity={0.7}
-                          onPress={() => setInitBufferMinutes(mins)}
-                        >
-                          <Ionicons
-                            name={isSel ? "checkmark-circle" : "time-outline"}
-                            size={14}
-                            color={isSel ? "#ffffff" : "#8e8e93"}
-                            style={{ marginRight: 5 }}
-                          />
-                          <Text
+                  <View style={styles.timeBufferContainer}>
+                    <View style={styles.timeQuickRow}>
+                      {[5, 10, 15, 20].map((mins) => {
+                        const isSel = initBufferMinutes === mins;
+                        return (
+                          <TouchableOpacity
+                            key={mins}
                             style={[
-                              styles.chipText,
-                              isSel && styles.chipTextActive,
+                              styles.timeQuickChip,
+                              isSel && [
+                                styles.chipActive,
+                                {
+                                  backgroundColor: theme.bg,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
+                              ],
                             ]}
+                            activeOpacity={0.7}
+                            onPress={() => setInitBufferMinutes(mins)}
                           >
-                            {mins} min
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                            <Ionicons
+                              name={isSel ? "checkmark-circle" : "time-outline"}
+                              size={13}
+                              color={isSel ? "#ffffff" : "#8e8e93"}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.chipText,
+                                isSel && styles.chipTextActive,
+                                { fontSize: 12 },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {mins} min
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
 
                     {initBufferMinutes !== null && (
-                      <View style={styles.fineStepRow}>
+                      <View style={styles.timeStepperCenteredRow}>
                         <TouchableOpacity
                           style={styles.fineStepPill}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                           onPress={() =>
                             setInitBufferMinutes((b) =>
                               Math.max(1, (b ?? 10) - 1),
@@ -1499,9 +1510,18 @@ function MainFormScreen() {
                             {
                               borderColor: theme.primary,
                               backgroundColor: theme.subtle,
+                              flexDirection: "row",
+                              alignItems: "center",
+                              justifyContent: "center",
                             },
                           ]}
                         >
+                          <Ionicons
+                            name="time-outline"
+                            size={14}
+                            color={theme.accent}
+                            style={{ marginRight: 5 }}
+                          />
                           <Text
                             style={[
                               styles.fineStepValueText,
@@ -1513,6 +1533,7 @@ function MainFormScreen() {
                         </View>
                         <TouchableOpacity
                           style={styles.fineStepPill}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                           onPress={() =>
                             setInitBufferMinutes((b) => (b ?? 10) + 1)
                           }
@@ -1802,62 +1823,61 @@ function MainFormScreen() {
                         </Text>
                       </View>
 
-                      {/* Pill options veloci */}
-                      <View style={styles.chipsRow}>
-                        {PARKING_OPTIONS.map((mins) => {
-                          const isSelected =
-                            localConfig.carLeg.parkingBufferMinutes === mins;
-                          return (
-                            <TouchableOpacity
-                              key={mins}
-                              style={[
-                                styles.chip,
-                                isSelected && [
-                                  styles.chipActive,
-                                  {
-                                    backgroundColor: `${theme.primary}25`,
-                                    borderColor: theme.primary,
-                                    shadowColor: theme.primary,
-                                  },
-                                ],
-                              ]}
-                              activeOpacity={0.7}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
-                              onPress={() =>
-                                setLocalConfig((prev) => ({
-                                  ...prev,
-                                  carLeg: {
-                                    ...prev.carLeg,
-                                    parkingBufferMinutes: mins,
-                                  },
-                                }))
-                              }
-                            >
-                              <Text
+                      <View style={styles.timeBufferContainer}>
+                        {/* Pill options veloci */}
+                        <View style={styles.timeQuickRow}>
+                          {PARKING_OPTIONS.map((mins) => {
+                            const isSelected =
+                              localConfig.carLeg.parkingBufferMinutes === mins;
+                            return (
+                              <TouchableOpacity
+                                key={mins}
                                 style={[
-                                  styles.chipText,
+                                  styles.timeQuickChip,
                                   isSelected && [
-                                    styles.chipTextActive,
-                                    { color: theme.accent },
+                                    styles.chipActive,
+                                    {
+                                      backgroundColor: `${theme.primary}25`,
+                                      borderColor: theme.primary,
+                                      shadowColor: theme.primary,
+                                    },
                                   ],
                                 ]}
+                                activeOpacity={0.7}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                onPress={() =>
+                                  setLocalConfig((prev) => ({
+                                    ...prev,
+                                    carLeg: {
+                                      ...prev.carLeg,
+                                      parkingBufferMinutes: mins,
+                                    },
+                                  }))
+                                }
                               >
-                                {mins} min
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
+                                <Text
+                                  style={[
+                                    styles.chipText,
+                                    isSelected && [
+                                      styles.chipTextActive,
+                                      { color: theme.accent },
+                                    ],
+                                    { fontSize: 12.5 },
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  {mins} min
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
 
-                      {/* Stepper minuto per minuto */}
-                      <View style={styles.stepperRow}>
-                        <Text style={styles.stepperSubtext}>Regolazione:</Text>
-                        <View style={styles.stepperControls}>
+                        {/* Stepper minuto per minuto centrato */}
+                        <View style={styles.timeStepperCenteredRow}>
                           <TouchableOpacity
                             style={styles.stepperBtn}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
                             onPress={() =>
                               setLocalConfig((prev) => ({
                                 ...prev,
@@ -1873,13 +1893,27 @@ function MainFormScreen() {
                           >
                             <Ionicons name="remove" size={16} color="#ffffff" />
                           </TouchableOpacity>
-                          <Text style={styles.stepperValue}>
-                            {localConfig.carLeg.parkingBufferMinutes} min
-                          </Text>
+                          <View
+                            style={[
+                              styles.fineStepValuePill,
+                              {
+                                borderColor: theme.primary,
+                                backgroundColor: theme.subtle,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.fineStepValueText,
+                                { color: theme.accent },
+                              ]}
+                            >
+                              {localConfig.carLeg.parkingBufferMinutes} min
+                            </Text>
+                          </View>
                           <TouchableOpacity
                             style={styles.stepperBtn}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
                             onPress={() =>
                               setLocalConfig((prev) => ({
                                 ...prev,
@@ -2164,54 +2198,62 @@ function MainFormScreen() {
                     </Text>
                   </View>
 
-                  {/* Pill options veloci */}
-                  <View style={styles.chipsRow}>
-                    {BUFFER_OPTIONS.map((mins) => {
-                      const isSelected = localConfig.bufferMinutes === mins;
-                      return (
-                        <TouchableOpacity
-                          key={mins}
-                          style={[
-                            styles.chip,
-                            isSelected && [
-                              styles.chipActive,
-                              {
-                                backgroundColor: `${theme.primary}25`,
-                                borderColor: theme.primary,
-                                shadowColor: theme.primary,
-                              },
-                            ],
-                          ]}
-                          activeOpacity={0.7}
-                          onPress={() =>
-                            setLocalConfig((prev) => ({
-                              ...prev,
-                              bufferMinutes: mins,
-                            }))
-                          }
-                        >
-                          <Text
+                  <View style={styles.timeBufferContainer}>
+                    {/* Riga superiore: opzioni veloci */}
+                    <View style={styles.timeQuickRow}>
+                      {BUFFER_OPTIONS.map((mins) => {
+                        const isSelected = localConfig.bufferMinutes === mins;
+                        return (
+                          <TouchableOpacity
+                            key={mins}
                             style={[
-                              styles.chipText,
+                              styles.timeQuickChip,
                               isSelected && [
-                                styles.chipTextActive,
-                                { color: theme.accent },
+                                styles.chipActive,
+                                {
+                                  backgroundColor: `${theme.primary}25`,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
                               ],
                             ]}
+                            activeOpacity={0.7}
+                            onPress={() =>
+                              setLocalConfig((prev) => ({
+                                ...prev,
+                                bufferMinutes: mins,
+                              }))
+                            }
                           >
-                            {mins} min
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                            <Ionicons
+                              name={isSelected ? "checkmark-circle" : "time-outline"}
+                              size={13}
+                              color={isSelected ? theme.accent : "#8e8e93"}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.chipText,
+                                isSelected && [
+                                  styles.chipTextActive,
+                                  { color: theme.accent },
+                                ],
+                                { fontSize: 12 },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {mins} min
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
 
-                  {/* Stepper minuto per minuto */}
-                  <View style={styles.stepperRow}>
-                    <Text style={styles.stepperSubtext}>Regolazione:</Text>
-                    <View style={styles.stepperControls}>
+                    {/* Selettore di precisione centrato esattamente sotto */}
+                    <View style={styles.timeStepperCenteredRow}>
                       <TouchableOpacity
                         style={styles.stepperBtn}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         onPress={() =>
                           setLocalConfig((prev) => ({
                             ...prev,
@@ -2221,11 +2263,36 @@ function MainFormScreen() {
                       >
                         <Ionicons name="remove" size={16} color="#ffffff" />
                       </TouchableOpacity>
-                      <Text style={styles.stepperValue}>
-                        {localConfig.bufferMinutes} min
-                      </Text>
+                      <View
+                        style={[
+                          styles.fineStepValuePill,
+                          {
+                            borderColor: theme.primary,
+                            backgroundColor: theme.subtle,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={14}
+                          color={theme.accent}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={[
+                            styles.fineStepValueText,
+                            { color: theme.accent },
+                          ]}
+                        >
+                          {localConfig.bufferMinutes} min
+                        </Text>
+                      </View>
                       <TouchableOpacity
                         style={styles.stepperBtn}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         onPress={() =>
                           setLocalConfig((prev) => ({
                             ...prev,
@@ -2964,6 +3031,38 @@ const styles = StyleSheet.create({
     gap: 8,
     overflow: "visible",
     paddingVertical: 4,
+  },
+  timeBufferContainer: {
+    width: "100%",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  timeQuickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    gap: 6,
+  },
+  timeQuickChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    paddingHorizontal: 4,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+  },
+  timeStepperCenteredRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 10,
+    width: "100%",
   },
   fineStepRow: {
     flexDirection: "row",

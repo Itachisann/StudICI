@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Easing,
   FlatList,
   KeyboardAvoidingView,
@@ -28,6 +29,7 @@ import {
   DarkTheme,
   NavigationContainer,
   NavigationIndependentTree,
+  useNavigation,
 } from "@react-navigation/native";
 import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
@@ -562,6 +564,7 @@ function CourseSelectScreen({ navigation }: any) {
 // Stile originale glowing buttons e layout card da c261508
 // ═══════════════════════════════════════════════════════════════════════════
 function PostDownloadScreen() {
+  const navigation = useNavigation<any>();
   const {
     theme,
     pendingDegree,
@@ -617,7 +620,42 @@ function PostDownloadScreen() {
   } = useOnboarding();
 
   const insets = useSafeAreaInsets();
-  const topInsetPadding = Math.max(insets.top, 24) + 16;
+  const topInsetPadding = Math.max(insets.top, 24) + 40;
+
+  useEffect(() => {
+    if (currentPage === 2) {
+      navigation?.setOptions({
+        headerLeft: () => (
+          <TouchableOpacity
+            onPress={() => pagerRef.current?.scrollTo({ x: 0, animated: true })}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={{
+              padding: 6,
+              marginLeft: Platform.OS === "ios" ? 0 : 4,
+            }}
+          >
+            <Ionicons name="chevron-back" size={28} color="#ffffff" />
+          </TouchableOpacity>
+        ),
+      });
+    } else {
+      navigation?.setOptions({
+        headerLeft: undefined,
+      });
+    }
+  }, [currentPage, navigation, pagerRef]);
+
+  useEffect(() => {
+    const onBackPress = () => {
+      if (currentPage === 2) {
+        pagerRef.current?.scrollTo({ x: 0, animated: true });
+        return true;
+      }
+      return false;
+    };
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => sub.remove();
+  }, [currentPage, pagerRef]);
 
   const isOtherDepartureSelected = Boolean(
     departureStation &&
@@ -1112,42 +1150,47 @@ function PostDownloadScreen() {
                     <Text style={styles.subPillLabel}>
                       MARGINE DI SICUREZZA
                     </Text>
-                    <View style={styles.chipsContainer}>
-                      {[5, 7, 10, 15].map((mins) => {
-                        const isSel = parkingBufferMinutes === mins;
-                        return (
-                          <TouchableOpacity
-                            key={mins}
-                            style={[
-                              styles.chip,
-                              isSel && [
-                                styles.chipActive,
-                                {
-                                  backgroundColor: theme.bg,
-                                  borderColor: theme.primary,
-                                  shadowColor: theme.primary,
-                                },
-                              ],
-                            ]}
-                            activeOpacity={0.7}
-                            onPress={() => setParkingBufferMinutes(mins)}
-                          >
-                            <Text
+                    <View style={styles.timeBufferContainer}>
+                      <View style={styles.timeQuickRow}>
+                        {[5, 7, 10, 15].map((mins) => {
+                          const isSel = parkingBufferMinutes === mins;
+                          return (
+                            <TouchableOpacity
+                              key={mins}
                               style={[
-                                styles.chipText,
-                                isSel && styles.chipTextActive,
+                                styles.timeQuickChip,
+                                isSel && [
+                                  styles.chipActive,
+                                  {
+                                    backgroundColor: theme.bg,
+                                    borderColor: theme.primary,
+                                    shadowColor: theme.primary,
+                                  },
+                                ],
                               ]}
+                              activeOpacity={0.7}
+                              onPress={() => setParkingBufferMinutes(mins)}
                             >
-                              {mins} min
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
+                              <Text
+                                style={[
+                                  styles.chipText,
+                                  isSel && styles.chipTextActive,
+                                  { fontSize: 12.5 },
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {mins} min
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
 
                       {parkingBufferMinutes !== null && (
-                        <View style={styles.fineStepRow}>
+                        <View style={styles.timeStepperCenteredRow}>
                           <TouchableOpacity
                             style={styles.fineStepPill}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
                               setParkingBufferMinutes((p: number | null) =>
                                 Math.max(1, (p ?? 7) - 1),
@@ -1180,15 +1223,12 @@ function PostDownloadScreen() {
                           </View>
                           <TouchableOpacity
                             style={styles.fineStepPill}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
                               setParkingBufferMinutes((p: number | null) => (p ?? 7) + 1)
                             }
                           >
-                            <Ionicons
-                              name="add"
-                              size={14}
-                              color="#ffffff"
-                            />
+                            <Ionicons name="add" size={14} color="#ffffff" />
                           </TouchableOpacity>
                         </View>
                       )}
@@ -1440,50 +1480,55 @@ function PostDownloadScreen() {
                 <Text style={styles.pillSectionLabel}>
                   ANTICIPO IN AULA
                 </Text>
-                <View style={styles.chipsContainer}>
-                  {[5, 10, 15, 20].map((mins) => {
-                    const isSel = bufferMinutes === mins;
-                    return (
-                      <TouchableOpacity
-                        key={mins}
-                        style={[
-                          styles.chip,
-                          isSel && [
-                            styles.chipActive,
-                            {
-                              backgroundColor: theme.bg,
-                              borderColor: theme.primary,
-                              shadowColor: theme.primary,
-                            },
-                          ],
-                        ]}
-                        activeOpacity={0.7}
-                        onPress={() => setBufferMinutes(mins)}
-                      >
-                        <Ionicons
-                          name={
-                            isSel ? "checkmark-circle" : "time-outline"
-                          }
-                          size={14}
-                          color={isSel ? "#ffffff" : "#8e8e93"}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text
+                <View style={styles.timeBufferContainer}>
+                  <View style={styles.timeQuickRow}>
+                    {[5, 10, 15, 20].map((mins) => {
+                      const isSel = bufferMinutes === mins;
+                      return (
+                        <TouchableOpacity
+                          key={mins}
                           style={[
-                            styles.chipText,
-                            isSel && styles.chipTextActive,
+                            styles.timeQuickChip,
+                            isSel && [
+                              styles.chipActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                                shadowColor: theme.primary,
+                              },
+                            ],
                           ]}
+                          activeOpacity={0.7}
+                          onPress={() => setBufferMinutes(mins)}
                         >
-                          {mins} min
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                          <Ionicons
+                            name={
+                              isSel ? "checkmark-circle" : "time-outline"
+                            }
+                            size={13}
+                            color={isSel ? "#ffffff" : "#8e8e93"}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.chipText,
+                              isSel && styles.chipTextActive,
+                              { fontSize: 12 },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {mins} min
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
                   {bufferMinutes !== null && (
-                    <View style={styles.fineStepRow}>
+                    <View style={styles.timeStepperCenteredRow}>
                       <TouchableOpacity
                         style={styles.fineStepPill}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         onPress={() =>
                           setBufferMinutes((b: number) =>
                             Math.max(1, (b ?? 10) - 1),
@@ -1502,9 +1547,18 @@ function PostDownloadScreen() {
                           {
                             borderColor: theme.primary,
                             backgroundColor: theme.subtle,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "center",
                           },
                         ]}
                       >
+                        <Ionicons
+                          name="time-outline"
+                          size={14}
+                          color={theme.accent}
+                          style={{ marginRight: 5 }}
+                        />
                         <Text
                           style={[
                             styles.fineStepValueText,
@@ -1516,6 +1570,7 @@ function PostDownloadScreen() {
                       </View>
                       <TouchableOpacity
                         style={styles.fineStepPill}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         onPress={() =>
                           setBufferMinutes((b: number) => (b ?? 10) + 1)
                         }
@@ -1614,8 +1669,15 @@ function PostDownloadScreen() {
                 onPress={() => finalizeOnboarding(false)}
                 variant="glass"
                 glow={false}
-                style={{ flex: 1 }}
-                textStyle={{ fontSize: 13, fontWeight: "700" }}
+                style={{ flex: 1, height: 48, borderRadius: 24 }}
+                pillStyle={{
+                  height: 48,
+                  borderRadius: 24,
+                  paddingHorizontal: 12,
+                  backgroundColor: "#2c2c2e",
+                  borderColor: "rgba(255, 255, 255, 0.12)",
+                }}
+                textStyle={{ color: "#ffffff", fontSize: 13, fontWeight: "600" }}
               />
 
               <NativeActionButton
@@ -2395,7 +2457,20 @@ export function OnboardingCourseSelector({
                   headerBackTitle: "",
                 }}
               />
-              <OnboardingStack.Screen name="PostDownload" component={PostDownloadScreen} />
+              <OnboardingStack.Screen
+                name="PostDownload"
+                component={PostDownloadScreen}
+                options={{
+                  headerShown: true,
+                  headerTitle: "",
+                  headerTransparent: true,
+                  headerShadowVisible: false,
+                  headerBackButtonDisplayMode: "minimal",
+                  headerBackTitle: "",
+                  headerTintColor: "#ffffff",
+                  headerStyle: { backgroundColor: "transparent" },
+                }}
+              />
             </OnboardingStack.Navigator>
           </NavigationContainer>
         </NavigationIndependentTree>
@@ -2867,6 +2942,37 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 8,
     textAlign: "center",
+  },
+  timeBufferContainer: {
+    width: "100%",
+    alignItems: "center",
+  },
+  timeQuickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    gap: 6,
+  },
+  timeQuickChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    paddingHorizontal: 4,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+  },
+  timeStepperCenteredRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 10,
+    width: "100%",
   },
   fineStepRow: {
     flexDirection: "row",
