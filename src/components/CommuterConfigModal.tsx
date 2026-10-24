@@ -22,7 +22,6 @@ import {
   NavigationIndependentTree,
   useNavigation,
 } from "@react-navigation/native";
-import { NativeActionButton } from "./NativeActionButton";
 import { CommuterConfig, StationInfo } from "../types/commuter";
 import {
   calculateDrivingEstimate,
@@ -130,6 +129,20 @@ const QUICK_ARRIVALS: StationInfo[] = [
   { name: "ROMA TUSCOLANA", code: "S08408", shortName: "Roma Tuscolana" },
   { name: "ROMA S. PIETRO", code: "S08402", shortName: "Roma S. Pietro" },
 ];
+
+const STATION_SHORT_NAMES: Record<string, string> = {
+  "S06421": "Firenze SMN",
+  "S05043": "Bologna C.le",
+  "S01700": "Milano C.le",
+  "S09218": "Napoli C.le",
+  "S08409": "Roma Termini",
+  "S08217": "Roma Tiburtina",
+  "S08406": "Roma Ostiense",
+  "S08408": "Roma Tuscolana",
+  "S08402": "Roma S. Pietro",
+  "S07004": "Perugia",
+  "S07226": "Terni",
+};
 
 const PARKING_OPTIONS = [3, 5, 8, 10];
 const BUFFER_OPTIONS = [5, 10, 15, 20];
@@ -824,6 +837,20 @@ function MainFormScreen() {
     setFilteredStations,
   } = useCommuterModal();
 
+  const isOtherInitDepartureSelected = useMemo(
+    () =>
+      !!initDepartureStation &&
+      !QUICK_DEPARTURES.some((s) => s.code === initDepartureStation.code),
+    [initDepartureStation],
+  );
+
+  const isOtherInitArrivalSelected = useMemo(
+    () =>
+      !!initArrivalStation &&
+      !QUICK_ARRIVALS.some((s) => s.code === initArrivalStation.code),
+    [initArrivalStation],
+  );
+
   const openStationPicker = useCallback(
     (type: "departure" | "arrival") => {
       setStationSearchQuery("");
@@ -879,20 +906,20 @@ function MainFormScreen() {
   ]);
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#16181d" }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <View style={{ flex: 1, backgroundColor: "#16181d" }}>
-            {isUnconfigured ? (
-            /* Form Inizializzazione Primo Avvio (senza nulla di default) */
-            <>
-              <ScrollView
-                style={styles.initScrollView}
-                contentContainerStyle={styles.initScrollContent}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
+    <View collapsable={false} style={{ flex: 1, backgroundColor: "#16181d" }}>
+      <KeyboardAvoidingView
+        collapsable={false}
+        style={{ flex: 1, backgroundColor: "#16181d" }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        {isUnconfigured ? (
+          /* Form Inizializzazione Primo Avvio (senza nulla di default) */
+          <ScrollView
+            style={styles.initScrollView}
+            contentContainerStyle={styles.initScrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
                 {/* Hero Header */}
                 <View style={styles.channelHeroHeader}>
                   <View
@@ -1214,71 +1241,61 @@ function MainFormScreen() {
                               isSel && styles.chipTextActive,
                             ]}
                             numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.7}
                           >
-                            {st.shortName || st.name}
+                            {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
                           </Text>
                         </TouchableOpacity>
                       );
                     })}
-                  </View>
-
-                  {initDepartureStation &&
-                  !QUICK_DEPARTURES.some(
-                    (s) => s.code === initDepartureStation.code,
-                  ) ? (
                     <TouchableOpacity
                       style={[
-                        styles.stationActionPill,
-                        styles.chipActive,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                          borderStyle: "solid",
-                        },
+                        styles.stationGridItem,
+                        isOtherInitDepartureSelected
+                          ? [
+                              styles.chipActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                                shadowColor: theme.primary,
+                                borderStyle: "solid",
+                              },
+                            ]
+                          : [
+                              styles.stationGridItemDashed,
+                              { borderColor: theme.primary },
+                            ],
                       ]}
                       activeOpacity={0.7}
                       onPress={() => openStationPicker("departure")}
                     >
                       <Ionicons
-                        name="checkmark-circle"
+                        name={isOtherInitDepartureSelected ? "checkmark-circle" : "search"}
                         size={14}
-                        color="#ffffff"
+                        color={isOtherInitDepartureSelected ? "#ffffff" : theme.accent}
                         style={{ marginRight: 5 }}
                       />
                       <Text
-                        style={[styles.chipText, styles.chipTextActive]}
+                        style={[
+                          styles.chipText,
+                          isOtherInitDepartureSelected
+                            ? styles.chipTextActive
+                            : { color: theme.accent, fontWeight: "600" },
+                        ]}
                         numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
                       >
-                        {initDepartureStation.shortName ||
-                          initDepartureStation.name}
-                      </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={12}
-                        color="#ffffff"
-                        style={{ marginLeft: 4 }}
-                      />
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.stationActionPill}
-                      activeOpacity={0.7}
-                      onPress={() => openStationPicker("departure")}
-                    >
-                      <Ionicons
-                        name="search"
-                        size={14}
-                        color={theme.accent}
-                        style={{ marginRight: 5 }}
-                      />
-                      <Text
-                        style={[styles.chipText, { color: theme.accent }]}
-                      >
-                        Altra stazione...
+                        {isOtherInitDepartureSelected
+                          ? (STATION_SHORT_NAMES[initDepartureStation?.code ?? ""] ||
+                              initDepartureStation?.shortName ||
+                              initDepartureStation?.name ||
+                              "Altro...")
+                          : "Altro..."}
                       </Text>
                     </TouchableOpacity>
-                  )}
+                  </View>
 
                   <Text style={[styles.pillSectionLabel, { marginTop: 18 }]}>
                     STAZIONE DI ARRIVO (ROMA)
@@ -1315,71 +1332,61 @@ function MainFormScreen() {
                               isSel && styles.chipTextActive,
                             ]}
                             numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.7}
                           >
-                            {st.shortName || st.name}
+                            {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
                           </Text>
                         </TouchableOpacity>
                       );
                     })}
-                  </View>
-
-                  {initArrivalStation &&
-                  !QUICK_ARRIVALS.some(
-                    (s) => s.code === initArrivalStation.code,
-                  ) ? (
                     <TouchableOpacity
                       style={[
-                        styles.stationActionPill,
-                        styles.chipActive,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                          borderStyle: "solid",
-                        },
+                        styles.stationGridItem,
+                        isOtherInitArrivalSelected
+                          ? [
+                              styles.chipActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                                shadowColor: theme.primary,
+                                borderStyle: "solid",
+                              },
+                            ]
+                          : [
+                              styles.stationGridItemDashed,
+                              { borderColor: theme.primary },
+                            ],
                       ]}
                       activeOpacity={0.7}
                       onPress={() => openStationPicker("arrival")}
                     >
                       <Ionicons
-                        name="checkmark-circle"
+                        name={isOtherInitArrivalSelected ? "checkmark-circle" : "search"}
                         size={14}
-                        color="#ffffff"
+                        color={isOtherInitArrivalSelected ? "#ffffff" : theme.accent}
                         style={{ marginRight: 5 }}
                       />
                       <Text
-                        style={[styles.chipText, styles.chipTextActive]}
+                        style={[
+                          styles.chipText,
+                          isOtherInitArrivalSelected
+                            ? styles.chipTextActive
+                            : { color: theme.accent, fontWeight: "600" },
+                        ]}
                         numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
                       >
-                        {initArrivalStation.shortName ||
-                          initArrivalStation.name}
-                      </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={12}
-                        color="#ffffff"
-                        style={{ marginLeft: 4 }}
-                      />
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.stationActionPill}
-                      activeOpacity={0.7}
-                      onPress={() => openStationPicker("arrival")}
-                    >
-                      <Ionicons
-                        name="search"
-                        size={14}
-                        color={theme.accent}
-                        style={{ marginRight: 5 }}
-                      />
-                      <Text
-                        style={[styles.chipText, { color: theme.accent }]}
-                      >
-                        Altra stazione...
+                        {isOtherInitArrivalSelected
+                          ? (STATION_SHORT_NAMES[initArrivalStation?.code ?? ""] ||
+                              initArrivalStation?.shortName ||
+                              initArrivalStation?.name ||
+                              "Altro...")
+                          : "Altro..."}
                       </Text>
                     </TouchableOpacity>
-                  )}
+                  </View>
 
                   {/* Anteprima live distanza e tempi reali se auto=sì e origine+stazione scelte */}
                   {initCarMode === "yes" &&
@@ -1517,39 +1524,9 @@ function MainFormScreen() {
                   </View>
                 </View>
               </ScrollView>
-
-              {/* Barra inferiore con pulsanti "Configura più tardi" e "Salva" */}
-              <View style={styles.initBottomButtonsRow}>
-                <NativeActionButton
-                  label="Configura più tardi"
-                  onPress={onClose}
-                  variant="glass"
-                  glow={false}
-                  style={{ flex: 1 }}
-                  textStyle={{ fontSize: 13, fontWeight: "700" }}
-                />
-
-                <NativeActionButton
-                  label="Salva"
-                  onPress={handleSaveInit}
-                  disabled={!isInitComplete}
-                  accentColor={theme.primary}
-                  glow={true}
-                  icon={
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={17}
-                      color={isInitComplete ? "#ffffff" : "#52525b"}
-                    />
-                  }
-                  style={{ flex: 1 }}
-                />
-              </View>
-            </>
           ) : (
             /* Form Configurazione iOS 26 */
-            <>
-              <ScrollView
+            <ScrollView
                 style={styles.body}
                 keyboardShouldPersistTaps="handled"
                 contentContainerStyle={{ paddingBottom: 40 }}
@@ -1946,7 +1923,7 @@ function MainFormScreen() {
                   <Text style={styles.stationFieldLabel}>
                     STAZIONE DI PARTENZA
                   </Text>
-                  <View style={styles.chipsRow}>
+                  <View style={styles.stationGrid}>
                     {QUICK_DEPARTURES.map((st) => {
                       const isSelected =
                         localConfig.departureStation.code === st.code;
@@ -1954,11 +1931,11 @@ function MainFormScreen() {
                         <TouchableOpacity
                           key={st.code}
                           style={[
-                            styles.chip,
+                            styles.stationGridItem,
                             isSelected && [
                               styles.chipActive,
                               {
-                                backgroundColor: `${theme.primary}25`,
+                                backgroundColor: theme.bg,
                                 borderColor: theme.primary,
                                 shadowColor: theme.primary,
                               },
@@ -1967,80 +1944,73 @@ function MainFormScreen() {
                           activeOpacity={0.7}
                           onPress={() => handleSelectDeparture(st)}
                         >
+                          <Ionicons
+                            name={isSelected ? "checkmark-circle" : "train-outline"}
+                            size={14}
+                            color={isSelected ? "#ffffff" : "#8e8e93"}
+                            style={{ marginRight: 5 }}
+                          />
                           <Text
                             style={[
                               styles.chipText,
-                              isSelected && [
-                                styles.chipTextActive,
-                                { color: theme.accent },
-                              ],
+                              isSelected && styles.chipTextActive,
                             ]}
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.7}
                           >
-                            {st.shortName || st.name}
+                            {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
                           </Text>
                         </TouchableOpacity>
                       );
                     })}
 
-                    {/* Pill Altra Stazione: se selezionata una stazione fuori lista, mostra nome attivo, altrimenti pulsante cerca */}
-                    {!isDepartureInQuick ? (
-                      <TouchableOpacity
+                    <TouchableOpacity
+                      style={[
+                        styles.stationGridItem,
+                        !isDepartureInQuick
+                          ? [
+                              styles.chipActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                                shadowColor: theme.primary,
+                                borderStyle: "solid",
+                              },
+                            ]
+                          : [
+                              styles.stationGridItemDashed,
+                              { borderColor: theme.primary },
+                            ],
+                      ]}
+                      activeOpacity={0.7}
+                      onPress={() => openStationPicker("departure")}
+                    >
+                      <Ionicons
+                        name={!isDepartureInQuick ? "checkmark-circle" : "search"}
+                        size={14}
+                        color={!isDepartureInQuick ? "#ffffff" : theme.accent}
+                        style={{ marginRight: 5 }}
+                      />
+                      <Text
                         style={[
-                          styles.chip,
-                          styles.chipActive,
-                          {
-                            backgroundColor: `${theme.primary}25`,
-                            borderColor: theme.primary,
-                            shadowColor: theme.primary,
-                          },
+                          styles.chipText,
+                          !isDepartureInQuick
+                            ? styles.chipTextActive
+                            : { color: theme.accent, fontWeight: "600" },
                         ]}
-                        activeOpacity={0.7}
-                        onPress={() => openStationPicker("departure")}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
                       >
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={13}
-                          color={theme.accent}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text
-                          style={[
-                            styles.chipTextActive,
-                            { color: theme.accent },
-                          ]}
-                        >
-                          {localConfig.departureStation.shortName ||
-                            localConfig.departureStation.name}
-                        </Text>
-                        <Ionicons
-                          name="chevron-down"
-                          size={12}
-                          color={theme.accent}
-                          style={{ marginLeft: 4 }}
-                        />
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity
-                        style={[
-                          styles.chip,
-                          { borderStyle: "dashed", borderColor: "#48484a" },
-                        ]}
-                        activeOpacity={0.7}
-                        onPress={() => openStationPicker("departure")}
-                      >
-                        <Ionicons
-                          name="search"
-                          size={13}
-                          color={theme.accent}
-                          style={{ marginRight: 4 }}
-                        />
-                        <Text
-                          style={[styles.chipText, { color: theme.accent }]}
-                        >
-                          Altro...
-                        </Text>
-                      </TouchableOpacity>
-                    )}
+                        {!isDepartureInQuick
+                          ? (STATION_SHORT_NAMES[localConfig.departureStation?.code ?? ""] ||
+                              localConfig.departureStation?.shortName ||
+                              localConfig.departureStation?.name ||
+                              "Altro...")
+                          : "Altro..."}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -2051,7 +2021,7 @@ function MainFormScreen() {
                   <Text style={styles.stationFieldLabel}>
                     STAZIONE DI ARRIVO (ROMA)
                   </Text>
-                  <View style={styles.chipsRow}>
+                  <View style={styles.stationGrid}>
                     {QUICK_ARRIVALS.map((st) => {
                       const isSelected =
                         localConfig.arrivalStation.code === st.code;
@@ -2059,11 +2029,11 @@ function MainFormScreen() {
                         <TouchableOpacity
                           key={st.code}
                           style={[
-                            styles.chip,
+                            styles.stationGridItem,
                             isSelected && [
                               styles.chipActive,
                               {
-                                backgroundColor: `${theme.primary}25`,
+                                backgroundColor: theme.bg,
                                 borderColor: theme.primary,
                                 shadowColor: theme.primary,
                               },
@@ -2072,79 +2042,73 @@ function MainFormScreen() {
                           activeOpacity={0.7}
                           onPress={() => handleSelectArrival(st)}
                         >
+                          <Ionicons
+                            name={isSelected ? "checkmark-circle" : "flag-outline"}
+                            size={14}
+                            color={isSelected ? "#ffffff" : "#8e8e93"}
+                            style={{ marginRight: 5 }}
+                          />
                           <Text
                             style={[
                               styles.chipText,
-                              isSelected && [
-                                styles.chipTextActive,
-                                { color: theme.accent },
-                              ],
+                              isSelected && styles.chipTextActive,
                             ]}
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.7}
                           >
-                            {st.shortName || st.name}
+                            {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
                           </Text>
                         </TouchableOpacity>
                       );
                     })}
 
-                    {!isArrivalInQuick ? (
-                      <TouchableOpacity
+                    <TouchableOpacity
+                      style={[
+                        styles.stationGridItem,
+                        !isArrivalInQuick
+                          ? [
+                              styles.chipActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                                shadowColor: theme.primary,
+                                borderStyle: "solid",
+                              },
+                            ]
+                          : [
+                              styles.stationGridItemDashed,
+                              { borderColor: theme.primary },
+                            ],
+                      ]}
+                      activeOpacity={0.7}
+                      onPress={() => openStationPicker("arrival")}
+                    >
+                      <Ionicons
+                        name={!isArrivalInQuick ? "checkmark-circle" : "search"}
+                        size={14}
+                        color={!isArrivalInQuick ? "#ffffff" : theme.accent}
+                        style={{ marginRight: 5 }}
+                      />
+                      <Text
                         style={[
-                          styles.chip,
-                          styles.chipActive,
-                          {
-                            backgroundColor: `${theme.primary}25`,
-                            borderColor: theme.primary,
-                            shadowColor: theme.primary,
-                          },
+                          styles.chipText,
+                          !isArrivalInQuick
+                            ? styles.chipTextActive
+                            : { color: theme.accent, fontWeight: "600" },
                         ]}
-                        activeOpacity={0.7}
-                        onPress={() => openStationPicker("arrival")}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
                       >
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={13}
-                          color={theme.accent}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text
-                          style={[
-                            styles.chipTextActive,
-                            { color: theme.accent },
-                          ]}
-                        >
-                          {localConfig.arrivalStation.shortName ||
-                            localConfig.arrivalStation.name}
-                        </Text>
-                        <Ionicons
-                          name="chevron-down"
-                          size={12}
-                          color={theme.accent}
-                          style={{ marginLeft: 4 }}
-                        />
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity
-                        style={[
-                          styles.chip,
-                          { borderStyle: "dashed", borderColor: "#48484a" },
-                        ]}
-                        activeOpacity={0.7}
-                        onPress={() => openStationPicker("arrival")}
-                      >
-                        <Ionicons
-                          name="search"
-                          size={13}
-                          color={theme.accent}
-                          style={{ marginRight: 4 }}
-                        />
-                        <Text
-                          style={[styles.chipText, { color: theme.accent }]}
-                        >
-                          Altro...
-                        </Text>
-                      </TouchableOpacity>
-                    )}
+                        {!isArrivalInQuick
+                          ? (STATION_SHORT_NAMES[localConfig.arrivalStation?.code ?? ""] ||
+                              localConfig.arrivalStation?.shortName ||
+                              localConfig.arrivalStation?.name ||
+                              "Altro...")
+                          : "Altro..."}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </View>
@@ -2276,10 +2240,9 @@ function MainFormScreen() {
                 </View>
               </View>
             </ScrollView>
-          </>
         )}
-          </View>
-        </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -2402,29 +2365,31 @@ function CommuterSheetScreen({ navigation }: any) {
   }, [navigation, onClose]);
 
   return (
-    <CommuterModalStack.Navigator
-      screenOptions={{
-        headerStyle: { backgroundColor: "#16181d" },
-        headerShadowVisible: false,
-        headerTintColor: "#ffffff",
-        headerTitleStyle: {
-          color: "#ffffff",
-          fontSize: 17,
-          fontWeight: "600",
-        },
-        contentStyle: { backgroundColor: "#16181d" },
-        animation: "slide_from_right",
-      }}
-    >
-      <CommuterModalStack.Screen
-        name="MainForm"
-        component={MainFormScreen}
-      />
-      <CommuterModalStack.Screen
-        name="StationPicker"
-        component={StationPickerScreen}
-      />
-    </CommuterModalStack.Navigator>
+    <View collapsable={false} style={{ flex: 1, backgroundColor: "#16181d" }}>
+      <CommuterModalStack.Navigator
+        screenOptions={{
+          headerStyle: { backgroundColor: "#16181d" },
+          headerShadowVisible: false,
+          headerTintColor: "#ffffff",
+          headerTitleStyle: {
+            color: "#ffffff",
+            fontSize: 17,
+            fontWeight: "600",
+          },
+          contentStyle: { backgroundColor: "#16181d" },
+          animation: "slide_from_right",
+        }}
+      >
+        <CommuterModalStack.Screen
+          name="MainForm"
+          component={MainFormScreen}
+        />
+        <CommuterModalStack.Screen
+          name="StationPicker"
+          component={StationPickerScreen}
+        />
+      </CommuterModalStack.Navigator>
+    </View>
   );
 }
 
@@ -2856,7 +2821,12 @@ const styles = StyleSheet.create({
   initScrollContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 130,
+    paddingBottom: 40,
+  },
+  stationGridItemDashed: {
+    borderStyle: "dashed",
+    borderWidth: 1.5,
+    backgroundColor: "transparent",
   },
   channelHeroHeader: {
     alignItems: "center",
