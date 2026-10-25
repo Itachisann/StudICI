@@ -15,6 +15,7 @@ import {
   useNavigation,
 } from '@react-navigation/native';
 import { UNIFORM_MODAL_BG } from '@/constants/theme';
+import { useTheme } from '@/context/ThemeContext';
 
 export interface SheetAction {
   label: string;
@@ -100,6 +101,7 @@ export function NativeSheetModal({
   searchBarOptions,
   children,
 }: NativeSheetModalProps) {
+  const { theme } = useTheme();
   // Titoli dei modali SEMPRE in bianco universale (#ffffff)
   const effectiveTitleColor = '#ffffff';
   // Colore universale neutro per icone (Indietro, Chiudi, Condividi)
@@ -164,7 +166,7 @@ export function NativeSheetModal({
         ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
         : undefined,
       variant: a.prominent && !a.tintColor ? ('prominent' as const) : ('plain' as const),
-      tintColor: a.tintColor || universalIconColor,
+      tintColor: a.tintColor || (a.prominent ? theme.primary : universalIconColor),
       sharesBackground: true,
       disabled: a.disabled,
       onPress: a.onPress,

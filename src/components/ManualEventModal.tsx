@@ -9,6 +9,7 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeSheetModal } from './NativeSheetModal';
@@ -18,6 +19,7 @@ import {
   ManualClassEvent,
   ManualEventRepetition,
   getDefaultSemesterEndDate,
+  getSemesterEndDateFromSchedule,
 } from '@/utils/manualEvents';
 import { getDateForDayIndex } from '@/utils/attendance';
 
@@ -25,29 +27,196 @@ interface ManualEventModalProps {
   visible: boolean;
   editingEvent?: ManualClassEvent | null;
   initialDayIndex?: number;
+  semesterInfo?: string;
+  alerts?: string[];
   onClose: () => void;
   onSave: (eventData: Omit<ManualClassEvent, 'id' | 'createdAt' | 'courseUrl'>, id?: string) => void;
   onDelete?: (id: string) => void;
 }
 
-const DAYS_SHORT = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
-const TIME_PRESETS = [
-  { start: '08:30', end: '10:30', label: '08:30 - 10:30' },
-  { start: '10:30', end: '12:30', label: '10:30 - 12:30' },
-  { start: '14:00', end: '16:00', label: '14:00 - 16:00' },
-  { start: '16:00', end: '18:00', label: '16:00 - 18:00' },
+const DAYS = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
+
+const DEFAULT_TIME_SLOTS = [
+  { start: '08:00', end: '10:00', label: '08:00 - 10:00' },
+  { start: '10:00', end: '12:00', label: '10:00 - 12:00' },
+  { start: '13:00', end: '15:00', label: '13:00 - 15:00' },
+  { start: '15:00', end: '17:00', label: '15:00 - 17:00' },
+  { start: '17:00', end: '19:00', label: '17:00 - 19:00' },
 ];
+
+const ITALIAN_MONTHS_NAMES = [
+  'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
+  'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre',
+];
+
+function formatDateItalian(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return `${d} ${ITALIAN_MONTHS_NAMES[m - 1]} ${y}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+/**
+ * Mini Calendario interattivo iOS per la selezione visuale della data di scadenza
+ */
+function InlineCalendarPicker({
+  selectedDate,
+  onSelectDate,
+  theme,
+}: {
+  selectedDate: string;
+  onSelectDate: (dateStr: string) => void;
+  theme: any;
+}) {
+  const initialDate = useMemo(() => {
+    if (selectedDate && /^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      const [y, m, d] = selectedDate.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+    return new Date();
+  }, [selectedDate]);
+
+  const [currentYear, setCurrentYear] = useState(initialDate.getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(initialDate.getMonth());
+
+  const daysInMonth = useMemo(() => {
+    return new Date(currentYear, currentMonth + 1, 0).getDate();
+  }, [currentYear, currentMonth]);
+
+  const firstDayOffset = useMemo(() => {
+    // 0 = Domenica, 1 = Lunedì...
+    const day = new Date(currentYear, currentMonth, 1).getDay();
+    // Offset da lunedì (0=Lun, 6=Dom)
+    return day === 0 ? 6 : day - 1;
+  }, [currentYear, currentMonth]);
+
+  const handlePrevMonth = () => {
+    if (currentMonth === 0) {
+      setCurrentMonth(11);
+      setCurrentYear((y) => y - 1);
+    } else {
+      setCurrentMonth((m) => m - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (currentMonth === 11) {
+      setCurrentMonth(0);
+      setCurrentYear((y) => y + 1);
+    } else {
+      setCurrentMonth((m) => m + 1);
+    }
+  };
+
+  const daysGrid = useMemo(() => {
+    const cells: (number | null)[] = [];
+    for (let i = 0; i < firstDayOffset; i++) {
+      cells.push(null);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push(d);
+    }
+    return cells;
+  }, [firstDayOffset, daysInMonth]);
+
+  return (
+    <View style={styles.calendarContainer}>
+      {/* Header Mese & Frecce */}
+      <View style={styles.calendarHeaderRow}>
+        <TouchableOpacity
+          style={styles.calendarNavBtn}
+          onPress={handlePrevMonth}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chevron-back" size={18} color="#cbd5e1" />
+        </TouchableOpacity>
+        <Text style={styles.calendarMonthText}>
+          {ITALIAN_MONTHS_NAMES[currentMonth]} {currentYear}
+        </Text>
+        <TouchableOpacity
+          style={styles.calendarNavBtn}
+          onPress={handleNextMonth}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Intestazioni Giorni (Lun-Dom) */}
+      <View style={styles.calendarWeekdaysRow}>
+        {['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((d, idx) => (
+          <Text key={idx} style={styles.calendarWeekdayText}>
+            {d}
+          </Text>
+        ))}
+      </View>
+
+      {/* Griglia dei giorni del mese */}
+      <View style={styles.calendarDaysGrid}>
+        {daysGrid.map((dayNum, idx) => {
+          if (dayNum === null) {
+            return <View key={idx} style={styles.calendarDayCellEmpty} />;
+          }
+
+          const cellDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(
+            dayNum
+          ).padStart(2, '0')}`;
+          const isSelected = selectedDate === cellDateStr;
+
+          return (
+            <TouchableOpacity
+              key={idx}
+              style={[
+                styles.calendarDayCell,
+                isSelected && [
+                  styles.calendarDayCellActive,
+                  {
+                    backgroundColor: theme.primary,
+                    borderColor: theme.primary,
+                    shadowColor: theme.primary,
+                  },
+                ],
+              ]}
+              onPress={() => onSelectDate(cellDateStr)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.calendarDayText,
+                  isSelected && styles.calendarDayTextActive,
+                ]}
+              >
+                {dayNum}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 function ManualEventForm({
   editingEvent,
   initialDayIndex = 0,
+  semesterInfo,
+  alerts,
   onClose,
   onSave,
   onDelete,
 }: Omit<ManualEventModalProps, 'visible'>) {
   const { theme } = useTheme();
 
-  const defaultSemesterEnd = useMemo(() => getDefaultSemesterEndDate(), []);
+  // Calcola la data stimata/estratta del semestre dai dati Sapienza/notizie
+  const detectedSemesterEnd = useMemo(() => {
+    return getSemesterEndDateFromSchedule(semesterInfo, alerts) || getDefaultSemesterEndDate();
+  }, [semesterInfo, alerts]);
+
   const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 4);
 
   const [subject, setSubject] = useState(editingEvent?.subject || '');
@@ -56,14 +225,40 @@ function ManualEventForm({
   const [dayIndex, setDayIndex] = useState(
     typeof editingEvent?.dayIndex === 'number' ? editingEvent.dayIndex : safeInitialDay
   );
-  const [startTime, setStartTime] = useState(editingEvent?.startTime || '08:30');
-  const [endTime, setEndTime] = useState(editingEvent?.endTime || '10:30');
+  const [startTime, setStartTime] = useState(editingEvent?.startTime || '08:00');
+  const [endTime, setEndTime] = useState(editingEvent?.endTime || '10:00');
   const [repetitionType, setRepetitionType] = useState<ManualEventRepetition>(
     editingEvent?.repetitionType || 'semester'
   );
   const [repeatUntilDate, setRepeatUntilDate] = useState(
-    editingEvent?.repeatUntilDate || defaultSemesterEnd
+    editingEvent?.repeatUntilDate || detectedSemesterEnd
   );
+  const [isCustomTimeActive, setIsCustomTimeActive] = useState(() => {
+    if (!editingEvent) return false;
+    return !DEFAULT_TIME_SLOTS.some(
+      (s) => s.start === editingEvent.startTime && s.end === editingEvent.endTime
+    );
+  });
+
+  // Animazioni di rimbalzo per i giorni della settimana (stesse animazioni del pannello orari)
+  const [dayScaleAnims] = useState(() => DAYS.map(() => new Animated.Value(1)));
+
+  const handleSelectDay = (idx: number) => {
+    setDayIndex(idx);
+    Animated.sequence([
+      Animated.timing(dayScaleAnims[idx], {
+        toValue: 0.9,
+        duration: 80,
+        useNativeDriver: true,
+      }),
+      Animated.spring(dayScaleAnims[idx], {
+        toValue: 1,
+        friction: 4,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
 
   const { dateStr: currentDayDateStr, displayDate: currentDayDisplayDate } = useMemo(() => {
     return getDateForDayIndex(dayIndex);
@@ -92,11 +287,12 @@ function ManualEventForm({
       endTime: endTime.trim(),
       repetitionType,
       startDate: editingEvent?.startDate || currentDayDateStr,
-      repeatUntilDate: repetitionType === 'semester'
-        ? defaultSemesterEnd
-        : repetitionType === 'custom_date'
-        ? (repeatUntilDate.trim() || defaultSemesterEnd)
-        : undefined,
+      repeatUntilDate:
+        repetitionType === 'semester'
+          ? detectedSemesterEnd
+          : repetitionType === 'custom_date'
+          ? (repeatUntilDate.trim() || detectedSemesterEnd)
+          : undefined,
     };
 
     onSave(payload, editingEvent?.id);
@@ -142,6 +338,7 @@ function ManualEventForm({
           label: 'Salva',
           sfSymbol: 'checkmark',
           prominent: true,
+          tintColor: theme.primary,
           onPress: handleSave,
         },
       ]}
@@ -156,7 +353,7 @@ function ManualEventForm({
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Sezione Dati Principali */}
+          {/* ── 1. Dati Principali Lezione ── */}
           <View style={styles.sectionCard}>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Materia</Text>
@@ -201,97 +398,201 @@ function ManualEventForm({
             </View>
           </View>
 
-          {/* Giorno della settimana */}
+          {/* ── 2. Giorni della Settimana (Glowing + Stesse Colorazioni & Animazioni del Pannello Orari) ── */}
           <Text style={styles.sectionTitle}>GIORNO DELLA SETTIMANA</Text>
-          <View style={styles.daySelectorRow}>
-            {DAYS_SHORT.map((name, idx) => {
+          <View style={styles.daysRow}>
+            {DAYS.map((name, idx) => {
               const isSelected = dayIndex === idx;
               return (
                 <TouchableOpacity
                   key={name}
-                  style={[
-                    styles.dayChip,
-                    isSelected && { backgroundColor: theme.primary, borderColor: theme.primary },
-                  ]}
-                  onPress={() => setDayIndex(idx)}
+                  style={styles.dayItem}
+                  onPress={() => handleSelectDay(idx)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.dayChipText, isSelected && styles.dayChipTextSelected]}>
-                    {name}
+                  <Animated.View
+                    style={[
+                      styles.dayCircle,
+                      isSelected && [
+                        styles.dayCircleActive,
+                        {
+                          backgroundColor: theme.bg,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                        },
+                      ],
+                      { transform: [{ scale: dayScaleAnims[idx] }] },
+                    ]}
+                  >
+                    <Text style={[styles.dayText, isSelected && styles.dayTextActive]}>
+                      {name}
+                    </Text>
+                  </Animated.View>
+                  {isSelected && (
+                    <View style={[styles.dayDot, { backgroundColor: theme.primary }]} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* ── 3. Orari Lezione di Default (Pill stile 'Anticipo in aula' in CommuterConfigModal) ── */}
+          <Text style={styles.sectionTitle}>ORARI LEZIONE (PRESET RAPIDI)</Text>
+          <View style={styles.timeQuickRow}>
+            {DEFAULT_TIME_SLOTS.map((slot) => {
+              const isSelected = !isCustomTimeActive && startTime === slot.start && endTime === slot.end;
+              return (
+                <TouchableOpacity
+                  key={slot.label}
+                  style={[
+                    styles.timeQuickChip,
+                    isSelected && [
+                      styles.chipActive,
+                      {
+                        backgroundColor: `${theme.primary}25`,
+                        borderColor: theme.primary,
+                        shadowColor: theme.primary,
+                      },
+                    ],
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setIsCustomTimeActive(false);
+                    setStartTime(slot.start);
+                    setEndTime(slot.end);
+                  }}
+                >
+                  <Ionicons
+                    name={isSelected ? 'checkmark-circle' : 'time-outline'}
+                    size={13}
+                    color={isSelected ? theme.accent : '#8e8e93'}
+                    style={{ marginRight: 5 }}
+                  />
+                  <Text
+                    style={[
+                      styles.chipText,
+                      isSelected && [styles.chipTextActive, { color: theme.accent }],
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {slot.label}
                   </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
 
-          {/* Orario Inizio e Fine */}
-          <Text style={styles.sectionTitle}>ORARIO LEZIONE</Text>
-          <View style={styles.sectionCard}>
-            <View style={styles.timeInputsRow}>
-              <View style={styles.timeInputCol}>
-                <Text style={styles.timeInputSublabel}>Inizio</Text>
-                <TextInput
-                  style={styles.timeBox}
-                  value={startTime}
-                  onChangeText={setStartTime}
-                  placeholder="08:30"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numbers-and-punctuation"
-                  maxLength={5}
-                />
-              </View>
-              <View style={styles.timeArrow}>
-                <Ionicons name="arrow-forward" size={16} color="#64748b" />
-              </View>
-              <View style={styles.timeInputCol}>
-                <Text style={styles.timeInputSublabel}>Fine</Text>
-                <TextInput
-                  style={styles.timeBox}
-                  value={endTime}
-                  onChangeText={setEndTime}
-                  placeholder="10:30"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numbers-and-punctuation"
-                  maxLength={5}
-                />
-              </View>
-            </View>
-
-            {/* Preset rapidi per l'orario */}
-            <View style={styles.presetsRow}>
-              {TIME_PRESETS.map((preset) => {
-                const isSelected = startTime === preset.start && endTime === preset.end;
-                return (
-                  <TouchableOpacity
-                    key={preset.label}
+          {/* ── 4. Selezione Orari stile Lista Tema (Theme Grid & Cards con V del Colore Tema) ── */}
+          <Text style={styles.sectionTitle}>SELEZIONE DETTAGLIATA ORARIO</Text>
+          <View style={styles.themeGrid}>
+            {DEFAULT_TIME_SLOTS.map((slot) => {
+              const isSelected = !isCustomTimeActive && startTime === slot.start && endTime === slot.end;
+              return (
+                <TouchableOpacity
+                  key={slot.label}
+                  style={[
+                    styles.themeCardItem,
+                    isSelected && {
+                      borderColor: theme.primary,
+                      backgroundColor: `${theme.primary}18`,
+                    },
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setIsCustomTimeActive(false);
+                    setStartTime(slot.start);
+                    setEndTime(slot.end);
+                  }}
+                >
+                  <View
                     style={[
-                      styles.presetChip,
-                      isSelected && {
-                        backgroundColor: 'rgba(239,68,68,0.2)',
-                        borderColor: theme.primary,
-                      },
+                      styles.themeColorDot,
+                      { backgroundColor: isSelected ? theme.primary : '#27272a' },
                     ]}
-                    onPress={() => {
-                      setStartTime(preset.start);
-                      setEndTime(preset.end);
-                    }}
-                    activeOpacity={0.7}
                   >
-                    <Text
-                      style={[
-                        styles.presetChipText,
-                        isSelected && { color: theme.primary, fontWeight: '700' },
-                      ]}
-                    >
-                      {preset.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                    {isSelected && <Ionicons name="checkmark" size={13} color="#ffffff" />}
+                  </View>
+                  <Text
+                    style={[
+                      styles.themeCardName,
+                      isSelected && { color: '#ffffff', fontWeight: '700' },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {slot.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* Scheda Orario Personalizzato */}
+            <TouchableOpacity
+              style={[
+                styles.themeCardItem,
+                isCustomTimeActive && {
+                  borderColor: theme.primary,
+                  backgroundColor: `${theme.primary}18`,
+                },
+              ]}
+              activeOpacity={0.7}
+              onPress={() => setIsCustomTimeActive(true)}
+            >
+              <View
+                style={[
+                  styles.themeColorDot,
+                  { backgroundColor: isCustomTimeActive ? theme.primary : '#27272a' },
+                ]}
+              >
+                {isCustomTimeActive && <Ionicons name="checkmark" size={13} color="#ffffff" />}
+              </View>
+              <Text
+                style={[
+                  styles.themeCardName,
+                  isCustomTimeActive && { color: '#ffffff', fontWeight: '700' },
+                ]}
+                numberOfLines={1}
+              >
+                Personalizzato
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Opzioni di Ripetizione */}
+          {/* Box Selettore Manuale Inizio/Fine (aperto se Personalizzato o visibile per precisione) */}
+          {isCustomTimeActive && (
+            <View style={[styles.sectionCard, { marginTop: 10 }]}>
+              <View style={styles.timeInputsRow}>
+                <View style={styles.timeInputCol}>
+                  <Text style={styles.timeInputSublabel}>Inizio</Text>
+                  <TextInput
+                    style={styles.timeBox}
+                    value={startTime}
+                    onChangeText={setStartTime}
+                    placeholder="08:00"
+                    placeholderTextColor="#64748b"
+                    keyboardType="numbers-and-punctuation"
+                    maxLength={5}
+                  />
+                </View>
+                <View style={styles.timeArrow}>
+                  <Ionicons name="arrow-forward" size={16} color="#64748b" />
+                </View>
+                <View style={styles.timeInputCol}>
+                  <Text style={styles.timeInputSublabel}>Fine</Text>
+                  <TextInput
+                    style={styles.timeBox}
+                    value={endTime}
+                    onChangeText={setEndTime}
+                    placeholder="10:00"
+                    placeholderTextColor="#64748b"
+                    keyboardType="numbers-and-punctuation"
+                    maxLength={5}
+                  />
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* ── 5. Opzioni di Ripetizione ── */}
           <Text style={styles.sectionTitle}>RIPETIZIONE</Text>
           <View style={styles.sectionCard}>
             {/* Opzione 1: Tutto il semestre */}
@@ -303,18 +604,21 @@ function ManualEventForm({
               <View style={styles.optionLeft}>
                 <View
                   style={[
-                    styles.radioCircle,
-                    repetitionType === 'semester' && { borderColor: theme.primary },
+                    styles.checkCircle,
+                    repetitionType === 'semester' && {
+                      backgroundColor: theme.primary,
+                      borderColor: theme.primary,
+                    },
                   ]}
                 >
                   {repetitionType === 'semester' && (
-                    <View style={[styles.radioDot, { backgroundColor: theme.primary }]} />
+                    <Ionicons name="checkmark" size={13} color="#ffffff" />
                   )}
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.optionTitle}>Tutto il semestre</Text>
                   <Text style={styles.optionSubtitle}>
-                    Si ripete ogni settimana fino alla fine del semestre ({defaultSemesterEnd})
+                    Fino a {formatDateItalian(detectedSemesterEnd)}
                   </Text>
                 </View>
               </View>
@@ -322,7 +626,7 @@ function ManualEventForm({
 
             <View style={styles.divider} />
 
-            {/* Opzione 2: Fino a data personalizzata */}
+            {/* Opzione 2: Fino a data specifica */}
             <TouchableOpacity
               style={styles.optionRow}
               onPress={() => setRepetitionType('custom_date')}
@@ -331,18 +635,21 @@ function ManualEventForm({
               <View style={styles.optionLeft}>
                 <View
                   style={[
-                    styles.radioCircle,
-                    repetitionType === 'custom_date' && { borderColor: theme.primary },
+                    styles.checkCircle,
+                    repetitionType === 'custom_date' && {
+                      backgroundColor: theme.primary,
+                      borderColor: theme.primary,
+                    },
                   ]}
                 >
                   {repetitionType === 'custom_date' && (
-                    <View style={[styles.radioDot, { backgroundColor: theme.primary }]} />
+                    <Ionicons name="checkmark" size={13} color="#ffffff" />
                   )}
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.optionTitle}>Fino a data specifica</Text>
                   <Text style={styles.optionSubtitle}>
-                    Si ripete ogni settimana fino alla data scelta
+                    Seleziona sul calendario o tramite le opzioni veloci
                   </Text>
                 </View>
               </View>
@@ -350,37 +657,48 @@ function ManualEventForm({
 
             {repetitionType === 'custom_date' && (
               <View style={styles.customDateContainer}>
-                <View style={styles.dateInputRow}>
-                  <Text style={styles.dateInputLabel}>Ripeti fino al:</Text>
-                  <TextInput
-                    style={styles.dateBox}
-                    value={repeatUntilDate}
-                    onChangeText={setRepeatUntilDate}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor="#64748b"
-                    maxLength={10}
-                  />
+                {/* Banner data attualmente selezionata */}
+                <View style={styles.selectedDateBanner}>
+                  <Ionicons name="calendar" size={15} color={theme.accent} style={{ marginRight: 6 }} />
+                  <Text style={[styles.selectedDateBannerText, { color: theme.accent }]}>
+                    Fino al {formatDateItalian(repeatUntilDate)}
+                  </Text>
                 </View>
+
+                {/* Pill arrotondate stile 'Anticipo in aula' per +1 mese, +2 mesi, Fine Semestre */}
                 <View style={styles.dateQuickChips}>
                   <TouchableOpacity
-                    style={styles.dateQuickChip}
+                    style={styles.pillDateQuickChip}
                     onPress={() => setCustomDateRelative(1)}
+                    activeOpacity={0.7}
                   >
-                    <Text style={styles.dateQuickChipText}>+1 Mese</Text>
+                    <Ionicons name="add-circle-outline" size={13} color={theme.accent} style={{ marginRight: 4 }} />
+                    <Text style={[styles.pillDateQuickChipText, { color: theme.accent }]}>+1 Mese</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.dateQuickChip}
+                    style={styles.pillDateQuickChip}
                     onPress={() => setCustomDateRelative(2)}
+                    activeOpacity={0.7}
                   >
-                    <Text style={styles.dateQuickChipText}>+2 Mesi</Text>
+                    <Ionicons name="add-circle-outline" size={13} color={theme.accent} style={{ marginRight: 4 }} />
+                    <Text style={[styles.pillDateQuickChipText, { color: theme.accent }]}>+2 Mesi</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.dateQuickChip}
-                    onPress={() => setRepeatUntilDate(defaultSemesterEnd)}
+                    style={styles.pillDateQuickChip}
+                    onPress={() => setRepeatUntilDate(detectedSemesterEnd)}
+                    activeOpacity={0.7}
                   >
-                    <Text style={styles.dateQuickChipText}>Fine Semestre</Text>
+                    <Ionicons name="school-outline" size={13} color={theme.accent} style={{ marginRight: 4 }} />
+                    <Text style={[styles.pillDateQuickChipText, { color: theme.accent }]}>Fine Semestre</Text>
                   </TouchableOpacity>
                 </View>
+
+                {/* Date Picker Calendario Inline Interattivo */}
+                <InlineCalendarPicker
+                  selectedDate={repeatUntilDate}
+                  onSelectDate={setRepeatUntilDate}
+                  theme={theme}
+                />
               </View>
             )}
 
@@ -395,12 +713,15 @@ function ManualEventForm({
               <View style={styles.optionLeft}>
                 <View
                   style={[
-                    styles.radioCircle,
-                    repetitionType === 'single' && { borderColor: theme.primary },
+                    styles.checkCircle,
+                    repetitionType === 'single' && {
+                      backgroundColor: theme.primary,
+                      borderColor: theme.primary,
+                    },
                   ]}
                 >
                   {repetitionType === 'single' && (
-                    <View style={[styles.radioDot, { backgroundColor: theme.primary }]} />
+                    <Ionicons name="checkmark" size={13} color="#ffffff" />
                   )}
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
@@ -413,7 +734,7 @@ function ManualEventForm({
             </TouchableOpacity>
           </View>
 
-          {/* Tasto Elimina per lezioni esistenti */}
+          {/* ── 6. Tasto Elimina per lezioni esistenti ── */}
           {editingEvent && onDelete && (
             <TouchableOpacity
               style={styles.deleteButton}
@@ -488,35 +809,130 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
     marginLeft: 14,
   },
-  daySelectorRow: {
+
+  /* Giorni della Settimana (Glowing + Stesse Colorazioni & Animazioni del Pannello Orari) */
+  daysRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 4,
     gap: 8,
   },
-  dayChip: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+  dayItem: {
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    height: 44,
   },
-  dayChipText: {
-    fontSize: 13,
+  dayCircle: {
+    width: 48,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    backgroundColor: '#1c1c1e',
+  },
+  dayCircleActive: {
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.95,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  dayText: {
+    color: '#8e8e93',
+    fontSize: 12,
     fontWeight: '700',
-    color: '#94a3b8',
+    letterSpacing: 0.5,
   },
-  dayChipTextSelected: {
+  dayTextActive: {
     color: '#ffffff',
   },
+  dayDot: {
+    position: 'absolute',
+    bottom: 0,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+
+  /* Orari di Default Pill stile Anticipo in aula */
+  timeQuickRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    width: '100%',
+  },
+  timeQuickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 12,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    flexGrow: 1,
+  },
+  chipActive: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8e8e93',
+  },
+  chipTextActive: {
+    fontWeight: '700',
+  },
+
+  /* Selezione Orari stile Lista Tema (themeGrid, themeCardItem, themeColorDot) */
+  themeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  themeCardItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minWidth: '47%',
+    flexGrow: 1,
+    gap: 8,
+  },
+  themeColorDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  themeCardName: {
+    fontSize: 13,
+    color: '#cbd5e1',
+    fontWeight: '500',
+    flex: 1,
+  },
+
+  /* Box orario manuale */
   timeInputsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
   },
   timeInputCol: {
     alignItems: 'center',
@@ -544,26 +960,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginTop: 18,
   },
-  presetsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingBottom: 12,
-  },
-  presetChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  presetChipText: {
-    fontSize: 12,
-    color: '#94a3b8',
-    fontWeight: '600',
-  },
+
+  /* Opzioni Ripetizione */
   optionRow: {
     paddingHorizontal: 14,
     paddingVertical: 14,
@@ -572,19 +970,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  radioCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
     borderColor: '#64748b',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  radioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
   optionTitle: {
     fontSize: 15,
@@ -596,50 +989,125 @@ const styles = StyleSheet.create({
     color: '#8e8e93',
     marginTop: 2,
   },
+
+  /* Sezione Data Personalizzata & Date Picker */
   customDateContainer: {
     paddingHorizontal: 14,
     paddingBottom: 14,
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
-  dateInputRow: {
+  selectedDateBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     marginTop: 8,
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  dateInputLabel: {
-    fontSize: 14,
-    color: '#ffffff',
-    fontWeight: '600',
-  },
-  dateBox: {
-    width: 120,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    textAlign: 'center',
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ffffff',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+  selectedDateBannerText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   dateQuickChips: {
     flexDirection: 'row',
     gap: 8,
+    justifyContent: 'space-between',
+    marginBottom: 14,
   },
-  dateQuickChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  pillDateQuickChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 8,
   },
-  dateQuickChipText: {
+  pillDateQuickChipText: {
     fontSize: 12,
-    color: '#38bdf8',
-    fontWeight: '600',
+    fontWeight: '700',
   },
+
+  /* Inline Calendar Picker */
+  calendarContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    padding: 12,
+  },
+  calendarHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  calendarNavBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarMonthText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  calendarWeekdaysRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 8,
+  },
+  calendarWeekdayText: {
+    width: 34,
+    textAlign: 'center',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  calendarDaysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+  },
+  calendarDayCellEmpty: {
+    width: '14.28%',
+    height: 36,
+  },
+  calendarDayCell: {
+    width: '14.28%',
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
+    marginVertical: 2,
+  },
+  calendarDayCellActive: {
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  calendarDayText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#e2e8f0',
+  },
+  calendarDayTextActive: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
+
   deleteButton: {
     flexDirection: 'row',
     alignItems: 'center',

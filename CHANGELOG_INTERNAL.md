@@ -237,3 +237,47 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - **Se già scaricata**: il cambio avviene istantaneamente (<50ms) senza mostrare il modal di download. Vengono ripristinati subito il canale prescelto, le presenze e gli orari manuali, indirizzando l'utente alla vista orari. In background viene lanciata in maniera asincrona la sola verifica ordinaria degli aggiornamenti (`checkCourseUpdates`), scaricando modifiche solo in caso di differenze reali dell'HTML.
   - **Se non ancora scaricata**: viene mostrata la barra di avanzamento e scaricato il corso per la prima volta.
   - Il pulsante esplicito *"Svuota cache e ricarica orario"* nelle impostazioni rimane disponibile per chi desidera forzare la riscrittura integrale.
+
+---
+
+## 14. Refactoring UI Modale "Nuova Lezione" & Uniformazione Pulsanti Modali a Tema
+
+### Colore Tema su "Salva" e Checkmark "V" nei Modali
+- **File**: `src/components/NativeSheetModal.tsx`, `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Il pulsante di conferma / checkmark "V" nell'header del modale "Nuova Lezione" e nei menu adotta il colore del tema attivo (`tintColor: theme.primary`).
+  - Tutti i pulsanti di azione prominenti (come i pulsanti "Salva" sparsi nei vari modali) ora ereditano automaticamente `theme.primary` come colore di sfondo/tint con testo ad alto contrasto (`#ffffff`).
+
+### Selettore Giorni con Glow & Animazioni a Molla (Modale Nuova Lezione)
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Replicato il selettore giorni della schermata orari (`src/app/index.tsx`): capsule con bordo semitrasparente, punto attivo indicatore (`activeDot`) e ombra luminosa fluorescente a tema (`shadowColor: theme.primary`, `shadowOpacity: 0.95`, `elevation: 8`).
+  - Introdotta animazione a molla con rimbalzo elastico (`Animated.spring`, `friction: 4`, `tension: 50`) al tocco del giorno.
+
+### Slot Orari di Default e Stile Pill "Anticipo in Aula"
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Orari predefiniti standardizzati sui blocchi orari universitari: `08:00 - 10:00`, `10:00 - 12:00`, `13:00 - 15:00`, `15:00 - 17:00`, `17:00 - 19:00`.
+  - Chip orario a forma di pill arrotondata (`borderRadius: 18`) identiche allo stile "Anticipo in aula" di `CommuterConfigModal.tsx`, con icona ad orologio e glow attivo su bordo e testo.
+
+### Selezione Orari in Stile Selettore Tema
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Ridisegnata la lista degli slot orari ispirandosi alla card list del selettore del tema: layout a griglia con card orario, indicatore circolare con checkmark "V" in bianco su sfondo `theme.primary` e bordo evidenziato per lo slot selezionato.
+
+### Estrazione Dinamica Fine Semestre dalla Bacheca/Orario Gemini
+- **File**: `src/utils/manualEvents.ts`, `src/app/index.tsx`, `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Nuova funzione `getSemesterEndDateFromSchedule`: analizza sia l'intestazione del foglio orari (`schedule.info.semester`) sia gli avvisi/bacheca estratti da Gemini (`schedule.alerts`) per individuare l'effettivo termine delle lezioni (es. "dal 23 settembre al 16 gennaio 2027" ➔ `2027-01-16`), con fallback intelligente su `getDefaultSemesterEndDate()`.
+  - La card di ripetizione per "Tutto il semestre" espone all'utente la data esatta calcolata (es. *Fino a 16 Gennaio 2027*).
+
+### Date Picker Interattivo & Pill Rapide Arrotondate
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Implementato un componente interno `InlineCalendarPicker`: un calendario visivo touch in puro React Native con cambio mese (`<` / `>`), giorni della settimana e griglia giorni con indicatore circolare a tema e glow per la data selezionata (compatibile al 100% con Expo Go senza dipendenze native esterne).
+  - Le pillole di offset rapido (`+1 Mese`, `+2 Mesi`, `Fine Semestre`) sono state convertite in pill arrotondate (`borderRadius: 18`) con testo colorato con l'accento del tema.
+
+### Pulsante "+" Minimalista nel Pannello Orari
+- **File**: `src/app/index.tsx`
+- **Descrizione**:
+  - Rimosso il testo "+ Lezione": nell'header dei giorni è ora presente un pulsante circolare minimalista contenente unicamente l'icona `+` (`Ionicons name="add"`), pulito ed elegante.
