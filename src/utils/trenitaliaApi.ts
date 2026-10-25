@@ -2582,9 +2582,9 @@ export function evaluateTrainStatus(
     return {
       statusType: 'scheduled',
       badgeLabel: 'Programmato',
-      badgeColor: '#38bdf8',
-      badgeBg: 'rgba(56, 189, 248, 0.12)',
-      badgeBorder: 'rgba(56, 189, 248, 0.25)',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.12)',
+      badgeBorder: 'rgba(148, 163, 184, 0.25)',
       iconName: 'calendar-outline',
     };
   }

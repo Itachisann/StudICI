@@ -102,3 +102,20 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - **Filtro Treni Utili (`minDepartureMins`)**: Passato `minDepartureMins` a `findOptimalCommuterTrain` ed eliminata la tolleranza retroattiva di 60 minuti in `isTrainCatchable`. Qualsiasi treno che parte prima dell'arrivo fisico del passeggero in stazione viene escluso dai treni prendibili.
   - **Garanzia Assoluta di Avanzamento al Treno Successivo**: In `computeOutboundItinerary` e `computeReturnItinerary`, se l'orario di partenza consigliato da casa o dall'università risulterebbe precedente all'orario attuale (`homeDepartureMins < nowMins`), l'algoritmo avanza automaticamente e seleziona il primo treno successivo della lista `availableTrains` per cui `homeDepartureMins >= nowMins`.
   - **Titolo Hero Card Dinamico**: Nel fine settimana o a lezioni terminate, il titolo dell'hero card mostra coerentemente *"Prossima partenza da casa alle"* anziché *"Parti da casa alle"*.
+
+---
+
+## 8. Calibrazione Slider Treni: Rimozione Falsi 'Fermo' e Badge Programmato Grigio
+
+### Rimozione Falsi "Fermo" nello Slider dei Treni
+- **File**: `src/app/viaggio.tsx`
+- **Problema riscontrato**:
+  - Treni fermi al binario in orario prima della partenza (ad esempio il convoglio 7461 alle 12:45 con partenza programmata alle 13:15) mostravano erroneamente l'etichetta `(Fermo)` e il colore ambra sullo slider alternativo, a causa della presenza del flag `Boolean(at.stoppedMinutes)`.
+- **Risoluzione**:
+  - L'etichetta `(Fermo)` sullo slider compare **esclusivamente** quando l'orario attuale supera la partenza stimata (`currentNowM >= atEstDepM`) o programmata (`currentNowM >= atPlannedDepM` se non c'è la stimata).
+  - Un treno fermo al binario ma ancora in orario viene visualizzato in modo pulito con il suo orario regolare, senza falsi avvisi di convoglio bloccato.
+
+### Badge "Programmato" Grigio nel Box di Selezione Treno
+- **File**: `src/app/viaggio.tsx`, `src/utils/trenitaliaApi.ts`
+- **Descrizione**:
+  - Nel box di selezione ed evidenziazione del treno (`trainHighlightCard`), la pillola di stato **"Programmato"** è ora visualizzata in grigio Apple sobrio (`badgeColor: '#94a3b8'`, `badgeBg: 'rgba(148, 163, 184, 0.12)'`, `badgeBorder: 'rgba(148, 163, 184, 0.25)'`), distinguendosi chiaramente dai badge operativi live.

@@ -243,14 +243,23 @@ export default function ViaggioScreen() {
       return {
         statusType: 'scheduled' as const,
         badgeLabel: 'Programmato',
-        badgeColor: '#38bdf8',
-        badgeBg: 'rgba(56, 189, 248, 0.12)',
-        badgeBorder: 'rgba(56, 189, 248, 0.25)',
+        badgeColor: '#94a3b8',
+        badgeBg: 'rgba(148, 163, 184, 0.12)',
+        badgeBorder: 'rgba(148, 163, 184, 0.25)',
         iconName: 'calendar-outline',
       };
     }
     const targetDate = new Date();
-    return evaluateTrainStatus(liveTrain, targetDate, commuterStationName);
+    const res = evaluateTrainStatus(liveTrain, targetDate, commuterStationName);
+    if (res.badgeLabel === 'Programmato') {
+      return {
+        ...res,
+        badgeColor: '#94a3b8',
+        badgeBg: 'rgba(148, 163, 184, 0.12)',
+        badgeBorder: 'rgba(148, 163, 184, 0.25)',
+      };
+    }
+    return res;
   }, [liveTrain, isSelectedDayToday, commuterStationName]);
 
   // Lezioni del giorno selezionato (non presenti nel weekend)
@@ -1891,19 +1900,30 @@ export default function ViaggioScreen() {
                             const isDeparted = Boolean(
                               isSelectedDayToday && at.isDepartedFromStation,
                             );
-                            const atEstDepM = parseTimeToMinutes(
-                              at.stoppedStationEstimatedDep ||
-                                at.departureTimeActual ||
-                                at.departureTimePlanned,
+                            const atPlannedDepM = parseTimeToMinutes(
+                              at.departureTimePlanned || "00:00",
                             );
+                            const atEstDepM = at.stoppedStationEstimatedDep
+                              ? parseTimeToMinutes(at.stoppedStationEstimatedDep)
+                              : at.departureTimeActual &&
+                                  at.departureTimeActual !== at.departureTimePlanned
+                                ? parseTimeToMinutes(at.departureTimeActual)
+                                : 0;
+                            const effectiveDepM =
+                              atEstDepM > 0 ? atEstDepM : atPlannedDepM;
                             const currentNowM =
                               new Date().getHours() * 60 +
                               new Date().getMinutes();
-                            // Il convoglio è evidenziato come fermo oltre l'orario se ha minuti di fermo o ha superato la partenza
+
+                            // Nello slider, (Fermo) deve uscire sempre dal momento in cui si supera
+                            // la partenza stimata o programmata (se non c'è la stimata): solo chi è fermo
+                            // oltre il tempo previsto risulta fermo, non chi è fermo al binario in orario.
                             const isStoppedLate = Boolean(
                               isSelectedDayToday &&
+                                !isDeparted &&
                                 at.isStoppedInStation &&
-                                (Boolean(at.stoppedMinutes) || atEstDepM === 0 || currentNowM >= atEstDepM),
+                                effectiveDepM > 0 &&
+                                currentNowM >= effectiveDepM,
                             );
 
                             return (
