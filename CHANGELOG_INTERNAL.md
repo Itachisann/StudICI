@@ -401,4 +401,16 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
     - Al tocco copia il codice di sincronizzazione cloud negli appunti di sistema e mostra un feedback immediato `Alert.alert("Copiato", "Codice di sincronizzazione copiato negli appunti.")`.
   - Il pulsante principale "Sincronizza" nella card hero si estende elegantemente a tutta larghezza per una leggibilità ottimale.
 
+---
+
+## 19. Risoluzione "unimplemented" e Passaggio a onValueChange per DateTimePicker
+
+### 1. Risoluzione Schermata "unimplemented" su Expo Go
+- **File**: `src/components/ManualEventModal.tsx`, `package.json`, `app.json`
+- **Descrizione**:
+  - Risolto il difetto per cui a video compariva la dicitura `unimplemented` e il warning `WARN DateTimePicker: onChange is deprecated. Use onValueChange, onDismiss, and onNeutralButtonPress instead`.
+  - In ambiente Expo Go / client pre-compilato, il vecchio pacchetto `@react-native-community/datetimepicker` richiede codice nativo non presente nel binary, causando il rendering dell'UnimplementedView di React Native.
+  - Sostituito con `@expo/ui/community/datetime-picker`, che implementa l'esatta interfaccia pubblica community ma sfrutta SwiftUI e Jetpack Compose nativamente inclusi nel runtime di Expo SDK 57.
+  - Sostituito `onChange` con `onValueChange` sia nei due selettori orari ("Inizio", "Fine") che nel selettore data di ripetizione ("Termina il:"), azzerando ogni warning di deprecazione e garantendo il rendering perfetto e fluido del pulsante compatto e del relativo popover nativo su schermo.
+
 

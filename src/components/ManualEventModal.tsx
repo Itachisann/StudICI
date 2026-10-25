@@ -11,10 +11,10 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker, {
-  DateTimePickerEvent,
-  DateTimePickerAndroid,
-} from '@react-native-community/datetimepicker';
+import {
+  DateTimePicker,
+  type DateTimePickerChangeEvent,
+} from '@expo/ui/community/datetime-picker';
 import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '@/context/ThemeContext';
@@ -97,8 +97,8 @@ function ManualEventForm({
   const startTimeDate = useMemo(() => parseTimeToDate(startTime), [startTime]);
   const endTimeDate = useMemo(() => parseTimeToDate(endTime), [endTime]);
 
-  const handleStartTimeChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (selectedDate && (event.type === 'set' || Platform.OS === 'ios')) {
+  const handleStartTimeChange = (_event: DateTimePickerChangeEvent, selectedDate: Date) => {
+    if (selectedDate) {
       const newStartStr = formatTimeFromDate(selectedDate);
       setStartTime(newStartStr);
 
@@ -112,8 +112,8 @@ function ManualEventForm({
     }
   };
 
-  const handleEndTimeChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (selectedDate && (event.type === 'set' || Platform.OS === 'ios')) {
+  const handleEndTimeChange = (_event: DateTimePickerChangeEvent, selectedDate: Date) => {
+    if (selectedDate) {
       setEndTime(formatTimeFromDate(selectedDate));
     }
   };
@@ -301,42 +301,24 @@ function ManualEventForm({
             })}
           </View>
 
-          {/* Selezione Orari Grafica (Inizio -> Fine a due colonne con @react-native-community/datetimepicker) */}
+          {/* Selezione Orari Grafica (Inizio -> Fine a due colonne con DateTimePicker nativo) */}
           <Text style={styles.sectionTitle}>ORARIO LEZIONE</Text>
           <View style={styles.timeSelectorCard}>
             {/* Colonna Orario Inizio */}
             <View style={styles.timeColumn}>
               <Text style={styles.timeColumnLabel}>Inizio</Text>
-              {Platform.OS === 'ios' ? (
-                <View style={styles.timePickerWrapper}>
-                  <DateTimePicker
-                    value={startTimeDate}
-                    mode="time"
-                    display="compact"
-                    locale="it_IT"
-                    themeVariant="dark"
-                    minuteInterval={5}
-                    accentColor={theme.primary}
-                    onChange={handleStartTimeChange}
-                    style={styles.timePickerControl}
-                  />
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.timeBox}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    DateTimePickerAndroid.open({
-                      value: startTimeDate,
-                      onChange: handleStartTimeChange,
-                      mode: 'time',
-                      is24Hour: true,
-                    });
-                  }}
-                >
-                  <Text style={styles.timeBoxValue}>{startTime}</Text>
-                </TouchableOpacity>
-              )}
+              <View style={styles.timePickerWrapper}>
+                <DateTimePicker
+                  value={startTimeDate}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                  locale="it_IT"
+                  themeVariant="dark"
+                  accentColor={theme.primary}
+                  onValueChange={handleStartTimeChange}
+                  style={styles.timePickerControl}
+                />
+              </View>
             </View>
 
             {/* Freccia Direzionale tra Inizio e Fine */}
@@ -347,36 +329,18 @@ function ManualEventForm({
             {/* Colonna Orario Fine */}
             <View style={styles.timeColumn}>
               <Text style={styles.timeColumnLabel}>Fine</Text>
-              {Platform.OS === 'ios' ? (
-                <View style={styles.timePickerWrapper}>
-                  <DateTimePicker
-                    value={endTimeDate}
-                    mode="time"
-                    display="compact"
-                    locale="it_IT"
-                    themeVariant="dark"
-                    minuteInterval={5}
-                    accentColor={theme.primary}
-                    onChange={handleEndTimeChange}
-                    style={styles.timePickerControl}
-                  />
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.timeBox}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    DateTimePickerAndroid.open({
-                      value: endTimeDate,
-                      onChange: handleEndTimeChange,
-                      mode: 'time',
-                      is24Hour: true,
-                    });
-                  }}
-                >
-                  <Text style={styles.timeBoxValue}>{endTime}</Text>
-                </TouchableOpacity>
-              )}
+              <View style={styles.timePickerWrapper}>
+                <DateTimePicker
+                  value={endTimeDate}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                  locale="it_IT"
+                  themeVariant="dark"
+                  accentColor={theme.primary}
+                  onValueChange={handleEndTimeChange}
+                  style={styles.timePickerControl}
+                />
+              </View>
             </View>
           </View>
 
@@ -500,7 +464,7 @@ function ManualEventForm({
                       accentColor={theme.primary}
                       minimumDate={new Date()}
                       style={styles.datePickerControl}
-                      onChange={(event, selectedDate) => {
+                      onValueChange={(_event, selectedDate) => {
                         if (selectedDate) {
                           const yyyy = selectedDate.getFullYear();
                           const mm = String(selectedDate.getMonth() + 1).padStart(2, '0');

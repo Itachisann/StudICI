@@ -76,8 +76,7 @@
         }
       ],
       "react-native-bottom-tabs",
-      "expo-sharing",
-      "@react-native-community/datetimepicker"
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,
