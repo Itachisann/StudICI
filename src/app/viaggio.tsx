@@ -98,6 +98,12 @@ export default function ViaggioScreen() {
   const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() => {
     return new Date().getDay();
   });
+  const activeDayIdxRef = useRef<number>(new Date().getDay());
+  const loadRequestIdRef = useRef<number>(0);
+
+  useEffect(() => {
+    activeDayIdxRef.current = selectedDayIdx;
+  }, [selectedDayIdx]);
   const [selectedClassIndex, setSelectedClassIndex] = useState<number | null>(
     null,
   );
@@ -337,6 +343,8 @@ export default function ViaggioScreen() {
           ? overrides.selectedTrainNumber
           : selectedTrainNumber;
 
+      const requestId = ++loadRequestIdRef.current;
+
       if (!silent) {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -348,6 +356,7 @@ export default function ViaggioScreen() {
 
       try {
         const currentConfig = await getCommuterConfig();
+        if (requestId !== loadRequestIdRef.current) return;
         setConfig(currentConfig);
 
         if (currentConfig.enabled === false) {
@@ -383,6 +392,7 @@ export default function ViaggioScreen() {
           console.warn("Errore lettura schedule corso:", err);
         }
 
+        if (requestId !== loadRequestIdRef.current) return;
         setSchedule(sched);
 
         // Calcola data target in base al giorno selezionato
@@ -477,13 +487,19 @@ export default function ViaggioScreen() {
           forceRefresh: isRefresh,
         });
 
+        if (requestId !== loadRequestIdRef.current) return;
+        // Ignora il risultato se l'utente ha già switchato a un altro giorno
+        if (effDayIdx !== activeDayIdxRef.current) return;
+
         setItinerary(itin);
         setLastUpdated(new Date());
       } catch (err: any) {
         console.warn("Errore calcolo itinerario pendolare", err);
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (requestId === loadRequestIdRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [
@@ -507,6 +523,7 @@ export default function ViaggioScreen() {
   );
 
   const handleDayChange = (dayIdx: number) => {
+    activeDayIdxRef.current = dayIdx;
     setSelectedDayIdx(dayIdx);
     setSelectedClassIndex(null);
     setSelectedTrainOffset(0);
@@ -521,7 +538,9 @@ export default function ViaggioScreen() {
   };
 
   const handleResetToToday = () => {
-    handleDayChange(new Date().getDay());
+    const today = new Date().getDay();
+    activeDayIdxRef.current = today;
+    handleDayChange(today);
   };
 
   const handleDirectionChange = (newDir: "outbound" | "return") => {

@@ -26,15 +26,30 @@ export interface ManualClassEvent {
 const MANUAL_EVENTS_PREFIX = 'studici_manual_events_';
 const MANUAL_TOMBSTONES_PREFIX = 'studici_manual_tombstones_';
 
-let manualChangeListener: (() => void) | null = null;
+const manualEventsListeners = new Set<() => void>();
+
+export function subscribeToManualEventsChanges(cb: () => void): () => void {
+  manualEventsListeners.add(cb);
+  return () => {
+    manualEventsListeners.delete(cb);
+  };
+}
 
 export function setManualEventsChangeListener(cb: (() => void) | null): void {
-  manualChangeListener = cb;
+  if (cb) {
+    manualEventsListeners.add(cb);
+  }
 }
 
 function notifyManualChange(): void {
   try {
-    manualChangeListener?.();
+    for (const listener of manualEventsListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.warn('Errore listener lezioni manuali:', e);
+      }
+    }
   } catch {}
 }
 

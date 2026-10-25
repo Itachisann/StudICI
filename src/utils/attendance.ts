@@ -118,17 +118,34 @@ export async function getAttendanceRecords(courseUrl?: string): Promise<Attendan
 export async function saveAttendanceList(records: AttendanceRecord[], courseUrl?: string): Promise<void> {
   const key = await getAttendanceStorageKey(courseUrl);
   await AsyncStorage.setItem(key, JSON.stringify(records));
-  notifyLocalChange();
+  notifyAttendanceChanged();
 }
 
-/** Callback invocato dopo ogni modifica locale alle presenze (usato dalla sync cloud). */
-let localChangeListener: (() => void) | null = null;
-export function setAttendanceChangeListener(cb: (() => void) | null): void {
-  localChangeListener = cb;
+/** Set di listener invocati dopo ogni modifica locale alle presenze. */
+const attendanceListeners = new Set<() => void>();
+
+export function subscribeToAttendanceChanges(cb: () => void): () => void {
+  attendanceListeners.add(cb);
+  return () => {
+    attendanceListeners.delete(cb);
+  };
 }
-function notifyLocalChange(): void {
+
+export function setAttendanceChangeListener(cb: (() => void) | null): void {
+  if (cb) {
+    attendanceListeners.add(cb);
+  }
+}
+
+export function notifyAttendanceChanged(): void {
   try {
-    localChangeListener?.();
+    for (const listener of attendanceListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.warn('Errore listener presenze:', e);
+      }
+    }
   } catch {}
 }
 
@@ -309,7 +326,7 @@ export async function clearAllAttendance(courseUrl?: string): Promise<void> {
   await addTombstones(current.map(r => r.id), courseUrl);
   const key = await getAttendanceStorageKey(courseUrl);
   await AsyncStorage.removeItem(key);
-  notifyLocalChange();
+  notifyAttendanceChanged();
 }
 
 /**
@@ -362,7 +379,7 @@ export async function saveAllAttendanceAcrossCourses(
     ]);
     if (pairs.length > 0) {
       await AsyncStorage.multiSet(pairs);
-      notifyLocalChange();
+      notifyAttendanceChanged();
     }
   } catch (err) {
     console.error('Errore ripristino presenze multi-corso:', err);

@@ -346,4 +346,36 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - **Esportazione PDF Orario**: `exportScheduleToPdf` ora supporta e riceve le lezioni manuali caricate da `getManualEvents()`. Le lezioni manuali vengono posizionate nelle colonne dei giorni feriali corrispondenti (estendendo se necessario il range orario della griglia 8:00 - 19:00), con il proprio colore distintivo e con l'etichetta `[MANUALE]` nell'intestazione della cella.
   - **Registro Presenze**: Il modello `AttendanceRecord` supporta la proprietà opzionale `isManual`. Le lezioni manuali e le relative presenze registrate appaiono all'interno del modale "Registro Presenze" contraddistinte dal badge `[MANUALE]` e vengono conteggiate nelle statistiche percentuali di frequenza e nel report PDF delle presenze.
 
+---
+
+## 17. Rimozione Tasti Salva Ridondanti, Header Tick Nativo, Reattività Istantanea Presenze e Fix Race Condition Viaggio
+
+### 1. Modale Modifica / Nuova Lezione e Callstack Liquid Glass
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - **Nuova Lezione**: Rimosso completamente il pulsante "Aggiungi Lezione" in fondo alla schermata. Il salvataggio avviene in modo pulito ed esclusivo tramite la spunta ("Tick") nativa in alto a destra nell'header.
+  - **Modifica Lezione**: Rimosso il tasto ridondante "Salva Modifiche". È presente in basso unicamente il pulsante **"Elimina questa lezione"**, stilizzato con Callstack Liquid Glass a rilievo pieno nel colore del tema (`accentColor={theme.primary}`, `glow={true}`) con testo e icona cestino bianchi ad alto contrasto.
+
+### 2. Conversione Tasti "Salva" in Tick Nativo (Header Native-Stack)
+- **File**: `src/components/CommuterConfigModal.tsx`, `src/app/settings.tsx`
+- **Descrizione**:
+  - Uniformati tutti i pulsanti di salvataggio presenti negli header nativi (`@react-navigation/native-stack` e `NativeSheetModal`):
+    - Nel modale di configurazione pendolare (`CommuterConfigModal.tsx`): sostituita l'etichetta testuale `"Salva"` con un'icona Tick nativa (`icon: { type: "sfSymbol", name: "checkmark" }`), variante `prominent` con `theme.primary`.
+    - Nel modale "Specifiche" (Canale / Anno in `settings.tsx`): convertito il tasto di destra in una spunta Tick nativa (`sfSymbol: "checkmark"`).
+
+### 3. Reattività e Sincronizzazione Istantanea Presenze nel Tabellone Orari
+- **File**: `src/utils/attendance.ts`, `src/app/index.tsx`, `src/app/settings.tsx`, `src/utils/manualEvents.ts`
+- **Descrizione**:
+  - Implementato un pattern di notifica pub/sub multi-listener (`subscribeToAttendanceChanges` e `subscribeToManualEventsChanges`) per lo storage locale di presenze e lezioni manuali.
+  - Nella schermata Orari (`index.tsx`), aggiunto un listener in tempo reale che ricarica istantaneamente lo stato `attendanceRecords` e `manualEvents` al verificarsi di qualsiasi mutazione.
+  - Quando l'utente elimina o revoca una presenza dal Registro Presenze (o tramite swipe in `settings.tsx`), la modifica viene notificata a runtime: tornando o visualizzando la sezione Orari, la spunta della presenza risulta già rimossa in tempo reale senza dover attendere il riavvio dell'app.
+
+### 4. Risoluzione Definitiva Race Condition nello Switch Giorni (Sezione "Viaggio")
+- **File**: `src/app/viaggio.tsx`
+- **Descrizione**:
+  - Risolto il difetto per cui, cambiando giorno rapidamente nella barra settimanale di "Viaggio", una risposta di rete asincrona lenta relativa al giorno precedente sovrascriveva i dati del giorno appena selezionato dall'utente.
+  - Introdotti due meccanismi di sincronia atomica:
+    - **Request ID Sequence (`loadRequestIdRef`)**: ogni invocazione di `loadData` incrementa un contatore di richiesta univoco. Tutte le chiamate asincrone precedenti in volo vengono identificate come stale e scartate prima di aggiornare `schedule`, `itinerary` o lo stato di loading.
+    - **Active Day Reference (`activeDayIdxRef`)**: prima di applicare l'itinerario calcolato, il sistema convalida che il giorno dell'itinerario corrisponda rigidamente al giorno attualmente attivo, impedendo categoricamente a treni o orari di giorni precedenti di comparire nel tabellone odierno o selezionato.
+
 

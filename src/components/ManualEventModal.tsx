@@ -604,47 +604,28 @@ function ManualEventForm({
             </TouchableOpacity>
           </View>
 
-          {/* Pulsanti Azione Callstack Liquid Glass in basso */}
-          <View style={styles.bottomActionContainer}>
-            <NativeActionButton
-              label={editingEvent ? "Salva Modifiche" : "Aggiungi Lezione"}
-              onPress={handleSave}
-              accentColor={theme.primary}
-              glow={true}
-              icon={
-                <Ionicons
-                  name="checkmark-circle"
-                  size={18}
-                  color="#ffffff"
-                  style={{ marginRight: 6 }}
-                />
-              }
-              style={{ width: "100%", height: 50, borderRadius: 25 }}
-              pillStyle={{ height: 50, borderRadius: 25 }}
-              textStyle={{ fontSize: 15, fontWeight: "700" }}
-            />
-
-            {editingEvent && onDelete && (
+          {/* Pulsante Elimina in basso solo in modalità modifica, nel colore del tema con Callstack Liquid Glass */}
+          {editingEvent && onDelete && (
+            <View style={styles.bottomActionContainer}>
               <NativeActionButton
                 label="Elimina questa lezione"
-                variant="outlined"
-                accentColor="#ef4444"
-                glow={false}
+                accentColor={theme.primary}
+                glow={true}
                 onPress={handleDelete}
                 icon={
                   <Ionicons
                     name="trash-outline"
-                    size={17}
-                    color="#ef4444"
+                    size={18}
+                    color="#ffffff"
                     style={{ marginRight: 6 }}
                   />
                 }
-                style={{ width: "100%", height: 48, borderRadius: 24, marginTop: 12 }}
-                pillStyle={{ height: 48, borderRadius: 24 }}
-                textStyle={{ fontSize: 14.5, fontWeight: "600", color: "#ef4444" }}
+                style={{ width: "100%", height: 50, borderRadius: 25 }}
+                pillStyle={{ height: 50, borderRadius: 25 }}
+                textStyle={{ fontSize: 15, fontWeight: "700", color: "#ffffff" }}
               />
-            )}
-          </View>
+            </View>
+          )}
 
           <View style={{ height: 40 }} />
         </ScrollView>

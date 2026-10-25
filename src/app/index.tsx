@@ -40,6 +40,7 @@ import {
   getDateForDayIndex,
   toggleAttendance,
   toggleDayAttendance,
+  subscribeToAttendanceChanges,
 } from "../utils/attendance";
 import {
   ManualClassEvent,
@@ -49,6 +50,7 @@ import {
   deleteManualEvent,
   manualEventToClassEvent,
   isManualEventActiveOnDate,
+  subscribeToManualEventsChanges,
 } from "../utils/manualEvents";
 import {
   formatSapienzaAddress,
@@ -346,6 +348,20 @@ export default function ScheduleScreen() {
     });
     return unsub;
   }, [loadData, loadAttendance, loadManualEvents]);
+
+  // Sincronizzazione istantanea in tempo reale tra tab per presenze e lezioni manuali
+  useEffect(() => {
+    const unsubAtt = subscribeToAttendanceChanges(() => {
+      loadAttendance();
+    });
+    const unsubMan = subscribeToManualEventsChanges(() => {
+      loadManualEvents();
+    });
+    return () => {
+      unsubAtt();
+      unsubMan();
+    };
+  }, [loadAttendance, loadManualEvents]);
 
   const handleClassLongPress = useCallback(
     async (cls: ClassEvent) => {

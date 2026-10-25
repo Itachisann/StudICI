@@ -888,7 +888,8 @@ function MainFormScreen() {
       unstable_headerRightItems: () => [
         {
           type: "button",
-          label: "Salva",
+          label: "",
+          icon: { type: "sfSymbol", name: "checkmark" },
           variant: "prominent" as const,
           prominent: true,
           tintColor: theme.primary,

@@ -481,7 +481,7 @@ export default function ProfiloScreen() {
       if (Platform.OS === "ios") {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       }
-      const updated = await deleteAttendanceRecord(record.id);
+      const updated = await deleteAttendanceRecord(record.id, degreeUrl || undefined);
       setAttendanceRecords(updated);
       setAttendanceStats(getAttendanceStats(updated));
       if (iCloudAutoSync) {
@@ -1991,10 +1991,12 @@ export default function ProfiloScreen() {
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
-            label: "Salva",
+            label: "",
+            sfSymbol: "checkmark",
             prominent: true,
             tintColor: theme.primary,
             disabled: !selectedTabForSpecifiche,
+            accessibilityLabel: "Salva",
             onPress: async () => {
               if (selectedTabForSpecifiche) {
                 await selectDefaultTab(selectedTabForSpecifiche);
