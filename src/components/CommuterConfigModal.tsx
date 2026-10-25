@@ -889,6 +889,7 @@ function MainFormScreen() {
         {
           type: "button",
           label: "Salva",
+          variant: "prominent" as const,
           prominent: true,
           tintColor: theme.primary,
           disabled: isUnconfigured ? !isInitComplete : false,

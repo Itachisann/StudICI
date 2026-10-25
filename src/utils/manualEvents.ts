@@ -79,86 +79,79 @@ export function getDefaultSemesterEndDate(fromDate: Date = new Date()): string {
   return `${endYear}-${mm}-${dd}`;
 }
 
-const ITALIAN_MONTHS: Record<string, number> = {
-  gennaio: 0,
-  febbraio: 1,
-  marzo: 2,
-  aprile: 3,
-  maggio: 4,
-  giugno: 5,
-  luglio: 6,
-  agosto: 7,
-  settembre: 8,
-  ottobre: 9,
-  novembre: 10,
-  dicembre: 11,
-};
+/**
+ * Estrae dinamicamente la data finale del semestre dalle informazioni estratte dal foglio orari Sapienza
+ * (ad esempio: "1° Semestre · Lezioni dal 29/09/2026 al 16/01/2027" o "al 16 Gennaio 2027").
+ * Se non reperibile, restituisce null consentendo il fallback a getDefaultSemesterEndDate().
+ */
+export function extractSemesterEndDate(semesterStr?: string): string | null {
+  if (!semesterStr) return null;
+
+  // 1. Cerca pattern numerico "al DD/MM/YYYY" o "al DD-MM-YYYY" o "al DD/MM/YY"
+  const numericMatch = semesterStr.match(/al\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/i);
+  if (numericMatch) {
+    const day = parseInt(numericMatch[1], 10);
+    const month = parseInt(numericMatch[2], 10);
+    let year = numericMatch[3] ? parseInt(numericMatch[3], 10) : new Date().getFullYear();
+    if (year < 100) year += 2000;
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      return `${year}-${mm}-${dd}`;
+    }
+  }
+
+  // 2. Cerca pattern testuale "al DD [Mese] [YYYY]"
+  const textMatch = semesterStr.match(/al\s+(\d{1,2})\s+([a-zA-Zàèéìòù]+)(?:\s+(\d{4}))?/i);
+  if (textMatch) {
+    const day = parseInt(textMatch[1], 10);
+    const monthName = textMatch[2].toLowerCase();
+    const monthsMap: Record<string, number> = {
+      gennaio: 1, gen: 1,
+      febbraio: 2, feb: 2,
+      marzo: 3, mar: 3,
+      aprile: 4, apr: 4,
+      maggio: 5, mag: 5,
+      giugno: 6, giu: 6,
+      luglio: 7, lug: 7,
+      agosto: 8, ago: 8,
+      settembre: 9, set: 9,
+      ottobre: 10, ott: 10,
+      novembre: 11, nov: 11,
+      dicembre: 12, dic: 12,
+    };
+    const month = monthsMap[monthName];
+    if (month && day >= 1 && day <= 31) {
+      let year = textMatch[3] ? parseInt(textMatch[3], 10) : new Date().getFullYear();
+      const currentMonth = new Date().getMonth();
+      if (!textMatch[3] && month <= 2 && currentMonth >= 8) {
+        year += 1;
+      }
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      return `${year}-${mm}-${dd}`;
+    }
+  }
+
+  return null;
+}
 
 /**
- * Estrae la data di conclusione del semestre dalle informazioni della bacheca/orario
- * estratte da Gemini/Sapienza (presenti in schedule.info.semester o schedule.alerts).
- * Se non reperibile, ricorre al calcolo stimato di default del semestre accademico.
+ * Formatta una stringa data YYYY-MM-DD in formato leggibile italiano (es. "16 Gennaio 2027").
  */
-export function getSemesterEndDateFromSchedule(
-  semesterText?: string,
-  alerts?: string[]
-): string {
-  const candidates: string[] = [];
-  if (semesterText && semesterText.trim()) {
-    candidates.push(semesterText.trim());
+export function formatDisplayDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    if (!y || !m || !d) return dateStr;
+    const months = [
+      'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
+      'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'
+    ];
+    return `${d} ${months[m - 1]} ${y}`;
+  } catch {
+    return dateStr;
   }
-  if (Array.isArray(alerts) && alerts.length > 0) {
-    candidates.push(...alerts);
-  }
-
-  const currentYear = new Date().getFullYear();
-
-  for (const text of candidates) {
-    if (!text) continue;
-
-    // Pattern 1: "... al 16 gennaio 2027" o "... fino al 22 dicembre" o "... termine lezioni 18 gennaio"
-    const matchNamed = text.match(
-      /(?:al(?:l['’]|le)?|fino al|termine(?:ranno)? (?:il|le)?(?:zioni)?)\s+(\d{1,2})\s+([a-zA-Zàèéìòù]+)(?:\s+(\d{4}))?/i
-    );
-    if (matchNamed) {
-      const day = parseInt(matchNamed[1], 10);
-      const monthStr = matchNamed[2].toLowerCase().trim();
-      const monthIdx = ITALIAN_MONTHS[monthStr];
-      if (monthIdx !== undefined && day >= 1 && day <= 31) {
-        let year = matchNamed[3] ? parseInt(matchNamed[3], 10) : currentYear;
-        // Se il mese è nei primi mesi dell'anno (gen-mar) e ci troviamo in autunno, l'anno è il successivo
-        if (!matchNamed[3] && monthIdx <= 2 && new Date().getMonth() >= 7) {
-          year = currentYear + 1;
-        }
-        const mm = String(monthIdx + 1).padStart(2, '0');
-        const dd = String(day).padStart(2, '0');
-        return `${year}-${mm}-${dd}`;
-      }
-    }
-
-    // Pattern 2: "... al 21/12/2026" o "... - 21/12/2026" o "... al 16.01.2027"
-    const matchNum = text.match(
-      /(?:al(?:l['’]|le)?|fino al|-)\s*(\d{1,2})[\/\.-](\d{1,2})(?:[\/\.-](\d{2,4}))?/i
-    );
-    if (matchNum) {
-      const day = parseInt(matchNum[1], 10);
-      const month = parseInt(matchNum[2], 10);
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-        let year = currentYear;
-        if (matchNum[3]) {
-          year = parseInt(matchNum[3], 10);
-          if (year < 100) year += 2000;
-        } else if (month <= 3 && new Date().getMonth() >= 7) {
-          year = currentYear + 1;
-        }
-        const mm = String(month).padStart(2, '0');
-        const dd = String(day).padStart(2, '0');
-        return `${year}-${mm}-${dd}`;
-      }
-    }
-  }
-
-  return getDefaultSemesterEndDate();
 }
 
 /**

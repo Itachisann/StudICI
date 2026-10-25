@@ -743,21 +743,16 @@ export default function ScheduleScreen() {
               <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
             </View>
             <TouchableOpacity
-              style={[
-                styles.addManualButton,
-                {
-                  borderColor: `${theme.primary}50`,
-                  backgroundColor: `${theme.primary}18`,
-                },
-              ]}
+              style={styles.addManualButton}
               onPress={() => {
                 setEditingManualEvent(null);
                 setManualModalVisible(true);
               }}
               activeOpacity={0.7}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Aggiungi lezione manuale"
             >
-              <Ionicons name="add" size={18} color={theme.accent} />
+              <Ionicons name="add" size={19} color={theme.accent} />
             </TouchableOpacity>
           </View>
 
@@ -1073,8 +1068,7 @@ export default function ScheduleScreen() {
         visible={manualModalVisible}
         editingEvent={editingManualEvent}
         initialDayIndex={selectedDay}
-        semesterInfo={schedule?.info.semester}
-        alerts={schedule?.alerts}
+        semesterText={schedule?.info?.semester}
         onClose={() => {
           setManualModalVisible(false);
           setEditingManualEvent(null);
@@ -1474,12 +1468,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   addManualButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+  },
+  addManualButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginLeft: 4,
   },
   manualBadgeRow: {
     flexDirection: "row",

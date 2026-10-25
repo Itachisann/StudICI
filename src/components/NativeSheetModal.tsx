@@ -15,7 +15,6 @@ import {
   useNavigation,
 } from '@react-navigation/native';
 import { UNIFORM_MODAL_BG } from '@/constants/theme';
-import { useTheme } from '@/context/ThemeContext';
 
 export interface SheetAction {
   label: string;
@@ -27,6 +26,7 @@ export interface SheetAction {
   prominent?: boolean;
   /** Colore personalizzato (es. theme.primary, #ef4444) */
   tintColor?: string;
+  accessibilityLabel?: string;
 }
 
 export { UNIFORM_MODAL_BG };
@@ -101,7 +101,6 @@ export function NativeSheetModal({
   searchBarOptions,
   children,
 }: NativeSheetModalProps) {
-  const { theme } = useTheme();
   // Titoli dei modali SEMPRE in bianco universale (#ffffff)
   const effectiveTitleColor = '#ffffff';
   // Colore universale neutro per icone (Indietro, Chiudi, Condividi)
@@ -161,16 +160,16 @@ export function NativeSheetModal({
   const buildRightItems = (): NativeStackHeaderItem[] =>
     (rightActions || []).map((a) => ({
       type: 'button' as const,
-      label: a.label,
+      label: a.label ?? '',
       icon: a.sfSymbol
         ? ({ type: 'sfSymbol', name: a.sfSymbol } as any)
         : undefined,
-      variant: a.prominent && !a.tintColor ? ('prominent' as const) : ('plain' as const),
-      tintColor: a.tintColor || (a.prominent ? theme.primary : universalIconColor),
+      variant: a.prominent ? ('prominent' as const) : ('plain' as const),
+      tintColor: a.tintColor || universalIconColor,
       sharesBackground: true,
       disabled: a.disabled,
       onPress: a.onPress,
-      accessibilityLabel: a.label,
+      accessibilityLabel: a.accessibilityLabel || a.label || 'Conferma',
     }));
 
   const contextValue = useMemo(

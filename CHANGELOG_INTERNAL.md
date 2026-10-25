@@ -240,44 +240,42 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
 
 ---
 
-## 14. Refactoring UI Modale "Nuova Lezione" & Uniformazione Pulsanti Modali a Tema
+## 14. Refactoring UI Modale "Nuova Lezione", Glowing Days, Native Date/Time Pickers & Tema Pulsanti Salva
 
-### Colore Tema su "Salva" e Checkmark "V" nei Modali
-- **File**: `src/components/NativeSheetModal.tsx`, `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Il pulsante di conferma / checkmark "V" nell'header del modale "Nuova Lezione" e nei menu adotta il colore del tema attivo (`tintColor: theme.primary`).
-  - Tutti i pulsanti di azione prominenti (come i pulsanti "Salva" sparsi nei vari modali) ora ereditano automaticamente `theme.primary` come colore di sfondo/tint con testo ad alto contrasto (`#ffffff`).
+### 1. Stile Generale e Modali
+- **Icona "V" (check) in alto a destra**: Nel modal "Nuova Lezione" (`src/components/ManualEventModal.tsx`) l'azione di salvataggio è impostata con icona checkmark (`sfSymbol: 'checkmark'`) in capsule prominente nativa (`variant: 'prominent'`) con sfondo colorato dal tema attivo (`tintColor: theme.primary`).
+- **Supporto Icone e Tinte in `NativeSheetModal.tsx`**:
+  - Rifinito `buildRightItems` per consentire azioni a sola icona (`label: ''` con `sfSymbol`).
+  - Corretto il flag `variant: a.prominent ? 'prominent' : 'plain'` garantendo che i bottoni prominenti mantengano la capsula piena con contrasto elevato anche quando viene passata una tinta personalizzata (`tintColor`).
+- **Colori Tema nei Pulsanti "Salva"**:
+  - `src/components/CommuterConfigModal.tsx`: header right button configurato con `variant: 'prominent'`, `prominent: true` e `tintColor: theme.primary`.
+  - `src/app/settings.tsx`: modal cambio canale con `prominent: true`, `tintColor: theme.primary` e contrasto testuale ottimale.
+  - `src/components/DefaultTabPicker.tsx` e `src/components/OnboardingCourseSelector.tsx`: bottoni di salvataggio dotati di `accentColor={theme.primary}` con testo/icone in bianco ad alto contrasto.
 
-### Selettore Giorni con Glow & Animazioni a Molla (Modale Nuova Lezione)
+### 2. Modale Nuova Lezione - Giorni della Settimana
 - **File**: `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Replicato il selettore giorni della schermata orari (`src/app/index.tsx`): capsule con bordo semitrasparente, punto attivo indicatore (`activeDot`) e ombra luminosa fluorescente a tema (`shadowColor: theme.primary`, `shadowOpacity: 0.95`, `elevation: 8`).
-  - Introdotta animazione a molla con rimbalzo elastico (`Animated.spring`, `friction: 4`, `tension: 50`) al tocco del giorno.
+- **Mantenimento Glowing Effect & Rimozione Pallino**:
+  - I cerchi dei giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`) mantengono l'effetto luminoso iOS glowing con ombreggiatura marcata del colore primario (`shadowColor: theme.primary`, `shadowOffset: { width: 0, height: 4 }`, `shadowOpacity: 0.9`, `shadowRadius: 10`, `borderColor: theme.primary`).
+  - Rimosso completamente il pallino sottostante (`dayDot` / `attendanceDayDot`), preservando l'eleganza minimale richiesta.
 
-### Slot Orari di Default e Stile Pill "Anticipo in Aula"
-- **File**: `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Orari predefiniti standardizzati sui blocchi orari universitari: `08:00 - 10:00`, `10:00 - 12:00`, `13:00 - 15:00`, `15:00 - 17:00`, `17:00 - 19:00`.
-  - Chip orario a forma di pill arrotondata (`borderRadius: 18`) identiche allo stile "Anticipo in aula" di `CommuterConfigModal.tsx`, con icona ad orologio e glow attivo su bordo e testo.
+### 3. Preset Orari e Selettore Orari Nativo iOS
+- **File**: `src/components/ManualEventModal.tsx`, `src/app/index.tsx`
+- **Nuovi Preset Orari**:
+  - Intervalli aggiornati: `"08:00 - 10:00"`, `"10:00 - 12:00"`, `"13:00 - 15:00"`, `"15:00 - 17:00"`, `"17:00 - 19:00"`.
+  - Stilizzati a forma di pillole arrotondate (`height: 34`, `borderRadius: 17`, bordo e sfondo glowing coordinati), identiche al componente "Anticipo in aula" della sezione viaggio.
+- **Pulsante Solo "+" nel Pannello Orari**:
+  - In `src/app/index.tsx`, rimosso il testo `+ Lezione` dall'header della lista lezioni, mantenendo esclusivamente il pulsante circolare iconico con il solo `+` (`Ionicons name="add" size={19}`).
+- **Selettore Orari Stile Tema iOS**:
+  - La selezione di "Ora Inizio" e "Ora Fine" è strutturata con lo stesso layout visivo a card del selettore del tema (icon box quadrata a sinistra, etichetta, orario corrente evidenziato con freccia chevron).
+  - Utilizza `MenuView` nativo iOS per aprire il menu a comparsa rapido con indicatore di spunta sulla voce attiva, con fallback modal per ambienti non-standalone.
 
-### Selezione Orari in Stile Selettore Tema
-- **File**: `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Ridisegnata la lista degli slot orari ispirandosi alla card list del selettore del tema: layout a griglia con card orario, indicatore circolare con checkmark "V" in bianco su sfondo `theme.primary` e bordo evidenziato per lo slot selezionato.
+### 4. Ripetizione e Date
+- **File**: `src/utils/manualEvents.ts`, `src/components/ManualEventModal.tsx`
+- **Data Finale Semestre Dinamica**:
+  - Nuova funzione `extractSemesterEndDate(semesterStr)` che estrae dinamicamente la data finale del semestre dal testo accademico presente nel foglio orari Sapienza (`schedule.info.semester`), gestendo sia formati numerici (`al 16/01/2027`) sia formati con mese in lettere (`al 16 Gennaio 2027`).
+  - Mostra il termine esatto nel sottotitolo dell'opzione "Tutto il semestre" (es. *fino al 16 Gennaio 2027*).
+- **DatePicker Expo Nativo**:
+  - Per l'opzione "Fino a data specifica", integrato `DateTimePicker` nativo di `@expo/ui/community/datetime-picker` (`display="compact"`, `accentColor={theme.primary}`, `themeVariant="dark"`).
+- **Pillole Rapide di Selezione Data**:
+  - I pulsanti rapidi `+1 Mese`, `+2 Mesi` e `Fine Semestre` sono sagomati a pillola arrotondata (`borderRadius: 18`, `height: 36`) con sfondo `#1c1c1e` scuro e testo colorato dal colore del tema.
 
-### Estrazione Dinamica Fine Semestre dalla Bacheca/Orario Gemini
-- **File**: `src/utils/manualEvents.ts`, `src/app/index.tsx`, `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Nuova funzione `getSemesterEndDateFromSchedule`: analizza sia l'intestazione del foglio orari (`schedule.info.semester`) sia gli avvisi/bacheca estratti da Gemini (`schedule.alerts`) per individuare l'effettivo termine delle lezioni (es. "dal 23 settembre al 16 gennaio 2027" ➔ `2027-01-16`), con fallback intelligente su `getDefaultSemesterEndDate()`.
-  - La card di ripetizione per "Tutto il semestre" espone all'utente la data esatta calcolata (es. *Fino a 16 Gennaio 2027*).
-
-### Date Picker Interattivo & Pill Rapide Arrotondate
-- **File**: `src/components/ManualEventModal.tsx`
-- **Descrizione**:
-  - Implementato un componente interno `InlineCalendarPicker`: un calendario visivo touch in puro React Native con cambio mese (`<` / `>`), giorni della settimana e griglia giorni con indicatore circolare a tema e glow per la data selezionata (compatibile al 100% con Expo Go senza dipendenze native esterne).
-  - Le pillole di offset rapido (`+1 Mese`, `+2 Mesi`, `Fine Semestre`) sono state convertite in pill arrotondate (`borderRadius: 18`) con testo colorato con l'accento del tema.
-
-### Pulsante "+" Minimalista nel Pannello Orari
-- **File**: `src/app/index.tsx`
-- **Descrizione**:
-  - Rimosso il testo "+ Lezione": nell'header dei giorni è ora presente un pulsante circolare minimalista contenente unicamente l'icona `+` (`Ionicons name="add"`), pulito ed elegante.
