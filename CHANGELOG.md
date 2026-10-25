@@ -8,13 +8,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.9.3
 
 ### Sezione Viaggio & Selettore Giorni Settimanali
-- **Nuovo Sistema di Selezione Giorni Settimanali**:
-  - **Addio allo Slider Orizzontale a Scorrimento**: rimosso lo slider orizzontale che sforava dai margini dello schermo e costringeva a scrollare.
-  - **Barra Segmentata Allineata ai Margini**: introdotta una nuova barra segmentata a 7 giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) che sfrutta la larghezza della scheda con allineamento millimetrico ai margini interni delle card sottostanti (`paddingHorizontal: 16`).
-  - **Rimozione dei Numeri del Giorno**: eliminati completamente i numeri del giorno del mese (`25`, `26`, ecc.) in favore di un design pulito incentrato sui giorni della settimana.
-  - **Navigazione Stepper & Contesto Giorno**: aggiunta una riga di testata con navigazione a step precedente/successivo (`<` e `>`), indicazione estesa del giorno (`Lunedì`, `Martedì`, ecc.) e badge di stato (`OGGI`, `WEEKEND`, `PROGRAMMATO`).
-  - **Pulsante Rapido "Torna a Oggi"**: quando viene visualizzato un giorno diverso da oggi, compare un comodo pulsante `[↩ Oggi]` per riposizionarsi istantaneamente con un solo tocco sul giorno corrente.
-  - **Indicatori e Feedback Visivo**: indicatore puntiforme sottile per la giornata odierna ed evidenziazione dei giorni del weekend (`SAB` e `DOM`).
+- **Design Ultra-Pulito Apple Liquid Glass**:
+  - **Eliminazione Toolbar Superflue**: rimossa la riga superiore di pulsanti e badge che appesantiva visivamente l'header creando troppi livelli sovrapposti.
+  - **Barra Segmentata Liquid Glass a 7 Pillole**: i 7 giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) sono racchiusi in un'unica elegante barra di vetro scuro satinato (`rgba(255,255,255,0.05)` con raggio 16px e bordo 1px `0.09`).
+  - **Separatore Elegante Feriale / Weekend**: introdotta una sottile linea verticale tra Venerdì e Sabato per distinguere intuitivamente i giorni accademici da quelli del fine settimana.
+  - **Glow Sapienza & Micro-Dot Oggi**: l'elemento selezionato si illumina in rosso Sapienza (`theme.bg` / `theme.primary`) con glow sfumato e dot dedicato per la giornata odierna.
+  - **Contesto e Tasto "Torna a Oggi" Integrati nella Sezione**: il nome completo del giorno e l'eventuale tasto rapido `[↩ Torna a oggi]` sono ora integrati con naturalezza nell'intestazione della sezione lezioni, liberando completamente l'header.
 
 ## 1.9.2
 
