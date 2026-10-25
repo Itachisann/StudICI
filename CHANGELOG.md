@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.3
+
+### Sezione Viaggio & Selettore Giorni Settimanali
+- **Nuovo Sistema di Selezione Giorni Settimanali**:
+  - **Addio allo Slider Orizzontale a Scorrimento**: rimosso lo slider orizzontale che sforava dai margini dello schermo e costringeva a scrollare.
+  - **Barra Segmentata Allineata ai Margini**: introdotta una nuova barra segmentata a 7 giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) che sfrutta la larghezza della scheda con allineamento millimetrico ai margini interni delle card sottostanti (`paddingHorizontal: 16`).
+  - **Rimozione dei Numeri del Giorno**: eliminati completamente i numeri del giorno del mese (`25`, `26`, ecc.) in favore di un design pulito incentrato sui giorni della settimana.
+  - **Navigazione Stepper & Contesto Giorno**: aggiunta una riga di testata con navigazione a step precedente/successivo (`<` e `>`), indicazione estesa del giorno (`Lunedì`, `Martedì`, ecc.) e badge di stato (`OGGI`, `WEEKEND`, `PROGRAMMATO`).
+  - **Pulsante Rapido "Torna a Oggi"**: quando viene visualizzato un giorno diverso da oggi, compare un comodo pulsante `[↩ Oggi]` per riposizionarsi istantaneamente con un solo tocco sul giorno corrente.
+  - **Indicatori e Feedback Visivo**: indicatore puntiforme sottile per la giornata odierna ed evidenziazione dei giorni del weekend (`SAB` e `DOM`).
+
 ## 1.9.2
 
 ### Sezione Viaggio & Orari Programmati
