@@ -10,9 +10,22 @@ import {
   AttendanceRecord,
   getAttendanceRecords,
   getAttendanceTombstones,
+  saveAttendanceList,
   setAttendanceChangeListener,
   setAttendanceTombstones,
+  getAllAttendanceAcrossCourses,
+  saveAllAttendanceAcrossCourses,
 } from "./attendance";
+import {
+  ManualClassEvent,
+  getManualEvents,
+  saveManualEvents,
+  getManualEventsTombstones,
+  setManualEventsTombstones,
+  setManualEventsChangeListener,
+  getAllManualEventsAcrossCourses,
+  saveAllManualEventsAcrossCourses,
+} from "./manualEvents";
 import {
   DEFAULT_COMMUTER_CONFIG,
   getCommuterConfig,
@@ -66,6 +79,10 @@ export interface PreAssociationBackup {
   course: CourseData;
   attendance: AttendanceRecord[];
   tombstones: Record<string, number>;
+  manualEvents?: ManualClassEvent[];
+  manualTombstones?: Record<string, number>;
+  allCoursesAttendance?: Record<string, AttendanceRecord[]>;
+  allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter: CommuterConfig;
   timestamp: number;
 }
@@ -82,6 +99,9 @@ export interface CloudBackupPayload {
     defaultTabUrl: string | null;
   };
   attendanceRecords: AttendanceRecord[];
+  manualEvents?: ManualClassEvent[];
+  allCoursesAttendance?: Record<string, AttendanceRecord[]>;
+  allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter?: CommuterConfig;
 }
 
@@ -103,6 +123,10 @@ interface RemoteDoc {
   cachedTabs?: string;
   attendance?: AttendanceRecord[];
   tombstones?: Record<string, number>;
+  manualEvents?: ManualClassEvent[];
+  manualTombstones?: Record<string, number>;
+  allCoursesAttendance?: Record<string, AttendanceRecord[]>;
+  allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter?: CommuterConfig;
   commuterModified?: number;
   devices?: Record<string, SyncDeviceInfo>;
@@ -267,16 +291,25 @@ export async function getLastCloudSync(): Promise<number | null> {
 export async function savePreAssociationBackup(): Promise<void> {
   const existing = await AsyncStorage.getItem(PRE_ASSOCIATION_BACKUP_KEY);
   if (!existing) {
-    const [course, attendance, tombstones, commuter] = await Promise.all([
-      readLocalCourse(),
-      getAttendanceRecords(),
-      getAttendanceTombstones(),
-      readLocalCommuter(),
-    ]);
+    const [course, attendance, tombstones, commuter, manualEvents, manualTombstones, allAtt, allManual] =
+      await Promise.all([
+        readLocalCourse(),
+        getAttendanceRecords(),
+        getAttendanceTombstones(),
+        readLocalCommuter(),
+        getManualEvents(),
+        getManualEventsTombstones(),
+        getAllAttendanceAcrossCourses(),
+        getAllManualEventsAcrossCourses(),
+      ]);
     const backup: PreAssociationBackup = {
       course,
       attendance,
       tombstones,
+      manualEvents,
+      manualTombstones,
+      allCoursesAttendance: allAtt,
+      allCoursesManualEvents: allManual,
       commuter,
       timestamp: Date.now(),
     };
@@ -299,14 +332,21 @@ export async function restorePreAssociationBackup(): Promise<void> {
       if (backup.course) {
         await writeLocalCourse(backup.course);
       }
-      if (Array.isArray(backup.attendance)) {
-        await AsyncStorage.setItem(
-          "studici_attendance_records",
-          JSON.stringify(backup.attendance),
-        );
+      if (backup.allCoursesAttendance) {
+        await saveAllAttendanceAcrossCourses(backup.allCoursesAttendance);
+      } else if (Array.isArray(backup.attendance)) {
+        await saveAttendanceList(backup.attendance);
       }
       if (backup.tombstones) {
         await setAttendanceTombstones(backup.tombstones);
+      }
+      if (backup.allCoursesManualEvents) {
+        await saveAllManualEventsAcrossCourses(backup.allCoursesManualEvents);
+      } else if (Array.isArray(backup.manualEvents)) {
+        await saveManualEvents(backup.manualEvents);
+      }
+      if (backup.manualTombstones) {
+        await setManualEventsTombstones(backup.manualTombstones);
       }
       if (backup.commuter) {
         await writeLocalCommuter(backup.commuter);
@@ -320,8 +360,10 @@ export async function restorePreAssociationBackup(): Promise<void> {
         className: null,
         defaultTabUrl: null,
       });
-      await AsyncStorage.setItem("studici_attendance_records", JSON.stringify([]));
+      await saveAttendanceList([]);
       await setAttendanceTombstones({});
+      await saveManualEvents([]);
+      await setManualEventsTombstones({});
       await writeLocalCommuter(DEFAULT_COMMUTER_CONFIG);
     }
     await AsyncStorage.removeItem(COURSE_SNAPSHOT_KEY);
@@ -356,7 +398,7 @@ export async function performCloudSync(): Promise<{
   const timestamp = Date.now();
   const formattedDate = new Date(timestamp).toLocaleString("it-IT");
 
-  const [url, name, className, defaultTabUrl, records, commuter] =
+  const [url, name, className, defaultTabUrl, records, commuter, manualEvents, allAtt, allManual] =
     await Promise.all([
       AsyncStorage.getItem("selectedDegreeUrl"),
       AsyncStorage.getItem("selectedDegreeName"),
@@ -364,6 +406,9 @@ export async function performCloudSync(): Promise<{
       AsyncStorage.getItem("defaultTabUrl"),
       getAttendanceRecords(),
       readLocalCommuter(),
+      getManualEvents(),
+      getAllAttendanceAcrossCourses(),
+      getAllManualEventsAcrossCourses(),
     ]);
 
   const payload: CloudBackupPayload = {
@@ -378,6 +423,9 @@ export async function performCloudSync(): Promise<{
       defaultTabUrl,
     },
     attendanceRecords: records,
+    manualEvents,
+    allCoursesAttendance: allAtt,
+    allCoursesManualEvents: allManual,
     commuter,
   };
 
@@ -446,11 +494,16 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
       await AsyncStorage.setItem("defaultTabUrl", data.course.defaultTabUrl);
     }
 
-    if (Array.isArray(data.attendanceRecords)) {
-      await AsyncStorage.setItem(
-        "studici_attendance_records",
-        JSON.stringify(data.attendanceRecords),
-      );
+    if (data.allCoursesAttendance) {
+      await saveAllAttendanceAcrossCourses(data.allCoursesAttendance);
+    } else if (Array.isArray(data.attendanceRecords)) {
+      await saveAttendanceList(data.attendanceRecords, data.course.url || undefined);
+    }
+
+    if (data.allCoursesManualEvents) {
+      await saveAllManualEventsAcrossCourses(data.allCoursesManualEvents);
+    } else if (Array.isArray(data.manualEvents)) {
+      await saveManualEvents(data.manualEvents, data.course.url || undefined);
     }
 
     if (data.commuter) {
@@ -766,6 +819,10 @@ async function handleLocalDeviceWasKickedOut(
         courseModified: Date.now(),
         attendance: await getAttendanceRecords(),
         tombstones: await getAttendanceTombstones(),
+        manualEvents: await getManualEvents(),
+        manualTombstones: await getManualEventsTombstones(),
+        allCoursesAttendance: await getAllAttendanceAcrossCourses(),
+        allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
         commuter: await readLocalCommuter(),
         commuterModified: Date.now(),
         devices: {
@@ -1053,6 +1110,10 @@ async function runSync(): Promise<CloudSyncResult> {
         cachedTabs: localCachedTabs || remote?.cachedTabs,
         attendance: localAtt,
         tombstones: localTomb,
+        manualEvents: await getManualEvents(localCourse.url || undefined),
+        manualTombstones: await getManualEventsTombstones(localCourse.url || undefined),
+        allCoursesAttendance: await getAllAttendanceAcrossCourses(),
+        allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
         commuter: localCommuter,
         commuterModified: Date.now(),
         devices: devicesMap,
@@ -1128,12 +1189,55 @@ async function runSync(): Promise<CloudSyncResult> {
 
     const attChanged = idsKey(merged) !== idsKey(localAtt);
     if (attChanged) {
-      await AsyncStorage.setItem(
-        "studici_attendance_records",
-        JSON.stringify(merged),
-      );
+      await saveAttendanceList(merged, finalCourse.url || undefined);
     }
-    await setAttendanceTombstones(tombstones);
+    await setAttendanceTombstones(tombstones, finalCourse.url || undefined);
+
+    if (remote?.allCoursesAttendance) {
+      const localAllAtt = await getAllAttendanceAcrossCourses();
+      const mergedAllAtt = { ...localAllAtt, ...remote.allCoursesAttendance };
+      if (finalCourse.url) mergedAllAtt[finalCourse.url] = merged;
+      await saveAllAttendanceAcrossCourses(mergedAllAtt);
+    }
+
+    // 2b. Sincronizzazione Lezioni Manuali (Union con tombstones)
+    const localManual = await getManualEvents(finalCourse.url || undefined);
+    const remoteManual: ManualClassEvent[] = Array.isArray(remote?.manualEvents)
+      ? remote!.manualEvents!.filter(Boolean)
+      : [];
+    const localManualTomb = await getManualEventsTombstones(finalCourse.url || undefined);
+    const remoteManualTomb = remote?.manualTombstones || {};
+
+    const manualTombstones: Record<string, number> = {};
+    for (const src of [localManualTomb, remoteManualTomb]) {
+      for (const [id, ts] of Object.entries(src)) {
+        if (now - ts > TOMBSTONE_TTL_MS) continue;
+        manualTombstones[id] = Math.max(manualTombstones[id] || 0, ts);
+      }
+    }
+
+    const byManualId = new Map<string, ManualClassEvent>();
+    for (const m of [...remoteManual, ...localManual]) {
+      const prev = byManualId.get(m.id);
+      if (!prev || (m.updatedAt || m.createdAt || 0) > (prev.updatedAt || prev.createdAt || 0)) {
+        byManualId.set(m.id, m);
+      }
+    }
+    const mergedManual = Array.from(byManualId.values())
+      .filter((m) => !(manualTombstones[m.id] && manualTombstones[m.id] >= (m.updatedAt || m.createdAt || 0)));
+
+    const manualChanged = JSON.stringify(mergedManual) !== JSON.stringify(localManual);
+    if (manualChanged) {
+      await saveManualEvents(mergedManual, finalCourse.url || undefined);
+    }
+    await setManualEventsTombstones(manualTombstones, finalCourse.url || undefined);
+
+    if (remote?.allCoursesManualEvents) {
+      const localAllManual = await getAllManualEventsAcrossCourses();
+      const mergedAllManual = { ...localAllManual, ...remote.allCoursesManualEvents };
+      if (finalCourse.url) mergedAllManual[finalCourse.url] = mergedManual;
+      await saveAllManualEventsAcrossCourses(mergedAllManual);
+    }
 
     // 3. Sincronizzazione Impostazioni di Viaggio (LWW)
     const localCommuter = await readLocalCommuter();
@@ -1204,6 +1308,10 @@ async function runSync(): Promise<CloudSyncResult> {
       cachedTabs: activeCachedTabs || remote?.cachedTabs,
       attendance: merged,
       tombstones,
+      manualEvents: mergedManual,
+      manualTombstones,
+      allCoursesAttendance: await getAllAttendanceAcrossCourses(),
+      allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
       devices: devicesMap,
@@ -1225,7 +1333,7 @@ async function runSync(): Promise<CloudSyncResult> {
     }
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
-    const updated = attChanged || courseChanged || commuterChanged;
+    const updated = attChanged || courseChanged || manualChanged || commuterChanged;
     return {
       success: true,
       updated,
@@ -1415,11 +1523,37 @@ export async function linkDeviceWithCode(
       )
       .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-    await AsyncStorage.setItem(
-      "studici_attendance_records",
-      JSON.stringify(mergedAtt),
-    );
-    await setAttendanceTombstones(tombstones);
+    await saveAttendanceList(mergedAtt, finalCourse.url || undefined);
+    await setAttendanceTombstones(tombstones, finalCourse.url || undefined);
+
+    if (rootRemote.allCoursesAttendance) {
+      await saveAllAttendanceAcrossCourses(rootRemote.allCoursesAttendance);
+    }
+
+    // 2b. Orari manuali: unione
+    const localManual = await getManualEvents(finalCourse.url || undefined);
+    const remoteManual: ManualClassEvent[] = Array.isArray(rootRemote.manualEvents)
+      ? rootRemote.manualEvents
+      : [];
+    const localManualTomb = await getManualEventsTombstones(finalCourse.url || undefined);
+    const remoteManualTomb = rootRemote.manualTombstones || {};
+    const manualTombstones: Record<string, number> = { ...localManualTomb, ...remoteManualTomb };
+    const byManualId = new Map<string, ManualClassEvent>();
+    for (const m of [...remoteManual, ...localManual]) {
+      const prev = byManualId.get(m.id);
+      if (!prev || (m.updatedAt || m.createdAt || 0) > (prev.updatedAt || prev.createdAt || 0)) {
+        byManualId.set(m.id, m);
+      }
+    }
+    const mergedManual = Array.from(byManualId.values())
+      .filter((m) => !(manualTombstones[m.id] && manualTombstones[m.id] >= (m.updatedAt || m.createdAt || 0)));
+
+    await saveManualEvents(mergedManual, finalCourse.url || undefined);
+    await setManualEventsTombstones(manualTombstones, finalCourse.url || undefined);
+
+    if (rootRemote.allCoursesManualEvents) {
+      await saveAllManualEventsAcrossCourses(rootRemote.allCoursesManualEvents);
+    }
 
     // 3. Impostazioni Viaggio Pendolare: adotta impostazioni del master
     let finalCommuter = await readLocalCommuter();
@@ -1444,6 +1578,10 @@ export async function linkDeviceWithCode(
       courseModified: finalCourseMod,
       attendance: mergedAtt,
       tombstones,
+      manualEvents: mergedManual,
+      manualTombstones,
+      allCoursesAttendance: await getAllAttendanceAcrossCourses(),
+      allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
       devices: updatedDevices,
@@ -1513,6 +1651,7 @@ function scheduleAutoPush() {
 
 setAttendanceChangeListener(scheduleAutoPush);
 setCommuterChangeListener(scheduleAutoPush);
+setManualEventsChangeListener(scheduleAutoPush);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale

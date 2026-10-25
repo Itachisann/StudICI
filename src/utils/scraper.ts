@@ -118,6 +118,10 @@ export interface ClassEvent {
   startTime: string;
   endTime: string;
   duration: number;
+  isManual?: boolean;
+  manualId?: string;
+  repetitionType?: 'semester' | 'custom_date' | 'single';
+  repeatUntilDate?: string;
 }
 
 export interface ScheduleData {

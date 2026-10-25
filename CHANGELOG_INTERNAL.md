@@ -185,3 +185,55 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - **Conservazione Treni Antecedenti**: Rimosso il filtro restrittivo dei 35 minuti, preservando lo storico della giornata (i treni già passati mantengono lo stato `Già passato` / `(Passato)` nello slider e non vengono mai scartati).
   - **Slider Completo (`availableTrains`)**: `availableTrains` contiene tutti i treni disponibili della tratta. Grazie a `centerSelectedTrain`, il treno consigliato o selezionato si centra automaticamente all'avvio, ma l'utente può scorrere liberamente a sinistra per vedere tutti i treni precedenti del giorno (fin dall'alba) e a destra per quelli successivi.
   - **Navigazione "Treno prima" / "Treno dopo" Istantanea**: `handleTrainPrev` e `handleTrainNext` selezionano direttamente l'elemento `[idx - 1]` e `[idx + 1]` in `availableTrains`, consentendo una navigazione fluida passo-passo sia con swipe che tramite i pulsanti.
+
+---
+
+## 13. Orari Manuali con Ripetizione, Segregazione Facoltà per Facoltà e Cambio Rapido Corsi Scaricati
+
+### 1. Inserimento e Gestione Orari Manuali (`ManualClassEvent`)
+- **Nuovo modulo architetturale**: `src/utils/manualEvents.ts`
+- **Nuovo componente UI**: `src/components/ManualEventModal.tsx`
+- **Funzionalità implementate**:
+  - Inserimento di lezioni personalizzate con:
+    - *Materia / Insegnamento* (obbligatorio)
+    - *Docente* e *Aula* (opzionali)
+    - *Giorno della settimana* (LUN-VEN, pre-selezionato sul giorno attualmente visualizzato)
+    - *Orario Inizio e Fine* (con preset rapidi: 08:30-10:30, 10:30-12:30, 14:00-16:00, 16:00-18:00 o personalizzabile)
+    - *Tipologia di Ripetizione*:
+      1. **Tutto il semestre (`semester`)**: Si ripete settimanalmente fino al termine del semestre accademico corrente (calcolato automaticamente tramite `getDefaultSemesterEndDate()`, es. 28 Febbraio per il I semestre o 31 Luglio per il II semestre).
+      2. **Fino a data specifica (`custom_date`)**: Si ripete settimanalmente fino alla data di scadenza impostata dall'utente (con pulsanti rapidi +1 Mese, +2 Mesi, Fine Semestre o data puntuale).
+      3. **Solo questa data (`single`)**: Singola occorrenza valida esclusivamente per la settimana/giornata selezionata.
+  - Integrazione completa nella schermata Orari (`src/app/index.tsx`):
+    - Pulsante elegante `+ Lezione` integrato nell'header del giorno selezionato.
+    - Badge `[ ✏️ MANUALE ]` sulle card delle lezioni create a mano.
+    - Modifica ed eliminazione accessibili sia cliccando sul badge della card che tramite il menu nativo iOS (`MenuView`) e il fallback di long press.
+    - Pieno supporto alle presenze: le lezioni manuali possono essere contrassegnate come frequentate (sia singolarmente che col toggle giornaliero) esattamente come le lezioni ufficiali.
+
+### 2. Sincronizzazione con Calendario Apple Nativo (`src/utils/appleCalendar.ts`)
+- In `syncScheduleToAppleCalendar`, oltre all'orario istituzionale Sapienza, vengono recuperati e inseriti nel calendario dedicato `StudICI - Lezioni Sapienza` anche tutti gli orari manuali del corso attivo:
+  - Lezioni con ripetizione `semester` o `custom_date` vengono create come eventi ricorrenti settimanali (`frequency: WEEKLY`) con `endDate` sincronizzato sulla data di fine indicata.
+  - Lezioni con ripetizione `single` vengono create come singoli eventi puntuali non ricorrenti.
+  - Indicazione pulita nelle note e nel titolo dell'evento.
+
+### 3. Sincronizzazione Cloud e Backup (`src/utils/cloudSync.ts`)
+- Esteso il protocollo di sincronizzazione cloud Firebase e il backup/ripristino:
+  - Aggiunti i campi `manualEvents`, `manualTombstones`, `allCoursesAttendance` e `allCoursesManualEvents` in `RemoteDoc`, `PreAssociationBackup` e `CloudBackupPayload`.
+  - Algoritmo di unione bidirezionale con tombstones (risoluzione cancellazioni) per le lezioni manuali tra dispositivi multipli.
+  - Agganciato il listener locale `setManualEventsChangeListener(scheduleAutoPush)` per la pubblicazione automatica in tempo reale sul cloud ad ogni modifica.
+
+### 4. Segregazione dei Dati Facoltà per Facoltà
+- **Architettura storage per corso**:
+  - *Presenze*: Lo storage delle presenze (`src/utils/attendance.ts`) adotta chiavi separate per facoltà: `studici_attendance_records_${courseUrl}` e `studici_attendance_tombstones_${courseUrl}`.
+  - *Migrazione retrocompatibile*: Se per il corso attivo non esiste ancora una chiave dedicata ma è presente la vecchia chiave globale legacy, i dati vengono automaticamente migrati senza perdita di alcuna presenza.
+  - *Orari Manuali*: Archiviati separatamente per facoltà (`studici_manual_events_${courseUrl}`).
+  - *Canale / Anno di default*: Archiviato per facoltà (`defaultTabUrl_${courseUrl}`).
+- **Comportamento al cambio corso**:
+  - Se l'utente passa da *Ingegneria Clinica* a *Ingegneria Aerospaziale*, troverà l'ambiente di Aerospaziale pulito (0 presenze, 0 orari manuali specifici, primo canale di default).
+  - Tornando su *Ingegneria Clinica*, ritroverà istantaneamente tutte le presenze, il canale scelto e gli orari manuali inseriti precedentemente.
+
+### 5. Cambio Rapido Facoltà già Scaricate (`src/app/settings.tsx`)
+- In `selectDegree`:
+  - Il sistema verifica prima di tutto se la facoltà selezionata è già presente nella cache locale (`allSchedules_v8_${degree.url}`).
+  - **Se già scaricata**: il cambio avviene istantaneamente (<50ms) senza mostrare il modal di download. Vengono ripristinati subito il canale prescelto, le presenze e gli orari manuali, indirizzando l'utente alla vista orari. In background viene lanciata in maniera asincrona la sola verifica ordinaria degli aggiornamenti (`checkCourseUpdates`), scaricando modifiche solo in caso di differenze reali dell'HTML.
+  - **Se non ancora scaricata**: viene mostrata la barra di avanzamento e scaricato il corso per la prima volta.
+  - Il pulsante esplicito *"Svuota cache e ricarica orario"* nelle impostazioni rimane disponibile per chi desidera forzare la riscrittura integrale.

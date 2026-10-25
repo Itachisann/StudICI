@@ -3,6 +3,7 @@ import * as Calendar from "expo-calendar/legacy";
 import { Platform } from "react-native";
 import { formatSapienzaAddress, resolveClassroom } from "./classroomLocations";
 import { ScheduleData, fetchScheduleData } from "./scraper";
+import { getManualEvents } from "./manualEvents";
 
 const LAST_CALENDAR_SYNC_KEY = "studici_last_calendar_sync";
 
@@ -257,6 +258,81 @@ export async function syncScheduleToAppleCalendar(
 
         eventsCount++;
       }
+    }
+
+    // 3. Sincronizzazione delle lezioni manuali dell'utente per questo corso
+    try {
+      const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
+      const manualList = await getManualEvents(storedDegreeUrl || undefined);
+
+      for (const mEvent of manualList) {
+        if (!mEvent.startTime || !mEvent.endTime) continue;
+
+        const [startH, startM] = mEvent.startTime.split(":").map(Number);
+        const [endH, endM] = mEvent.endTime.split(":").map(Number);
+        if (isNaN(startH) || isNaN(endH)) continue;
+
+        const targetDayOfWeek = mEvent.dayIndex + 1; // 1=LUN, 2=MAR...
+        let daysUntil = targetDayOfWeek - currentDayOfWeek;
+        if (daysUntil < 0) daysUntil += 7;
+
+        let startDate = new Date(now);
+        if (mEvent.repetitionType === "single" && mEvent.startDate) {
+          const [sY, sM, sD] = mEvent.startDate.split("-").map(Number);
+          if (!isNaN(sY) && !isNaN(sM) && !isNaN(sD)) {
+            startDate = new Date(sY, sM - 1, sD);
+          }
+        } else {
+          startDate.setDate(now.getDate() + daysUntil);
+        }
+        startDate.setHours(startH, startM || 0, 0, 0);
+
+        const endDate = new Date(startDate);
+        endDate.setHours(endH, endM || 0, 0, 0);
+
+        const subjectUpper = mEvent.subject?.trim().toUpperCase() || "LEZIONE";
+        const roomStr = mEvent.room ? ` (${mEvent.room})` : "";
+        const profStr = mEvent.teacher ? ` - Prof. ${mEvent.teacher}` : "";
+        const eventTitle = `${subjectUpper}${roomStr}${profStr}`;
+
+        const notesParts = [
+          mEvent.room ? `Aula: ${mEvent.room}` : "",
+          mEvent.teacher ? `Docente: Prof. ${mEvent.teacher}` : "",
+          `Corso: ${courseName}`,
+          channelName ? `Canale: ${channelName}` : "",
+          "Lezione inserita manualmente su StudICI",
+          "StudICI • Sapienza Università di Roma",
+        ].filter(Boolean);
+
+        let recurrenceRule: Calendar.RecurrenceRule | undefined;
+        if (mEvent.repetitionType === "semester") {
+          recurrenceRule = {
+            frequency: Calendar.Frequency.WEEKLY,
+            endDate: semesterEndDate,
+          };
+        } else if (mEvent.repetitionType === "custom_date" && mEvent.repeatUntilDate) {
+          const [eY, eM, eD] = mEvent.repeatUntilDate.split("-").map(Number);
+          const untilDate = new Date(eY, eM - 1, eD, 23, 59, 59);
+          recurrenceRule = {
+            frequency: Calendar.Frequency.WEEKLY,
+            endDate: untilDate,
+          };
+        }
+
+        await Calendar.createEventAsync(calendarId, {
+          title: eventTitle,
+          startDate,
+          endDate,
+          location: mEvent.address || mEvent.room || "Sapienza Università di Roma",
+          notes: notesParts.join("\n"),
+          timeZone: "Europe/Rome",
+          ...(recurrenceRule ? { recurrenceRule } : {}),
+        });
+
+        eventsCount++;
+      }
+    } catch (manualSyncErr) {
+      console.warn("Errore sincronizzazione lezioni manuali su Calendario:", manualSyncErr);
     }
 
     const timestamp = Date.now();

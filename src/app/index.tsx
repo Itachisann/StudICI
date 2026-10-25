@@ -4,7 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -26,6 +26,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { ClassroomModal } from "../components/ClassroomModal";
+import { ManualEventModal } from "../components/ManualEventModal";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
@@ -40,6 +41,15 @@ import {
   toggleAttendance,
   toggleDayAttendance,
 } from "../utils/attendance";
+import {
+  ManualClassEvent,
+  getManualEvents,
+  addManualEvent,
+  updateManualEvent,
+  deleteManualEvent,
+  manualEventToClassEvent,
+  isManualEventActiveOnDate,
+} from "../utils/manualEvents";
 import {
   formatSapienzaAddress,
   resolveClassroom,
@@ -179,6 +189,9 @@ export default function ScheduleScreen() {
   const [attendanceRecords, setAttendanceRecords] = useState<
     AttendanceRecord[]
   >([]);
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
+  const [manualModalVisible, setManualModalVisible] = useState(false);
+  const [editingManualEvent, setEditingManualEvent] = useState<ManualClassEvent | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
 
@@ -212,6 +225,22 @@ export default function ScheduleScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const cardWidth = Math.max(windowWidth - 32, 280);
 
+  const loadManualEvents = useCallback(async (courseUrlParam?: string | null) => {
+    try {
+      const storedUrl = courseUrlParam !== undefined ? courseUrlParam : await AsyncStorage.getItem("selectedDegreeUrl");
+      const list = await getManualEvents(storedUrl || undefined);
+      setManualEvents(list);
+    } catch {}
+  }, []);
+
+  const loadAttendance = useCallback(async (courseUrlParam?: string | null) => {
+    try {
+      const storedUrl = courseUrlParam !== undefined ? courseUrlParam : await AsyncStorage.getItem("selectedDegreeUrl");
+      const records = await getAttendanceRecords(storedUrl || undefined);
+      setAttendanceRecords(records);
+    } catch {}
+  }, []);
+
   const loadData = useCallback(
     async (force = false) => {
       try {
@@ -223,13 +252,15 @@ export default function ScheduleScreen() {
               if (syncRes.updated) {
                 const recs = await getAttendanceRecords();
                 setAttendanceRecords(recs);
+                loadManualEvents();
               }
             } catch {}
           }
         }).catch(() => {});
 
         const storedUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-        const storedDefaultTab = await AsyncStorage.getItem("defaultTabUrl");
+        const storedDefaultTab = (storedUrl ? await AsyncStorage.getItem(`defaultTabUrl_${storedUrl}`) : null)
+          || (await AsyncStorage.getItem("defaultTabUrl"));
 
         if (!storedUrl) {
           setDegreeUrl(null);
@@ -246,6 +277,9 @@ export default function ScheduleScreen() {
         }
 
         setDegreeUrl(storedUrl);
+        loadManualEvents(storedUrl);
+        loadAttendance(storedUrl);
+
         if (
           tabsRef.current.length === 0 ||
           force ||
@@ -280,21 +314,15 @@ export default function ScheduleScreen() {
         setLoading(false);
       }
     },
-    [],
+    [loadManualEvents, loadAttendance],
   );
-
-  const loadAttendance = useCallback(async () => {
-    try {
-      const records = await getAttendanceRecords();
-      setAttendanceRecords(records);
-    } catch {}
-  }, []);
 
   useFocusEffect(
     useCallback(() => {
       loadData(false);
       loadAttendance();
-    }, [loadData, loadAttendance]),
+      loadManualEvents();
+    }, [loadData, loadAttendance, loadManualEvents]),
   );
 
   useEffect(() => {
@@ -302,10 +330,11 @@ export default function ScheduleScreen() {
       if (updated) {
         loadData(false);
         loadAttendance();
+        loadManualEvents();
       }
     });
     return unsub;
-  }, [loadData, loadAttendance]);
+  }, [loadData, loadAttendance, loadManualEvents]);
 
   const handleClassLongPress = useCallback(
     async (cls: ClassEvent) => {
@@ -314,6 +343,7 @@ export default function ScheduleScreen() {
           selectedDay,
           DAYS_FULL[selectedDay],
           cls,
+          degreeUrl || undefined,
         );
         setAttendanceRecords(res.records);
         getICloudAutoSyncEnabled().then((enabled) => {
@@ -323,18 +353,24 @@ export default function ScheduleScreen() {
         console.error(err);
       }
     },
-    [selectedDay],
+    [selectedDay, degreeUrl],
   );
 
   const handleDayLongPress = useCallback(
     async (dayIdx: number) => {
-      const dayClasses = schedule?.days[dayIdx] || [];
+      const scraped = schedule?.days[dayIdx] || [];
+      const { dateStr } = getDateForDayIndex(dayIdx);
+      const manualForDay = manualEvents
+        .filter((e) => e.dayIndex === dayIdx && isManualEventActiveOnDate(e, dateStr))
+        .map(manualEventToClassEvent);
+      const dayClasses = [...scraped, ...manualForDay];
       if (dayClasses.length === 0) return;
       try {
         const res = await toggleDayAttendance(
           dayIdx,
           DAYS_FULL[dayIdx],
           dayClasses,
+          degreeUrl || undefined,
         );
         setAttendanceRecords(res.records);
         getICloudAutoSyncEnabled().then((enabled) => {
@@ -344,7 +380,7 @@ export default function ScheduleScreen() {
         console.error(err);
       }
     },
-    [schedule],
+    [schedule, manualEvents, degreeUrl],
   );
 
   const checkIsAttended = useCallback(
@@ -374,6 +410,9 @@ export default function ScheduleScreen() {
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
     AsyncStorage.setItem("defaultTabUrl", tab.url).catch(() => {});
+    if (degreeUrl) {
+      AsyncStorage.setItem(`defaultTabUrl_${degreeUrl}`, tab.url).catch(() => {});
+    }
     if (schedulesMap[tab.url]) {
       // Istantaneo da memoria: zero caricamento e zero rete!
       setSchedule(schedulesMap[tab.url]);
@@ -383,6 +422,44 @@ export default function ScheduleScreen() {
       setSchedule(data);
       setSchedulesMap((prev) => ({ ...prev, [tab.url]: data }));
       setLoading(false);
+    }
+  };
+
+  const handleSaveManualEvent = async (
+    data: Omit<ManualClassEvent, "id" | "createdAt" | "courseUrl">,
+    id?: string,
+  ) => {
+    try {
+      if (id) {
+        const existing = manualEvents.find((e) => e.id === id);
+        if (existing) {
+          const updated: ManualClassEvent = {
+            ...existing,
+            ...data,
+          };
+          await updateManualEvent(updated, degreeUrl || undefined);
+        }
+      } else {
+        await addManualEvent(data, degreeUrl || undefined);
+      }
+      await loadManualEvents();
+      getICloudAutoSyncEnabled().then((enabled) => {
+        if (enabled) syncWithICloudStorage().catch(() => {});
+      }).catch(() => {});
+    } catch (err) {
+      console.error("Errore salvataggio lezione manuale:", err);
+    }
+  };
+
+  const handleDeleteManualEvent = async (id: string) => {
+    try {
+      await deleteManualEvent(id, degreeUrl || undefined);
+      await loadManualEvents();
+      getICloudAutoSyncEnabled().then((enabled) => {
+        if (enabled) syncWithICloudStorage().catch(() => {});
+      }).catch(() => {});
+    } catch (err) {
+      console.error("Errore eliminazione lezione manuale:", err);
     }
   };
 
@@ -410,7 +487,16 @@ export default function ScheduleScreen() {
     setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
   };
 
-  const todayClasses = schedule?.days[selectedDay] || [];
+  const todayClasses = useMemo(() => {
+    const scraped = schedule?.days[selectedDay] || [];
+    const { dateStr } = getDateForDayIndex(selectedDay);
+    const manualForDay = manualEvents
+      .filter((e) => e.dayIndex === selectedDay && isManualEventActiveOnDate(e, dateStr))
+      .map(manualEventToClassEvent);
+
+    const combined = [...scraped, ...manualForDay];
+    return combined.sort((a, b) => a.startTime.localeCompare(b.startTime));
+  }, [schedule, selectedDay, manualEvents]);
 
 
 
@@ -650,11 +736,25 @@ export default function ScheduleScreen() {
           }}
         >
           <View style={styles.dayLabelRow}>
-          <Text style={styles.dayLabel}>
-            {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
-          </Text>
-          <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
-        </View>
+            <View style={styles.dayLabelLeft}>
+              <Text style={styles.dayLabel}>
+                {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
+              </Text>
+              <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.addManualButton}
+              onPress={() => {
+                setEditingManualEvent(null);
+                setManualModalVisible(true);
+              }}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="add-circle" size={16} color={theme.accent} />
+              <Text style={[styles.addManualButtonText, { color: theme.accent }]}>+ Lezione</Text>
+            </TouchableOpacity>
+          </View>
 
         {/* ── Classes List ── */}
         {loading ? (
@@ -720,9 +820,29 @@ export default function ScheduleScreen() {
                   {/* Dettagli Lezione */}
                   <View style={styles.cardBody}>
                     <View style={styles.cardTitleRow}>
-                      <Text style={styles.subjectText} numberOfLines={2}>
-                        {cls.subject?.toUpperCase()}
-                      </Text>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={styles.subjectText} numberOfLines={2}>
+                          {cls.subject?.toUpperCase()}
+                        </Text>
+                        {cls.isManual && (
+                          <TouchableOpacity
+                            style={styles.manualBadgeRow}
+                            onPress={() => {
+                              const found = manualEvents.find((e) => e.id === cls.manualId);
+                              if (found) {
+                                setEditingManualEvent(found);
+                                setManualModalVisible(true);
+                              }
+                            }}
+                            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          >
+                            <View style={styles.manualBadge}>
+                              <Ionicons name="pencil" size={10} color="#f59e0b" style={{ marginRight: 3 }} />
+                              <Text style={styles.manualBadgeText}>Manuale</Text>
+                            </View>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                       <View style={styles.badgesCluster}>
                         {/* Simbolo colorato distintivo della presenza (con animazione spring all'apparizione) */}
                         {isAttended && <AttendanceCheckmark />}
@@ -784,6 +904,38 @@ export default function ScheduleScreen() {
 
               // In standalone iOS (.IPA), usa UIContextMenuInteraction nativo
               if (isNativeComponentAvailable) {
+                const menuActions = [
+                  {
+                    id: "toggle_presence",
+                    title: isAttended
+                      ? "Rimuovi Presenza"
+                      : "Segna Presenza",
+                    image: isAttended
+                      ? "checkmark.circle.badge.xmark"
+                      : "checkmark.circle",
+                    attributes: {
+                      destructive: isAttended,
+                    },
+                  },
+                  ...(cls.isManual
+                    ? [
+                        {
+                          id: "edit_manual",
+                          title: "Modifica Lezione Manuale",
+                          image: "pencil",
+                        },
+                        {
+                          id: "delete_manual",
+                          title: "Elimina Lezione Manuale",
+                          image: "trash",
+                          attributes: {
+                            destructive: true,
+                          },
+                        },
+                      ]
+                    : []),
+                ];
+
                 return (
                   <MenuView
                     key={i}
@@ -793,22 +945,17 @@ export default function ScheduleScreen() {
                     onPressAction={({ nativeEvent }) => {
                       if (nativeEvent.event === "toggle_presence") {
                         handleClassLongPress(cls);
+                      } else if (nativeEvent.event === "edit_manual" && cls.manualId) {
+                        const found = manualEvents.find((e) => e.id === cls.manualId);
+                        if (found) {
+                          setEditingManualEvent(found);
+                          setManualModalVisible(true);
+                        }
+                      } else if (nativeEvent.event === "delete_manual" && cls.manualId) {
+                        handleDeleteManualEvent(cls.manualId);
                       }
                     }}
-                    actions={[
-                      {
-                        id: "toggle_presence",
-                        title: isAttended
-                          ? "Rimuovi Presenza"
-                          : "Segna Presenza",
-                        image: isAttended
-                          ? "checkmark.circle.badge.xmark"
-                          : "checkmark.circle",
-                        attributes: {
-                          destructive: isAttended,
-                        },
-                      },
-                    ]}
+                    actions={menuActions as any}
                   >
                     {cardView}
                   </MenuView>
@@ -821,7 +968,38 @@ export default function ScheduleScreen() {
                   key={i}
                   style={[styles.cardMenuWrapper, { width: cardWidth }]}
                   activeOpacity={0.85}
-                  onLongPress={() => handleClassLongPress(cls)}
+                  onLongPress={() => {
+                    if (cls.isManual && cls.manualId) {
+                      Alert.alert(
+                        cls.subject,
+                        "Gestisci lezione o presenza",
+                        [
+                          {
+                            text: isAttended ? "Rimuovi Presenza" : "Segna Presenza",
+                            onPress: () => handleClassLongPress(cls),
+                          },
+                          {
+                            text: "Modifica Lezione",
+                            onPress: () => {
+                              const found = manualEvents.find((e) => e.id === cls.manualId);
+                              if (found) {
+                                setEditingManualEvent(found);
+                                setManualModalVisible(true);
+                              }
+                            },
+                          },
+                          {
+                            text: "Elimina Lezione",
+                            style: "destructive",
+                            onPress: () => handleDeleteManualEvent(cls.manualId!),
+                          },
+                          { text: "Annulla", style: "cancel" },
+                        ]
+                      );
+                    } else {
+                      handleClassLongPress(cls);
+                    }
+                  }}
                   delayLongPress={400}
                 >
                   {cardView}
@@ -883,6 +1061,19 @@ export default function ScheduleScreen() {
         classroom={selectedRoomModal}
         subjects={selectedRoomSubjects}
         onClose={() => setSelectedRoomModal(null)}
+      />
+
+      {/* ── Modal Lezioni Manuali ── */}
+      <ManualEventModal
+        visible={manualModalVisible}
+        editingEvent={editingManualEvent}
+        initialDayIndex={selectedDay}
+        onClose={() => {
+          setManualModalVisible(false);
+          setEditingManualEvent(null);
+        }}
+        onSave={handleSaveManualEvent}
+        onDelete={handleDeleteManualEvent}
       />
 
       {/* ── Modal iOS Bloccante per Major Update Obbligatorio ── */}
@@ -1267,10 +1458,49 @@ const styles = StyleSheet.create({
   /* Day label */
   dayLabelRow: {
     flexDirection: "row",
-    alignItems: "baseline",
+    alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 12,
+  },
+  dayLabelLeft: {
+    flex: 1,
+  },
+  addManualButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+  },
+  addManualButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginLeft: 4,
+  },
+  manualBadgeRow: {
+    flexDirection: "row",
+    marginTop: 4,
+  },
+  manualBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+  },
+  manualBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#f59e0b",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   dayLabel: {
     color: "#8e8e93",
@@ -1282,6 +1512,7 @@ const styles = StyleSheet.create({
     color: "#71717a",
     fontSize: 10.5,
     fontWeight: "500",
+    marginTop: 2,
   },
 
   /* Empty state */

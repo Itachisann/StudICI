@@ -72,6 +72,7 @@ import {
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
 import {
   Degree,
+  checkCourseUpdates,
   fetchAllCourseData,
   fetchDegrees,
   fetchScheduleData,
@@ -231,7 +232,7 @@ export default function ProfiloScreen() {
       }
 
       // 3. Presenze e statistiche immediate da disco
-      const attList = await getAttendanceRecords();
+      const attList = await getAttendanceRecords(storedUrl || undefined);
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
@@ -301,11 +302,66 @@ export default function ProfiloScreen() {
 
   const selectDegree = async (degree: Degree) => {
     setCourseModalVisible(false);
-    setDownloadingCourse(degree);
-    setDownloadProgressText("Preparazione e analisi canali...");
 
     try {
-      const { tabs } = await fetchAllCourseData(degree.url, true, (stepMsg) => {
+      // 1. Controlla se il corso è già presente in cache locale (download effettuato in precedenza)
+      const cacheKey = `allSchedules_v8_${degree.url}`;
+      const cachedRaw = await AsyncStorage.getItem(cacheKey);
+
+      if (cachedRaw) {
+        let cachedData: { tabs?: Tab[]; schedules?: Record<string, any> } | null = null;
+        try {
+          cachedData = JSON.parse(cachedRaw);
+        } catch {}
+
+        if (cachedData && Array.isArray(cachedData.tabs) && cachedData.tabs.length > 0) {
+          const tabs = cachedData.tabs;
+          // Recupera il canale precedentemente scelto per questo specifico corso
+          const savedTabForDegree = await AsyncStorage.getItem(`defaultTabUrl_${degree.url}`);
+          const activeTab = (savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree))
+            ? savedTabForDegree
+            : (tabs[0]?.url || null);
+
+          // Salva istantaneamente i parametri del corso selezionato
+          const pairs: [string, string][] = [
+            ["selectedDegreeUrl", degree.url],
+            ["selectedDegreeName", degree.name],
+            ["selectedDegreeClassName", degree.className || ""],
+          ];
+          if (activeTab) {
+            pairs.push(["defaultTabUrl", activeTab]);
+            pairs.push([`defaultTabUrl_${degree.url}`, activeTab]);
+          }
+          await AsyncStorage.multiSet(pairs);
+
+          setDegreeUrl(degree.url);
+          setDegreeName(degree.name);
+          setDegreeClassName(degree.className || "");
+          setDefaultTabUrl(activeTab);
+          setAvailableTabs(tabs);
+          setDownloadingCourse(null);
+
+          // Ricarica le presenze e i dati del profilo per la facoltà appena attivata
+          loadProfileData();
+
+          // Esegui la verifica orari ordinaria in background (senza attese o blocchi UI)
+          checkCourseUpdates(degree.url).then(async (checkRes) => {
+            if (checkRes.hasChanges) {
+              console.log("Verifica ordinaria: rilevate variazioni per il corso", degree.name);
+              fetchAllCourseData(degree.url, true).catch(() => {});
+            }
+          }).catch(() => {});
+
+          router.replace("/");
+          return;
+        }
+      }
+
+      // 2. Se non è presente in cache, scarica per la prima volta
+      setDownloadingCourse(degree);
+      setDownloadProgressText("Preparazione e analisi canali...");
+
+      const { tabs } = await fetchAllCourseData(degree.url, false, (stepMsg) => {
         setDownloadProgressText(stepMsg);
       });
 
@@ -318,6 +374,7 @@ export default function ProfiloScreen() {
       const firstTab = tabs && tabs[0] ? tabs[0].url : null;
       if (firstTab) {
         await AsyncStorage.setItem("defaultTabUrl", firstTab);
+        await AsyncStorage.setItem(`defaultTabUrl_${degree.url}`, firstTab);
       } else {
         await AsyncStorage.removeItem("defaultTabUrl");
       }
@@ -328,6 +385,8 @@ export default function ProfiloScreen() {
       setDefaultTabUrl(firstTab);
       setAvailableTabs(tabs);
       setDownloadingCourse(null);
+
+      loadProfileData();
 
       if (tabs && tabs.length > 1) {
         const match = tabs.find((t) => t.url === firstTab) || tabs[0];
@@ -350,6 +409,9 @@ export default function ProfiloScreen() {
   const selectDefaultTab = async (tab: Tab) => {
     setDefaultTabUrl(tab.url);
     await AsyncStorage.setItem("defaultTabUrl", tab.url);
+    if (degreeUrl) {
+      await AsyncStorage.setItem(`defaultTabUrl_${degreeUrl}`, tab.url);
+    }
     setChannelModalVisible(false);
   };
 

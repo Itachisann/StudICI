@@ -2,6 +2,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ClassEvent } from './scraper';
 
 const ATTENDANCE_STORAGE_KEY = 'studici_attendance_records';
+const TOMBSTONES_KEY = 'studici_attendance_tombstones';
+
+export async function getAttendanceStorageKey(courseUrl?: string): Promise<string> {
+  const url = courseUrl || (await AsyncStorage.getItem('selectedDegreeUrl'));
+  return url ? `${ATTENDANCE_STORAGE_KEY}_${url}` : ATTENDANCE_STORAGE_KEY;
+}
+
+export async function getTombstonesStorageKey(courseUrl?: string): Promise<string> {
+  const url = courseUrl || (await AsyncStorage.getItem('selectedDegreeUrl'));
+  return url ? `${TOMBSTONES_KEY}_${url}` : TOMBSTONES_KEY;
+}
 
 export interface AttendanceRecord {
   id: string; // `${date}_${subject}_${startTime}`
@@ -68,11 +79,29 @@ export function generateAttendanceId(dateStr: string, subject: string, startTime
 }
 
 /**
- * Recupera l'elenco di tutte le presenze salvate
+ * Recupera l'elenco di tutte le presenze salvate per il corso specificato (o quello attivo)
  */
-export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
+export async function getAttendanceRecords(courseUrl?: string): Promise<AttendanceRecord[]> {
   try {
-    const raw = await AsyncStorage.getItem(ATTENDANCE_STORAGE_KEY);
+    const key = await getAttendanceStorageKey(courseUrl);
+    let raw = await AsyncStorage.getItem(key);
+
+    // Se la chiave specifica per il corso non esiste ancora, controlla se c'è una migrazione
+    // da effettuare dalla chiave globale legacy
+    if (!raw && key !== ATTENDANCE_STORAGE_KEY) {
+      const legacyRaw = await AsyncStorage.getItem(ATTENDANCE_STORAGE_KEY);
+      if (legacyRaw) {
+        try {
+          const parsedLegacy = JSON.parse(legacyRaw);
+          if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+            // Migra i dati nel nuovo storage associato a questo corso
+            await AsyncStorage.setItem(key, legacyRaw);
+            raw = legacyRaw;
+          }
+        } catch {}
+      }
+    }
+
     if (!raw) return [];
     const list: AttendanceRecord[] = JSON.parse(raw);
     return Array.isArray(list) ? list : [];
@@ -83,14 +112,13 @@ export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
 }
 
 /**
- * Salva l'elenco delle presenze su AsyncStorage
+ * Salva l'elenco delle presenze su AsyncStorage per il corso specificato (o quello attivo)
  */
-async function saveAttendanceList(records: AttendanceRecord[]): Promise<void> {
-  await AsyncStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(records));
+export async function saveAttendanceList(records: AttendanceRecord[], courseUrl?: string): Promise<void> {
+  const key = await getAttendanceStorageKey(courseUrl);
+  await AsyncStorage.setItem(key, JSON.stringify(records));
   notifyLocalChange();
 }
-
-const TOMBSTONES_KEY = 'studici_attendance_tombstones';
 
 /** Callback invocato dopo ogni modifica locale alle presenze (usato dalla sync cloud). */
 let localChangeListener: (() => void) | null = null;
@@ -103,26 +131,35 @@ function notifyLocalChange(): void {
   } catch {}
 }
 
-/** Elenco presenze eliminate (id → timestamp eliminazione), necessario per propagare le cancellazioni tra dispositivi */
-export async function getAttendanceTombstones(): Promise<Record<string, number>> {
+/** Elenco presenze eliminate (id → timestamp eliminazione) per il corso specificato o attivo */
+export async function getAttendanceTombstones(courseUrl?: string): Promise<Record<string, number>> {
   try {
-    const raw = await AsyncStorage.getItem(TOMBSTONES_KEY);
+    const key = await getTombstonesStorageKey(courseUrl);
+    let raw = await AsyncStorage.getItem(key);
+    if (!raw && key !== TOMBSTONES_KEY) {
+      const legacyRaw = await AsyncStorage.getItem(TOMBSTONES_KEY);
+      if (legacyRaw) {
+        await AsyncStorage.setItem(key, legacyRaw);
+        raw = legacyRaw;
+      }
+    }
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
   }
 }
 
-export async function setAttendanceTombstones(t: Record<string, number>): Promise<void> {
-  await AsyncStorage.setItem(TOMBSTONES_KEY, JSON.stringify(t));
+export async function setAttendanceTombstones(t: Record<string, number>, courseUrl?: string): Promise<void> {
+  const key = await getTombstonesStorageKey(courseUrl);
+  await AsyncStorage.setItem(key, JSON.stringify(t));
 }
 
-async function addTombstones(ids: string[]): Promise<void> {
+async function addTombstones(ids: string[], courseUrl?: string): Promise<void> {
   if (ids.length === 0) return;
-  const t = await getAttendanceTombstones();
+  const t = await getAttendanceTombstones(courseUrl);
   const now = Date.now();
   for (const id of ids) t[id] = now;
-  await setAttendanceTombstones(t);
+  await setAttendanceTombstones(t, courseUrl);
 }
 
 /**
@@ -147,19 +184,20 @@ export function calculateLessonDuration(startTime: string, endTime: string, defa
 export async function toggleAttendance(
   dayIndex: number,
   dayName: string,
-  cls: ClassEvent
+  cls: ClassEvent,
+  courseUrl?: string
 ): Promise<{ added: boolean; records: AttendanceRecord[] }> {
   const { dateStr, displayDate } = getDateForDayIndex(dayIndex);
   const id = generateAttendanceId(dateStr, cls.subject, cls.startTime);
-  const currentRecords = await getAttendanceRecords();
+  const currentRecords = await getAttendanceRecords(courseUrl);
 
   const existingIndex = currentRecords.findIndex(r => r.id === id);
 
   if (existingIndex >= 0) {
     // Rimuovi presenza
     currentRecords.splice(existingIndex, 1);
-    await addTombstones([id]);
-    await saveAttendanceList(currentRecords);
+    await addTombstones([id], courseUrl);
+    await saveAttendanceList(currentRecords, courseUrl);
     return { added: false, records: currentRecords };
   } else {
     // Aggiungi presenza
@@ -179,7 +217,7 @@ export async function toggleAttendance(
       timestamp: Date.now(),
     };
     const updated = [newRecord, ...currentRecords];
-    await saveAttendanceList(updated);
+    await saveAttendanceList(updated, courseUrl);
     return { added: true, records: updated };
   }
 }
@@ -190,15 +228,16 @@ export async function toggleAttendance(
 export async function toggleDayAttendance(
   dayIndex: number,
   dayName: string,
-  classes: ClassEvent[]
+  classes: ClassEvent[],
+  courseUrl?: string
 ): Promise<{ added: boolean; count: number; records: AttendanceRecord[] }> {
   if (!classes || classes.length === 0) {
-    const list = await getAttendanceRecords();
+    const list = await getAttendanceRecords(courseUrl);
     return { added: false, count: 0, records: list };
   }
 
   const { dateStr, displayDate } = getDateForDayIndex(dayIndex);
-  const currentRecords = await getAttendanceRecords();
+  const currentRecords = await getAttendanceRecords(courseUrl);
 
   // Verifica quante lezioni di questo giorno sono già presenti
   const idsForDay = classes.map(c => generateAttendanceId(dateStr, c.subject, c.startTime));
@@ -211,7 +250,7 @@ export async function toggleDayAttendance(
   if (allAttended) {
     // Rimuovi tutte le presenze di questo giorno
     updatedList = currentRecords.filter(r => !idsForDay.includes(r.id));
-    await addTombstones(idsForDay);
+    await addTombstones(idsForDay, courseUrl);
     added = false;
     count = idsForDay.length;
   } else {
@@ -244,29 +283,87 @@ export async function toggleDayAttendance(
     count = toAdd.length;
   }
 
-  await saveAttendanceList(updatedList);
+  await saveAttendanceList(updatedList, courseUrl);
   return { added, count, records: updatedList };
 }
 
 /**
  * Elimina una specifica presenza per ID
  */
-export async function deleteAttendanceRecord(id: string): Promise<AttendanceRecord[]> {
-  const currentRecords = await getAttendanceRecords();
+export async function deleteAttendanceRecord(id: string, courseUrl?: string): Promise<AttendanceRecord[]> {
+  const currentRecords = await getAttendanceRecords(courseUrl);
   const filtered = currentRecords.filter(r => r.id !== id);
-  await addTombstones([id]);
-  await saveAttendanceList(filtered);
+  await addTombstones([id], courseUrl);
+  await saveAttendanceList(filtered, courseUrl);
   return filtered;
 }
 
 /**
  * Resetta l'intero registro presenze
  */
-export async function clearAllAttendance(): Promise<void> {
-  const current = await getAttendanceRecords();
-  await addTombstones(current.map(r => r.id));
-  await AsyncStorage.removeItem(ATTENDANCE_STORAGE_KEY);
+export async function clearAllAttendance(courseUrl?: string): Promise<void> {
+  const current = await getAttendanceRecords(courseUrl);
+  await addTombstones(current.map(r => r.id), courseUrl);
+  const key = await getAttendanceStorageKey(courseUrl);
+  await AsyncStorage.removeItem(key);
   notifyLocalChange();
+}
+
+/**
+ * Recupera tutte le presenze di tutte le facoltà (usato per backup e cloud sync multi-corso).
+ */
+export async function getAllAttendanceAcrossCourses(): Promise<Record<string, AttendanceRecord[]>> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const attKeys = keys.filter(k => k.startsWith(`${ATTENDANCE_STORAGE_KEY}_`));
+    const result: Record<string, AttendanceRecord[]> = {};
+
+    if (attKeys.length > 0) {
+      const pairs = await AsyncStorage.multiGet(attKeys);
+      for (const [key, val] of pairs) {
+        if (val) {
+          const courseUrl = key.replace(`${ATTENDANCE_STORAGE_KEY}_`, '');
+          try {
+            result[courseUrl] = JSON.parse(val);
+          } catch {}
+        }
+      }
+    }
+
+    // Se esiste la chiave legacy globale non ancora migrata
+    const legacy = await AsyncStorage.getItem(ATTENDANCE_STORAGE_KEY);
+    if (legacy && Object.keys(result).length === 0) {
+      try {
+        const activeUrl = (await AsyncStorage.getItem('selectedDegreeUrl')) || 'default';
+        result[activeUrl] = JSON.parse(legacy);
+      } catch {}
+    }
+
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Salva presenze multi-corso (usato per ripristino backup e cloud sync).
+ */
+export async function saveAllAttendanceAcrossCourses(
+  map: Record<string, AttendanceRecord[]>
+): Promise<void> {
+  if (!map) return;
+  try {
+    const pairs: [string, string][] = Object.entries(map).map(([courseUrl, records]) => [
+      `${ATTENDANCE_STORAGE_KEY}_${courseUrl}`,
+      JSON.stringify(records),
+    ]);
+    if (pairs.length > 0) {
+      await AsyncStorage.multiSet(pairs);
+      notifyLocalChange();
+    }
+  } catch (err) {
+    console.error('Errore ripristino presenze multi-corso:', err);
+  }
 }
 
 /**
