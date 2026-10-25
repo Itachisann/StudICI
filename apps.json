@@ -14,7 +14,7 @@
       "developerName": "Vitor",
       "version": "1.9.3",
       "versionDate": "2026-10-25",
-      "versionDescription": "Design ultra-pulito Liquid Glass per il selettore settimanale in Viaggio: barra a 7 pillole con separatore feriale/weekend, senza righe superflue, allineamento perfetto ai margini delle card.",
+      "versionDescription": "Segmented UI nativo iOS per IPA con animazione di scivolamento fluida tra giorni e transizione animata dei contenuti nella sezione Viaggio.",
       "downloadURL": "https://github.com/Itachisann/StudICI/releases/latest/download/StudICI.ipa",
       "localizedDescription": "L'app compagna per gli studenti di Ingegneria Informatica e Automatica alla Sapienza Università di Roma. Orari lezioni, monitoraggio treni pendolari Trenitalia in tempo reale, percorsi urbani ATAC e gestione presenze.",
       "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",

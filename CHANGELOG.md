@@ -8,12 +8,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 ## 1.9.3
 
 ### Sezione Viaggio & Selettore Giorni Settimanali
-- **Design Ultra-Pulito Apple Liquid Glass**:
-  - **Eliminazione Toolbar Superflue**: rimossa la riga superiore di pulsanti e badge che appesantiva visivamente l'header creando troppi livelli sovrapposti.
-  - **Barra Segmentata Liquid Glass a 7 Pillole**: i 7 giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) sono racchiusi in un'unica elegante barra di vetro scuro satinato (`rgba(255,255,255,0.05)` con raggio 16px e bordo 1px `0.09`).
-  - **Separatore Elegante Feriale / Weekend**: introdotta una sottile linea verticale tra Venerdì e Sabato per distinguere intuitivamente i giorni accademici da quelli del fine settimana.
-  - **Glow Sapienza & Micro-Dot Oggi**: l'elemento selezionato si illumina in rosso Sapienza (`theme.bg` / `theme.primary`) con glow sfumato e dot dedicato per la giornata odierna.
-  - **Contesto e Tasto "Torna a Oggi" Integrati nella Sezione**: il nome completo del giorno e l'eventuale tasto rapido `[↩ Torna a oggi]` sono ora integrati con naturalezza nell'intestazione della sezione lezioni, liberando completamente l'header.
+- **Segmented UI Nativo per IPA con Animazione di Scorrimento**:
+  - **Supporto Nativo UISegmentedControl**: su build IPA e dispositivi iOS (`isNativeIos`), il selettore dei 7 giorni (`Lun`, `Mar`, `Mer`, `Gio`, `Ven`, `Sab`, `Dom`) adotta ora il controllo nativo `UISegmentedControl` coordinato al selettore Andata/Ritorno.
+  - **Animazione di Scorrimento Nativa Apple**: il cursore a pillola scivola fluidamente da un giorno all'altro con fisica a molla e feedback aptico nativo di iOS.
+  - **Animazione Fluida di Transizione Contenuti**: al cambio giorno (e al cambio direzione), l'intera area contenuti della sezione Viaggio (lezioni, convoglio target, timeline) transiziona morbidamente con cross-fade e scorrimento verticale (`opacity: 0.4 -> 1`, `translateY: 8 -> 0`).
+  - **Barra Vetro Satinato per Fallback**: su ambienti non nativi viene mantenuta la barra segmentata liquid glass a 7 pillole con separatore feriale/weekend.
+  - **Allineamento Perfetto ai Margini**: entrambi i controlli segmentati rispettano fedelmente i margini interni delle card sottostanti (`paddingHorizontal: 16`, `maxWidth: 600`).
 
 ## 1.9.2
 

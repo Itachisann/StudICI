@@ -9,6 +9,7 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  Animated,
   Linking,
   Platform,
   RefreshControl,
@@ -74,14 +75,16 @@ interface WeekdayItem {
 }
 
 const WEEKDAYS: WeekdayItem[] = [
-  { label: "LUN", fullLabel: "Lunedì", dayIdx: 1 },
-  { label: "MAR", fullLabel: "Martedì", dayIdx: 2 },
-  { label: "MER", fullLabel: "Mercoledì", dayIdx: 3 },
-  { label: "GIO", fullLabel: "Giovedì", dayIdx: 4 },
-  { label: "VEN", fullLabel: "Venerdì", dayIdx: 5 },
-  { label: "SAB", fullLabel: "Sabato", dayIdx: 6, isWeekend: true },
-  { label: "DOM", fullLabel: "Domenica", dayIdx: 0, isWeekend: true },
+  { label: "Lun", fullLabel: "Lunedì", dayIdx: 1 },
+  { label: "Mar", fullLabel: "Martedì", dayIdx: 2 },
+  { label: "Mer", fullLabel: "Mercoledì", dayIdx: 3 },
+  { label: "Gio", fullLabel: "Giovedì", dayIdx: 4 },
+  { label: "Ven", fullLabel: "Venerdì", dayIdx: 5 },
+  { label: "Sab", fullLabel: "Sabato", dayIdx: 6, isWeekend: true },
+  { label: "Dom", fullLabel: "Domenica", dayIdx: 0, isWeekend: true },
 ];
+
+const WEEKDAY_TITLES = WEEKDAYS.map((w) => w.label);
 
 export default function ViaggioScreen() {
   const { theme } = useTheme();
@@ -113,6 +116,26 @@ export default function ViaggioScreen() {
   }, [selectedDayIdx]);
 
   const currentWeekday = WEEKDAYS[currentWeekdayIndex];
+
+  const [contentFadeAnim] = useState(() => new Animated.Value(1));
+  const [contentSlideAnim] = useState(() => new Animated.Value(0));
+
+  const animateDayTransition = useCallback(() => {
+    contentFadeAnim.setValue(0.4);
+    contentSlideAnim.setValue(8);
+    Animated.parallel([
+      Animated.timing(contentFadeAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(contentSlideAnim, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [contentFadeAnim, contentSlideAnim]);
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
@@ -425,6 +448,7 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
+    animateDayTransition();
     loadData(false, false, {
       selectedDayIdx: dayIdx,
       selectedClassIndex: null,
@@ -442,6 +466,7 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
+    animateDayTransition();
     loadData(false, false, {
       direction: newDir,
       selectedTrainOffset: 0,
@@ -765,54 +790,80 @@ export default function ViaggioScreen() {
                 )}
               </View>
 
-              {/* Selettore Giorno della settimana - Liquid Glass Week Bar */}
+              {/* Selettore Giorno della settimana - Native Segmented Control per IPA / Glass Week Bar per Fallback */}
               <View style={styles.daySelectorContainer}>
-                <View style={styles.daySegmentedBar}>
-                  {WEEKDAYS.map((w, idx) => {
-                    const isSelected = selectedDayIdx === w.dayIdx;
-                    const isItemToday = todayDayIdx === w.dayIdx;
-                    const isItemWeekend = Boolean(w.isWeekend);
+                {isNativeIos ? (
+                  <SegmentedControl
+                    key={`seg-days-${currentWeekdayIndex}-${theme.primary}`}
+                    values={WEEKDAY_TITLES}
+                    selectedIndex={currentWeekdayIndex}
+                    onChange={(event) => {
+                      const idx = event.nativeEvent.selectedSegmentIndex;
+                      if (WEEKDAYS[idx]) {
+                        handleDayChange(WEEKDAYS[idx].dayIdx);
+                      }
+                    }}
+                    appearance="dark"
+                    tintColor={theme.primary}
+                    fontStyle={{
+                      fontSize: 12,
+                      fontWeight: "600",
+                      color: "#a1a1aa",
+                    }}
+                    activeFontStyle={{
+                      fontSize: 12,
+                      fontWeight: "700",
+                      color: "#ffffff",
+                    }}
+                    style={styles.nativeDaySegmentedControl}
+                  />
+                ) : (
+                  <View style={styles.daySegmentedBar}>
+                    {WEEKDAYS.map((w, idx) => {
+                      const isSelected = selectedDayIdx === w.dayIdx;
+                      const isItemToday = todayDayIdx === w.dayIdx;
+                      const isItemWeekend = Boolean(w.isWeekend);
 
-                    const activeBg = isItemWeekend
-                      ? "rgba(245, 158, 11, 0.22)"
-                      : theme.bg;
-                    const activeBorder = isItemWeekend
-                      ? "#f59e0b"
-                      : theme.primary;
-                    const activeShadow = isItemWeekend
-                      ? "#f59e0b"
-                      : theme.primary;
+                      const activeBg = isItemWeekend
+                        ? "rgba(245, 158, 11, 0.22)"
+                        : theme.bg;
+                      const activeBorder = isItemWeekend
+                        ? "#f59e0b"
+                        : theme.primary;
+                      const activeShadow = isItemWeekend
+                        ? "#f59e0b"
+                        : theme.primary;
 
-                    return (
-                      <View
-                        key={w.dayIdx}
-                        style={[
-                          styles.daySegmentWrapper,
-                          idx === 5 && styles.daySegmentWrapperWithDivider,
-                        ]}
-                      >
-                        {idx === 5 && <View style={styles.dayWeekendDivider} />}
-                        <TouchableOpacity
-                          onPress={() => handleDayChange(w.dayIdx)}
-                          activeOpacity={0.7}
+                      return (
+                        <View
+                          key={w.dayIdx}
                           style={[
-                            styles.daySegmentItem,
-                            isSelected && [
-                              styles.daySegmentItemActive,
-                              {
-                                backgroundColor: activeBg,
-                                borderColor: activeBorder,
-                                shadowColor: activeShadow,
-                              },
-                            ],
+                            styles.daySegmentWrapper,
+                            idx === 5 && styles.daySegmentWrapperWithDivider,
                           ]}
                         >
-                          <Text
+                          {idx === 5 && <View style={styles.dayWeekendDivider} />}
+                          <TouchableOpacity
+                            onPress={() => handleDayChange(w.dayIdx)}
+                            activeOpacity={0.7}
                             style={[
-                              styles.daySegmentLabel,
-                              isItemWeekend &&
-                                !isSelected &&
-                                styles.daySegmentLabelWeekend,
+                              styles.daySegmentItem,
+                              isSelected && [
+                                styles.daySegmentItemActive,
+                                {
+                                  backgroundColor: activeBg,
+                                  borderColor: activeBorder,
+                                  shadowColor: activeShadow,
+                                },
+                              ],
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.daySegmentLabel,
+                                isItemWeekend &&
+                                  !isSelected &&
+                                  styles.daySegmentLabelWeekend,
                               isSelected && styles.daySegmentLabelActive,
                             ]}
                           >
@@ -834,7 +885,8 @@ export default function ViaggioScreen() {
                     );
                   })}
                 </View>
-              </View>
+              )}
+            </View>
             </>
           )}
         </View>
@@ -895,7 +947,13 @@ export default function ViaggioScreen() {
               />
             }
           >
-            {/* Sezione Selettore Lezioni del Giorno */}
+            <Animated.View
+              style={{
+                opacity: contentFadeAnim,
+                transform: [{ translateY: contentSlideAnim }],
+              }}
+            >
+              {/* Sezione Selettore Lezioni del Giorno */}
             <View style={styles.lecturesSection}>
               <View style={styles.sectionHeaderRow}>
                 <View
@@ -2234,6 +2292,7 @@ export default function ViaggioScreen() {
                 </View>
               </>
             )}
+            </Animated.View>
           </ScrollView>
         )}
 
@@ -2380,6 +2439,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 10,
     paddingTop: 2,
+    width: "100%",
+    maxWidth: 600,
+    alignSelf: "center",
+  },
+  nativeDaySegmentedControl: {
+    height: 36,
     width: "100%",
     maxWidth: 600,
     alignSelf: "center",
