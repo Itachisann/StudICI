@@ -548,6 +548,17 @@ export default function ViaggioScreen() {
   };
 
   const handleTrainPrev = () => {
+    if (itinerary?.availableTrains && itinerary.liveTrain) {
+      const currentClean = itinerary.liveTrain.trainNumber.replace(/\D/g, "");
+      const idx = itinerary.availableTrains.findIndex(
+        (t) => t.trainNumber.replace(/\D/g, "") === currentClean
+      );
+      if (idx > 0) {
+        const prevTrain = itinerary.availableTrains[idx - 1];
+        handleSelectTrainChip(prevTrain.trainNumber);
+        return;
+      }
+    }
     const nextOffset = selectedTrainOffset - 1;
     setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);
@@ -558,6 +569,17 @@ export default function ViaggioScreen() {
   };
 
   const handleTrainNext = () => {
+    if (itinerary?.availableTrains && itinerary.liveTrain) {
+      const currentClean = itinerary.liveTrain.trainNumber.replace(/\D/g, "");
+      const idx = itinerary.availableTrains.findIndex(
+        (t) => t.trainNumber.replace(/\D/g, "") === currentClean
+      );
+      if (idx !== -1 && idx < itinerary.availableTrains.length - 1) {
+        const nextTrain = itinerary.availableTrains[idx + 1];
+        handleSelectTrainChip(nextTrain.trainNumber);
+        return;
+      }
+    }
     const nextOffset = selectedTrainOffset + 1;
     setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);

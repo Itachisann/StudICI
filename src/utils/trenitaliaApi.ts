@@ -2035,104 +2035,73 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     forceRefresh
   );
 
-  // 2. Se l'API non risponde (es. offline), usa i dati di fallback aggiornati
-  if (allTrains.length === 0) {
-    if (isOutbound) {
-      allTrains = SCHEDULED_ORTE_TO_ROMA.map((s) => {
-        const arrTime = isTerminiArrival ? s.arrivalTimeTermini : s.arrivalTimeTiburtina;
-        const duration = isTerminiArrival ? s.durationMinutesTermini : s.durationMinutesTiburtina;
-        return {
-          trainNumber: s.trainNumber,
-          category: s.category,
-          destination: s.destination,
-          originStationName: departureStation.name,
-          originStationCode: departureStation.code,
-          departureTimePlanned: s.departureTime,
-          departureTimeActual: s.departureTime,
-          departureMillis: targetDate.getTime(),
-          arrivalTimePlanned: arrTime,
-          arrivalTimeActual: arrTime,
-          platformPlanned: s.platformPlanned,
-          platformActual: s.platformPlanned,
-          delayMinutes: 0,
-          statusDescription: 'Non partito',
-          alertMessage:
-            fetchTotal > 0 && fetchOk === 0
-              ? 'Connessione a Trenitalia non riuscita. Visualizzazione orari ufficiali programmati.'
-              : undefined,
-          isLive: false,
-          durationMinutes: duration,
-          isFast: s.category === 'RV',
-        };
-      });
+  // 2. Unione con la tabella oraria ufficiale completa della tratta
+  // Assicura che TUTTI i treni programmati della giornata siano sempre presenti e consultabili nello slider
+  // (anche quelli del mattino o della sera non compresi nella finestra live istantanea di ViaggiaTreno).
+  const isOrteToRoma =
+    (departureStation.code === 'S08209' && (arrivalStation.code === 'S08409' || arrivalStation.code === 'S08217' || arrivalStation.code === 'S08406')) ||
+    (direction === 'outbound' && departureStation.code === 'S08209');
+  const isRomaToOrte =
+    ((departureStation.code === 'S08409' || departureStation.code === 'S08217' || departureStation.code === 'S08406') && arrivalStation.code === 'S08209') ||
+    (direction === 'return' && arrivalStation.code === 'S08209');
+
+  const masterScheduledList = isOrteToRoma
+    ? SCHEDULED_ORTE_TO_ROMA
+    : isRomaToOrte
+    ? SCHEDULED_ROMA_TO_ORTE
+    : isOutbound
+    ? SCHEDULED_ORTE_TO_ROMA
+    : SCHEDULED_ROMA_TO_ORTE;
+
+  const nowMinsCurrent = now.getHours() * 60 + now.getMinutes();
+  const existingNumbers = new Set(allTrains.map((t) => t.trainNumber.replace(/\D/g, '')));
+
+  for (const s of masterScheduledList) {
+    const cleanNum = s.trainNumber.replace(/\D/g, '');
+    if (existingNumbers.has(cleanNum)) continue;
+
+    let depPlanned = '';
+    let arrPlanned = '';
+    let duration = 0;
+    const platformPlanned = s.platformPlanned;
+
+    if (isOutbound || isOrteToRoma) {
+      const entry = s as ScheduledTrainEntry;
+      depPlanned = entry.departureTime;
+      arrPlanned = isTerminiArrival ? entry.arrivalTimeTermini : entry.arrivalTimeTiburtina;
+      duration = isTerminiArrival ? entry.durationMinutesTermini : entry.durationMinutesTiburtina;
     } else {
-      allTrains = SCHEDULED_ROMA_TO_ORTE.map((s) => {
-        const depTime = isTerminiArrival && s.departureTimeTermini ? s.departureTimeTermini : s.departureTimeTiburtina;
-        return {
-          trainNumber: s.trainNumber,
-          category: s.category,
-          destination: s.destination,
-          originStationName: departureStation.name,
-          originStationCode: departureStation.code,
-          departureTimePlanned: depTime,
-          departureTimeActual: depTime,
-          departureMillis: targetDate.getTime(),
-          arrivalTimePlanned: s.arrivalTimeOrte,
-          arrivalTimeActual: s.arrivalTimeOrte,
-          platformPlanned: s.platformPlanned,
-          platformActual: s.platformPlanned,
-          delayMinutes: 0,
-          statusDescription: 'Non partito',
-          alertMessage:
-            fetchTotal > 0 && fetchOk === 0
-              ? 'Connessione a Trenitalia non riuscita. Visualizzazione orari ufficiali programmati.'
-              : undefined,
-          isLive: false,
-          durationMinutes: s.durationMinutesTiburtina,
-          isFast: s.category === 'RV',
-        };
-      });
+      const entry = s as ScheduledReturnTrainEntry;
+      depPlanned = (isTerminiArrival && entry.departureTimeTermini) ? entry.departureTimeTermini : entry.departureTimeTiburtina;
+      arrPlanned = entry.arrivalTimeOrte;
+      duration = entry.durationMinutesTiburtina;
     }
 
-    if (isToday) {
-      try {
-        const liveList = await getLiveStationDepartures(departureStation.code, new Date());
-        for (const live of liveList) {
-          const liveNumDigits = live.trainNumber.replace(/\D/g, '');
-          if (!liveNumDigits) continue;
+    const depM = parseTimeToMinutes(depPlanned);
+    const isPassed = isToday && nowMinsCurrent > depM + 3;
 
-          const matchIdx = allTrains.findIndex(
-            (t) => t.trainNumber.replace(/\D/g, '') === liveNumDigits
-          );
-
-          if (matchIdx !== -1) {
-            const matched = allTrains[matchIdx];
-            matched.isLive = true;
-            matched.delayMinutes = live.delayMinutes;
-            matched.statusDescription = live.statusDescription;
-            matched.departureTimeActual =
-              live.delayMinutes > 0
-                ? live.departureTimeActual || matched.departureTimePlanned
-                : matched.departureTimePlanned;
-            matched.isOriginStation = live.isOriginStation;
-            matched.isDeparted = live.isDeparted;
-            if (live.isDepartedFromStation !== undefined) {
-              matched.isDepartedFromStation = live.isDepartedFromStation;
-            }
-            if (live.platformActual) matched.platformActual = cleanPlatform(live.platformActual);
-            if (live.platformPlanned) matched.platformPlanned = cleanPlatform(live.platformPlanned);
-            matched.alertMessage = live.alertMessage;
-
-            if (matched.arrivalTimePlanned) {
-              const arrMins =
-                parseTimeToMinutes(matched.arrivalTimePlanned) +
-                (live.delayMinutes > 0 ? live.delayMinutes : 0);
-              matched.arrivalTimeActual = minutesToTime(arrMins);
-            }
-          }
-        }
-      } catch {}
-    }
+    allTrains.push({
+      trainNumber: s.trainNumber,
+      category: s.category,
+      destination: s.destination,
+      originStationName: departureStation.name,
+      originStationCode: departureStation.code,
+      departureTimePlanned: depPlanned,
+      departureTimeActual: depPlanned,
+      departureMillis: targetDate.getTime(),
+      arrivalTimePlanned: arrPlanned,
+      arrivalTimeActual: arrPlanned,
+      platformPlanned: cleanPlatform(platformPlanned),
+      platformActual: cleanPlatform(platformPlanned),
+      delayMinutes: 0,
+      statusDescription: isToday ? (isPassed ? 'Già passato' : 'Programmato') : 'Programmato',
+      isDeparted: isPassed,
+      isDepartedFromStation: isPassed,
+      isLive: false,
+      durationMinutes: duration,
+      isFast: s.category === 'RV',
+    });
+    existingNumbers.add(cleanNum);
   }
 
   // Se la data richiesta NON è oggi (es. giorni precedenti o successivi),
@@ -2166,114 +2135,6 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   // 3. Algoritmo di selezione del treno migliore (Regionale Veloce preferito)
   const targetMins = parseTimeToMinutes(targetTimeStr);
   const nowMins = now.getHours() * 60 + now.getMinutes();
-
-  // Se è oggi:
-  // 1. Escludi i treni la cui corsa è già conclusa da lungo tempo (oltre 60 minuti dall'arrivo)
-  // 2. Escludi i treni N.D. senza riscontro live passati da oltre 5 minuti
-  // 3. MANTIENI i treni già partiti ma ancora in viaggio fino all'arrivo a destinazione (e per i "treni prima")
-  if (isToday && allTrains.length > 0) {
-    const validCirculatingOrRecent = allTrains.filter((t) => {
-      const depM = parseTimeToMinutes(t.departureTimePlanned || '00:00');
-      const arrM = parseTimeToMinutes(t.arrivalTimeActual || t.arrivalTimePlanned || '00:00');
-
-      let arrNorm = arrM;
-      if (arrM > 0 && depM > 0 && arrM < depM) {
-        // Treno che viaggia a cavallo della mezzanotte
-        arrNorm += 1440;
-      }
-      let nowNorm = nowMins;
-      if (depM > 1200 && nowMins < 300) {
-        nowNorm += 1440;
-      }
-
-      // Treno già arrivato alla destinazione finale da oltre 35 minuti: escludi
-      if (arrNorm > 0 && nowNorm > arrNorm + 35) {
-        return false;
-      }
-
-      // Treno N.D. senza dati live la cui partenza è passata da oltre 5 minuti: escludi
-      if (nowMins > depM + 5 && !t.delayMinutes && !t.isDepartedFromStation && !t.isLive) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (validCirculatingOrRecent.length > 0) {
-      allTrains = validCirculatingOrRecent;
-    } else {
-      // Se tutti i treni sono arrivati, conserva gli ultimi 1-2 treni della giornata con stato "Arrivato"
-      allTrains = allTrains.slice(Math.max(0, allTrains.length - 2));
-    }
-  }
-
-  // Se nessun treno disponibile (es. offline): ripristina la tabella programmata con avviso
-  if (allTrains.length === 0) {
-    const isLateNight = isToday && nowMins >= 22 * 60;
-    const baseListOut = isLateNight
-      ? SCHEDULED_ORTE_TO_ROMA.slice(Math.max(0, SCHEDULED_ORTE_TO_ROMA.length - 2))
-      : SCHEDULED_ORTE_TO_ROMA;
-    const baseListRet = isLateNight
-      ? SCHEDULED_ROMA_TO_ORTE.slice(Math.max(0, SCHEDULED_ROMA_TO_ORTE.length - 2))
-      : SCHEDULED_ROMA_TO_ORTE;
-
-    if (isOutbound) {
-      allTrains = baseListOut.map((s) => {
-        const arrTime = isTerminiArrival ? s.arrivalTimeTermini : s.arrivalTimeTiburtina;
-        const duration = isTerminiArrival ? s.durationMinutesTermini : s.durationMinutesTiburtina;
-        const depM = parseTimeToMinutes(s.departureTime);
-        const isPassed = isToday && nowMins > depM + 3;
-        return {
-          trainNumber: s.trainNumber,
-          category: s.category,
-          destination: s.destination,
-          originStationName: departureStation.name,
-          originStationCode: departureStation.code,
-          departureTimePlanned: s.departureTime,
-          departureTimeActual: s.departureTime,
-          departureMillis: targetDate.getTime(),
-          arrivalTimePlanned: arrTime,
-          arrivalTimeActual: arrTime,
-          platformPlanned: s.platformPlanned,
-          platformActual: s.platformPlanned,
-          delayMinutes: 0,
-          statusDescription: isPassed ? 'Già passato' : 'Non partito',
-          isDeparted: isPassed,
-          isDepartedFromStation: isPassed,
-          isLive: false,
-          durationMinutes: duration,
-          isFast: s.category === 'RV',
-        };
-      });
-    } else {
-      allTrains = baseListRet.map((s) => {
-        const depTime = isTerminiArrival && s.departureTimeTermini ? s.departureTimeTermini : s.departureTimeTiburtina;
-        const depM = parseTimeToMinutes(depTime);
-        const isPassed = isToday && nowMins > depM + 3;
-        return {
-          trainNumber: s.trainNumber,
-          category: s.category,
-          destination: s.destination,
-          originStationName: departureStation.name,
-          originStationCode: departureStation.code,
-          departureTimePlanned: depTime,
-          departureTimeActual: depTime,
-          departureMillis: targetDate.getTime(),
-          arrivalTimePlanned: s.arrivalTimeOrte,
-          arrivalTimeActual: s.arrivalTimeOrte,
-          platformPlanned: s.platformPlanned,
-          platformActual: s.platformPlanned,
-          delayMinutes: 0,
-          statusDescription: isPassed ? 'Già passato' : 'Non partito',
-          isDeparted: isPassed,
-          isDepartedFromStation: isPassed,
-          isLive: false,
-          durationMinutes: s.durationMinutesTiburtina,
-          isFast: s.category === 'RV',
-        };
-      });
-    }
-  }
 
   // Se è oggi, per treni che hanno problemi REALI alla partenza o sono fermi in stazione oltre l'orario:
   if (isToday) {
@@ -2456,16 +2317,10 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
   chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
 
-  // Sliding window per le alternative da mostrare nell'interfaccia:
-  // Se tutti i treni di oggi sono già passati (fine servizio), mostra solo gli ultimi 1-2 treni serali
-  let availableTrains: LiveTrainInfo[];
-  if (isToday && allTrains.every((t) => t.isDepartedFromStation)) {
-    availableTrains = allTrains.slice(Math.max(0, allTrains.length - 2));
-  } else {
-    const sliceStart = Math.max(0, selectedIndexSafe - 1);
-    const sliceEnd = Math.min(allTrains.length, selectedIndexSafe + 5);
-    availableTrains = allTrains.length > 0 ? allTrains.slice(sliceStart, sliceEnd) : [chosenTrain];
-  }
+  // Alternative da mostrare nello slider dell'interfaccia:
+  // Include tutti i treni della tratta affinché l'utente possa scorrere all'indietro e in avanti liberamente,
+  // visualizzando e selezionando anche i treni con orario antecedente.
+  const availableTrains: LiveTrainInfo[] = allTrains.length > 0 ? allTrains : [chosenTrain];
 
   return {
     train: chosenTrain,

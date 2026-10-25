@@ -168,3 +168,20 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
     - *Lezione già terminata*: Se la lezione era già terminata prima dell'orario del pullman, la tappa riporta il badge grigio sobrio *"Ultimo mezzo utile"*.
     - *Fine settimana / Nessuna lezione*: In assenza di lezione, l'itinerario aggancia direttamente la partenza all'orario effettivo del treno, senza generare tappe di attesa con durata negativa.
   - **Preservazione del Funzionamento Attuale**: Per tutti i treni non ancora passati (`!isTrainAlreadyPassed`), l'intero flusso preesistente (primo mezzo utile da `nowMins`, lezioni in corso, orario di uscita naturale da aula e attesa reale in stazione) rimane preservato e invariato al 100%.
+
+---
+
+## 12. Risoluzione Limitazione Scorrimento Treni Precedenti
+
+### Sblocco Totale dello Scorrimento all'Indietro e Visibilità Completa della Tratta
+- **File**: `src/utils/trenitaliaApi.ts`, `src/app/viaggio.tsx`
+- **Diagnosi del comportamento precedente (perché risultava limitato)**:
+  1. *Finestra asimmetrica dello slider (`sliceStart = selectedIndex - 1`)*: In `trenitaliaApi.ts`, l'array `availableTrains` ritagliava artificialmente la lista mostrando **soltanto 1 treno prima** di quello selezionato (`selectedIndex - 1`) e fino a 5 dopo. Qualsiasi treno anteriore veniva eliminato dalla lista orizzontale.
+  2. *Filtro di scarto corse concluse da oltre 35m*: La funzione `validCirculatingOrRecent` escludeva tassativamente da `allTrains` i treni arrivati da oltre 35 minuti, facendo sparire dal catalogo tutti i treni del mattino o delle ore precedenti nel pomeriggio.
+  3. *Mancata unione della tabella oraria completa*: ViaggiaTreno API restituisce soltanto i treni della finestra corrente (-90m / +225m). Senza unire sistematicamente i treni del master timetable (`SCHEDULED_ORTE_TO_ROMA` e `SCHEDULED_ROMA_TO_ORTE`), i convogli precedenti non erano neppure presenti in memoria.
+  4. *Disallineamento pulsanti "Treno prima" / "Treno dopo"*: La funzione `handleTrainPrev` azzerava il treno selezionato applicando un offset relativo al treno *consigliato* iniziale invece di selezionare il treno cronologicamente precedente nella lista.
+- **Risoluzione implementata**:
+  - **Integrazione Master Timetable Completo**: `findOptimalCommuterTrain` unisce sempre l'intera tabella oraria programmata della linea (22 treni Orte➔Roma, 27 treni Roma➔Orte) con i dati live di ViaggiaTreno, garantendo che tutti i treni della giornata siano presenti e ordinati cronologicamente.
+  - **Conservazione Treni Antecedenti**: Rimosso il filtro restrittivo dei 35 minuti, preservando lo storico della giornata (i treni già passati mantengono lo stato `Già passato` / `(Passato)` nello slider e non vengono mai scartati).
+  - **Slider Completo (`availableTrains`)**: `availableTrains` contiene tutti i treni disponibili della tratta. Grazie a `centerSelectedTrain`, il treno consigliato o selezionato si centra automaticamente all'avvio, ma l'utente può scorrere liberamente a sinistra per vedere tutti i treni precedenti del giorno (fin dall'alba) e a destra per quelli successivi.
+  - **Navigazione "Treno prima" / "Treno dopo" Istantanea**: `handleTrainPrev` e `handleTrainNext` selezionano direttamente l'elemento `[idx - 1]` e `[idx + 1]` in `availableTrains`, consentendo una navigazione fluida passo-passo sia con swipe che tramite i pulsanti.
