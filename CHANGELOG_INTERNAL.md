@@ -134,3 +134,16 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - **Badge di Ritardo Ufficiale**: Mostra chiaramente la discrepanza rispetto alla tabella di marcia: **`[ ⏱ +8 min ]`** (in ambra `#f59e0b` o rosso).
   - **Dwell Badge Dedicato (`dwellBadge`)**: Il tempo di stazionamento fisico al binario è convogliato in una terza pillola autonoma in grigio sobrio con icona a clessidra: **`[ ⏳ In banchina da 13m ]`**.
   - In questo modo, l'interfaccia separa in modo cristallino lo stato (`Fermo a Terni`), il ritardo (`+8 min`) e la durata della sosta fisica (`In banchina da 13m`), eliminando ogni possibile confusione.
+
+---
+
+## 10. Risoluzione Duplicazione Testo Ritardo Traffico nella Card Partenza
+
+### Prevenzione Duplicati "rispetto al tempo base"
+- **File**: `src/app/viaggio.tsx`
+- **Problema riscontrato**:
+  - Nella card del tragitto in auto (tappa partenza), in presenza di traffico con ritardo stimato, la descrizione generava una ripetizione testuale duplicata (es. `Viabilità attuale: rallentamenti verso la stazione (+3 min rispetto al tempo base) (+3 min rispetto al tempo base)`).
+  - Questo accadeva perché la stringa calcolata da `drivingRouter.ts` conteneva già al suo interno l'indicazione `(+X min rispetto al tempo base)`, e la vista in `viaggio.tsx` la concatenava una seconda volta con `delayInfo`.
+- **Risoluzione grafica**:
+  - Inserito un controllo preventivo di deduplicazione: se la stringa della condizione (`baseCondition`) contiene già il riferimento al tempo base o una stima tra parentesi `(+`, l'append di `delayInfo` viene inibito.
+  - Aggiunta inoltre una regex di sanificazione per ripulire eventuali doppioni già presenti o persistiti in cache, garantendo un'unica e pulita dicitura informativa per il tragitto stradale.

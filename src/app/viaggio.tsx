@@ -2264,17 +2264,32 @@ export default function ViaggioScreen() {
                                       style={styles.trafficAlertDescription}
                                     >
                                       {(() => {
-                                        const baseCondition =
+                                        let baseCondition = (
                                           leg.details.trafficCondition ||
                                           (leg.details.trafficFluency ===
                                           "scorrevole"
                                             ? "Tempo ottimale senza rallentamenti"
-                                            : "Viabilità regolare");
+                                            : "Viabilità regolare")
+                                        ).trim();
+
+                                        // Rimuove eventuali duplicazioni di stringa di ritardo
+                                        baseCondition = baseCondition.replace(
+                                          /(\s*\(\+\d+\s*min(?:\s*rispetto\s*al\s*tempo\s*base)?\)){2,}/gi,
+                                          "$1"
+                                        );
+
+                                        // Appende lo scostamento dal tempo base solo se non è già presente nella stringa
+                                        const alreadyHasDelay =
+                                          baseCondition.includes("rispetto al tempo base") ||
+                                          baseCondition.includes("(+");
+
                                         const delayInfo =
+                                          !alreadyHasDelay &&
                                           leg.details.trafficDelayMinutes &&
                                           leg.details.trafficDelayMinutes > 0
                                             ? ` (+${leg.details.trafficDelayMinutes} min rispetto al tempo base)`
                                             : "";
+
                                         return `${baseCondition}${delayInfo}`;
                                       })()}
                                     </Text>
