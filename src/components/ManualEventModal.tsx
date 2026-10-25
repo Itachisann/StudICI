@@ -10,13 +10,13 @@ import {
   Platform,
   KeyboardAvoidingView,
   Modal,
-  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { MenuView } from '@expo/ui/community/menu';
 import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 import { NativeSheetModal } from './NativeSheetModal';
+import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_MODAL_BG } from '@/constants/theme';
 import {
@@ -73,10 +73,6 @@ function ManualEventForm({
   const dynamicSemesterEnd = useMemo(() => {
     return extractSemesterEndDate(semesterText) || getDefaultSemesterEndDate();
   }, [semesterText]);
-
-  const initialCardWidth = Dimensions.get('window').width - 32;
-  const [measuredCardWidth, setMeasuredCardWidth] = useState(0);
-  const cardWidth = measuredCardWidth > 0 ? measuredCardWidth : initialCardWidth;
 
   const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 4);
 
@@ -303,131 +299,75 @@ function ManualEventForm({
             })}
           </View>
 
-          {/* Selezione Orari con struttura visuale nativa iOS (uguale alla selezione del tema) */}
+          {/* Selezione Orari Grafica (Inizio -> Fine a due colonne ispirata a iOS) */}
           <Text style={styles.sectionTitle}>ORARIO LEZIONE</Text>
-          <View
-            style={styles.sectionCard}
-            onLayout={(e) => {
-              const w = e.nativeEvent.layout.width;
-              if (w > 0 && Math.abs(w - measuredCardWidth) > 1) {
-                setMeasuredCardWidth(w);
-              }
-            }}
-          >
-            {/* Riga Orario Inizio */}
-            {isNativeComponentAvailable ? (
-              <MenuView
-                title="Orario Inizio"
-                onPressAction={({ nativeEvent }) => {
-                  setStartTime(nativeEvent.event);
-                  // Se l'orario di fine è precedente o uguale, spostalo di 2 ore
-                  const startIdx = TIME_SLOTS.indexOf(nativeEvent.event);
-                  if (startIdx >= 0) {
-                    const endIdx = TIME_SLOTS.indexOf(endTime);
-                    if (endIdx <= startIdx) {
-                      const newEndIdx = Math.min(startIdx + 4, TIME_SLOTS.length - 1);
-                      setEndTime(TIME_SLOTS[newEndIdx]);
+          <View style={styles.timeSelectorCard}>
+            {/* Colonna Orario Inizio */}
+            <View style={styles.timeColumn}>
+              <Text style={styles.timeColumnLabel}>Inizio</Text>
+              {isNativeComponentAvailable ? (
+                <MenuView
+                  title="Orario Inizio"
+                  onPressAction={({ nativeEvent }) => {
+                    setStartTime(nativeEvent.event);
+                    const startIdx = TIME_SLOTS.indexOf(nativeEvent.event);
+                    if (startIdx >= 0) {
+                      const endIdx = TIME_SLOTS.indexOf(endTime);
+                      if (endIdx <= startIdx) {
+                        const newEndIdx = Math.min(startIdx + 4, TIME_SLOTS.length - 1);
+                        setEndTime(TIME_SLOTS[newEndIdx]);
+                      }
                     }
-                  }
-                }}
-                actions={startTimeMenuActions as any}
-                style={{ width: cardWidth }}
-              >
-                <View style={[styles.tableRow, { width: cardWidth }]}>
-                  <View style={styles.rowLeftContent}>
-                    <View
-                      style={[
-                        styles.iconBox,
-                        { backgroundColor: theme.subtle, borderColor: theme.border },
-                      ]}
-                    >
-                      <Ionicons name="time-outline" size={17} color={theme.accent} />
-                    </View>
-                    <Text style={styles.rowTitle}>Orario Inizio</Text>
+                  }}
+                  actions={startTimeMenuActions as any}
+                  style={styles.timeBoxTouch}
+                >
+                  <View style={styles.timeBox}>
+                    <Text style={styles.timeBoxValue}>{startTime}</Text>
                   </View>
-                  <View style={styles.themeRowPreview}>
-                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{startTime}</Text>
-                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                  </View>
-                </View>
-              </MenuView>
-            ) : (
-              <TouchableOpacity
-                style={[styles.tableRow, { width: cardWidth }]}
-                activeOpacity={0.7}
-                onPress={() => setFallbackTimePickerField('start')}
-              >
-                <View style={styles.rowLeftContent}>
-                  <View
-                    style={[
-                      styles.iconBox,
-                      { backgroundColor: theme.subtle, borderColor: theme.border },
-                    ]}
-                  >
-                    <Ionicons name="time-outline" size={17} color={theme.accent} />
-                  </View>
-                  <Text style={styles.rowTitle}>Orario Inizio</Text>
-                </View>
-                <View style={styles.themeRowPreview}>
-                  <Text style={[styles.rowDetail, { color: theme.accent }]}>{startTime}</Text>
-                  <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                </View>
-              </TouchableOpacity>
-            )}
+                </MenuView>
+              ) : (
+                <TouchableOpacity
+                  style={styles.timeBox}
+                  activeOpacity={0.7}
+                  onPress={() => setFallbackTimePickerField('start')}
+                >
+                  <Text style={styles.timeBoxValue}>{startTime}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-            <View style={styles.divider} />
+            {/* Freccia Direzionale tra Inizio e Fine */}
+            <View style={styles.timeArrowBox}>
+              <Ionicons name="arrow-forward" size={18} color="#64748b" />
+            </View>
 
-            {/* Riga Orario Fine */}
-            {isNativeComponentAvailable ? (
-              <MenuView
-                title="Orario Fine"
-                onPressAction={({ nativeEvent }) => {
-                  setEndTime(nativeEvent.event);
-                }}
-                actions={endTimeMenuActions as any}
-                style={{ width: cardWidth }}
-              >
-                <View style={[styles.tableRow, { width: cardWidth }]}>
-                  <View style={styles.rowLeftContent}>
-                    <View
-                      style={[
-                        styles.iconBox,
-                        { backgroundColor: theme.subtle, borderColor: theme.border },
-                      ]}
-                    >
-                      <Ionicons name="time-outline" size={17} color={theme.accent} />
-                    </View>
-                    <Text style={styles.rowTitle}>Orario Fine</Text>
+            {/* Colonna Orario Fine */}
+            <View style={styles.timeColumn}>
+              <Text style={styles.timeColumnLabel}>Fine</Text>
+              {isNativeComponentAvailable ? (
+                <MenuView
+                  title="Orario Fine"
+                  onPressAction={({ nativeEvent }) => {
+                    setEndTime(nativeEvent.event);
+                  }}
+                  actions={endTimeMenuActions as any}
+                  style={styles.timeBoxTouch}
+                >
+                  <View style={styles.timeBox}>
+                    <Text style={styles.timeBoxValue}>{endTime}</Text>
                   </View>
-                  <View style={styles.themeRowPreview}>
-                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{endTime}</Text>
-                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                  </View>
-                </View>
-              </MenuView>
-            ) : (
-              <TouchableOpacity
-                style={[styles.tableRow, { width: cardWidth }]}
-                activeOpacity={0.7}
-                onPress={() => setFallbackTimePickerField('end')}
-              >
-                <View style={styles.rowLeftContent}>
-                  <View
-                    style={[
-                      styles.iconBox,
-                      { backgroundColor: theme.subtle, borderColor: theme.border },
-                    ]}
-                  >
-                    <Ionicons name="time-outline" size={17} color={theme.accent} />
-                  </View>
-                  <Text style={styles.rowTitle}>Orario Fine</Text>
-                </View>
-                <View style={styles.themeRowPreview}>
-                  <Text style={[styles.rowDetail, { color: theme.accent }]}>{endTime}</Text>
-                  <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                </View>
-              </TouchableOpacity>
-            )}
+                </MenuView>
+              ) : (
+                <TouchableOpacity
+                  style={styles.timeBox}
+                  activeOpacity={0.7}
+                  onPress={() => setFallbackTimePickerField('end')}
+                >
+                  <Text style={styles.timeBoxValue}>{endTime}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           {/* Preset rapidi per l'orario (Pill arrotondate in stile "Anticipo in aula") */}
@@ -664,17 +604,47 @@ function ManualEventForm({
             </TouchableOpacity>
           </View>
 
-          {/* Tasto Elimina per lezioni esistenti */}
-          {editingEvent && onDelete && (
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={handleDelete}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="trash-outline" size={18} color="#ef4444" style={{ marginRight: 6 }} />
-              <Text style={styles.deleteButtonText}>Elimina questa lezione</Text>
-            </TouchableOpacity>
-          )}
+          {/* Pulsanti Azione Callstack Liquid Glass in basso */}
+          <View style={styles.bottomActionContainer}>
+            <NativeActionButton
+              label={editingEvent ? "Salva Modifiche" : "Aggiungi Lezione"}
+              onPress={handleSave}
+              accentColor={theme.primary}
+              glow={true}
+              icon={
+                <Ionicons
+                  name="checkmark-circle"
+                  size={18}
+                  color="#ffffff"
+                  style={{ marginRight: 6 }}
+                />
+              }
+              style={{ width: "100%", height: 50, borderRadius: 25 }}
+              pillStyle={{ height: 50, borderRadius: 25 }}
+              textStyle={{ fontSize: 15, fontWeight: "700" }}
+            />
+
+            {editingEvent && onDelete && (
+              <NativeActionButton
+                label="Elimina questa lezione"
+                variant="outlined"
+                accentColor="#ef4444"
+                glow={false}
+                onPress={handleDelete}
+                icon={
+                  <Ionicons
+                    name="trash-outline"
+                    size={17}
+                    color="#ef4444"
+                    style={{ marginRight: 6 }}
+                  />
+                }
+                style={{ width: "100%", height: 48, borderRadius: 24, marginTop: 12 }}
+                pillStyle={{ height: 48, borderRadius: 24 }}
+                textStyle={{ fontSize: 14.5, fontWeight: "600", color: "#ef4444" }}
+              />
+            )}
+          </View>
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -759,7 +729,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingTop: 12,
-    paddingBottom: 24,
+    paddingBottom: 64,
   },
   sectionTitle: {
     fontSize: 12,
@@ -849,42 +819,61 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  /* Struttura visuale iOS uguale alla selezione del Tema */
-  tableRow: {
+  /* Selezione Orari Grafica Inizio -> Fine a due colonne */
+  timeSelectorCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 13,
+    justifyContent: 'space-around',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  rowLeftContent: {
-    flexDirection: 'row',
+  timeColumn: {
     alignItems: 'center',
     flex: 1,
-    marginRight: 16,
   },
-  iconBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  rowTitle: {
-    fontSize: 15,
+  timeColumnLabel: {
+    fontSize: 13,
     fontWeight: '600',
-    color: '#ffffff',
+    color: '#8e8e93',
+    marginBottom: 8,
+    textAlign: 'center',
   },
-  themeRowPreview: {
-    flexDirection: 'row',
+  timeBoxTouch: {
+    width: 110,
+    height: 48,
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
   },
-  rowDetail: {
-    fontSize: 15,
+  timeBox: {
+    width: 110,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#242426',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  timeBoxValue: {
+    fontSize: 22,
     fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: 0.5,
+  },
+  timeArrowBox: {
+    paddingHorizontal: 12,
+    marginTop: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   /* Pill preset orari in stile "Anticipo in aula" */
@@ -1004,21 +993,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+  bottomActionContainer: {
     marginTop: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-  },
-  deleteButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#ef4444',
+    marginBottom: 8,
+    width: '100%',
   },
 
   /* Fallback modal per ambienti senza MenuView */

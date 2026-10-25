@@ -26,6 +26,7 @@ export interface AttendanceRecord {
   room?: string;
   teacher?: string;
   duration: number; // in ore
+  isManual?: boolean;
   timestamp: number;
 }
 
@@ -214,6 +215,7 @@ export async function toggleAttendance(
       room: cls.room,
       teacher: cls.teacher,
       duration,
+      isManual: cls.isManual || false,
       timestamp: Date.now(),
     };
     const updated = [newRecord, ...currentRecords];
@@ -274,6 +276,7 @@ export async function toggleDayAttendance(
           room: cls.room,
           teacher: cls.teacher,
           duration,
+          isManual: cls.isManual || false,
           timestamp: Date.now(),
         });
       }

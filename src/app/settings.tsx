@@ -70,6 +70,7 @@ import {
   saveCommuterConfig,
 } from "../utils/commuterStorage";
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
+import { getManualEvents } from "../utils/manualEvents";
 import {
   Degree,
   checkCourseUpdates,
@@ -589,9 +590,16 @@ export default function ProfiloScreen() {
       </View>
 
       <View style={{ flex: 1, marginHorizontal: 12 }}>
-        <Text style={styles.attendanceHistorySubject} numberOfLines={1}>
-          {item.subject?.toUpperCase()}
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <Text style={[styles.attendanceHistorySubject, { flexShrink: 1 }]} numberOfLines={1}>
+            {item.subject?.toUpperCase()}
+          </Text>
+          {item.isManual && (
+            <View style={styles.manualAttendanceBadge}>
+              <Text style={styles.manualAttendanceBadgeText}>MANUALE</Text>
+            </View>
+          )}
+        </View>
         <View style={styles.attendanceTimeRow}>
           <Ionicons
             name="time-outline"
@@ -734,10 +742,12 @@ export default function ProfiloScreen() {
     setIsExportingPdf(true);
     try {
       const schedule = await fetchScheduleData(tabUrl, true);
+      const manualEvents = await getManualEvents(degreeUrl || undefined);
       await exportScheduleToPdf(
         schedule,
         courseMetadata.cleanCourseTitle,
         defaultTabLabel,
+        manualEvents,
       );
     } catch (err: any) {
       Alert.alert(
@@ -3061,6 +3071,20 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 14,
     fontWeight: "700",
+  },
+  manualAttendanceBadge: {
+    backgroundColor: "rgba(249, 115, 22, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(249, 115, 22, 0.35)",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 6,
+  },
+  manualAttendanceBadgeText: {
+    fontSize: 9.5,
+    fontWeight: "700",
+    color: "#f97316",
   },
   attendanceTimeRow: {
     flexDirection: "row",

@@ -80,35 +80,39 @@ export function ClassroomModal({
     >
       <View style={styles.sheetContent}>
         {/* Header Sottotitolo Edificio e Campus Badge */}
-        <View style={styles.headerInfoRow}>
-          <Text style={styles.buildingSubtitle} numberOfLines={1}>
-            {classroom.buildingName}
-          </Text>
-          {classroom.campus ? (
-            <View
-              style={[
-                styles.campusBadge,
-                {
-                  backgroundColor: theme.cardTint,
-                  borderColor: theme.border,
-                },
-              ]}
-            >
-              <Ionicons
-                name="business"
-                size={11}
-                color={theme.accent}
-                style={{ marginRight: 4 }}
-              />
-              <Text
-                style={[styles.campusBadgeText, { color: theme.accent }]}
-                numberOfLines={1}
-              >
-                {classroom.campus}
+        {Boolean(classroom.buildingName || classroom.campus) && (
+          <View style={styles.headerInfoRow}>
+            {Boolean(classroom.buildingName) && (
+              <Text style={styles.buildingSubtitle} numberOfLines={1}>
+                {classroom.buildingName}
               </Text>
-            </View>
-          ) : null}
-        </View>
+            )}
+            {classroom.campus ? (
+              <View
+                style={[
+                  styles.campusBadge,
+                  {
+                    backgroundColor: theme.cardTint,
+                    borderColor: theme.border,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="business"
+                  size={11}
+                  color={theme.accent}
+                  style={{ marginRight: 4 }}
+                />
+                <Text
+                  style={[styles.campusBadgeText, { color: theme.accent }]}
+                  numberOfLines={1}
+                >
+                  {classroom.campus}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        )}
 
         {/* ── Mappa Interattiva Incorporata (Live MapKit Preview) ── */}
         <View style={styles.mapCard}>
@@ -158,30 +162,32 @@ export function ClassroomModal({
           )}
 
           {/* Overlay Inferiore della Mappa con Indirizzo e Tasto Naviga Rapido */}
-          <TouchableOpacity
-            style={styles.mapAddressOverlay}
-            activeOpacity={0.85}
-            onPress={() => {
-              openInMaps(classroom, "apple");
-              onClose();
-            }}
-          >
-            <Ionicons
-              name="navigate-circle"
-              size={20}
-              color={theme.accent}
-              style={{ marginRight: 8 }}
-            />
-            <Text style={styles.mapAddressText} numberOfLines={1}>
-              {classroom.address}
-            </Text>
-            <Ionicons
-              name="open-outline"
-              size={14}
-              color="#94a3b8"
-              style={{ marginLeft: 6 }}
-            />
-          </TouchableOpacity>
+          {Boolean(classroom.address) && (
+            <TouchableOpacity
+              style={styles.mapAddressOverlay}
+              activeOpacity={0.85}
+              onPress={() => {
+                openInMaps(classroom, "apple");
+                onClose();
+              }}
+            >
+              <Ionicons
+                name="navigate-circle"
+                size={20}
+                color={theme.accent}
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.mapAddressText} numberOfLines={1}>
+                {classroom.address}
+              </Text>
+              <Ionicons
+                name="open-outline"
+                size={14}
+                color="#94a3b8"
+                style={{ marginLeft: 6 }}
+              />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* ── Materie Associate in Quest'Aula ── */}

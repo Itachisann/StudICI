@@ -32,7 +32,7 @@ import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
 import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { hasDateInfo } from "../utils/aiParser";
-import { ACCENT_COLORS, getSubjectColor } from "../utils/subjectColors";
+import { ACCENT_COLORS, getSubjectColor, getManualSubjectColor } from "../utils/subjectColors";
 import {
   AttendanceRecord,
   generateAttendanceId,
@@ -77,6 +77,17 @@ const SAPIENZA_RED = "#822433";
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeComponentAvailable = Platform.OS === "ios" && !isExpoGo;
+
+let CallstackLiquidGlass: any = null;
+if (isNativeComponentAvailable) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    CallstackLiquidGlass = require("@callstack/liquid-glass");
+  } catch {
+    CallstackLiquidGlass = null;
+  }
+}
+
 const DAYS = ["LUN", "MAR", "MER", "GIO", "VEN"];
 const DAYS_FULL = ["LUNEDÌ", "MARTEDÌ", "MERCOLEDÌ", "GIOVEDÌ", "VENERDÌ"];
 export { ACCENT_COLORS, getSubjectColor };
@@ -465,6 +476,17 @@ export default function ScheduleScreen() {
 
   const handleRoomClick = (cls: ClassEvent) => {
     if (!cls.room) return;
+    if (cls.isManual) {
+      // Per le lezioni inserite manualmente dall'utente, rimuovi il plesso/edificio stimato
+      setSelectedRoomModal({
+        displayName: cls.room,
+        buildingName: "",
+        buildingCode: "",
+        address: cls.address || "",
+      });
+      setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
+      return;
+    }
     if (cls.building && cls.address) {
       const bCode = cls.building.replace(/^Edificio\s+/i, "");
       setSelectedRoomModal({
@@ -497,6 +519,18 @@ export default function ScheduleScreen() {
     const combined = [...scraped, ...manualForDay];
     return combined.sort((a, b) => a.startTime.localeCompare(b.startTime));
   }, [schedule, selectedDay, manualEvents]);
+
+  const officialUsedColors = useMemo(() => {
+    const set = new Set<string>();
+    if (schedule?.days) {
+      schedule.days.flat().forEach((c) => {
+        if (c.subject) {
+          set.add(getSubjectColor(c.subject).toLowerCase());
+        }
+      });
+    }
+    return set;
+  }, [schedule]);
 
 
 
@@ -752,6 +786,14 @@ export default function ScheduleScreen() {
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityLabel="Aggiungi lezione manuale"
             >
+              {isNativeComponentAvailable && CallstackLiquidGlass?.LiquidGlassView ? (
+                <CallstackLiquidGlass.LiquidGlassView
+                  effect="regular"
+                  colorScheme="dark"
+                  tintColor="rgba(255, 255, 255, 0.12)"
+                  style={[StyleSheet.absoluteFill, { borderRadius: 14 }]}
+                />
+              ) : null}
               <Ionicons name="add" size={19} color={theme.accent} />
             </TouchableOpacity>
           </View>
@@ -772,7 +814,9 @@ export default function ScheduleScreen() {
             )}
 
             {todayClasses.map((cls: ClassEvent, i: number) => {
-              const accentColor = getSubjectColor(cls.subject);
+              const accentColor = cls.isManual
+                ? getManualSubjectColor(cls.subject, officialUsedColors)
+                : getSubjectColor(cls.subject);
               const isLive = isCurrentClass(cls);
               const isAttended = checkIsAttended(cls);
 
@@ -1475,7 +1519,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.12)",
+    borderColor: "rgba(255, 255, 255, 0.15)",
+    overflow: "hidden",
   },
   addManualButtonText: {
     fontSize: 12,

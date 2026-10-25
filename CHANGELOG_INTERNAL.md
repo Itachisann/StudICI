@@ -308,4 +308,42 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - Introdotti confini di parola rigidi (`\b(?:al|all['’]|alle|fino al|fino all['’]|termine)\b`) che impediscono categoricamente qualsiasi match con `"dal"`.
   - Gestiti tutti i formati accademici Sapienza con range completi (`dal <inizio> al <fine>`, `<inizio> - <fine>`, ecc.), garantendo l'estrazione esclusiva e puntuale della vera data di termine del semestre (es. `16 Gennaio 2027` anziché `24 Settembre 2026`).
 
+---
+
+## 16. Layout Orario 2 Colonne, Callstack Liquid Glass, Esportazione PDF/Presenze ed Isolamento Cromatico Lezioni Manuali
+
+### 1. Selettore Orario a Due Colonne Grafico
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Ridisegnato il selettore dell'orario con layout a due colonne simmetriche ispirato al design grafico richiesto:
+    - **Colonna Sinistra ("Inizio")**: etichetta `Inizio` con box arrotondato scuro (`#242426`, `borderRadius: 14`), padding dedicato e orario in grande tipografia ad alto contrasto (es. `08:00`).
+    - **Elemento Centrale**: icona freccia direzionale `Ionicons name="arrow-forward"` color grigio neutro tenue, che collega visivamente l'orario di inizio e fine.
+    - **Colonna Destra ("Fine")**: etichetta `Fine` con box identico e orario di conclusione (es. `10:00`).
+  - Il tocco su ciascuna colonna apre istantaneamente il menu nativo iOS `MenuView` (con fallback su modale custom su Android/Go) per selezionare con un solo tocco l'orario desiderato.
+
+### 2. Rimozione Plesso per Aule Manuali
+- **File**: `src/app/index.tsx`, `src/components/ClassroomModal.tsx`
+- **Descrizione**:
+  - Quando l'utente tocca la pillola/aula di una lezione inserita manualmente (`cls.isManual`), il sistema non esegue più l'euristica di associazione automatica degli edifici e plessi ufficiali della Sapienza (`resolveClassroom`), impostando `buildingName: ""` e `buildingCode: ""`.
+  - In `ClassroomModal.tsx`, l'intestazione secondaria e la riga dell'indirizzo vengono omesse se non è presente un edificio/plesso o un indirizzo reale, evitando l'assegnazione erronea di plessi come "Tiburtina" o simili a un'aula manuale inserita liberamente.
+
+### 3. Effetto Callstack Liquid Glass per Pulsante "+" e Azioni Modale
+- **File**: `src/app/index.tsx`, `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - **Pulsante "+" in Orari**: Nel tabellone orario (`index.tsx`), il pulsante fluttuante rotondo per l'aggiunta di lezioni manuali è stato integrato con il componente nativo `LiquidGlassView` di `@callstack/liquid-glass` (caricato in modo sicuro e condizionale solo su ambienti standalone iOS), con fallback pulito per Expo Go e Android.
+  - **Pulsante Azione Principale Modale**: In fondo a `ManualEventModal.tsx`, è stato integrato il componente nativo `NativeActionButton` con finitura Callstack Liquid Glass ("Salva Modifiche" o "Aggiungi Lezione") e, se in modalità modifica, pulsante outlined per eliminare la lezione singola.
+  - Aumentato il padding inferiore della modale a `paddingBottom: 64` per evitare sovrapposizioni con l'home indicator e i margini inferiori.
+
+### 4. Segregazione Cromatica Lezioni Manuali
+- **File**: `src/utils/subjectColors.ts`, `src/app/index.tsx`, `src/utils/pdfExport.ts`
+- **Descrizione**:
+  - Introdotta la funzione `getManualSubjectColor(subjectName, usedColors)` e la palette estesa `EXTENDED_MANUAL_PALETTE` contenente 14 tonalità vivaci distinte.
+  - Il sistema analizza dinamicamente tutti i colori già assegnati alle materie ufficiali del corso di studi (`officialUsedColors`) ed esclude categoricamente qualsiasi colore già in uso, garantendo che una lezione inserita manualmente non abbia mai lo stesso colore di una materia ufficiale del corso.
+
+### 5. Integrazione Lezioni Manuali in Esportazione PDF e Registro Presenze
+- **File**: `src/utils/pdfExport.ts`, `src/utils/attendance.ts`, `src/app/settings.tsx`
+- **Descrizione**:
+  - **Esportazione PDF Orario**: `exportScheduleToPdf` ora supporta e riceve le lezioni manuali caricate da `getManualEvents()`. Le lezioni manuali vengono posizionate nelle colonne dei giorni feriali corrispondenti (estendendo se necessario il range orario della griglia 8:00 - 19:00), con il proprio colore distintivo e con l'etichetta `[MANUALE]` nell'intestazione della cella.
+  - **Registro Presenze**: Il modello `AttendanceRecord` supporta la proprietà opzionale `isManual`. Le lezioni manuali e le relative presenze registrate appaiono all'interno del modale "Registro Presenze" contraddistinte dal badge `[MANUALE]` e vengono conteggiate nelle statistiche percentuali di frequenza e nel report PDF delle presenze.
+
 

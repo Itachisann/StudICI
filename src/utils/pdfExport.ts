@@ -2,8 +2,9 @@ import { File, Paths } from "expo-file-system";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { AttendanceRecord, AttendanceStats } from "./attendance";
-import { ScheduleData } from "./scraper";
-import { getSubjectColor } from "./subjectColors";
+import { ScheduleData, ClassEvent } from "./scraper";
+import { getSubjectColor, getManualSubjectColor } from "./subjectColors";
+import { ManualClassEvent, manualEventToClassEvent } from "./manualEvents";
 
 const SAPIENZA_RED = "#822433";
 const DAYS_NAMES = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì"];
@@ -51,6 +52,7 @@ export async function exportScheduleToPdf(
   schedule: ScheduleData,
   courseName: string,
   channelName?: string,
+  manualEvents?: ManualClassEvent[],
 ): Promise<string> {
   const currentDateFormatted = new Date().toLocaleDateString("it-IT", {
     day: "numeric",
@@ -58,7 +60,25 @@ export async function exportScheduleToPdf(
     year: "numeric",
   });
 
-  const allClasses = schedule.days.flat();
+  const manualClassesByDay: Record<number, ClassEvent[]> = {};
+  if (Array.isArray(manualEvents)) {
+    for (const m of manualEvents) {
+      if (typeof m.dayIndex === "number" && m.dayIndex >= 0 && m.dayIndex < 5) {
+        if (!manualClassesByDay[m.dayIndex]) manualClassesByDay[m.dayIndex] = [];
+        manualClassesByDay[m.dayIndex].push(manualEventToClassEvent(m));
+      }
+    }
+  }
+
+  // Prepara l'insieme dei colori delle materie ufficiali per evitare sovrapposizioni cromatiche
+  const officialUsedColors = new Set(
+    schedule.days.flat().map((c) => getSubjectColor(c.subject).toLowerCase())
+  );
+
+  const allClasses = [
+    ...schedule.days.flat(),
+    ...(manualEvents || []).map(manualEventToClassEvent),
+  ];
   const starts = allClasses.map((c) => timeToMinutes(c.startTime));
   const ends = allClasses.map((c) => timeToMinutes(c.endTime));
   const gridStart = allClasses.length
@@ -90,8 +110,12 @@ export async function exportScheduleToPdf(
   }).join("");
 
   const columnsHtml = DAYS_NAMES.map((dayName, dayIdx) => {
+    const officialForDay = schedule.days[dayIdx] || [];
+    const manualForDay = manualClassesByDay[dayIdx] || [];
+    const combinedForDay = [...officialForDay, ...manualForDay];
+
     // Unione difensiva di slot contigui della stessa materia (es. 15-18 e 18-19 accorpati in 15-19)
-    const rawSorted = [...(schedule.days[dayIdx] || [])]
+    const rawSorted = combinedForDay
       .filter((c) => c.startTime && c.endTime && c.subject)
       .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
 
@@ -156,13 +180,18 @@ export async function exportScheduleToPdf(
 
     const lessonsHtml = placed
       .map((p) => {
-        const color = getSubjectColor(p.c.subject);
+        const color = p.c.isManual
+          ? getManualSubjectColor(p.c.subject, officialUsedColors)
+          : getSubjectColor(p.c.subject);
         const top = ((p.s - gridStart) / 60) * hourH + 1;
         const height = ((p.e - p.s) / 60) * hourH - 2;
         const width = 100 / p.lanes;
         return `
           <div class="lesson" style="top:${top}px; height:${height}px; left:calc(${p.lane * width}% + 1px); width:calc(${width}% - 2px); border-left:3px solid ${color}; background:linear-gradient(${color}22, ${color}22), #ffffff;">
-            <div class="lesson-time">${escapeHtml(p.c.startTime)} - ${escapeHtml(p.c.endTime)}</div>
+            <div class="lesson-time">
+              ${escapeHtml(p.c.startTime)} - ${escapeHtml(p.c.endTime)}
+              ${p.c.isManual ? `<span style="font-size:7.5px; font-weight:800; background:#f97316; color:#ffffff; padding:1px 4px; border-radius:3px; margin-left:3px; vertical-align:middle;">MANUALE</span>` : ""}
+            </div>
             <div class="lesson-title">${escapeHtml((p.c.subject || "").toUpperCase())}</div>
             ${p.c.teacher ? `<div class="lesson-meta">${escapeHtml(p.c.teacher)}</div>` : ""}
             ${p.c.room ? `<div class="lesson-room">${escapeHtml(formatRoomLabel(p.c.room))}</div>` : ""}
