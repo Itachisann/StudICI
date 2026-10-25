@@ -821,6 +821,7 @@ export interface OptimalTrainOptions {
   trainOffset?: number; // 0 = consigliato, -1 = precedente, +1 = successivo
   selectedTrainNumber?: string; // override selezione esplicita treno
   forceRefresh?: boolean; // true per forzare chiamata diretta a Trenitalia bypassando la cache
+  minDepartureMins?: number; // Orario minimo (in minuti da mezzanotte) di partenza del treno affinché sia prendibile dal viaggiatore
 }
 
 export interface OptimalTrainResult {
@@ -2010,6 +2011,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     trainOffset = 0,
     selectedTrainNumber,
     forceRefresh = false,
+    minDepartureMins,
   } = options;
 
   const departureStation = normalizeStationInfo(rawDepartureStation);
@@ -2327,18 +2329,16 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   }
 
   // Verifica se un treno è prendibile dal viaggiatore:
-  // se è oggi, esclude treni già partiti dalla stazione di riferimento o treni passati da ore
+  // se è oggi, esclude treni già partiti dalla stazione di riferimento o treni che partono prima
+  // del tempo minimo necessario al passeggero per raggiungere la stazione (minDepartureMins o nowMins)
   const isTrainCatchable = (t: LiveTrainInfo) => {
     if (!isToday) return true;
     if (t.isDepartedFromStation) return false;
-    // Se il treno è fermo in stazione (es. al binario pronto a partire o con ritardo alla partenza): è prendibile!
-    if (t.isStoppedInStation && !t.isDepartedFromStation) return true;
     const depM = parseTimeToMinutes(t.departureTimeActual || t.departureTimePlanned);
-    // Solo treni con partenza futura o al minuto attuale.
-    // Se è un treno fermo al binario per problemi di partenza, massimo 60 min di ritardo.
-    if (depM >= nowMins) return true;
-    if (t.isDeparted === false && nowMins - depM <= 60) return true;
-    return false;
+    const effectiveMinDep = minDepartureMins != null ? minDepartureMins : nowMins;
+    // Un treno la cui partenza effettiva o programmata è precedente al tempo di arrivo in stazione non è prendibile
+    if (depM < effectiveMinDep) return false;
+    return true;
   };
 
   let recommendedIdx = 0;

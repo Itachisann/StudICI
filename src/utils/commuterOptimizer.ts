@@ -286,24 +286,43 @@ async function computeOutboundItinerary(
     targetDate.getFullYear() === now.getFullYear();
   const nowMins = now.getHours() * 60 + now.getMinutes();
 
+  const carEnabled = config.carLeg.enabled;
+  // Durata preliminare stimata per raggiungere la stazione (auto + parcheggio oppure a piedi)
+  const estimatedTimeToStation = carEnabled
+    ? Math.ceil(
+        (config.carLeg.durationMinutes || config.carLeg.baseDurationMinutes || 24) +
+          (config.carLeg.parkingBufferMinutes || 7)
+      )
+    : 10;
+
+  // Stima orario minimo di partenza treno affinché sia raggiungibile partendo da adesso
+  const minTrainDepartureMins = isToday ? nowMins + estimatedTimeToStation : 0;
+
   let stationTargetArrivalMins: number;
   if (targetLecture) {
     const lectureStartMins = parseTimeToMinutes(targetLecture.startTime);
     const classroomArrivalMins = lectureStartMins - bufferMins;
     stationTargetArrivalMins = classroomArrivalMins - transitMins;
-    if (isToday && nowMins > lectureStartMins) {
-      stationTargetArrivalMins = nowMins + 50;
+    // Se è oggi e l'orario utile per la lezione è già passato o richiederebbe di partire prima di adesso:
+    // calcola treni a partire da adesso
+    if (isToday && (nowMins > lectureStartMins || stationTargetArrivalMins < minTrainDepartureMins + 45)) {
+      stationTargetArrivalMins = minTrainDepartureMins + 50;
     }
   } else {
     // Weekend o viaggio stazione-stazione senza lezioni: calcola rispetto all'orario targetDate
     const targetHourMins = targetDate.getHours() * 60 + targetDate.getMinutes();
-    stationTargetArrivalMins = isToday ? nowMins + 50 : (targetHourMins > 0 ? targetHourMins + 50 : 9 * 60);
+    if (isToday) {
+      stationTargetArrivalMins = minTrainDepartureMins + 50;
+    } else {
+      stationTargetArrivalMins = targetHourMins > 0 ? targetHourMins + 50 : 9 * 60;
+    }
   }
   const stationTargetArrivalStr = minutesToTime(stationTargetArrivalMins);
 
-  const carEnabled = config.carLeg.enabled;
-  // Stima preliminare orario partenza in auto (circa 50 min prima dell'arrivo a Roma)
-  const approxCarDepartureTimeStr = minutesToTime(Math.max(0, stationTargetArrivalMins - 50));
+  // Stima preliminare orario partenza in auto
+  const approxCarDepartureTimeStr = minutesToTime(
+    Math.max(0, stationTargetArrivalMins - 50 - estimatedTimeToStation)
+  );
 
   // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
   const [optimalTrainResult, drivingEst] = await Promise.all([
@@ -316,6 +335,7 @@ async function computeOutboundItinerary(
       trainOffset: selectedTrainOffset,
       selectedTrainNumber,
       forceRefresh,
+      minDepartureMins: isToday ? minTrainDepartureMins : undefined,
     }),
     carEnabled
       ? calculateDrivingEstimate(
@@ -328,16 +348,7 @@ async function computeOutboundItinerary(
       : Promise.resolve(null),
   ]);
 
-  const { train, availableTrains, selectedIndex } = optimalTrainResult;
-
-  // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
-  // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
-  // Se la data è oggi, l'arrivo effettivo a destinazione incorpora il ritardo reale (arrivalTimeActual);
-  // altrimenti per giorni futuri o passati si fa riferimento esclusivo all'orario ufficiale programmato.
-  const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
-  const trainArrMins = isToday
-    ? parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '')
-    : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
+  let { train, availableTrains, selectedIndex } = optimalTrainResult;
 
   // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
   let carDuration = 0;
@@ -365,6 +376,34 @@ async function computeOutboundItinerary(
   }
 
   const parkDuration = carEnabled ? config.carLeg.parkingBufferMinutes || 7 : 0;
+  const actualTimeToStation = carEnabled ? carDuration + parkDuration : 10;
+
+  // Garanzia Assoluta: se è oggi e siamo nella selezione consigliata (offset 0 e nessun treno esplicito),
+  // l'orario di partenza da casa non può MAI essere nel passato (homeDepartureMins < nowMins).
+  // Se il treno selezionato richiederebbe di partire prima di adesso, seleziona il primo treno successivo
+  // in availableTrains tale che homeDepartureMins >= nowMins.
+  if (isToday && selectedTrainOffset === 0 && !selectedTrainNumber) {
+    const currentTrainDep = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
+    if (currentTrainDep - actualTimeToStation < nowMins) {
+      const nextCatchableIdx = availableTrains.findIndex((t) => {
+        const dep = parseTimeToMinutes(t.departureTimePlanned || t.departureTimeActual || '');
+        return dep - actualTimeToStation >= nowMins;
+      });
+      if (nextCatchableIdx !== -1) {
+        train = availableTrains[nextCatchableIdx];
+        selectedIndex = nextCatchableIdx;
+      }
+    }
+  }
+
+  // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
+  // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
+  // Se la data è oggi, l'arrivo effettivo a destinazione incorpora il ritardo reale (arrivalTimeActual);
+  // altrimenti per giorni futuri o passati si fa riferimento esclusivo all'orario ufficiale programmato.
+  const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
+  const trainArrMins = isToday
+    ? parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '')
+    : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
 
   // Orario in cui essere in stazione per il treno
   const stationReachMins = trainDepMins - parkDuration;
@@ -555,18 +594,30 @@ async function computeOutboundItinerary(
   const totalTripDuration = finalArrivalMins - homeDepartureMins;
 
   // Status badge dell'itinerario globale
-  let badgeText = 'Tutto regolare';
-  let badgeColor = '#34c759'; // green
+  let badgeText = 'In orario';
+  let badgeColor = '#10b981'; // emerald green
   let isWarning = false;
 
-  const outboundStatusDesc = (train?.statusDescription || '').toLowerCase();
-  if (outboundStatusDesc.includes('soppresso')) {
-    badgeText = 'Treno Soppresso';
-    badgeColor = '#ef4444'; // red
-    isWarning = true;
-  } else if (train?.isLive) {
-    badgeText = 'Fonte: Trenitalia';
-    badgeColor = '#e05666';
+  if (!isToday) {
+    badgeText = 'Programmato';
+    badgeColor = '#38bdf8'; // sky blue
+    isWarning = false;
+  } else {
+    const outboundStatusDesc = (train?.statusDescription || '').toLowerCase();
+    const delayMins = train?.delayMinutes || 0;
+    if (outboundStatusDesc.includes('soppresso') || outboundStatusDesc.includes('cancellato')) {
+      badgeText = 'Treno Soppresso';
+      badgeColor = '#ef4444'; // red
+      isWarning = true;
+    } else if (delayMins > 0) {
+      badgeText = `+${delayMins}m ritardo`;
+      badgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';
+      isWarning = delayMins > 10;
+    } else {
+      badgeText = 'In orario';
+      badgeColor = '#10b981';
+      isWarning = false;
+    }
   }
 
   const summary = targetLecture
@@ -665,6 +716,7 @@ async function computeReturnItinerary(
       trainOffset: selectedTrainOffset,
       selectedTrainNumber,
       forceRefresh,
+      minDepartureMins: isToday ? stationArrivalMins : undefined,
     }),
     carEnabled
       ? calculateDrivingEstimate(
@@ -677,7 +729,23 @@ async function computeReturnItinerary(
       : Promise.resolve(null),
   ]);
 
-  const { train, availableTrains, selectedIndex } = optimalTrainResult;
+  let { train, availableTrains, selectedIndex } = optimalTrainResult;
+
+  // Garanzia Assoluta: se è oggi e siamo nella selezione consigliata (offset 0 e nessun treno esplicito),
+  // il treno non può MAI partire prima dell'orario in cui il viaggiatore giunge in stazione (stationArrivalMins).
+  if (isToday && selectedTrainOffset === 0 && !selectedTrainNumber) {
+    const currentTrainDep = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
+    if (currentTrainDep < stationArrivalMins) {
+      const nextCatchableIdx = availableTrains.findIndex((t) => {
+        const dep = parseTimeToMinutes(t.departureTimePlanned || t.departureTimeActual || '');
+        return dep >= stationArrivalMins;
+      });
+      if (nextCatchableIdx !== -1) {
+        train = availableTrains[nextCatchableIdx];
+        selectedIndex = nextCatchableIdx;
+      }
+    }
+  }
 
   // NOTA COMMUTER: La partenza del treno a cui ancorare il rientro da Roma
   // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora il ritardo reale solo se la data è oggi.
@@ -962,6 +1030,32 @@ async function computeReturnItinerary(
 
   const totalTripDuration = homeArrivalMins - initialStartMins;
 
+  let returnBadgeText = 'Rientro in orario';
+  let returnBadgeColor = '#10b981';
+  let isReturnWarning = false;
+
+  if (!isToday) {
+    returnBadgeText = 'Programmato';
+    returnBadgeColor = '#38bdf8';
+    isReturnWarning = false;
+  } else {
+    const returnStatusDesc = (train?.statusDescription || '').toLowerCase();
+    const delayMins = train?.delayMinutes || 0;
+    if (returnStatusDesc.includes('soppresso') || returnStatusDesc.includes('cancellato')) {
+      returnBadgeText = 'Treno Soppresso';
+      returnBadgeColor = '#ef4444';
+      isReturnWarning = true;
+    } else if (delayMins > 0) {
+      returnBadgeText = `+${delayMins}m ritardo`;
+      returnBadgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';
+      isReturnWarning = delayMins > 10;
+    } else {
+      returnBadgeText = 'Rientro in orario';
+      returnBadgeColor = '#10b981';
+      isReturnWarning = false;
+    }
+  }
+
   return {
     direction: 'return',
     targetDate: targetDate.toISOString().slice(0, 10),
@@ -974,19 +1068,9 @@ async function computeReturnItinerary(
     availableTrains,
     selectedTrainIndex: selectedIndex,
     statusBadge: {
-      text:
-        (train?.statusDescription || '').toLowerCase().includes('soppresso')
-          ? 'Treno Soppresso'
-          : train?.isLive
-          ? 'Fonte: Trenitalia'
-          : 'Rientro in orario',
-      color:
-        (train?.statusDescription || '').toLowerCase().includes('soppresso')
-          ? '#ef4444'
-          : train?.isLive
-          ? '#e05666'
-          : '#34c759',
-      isWarning: (train?.statusDescription || '').toLowerCase().includes('soppresso'),
+      text: returnBadgeText,
+      color: returnBadgeColor,
+      isWarning: isReturnWarning,
     },
     summaryMessage: targetLecture
       ? (lectureTimeStatus?.type === 'early_departure'

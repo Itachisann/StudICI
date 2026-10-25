@@ -1207,21 +1207,25 @@ export default function ViaggioScreen() {
                 >
                   <View style={styles.heroTopRow}>
                     {(() => {
-                      const isFonteTrenitalia =
-                        itinerary.statusBadge.text === "Fonte: Trenitalia" ||
-                        itinerary.statusBadge.text === "Dati Trenitalia";
-                      const badgeColor = isFonteTrenitalia
-                        ? theme.accent
-                        : itinerary.statusBadge.color;
-                      const badgeBg = isFonteTrenitalia
-                        ? theme.subtle
-                        : `${itinerary.statusBadge.color}22`;
-                      const badgeBorder = isFonteTrenitalia
-                        ? theme.border
-                        : `${itinerary.statusBadge.color}35`;
-                      const badgeText = isFonteTrenitalia
-                        ? "Fonte: Trenitalia"
-                        : itinerary.statusBadge.text;
+                      let badgeText = itinerary.statusBadge.text;
+                      let badgeColor = itinerary.statusBadge.color;
+                      let badgeBg = `${itinerary.statusBadge.color}22`;
+                      let badgeBorder = `${itinerary.statusBadge.color}35`;
+
+                      if (!isSelectedDayToday) {
+                        badgeText = "Programmato";
+                        badgeColor = "#38bdf8";
+                        badgeBg = "rgba(56, 189, 248, 0.12)";
+                        badgeBorder = "rgba(56, 189, 248, 0.25)";
+                      } else if (
+                        badgeText === "Fonte: Trenitalia" ||
+                        badgeText === "Dati Trenitalia"
+                      ) {
+                        badgeText = "In orario";
+                        badgeColor = "#10b981";
+                        badgeBg = "rgba(16, 185, 129, 0.15)";
+                        badgeBorder = "rgba(16, 185, 129, 0.3)";
+                      }
 
                       return (
                         <View
@@ -1270,7 +1274,7 @@ export default function ViaggioScreen() {
                   <Text style={styles.heroHeadline}>
                     {direction === "return"
                       ? "Rientro stimato alle"
-                      : isTargetLectureFinished
+                      : isWeekend || isTargetLectureFinished
                         ? "Prossima partenza da casa alle"
                         : "Parti da casa alle"}
                   </Text>

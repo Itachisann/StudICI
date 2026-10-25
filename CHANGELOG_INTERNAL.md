@@ -77,3 +77,28 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
 - **Versione app**: `1.8.9` (Downgrade mantenuto come richiesto dall'utente)
 - **iOS Build Number**: `68`
 - **Android Version Code**: `62`
+
+---
+
+## 7. Risoluzione Badge Stato Viaggio e Prevenzione Partenze nel Passato
+
+### Correzione Badge di Stato ("Fonte: Trenitalia" vs "Tutto regolare")
+- **File**: `src/app/viaggio.tsx`, `src/utils/commuterOptimizer.ts`
+- **Problema riscontrato**:
+  - Per i giorni futuri/passati, la card mostrava erroneamente "Tutto regolare" anche se non esiste stato live per giorni non odierni.
+  - Per il giorno odierno, l'etichetta di stato veniva sovrascritta con la stringa di attribuzione "Fonte: Trenitalia" invece di mostrare l'effettivo stato del viaggio ("In orario", ritardo in minuti o soppressione).
+- **Risoluzione**:
+  - Per i giorni diversi da oggi (`!isToday` / `!isSelectedDayToday`), il badge di stato mostra sempre **"Programmato"** in azzurro cielo (`#38bdf8`) con pillola semitrasparente.
+  - Per il giorno odierno, il badge mostra fedelmente lo stato reale della circolazione: **"In orario"** (verde smeraldo `#10b981`), **`+Xm ritardo`** (ambra `#f59e0b` / rosso se elevato) o **"Treno Soppresso"** (rosso `#ef4444`). "Fonte: Trenitalia" non sovrascrive più lo stato del viaggio.
+
+### Prevenzione Assoluta di Orari di Partenza nel Passato ("Treni da ora")
+- **File**: `src/utils/commuterOptimizer.ts`, `src/utils/trenitaliaApi.ts`
+- **Problema riscontrato**:
+  - Quando si consultava la sezione viaggio durante il weekend, in assenza di lezioni o ad orario inoltrato (es. ore 11:44), l'app calcolava `stationTargetArrivalMins = nowMins + 50`. Questo selezionava un treno in arrivo a Roma alle 12:34 e in partenza da Orte alle 11:40 o 12:05.
+  - Sottraendo i tempi di percorrenza in auto (24 min) e parcheggio (7 min), l'orario di partenza da casa risultava essere alle **11:34** (10 minuti nel passato!), costringendo l'utente a un'impossibile "partenza indietro nel tempo".
+  - Inoltre, la funzione `isTrainCatchable` consentiva a treni con orario già trascorso fino a 60 minuti (`nowMins - depM <= 60`) di essere considerati prendibili.
+- **Risoluzione**:
+  - **Calcolo Tempi Reali da Casa**: Quando si considerano treni "da adesso" (weekend, lezioni terminate o orario di inizio lezione ormai superato), l'orario minimo in cui il passeggero può trovarsi sul binario della stazione include esplicitamente il tragitto in auto e il buffer di parcheggio: `minTrainDepartureMins = nowMins + carDuration + parkDuration`.
+  - **Filtro Treni Utili (`minDepartureMins`)**: Passato `minDepartureMins` a `findOptimalCommuterTrain` ed eliminata la tolleranza retroattiva di 60 minuti in `isTrainCatchable`. Qualsiasi treno che parte prima dell'arrivo fisico del passeggero in stazione viene escluso dai treni prendibili.
+  - **Garanzia Assoluta di Avanzamento al Treno Successivo**: In `computeOutboundItinerary` e `computeReturnItinerary`, se l'orario di partenza consigliato da casa o dall'università risulterebbe precedente all'orario attuale (`homeDepartureMins < nowMins`), l'algoritmo avanza automaticamente e seleziona il primo treno successivo della lista `availableTrains` per cui `homeDepartureMins >= nowMins`.
+  - **Titolo Hero Card Dinamico**: Nel fine settimana o a lezioni terminate, il titolo dell'hero card mostra coerentemente *"Prossima partenza da casa alle"* anziché *"Parti da casa alle"*.
