@@ -147,3 +147,24 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
 - **Risoluzione grafica**:
   - Inserito un controllo preventivo di deduplicazione: se la stringa della condizione (`baseCondition`) contiene già il riferimento al tempo base o una stima tra parentesi `(+`, l'append di `delayInfo` viene inibito.
   - Aggiunta inoltre una regex di sanificazione per ripulire eventuali doppioni già presenti o persistiti in cache, garantendo un'unica e pulita dicitura informativa per il tragitto stradale.
+
+---
+
+## 11. Blocco Tappa Pullman all'Ultimo Orario Utile per Treni Già Passati
+
+### Ancoraggio Coerente del Mezzo Urbano prima del Passaggio del Treno
+- **File**: `src/utils/commuterOptimizer.ts`
+- **Problema riscontrato**:
+  - Nella sezione viaggio per l'itinerario di ritorno (dall'aula/campus universitario verso la stazione di Roma Tiburtina e poi Orte), quando una lezione era terminata (`isLectureFinished`), il calcolo della tappa di trasferimento con i mezzi urbani (`return-transit-leg`) impostava automaticamente l'orario di partenza a `nowMins` (orario attuale, ad esempio ore 18:00).
+  - Se il pendolare consultava sullo slider un treno già passato dalla stazione di partenza impostata (es. RV 7461 con passaggio/partenza alle 15:30), si verificava un'incoerenza cronologica: il pullman veniva visualizzato nel futuro (18:00 ➔ 18:20) per prendere un treno già partito nel passato (15:30), generando un'attesa in stazione negativa o assurda.
+- **Risoluzione architetturale**:
+  - **Rilevamento Treno Già Passato (`isTrainAlreadyPassed`)**: Il sistema rileva se il convoglio selezionato per la giornata odierna è già transitato/partito dalla stazione di riferimento del pendolare (`train.isDepartedFromStation || statusDescription.includes('passato') || statusDescription.includes('arrivato') || (train.isLive ? (train.isDepartedFromStation || nowMins > effectiveDepMins + 5) : nowMins > trainDepMins)`), escludendo i treni attualmente fermi al binario (`!train.isStoppedInStation`).
+  - **Blocco all'Ultimo Orario Utile**: Esclusivamente se il treno è già passato:
+    - L'arrivo in stazione del pullman (`lockedTransitEndMins`) viene bloccato all'orario esatto del passaggio del treno (`trainDepMins`).
+    - La partenza del pullman dal campus (`lockedTransitStartMins`) è calibrata a ritroso di `transitMins` minuti (`trainDepMins - transitMins`).
+    - L'inizio dell'itinerario (`initialStartMins`) e il tempo totale di viaggio sono ricalcolati con precisione al minuto, azzerando qualsiasi attesa fittizia o sfasamento.
+  - **Coerenza con l'Architettura delle Lezioni**:
+    - *Partenza anticipata*: Se per prendere quel treno già passato era necessario uscire prima della fine naturale della lezione (`requiredDepartureFromCampusMins < lectureEndMins && trainDepMins > lectureStartMins`), viene calcolato il minutaggio effettivo perso (`Perdi Xh Ym di lezione`) con badge ambra e nota apposita.
+    - *Lezione già terminata*: Se la lezione era già terminata prima dell'orario del pullman, la tappa riporta il badge grigio sobrio *"Ultimo mezzo utile"*.
+    - *Fine settimana / Nessuna lezione*: In assenza di lezione, l'itinerario aggancia direttamente la partenza all'orario effettivo del treno, senza generare tappe di attesa con durata negativa.
+  - **Preservazione del Funzionamento Attuale**: Per tutti i treni non ancora passati (`!isTrainAlreadyPassed`), l'intero flusso preesistente (primo mezzo utile da `nowMins`, lezioni in corso, orario di uscita naturale da aula e attesa reale in stazione) rimane preservato e invariato al 100%.

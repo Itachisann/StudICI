@@ -784,6 +784,23 @@ async function computeReturnItinerary(
   let lectureTimeStatus: CommuterItinerary['lectureTimeStatus'] | undefined = undefined;
   let initialStartMins = stationArrivalMins;
 
+  const effectiveDepMins = Math.max(
+    trainDepMins,
+    parseTimeToMinutes(train.departureTimeActual || '')
+  );
+
+  const isTrainAlreadyPassed = Boolean(
+    isToday &&
+    !train.isStoppedInStation && (
+      train.isDepartedFromStation ||
+      (train.statusDescription || '').toLowerCase().includes('passato') ||
+      (train.statusDescription || '').toLowerCase().includes('arrivato') ||
+      (train.isLive
+        ? (train.isDepartedFromStation || (effectiveDepMins > 0 && nowMins > effectiveDepMins + 5))
+        : (trainDepMins > 0 && nowMins > trainDepMins))
+    )
+  );
+
   if (targetLecture && transitSolution) {
     const lectureStartMins = parseTimeToMinutes(targetLecture.startTime);
     const lectureEndMins = parseTimeToMinutes(targetLecture.endTime);
@@ -795,8 +812,69 @@ async function computeReturnItinerary(
     const isLectureInProgress = isToday && nowMins >= lectureStartMins && nowMins < lectureEndMins;
     const isEarlyDeparture = !isLectureFinished && (requiredDepartureFromCampusMins < lectureEndMins);
 
-    if (isLectureFinished) {
-      // SCENARIO 1: Lezione già terminata
+    if (isTrainAlreadyPassed) {
+      // SCENARIO DEDICATO: Treno già passato dalla stazione di partenza del pendolare (es. Roma Tiburtina)
+      // Blocca la tappa del viaggio relativa al pullman all'ultimo orario utile prima del passaggio del treno,
+      // preservando la coerenza di tutta l'architettura delle lezioni (in corso, terminata, orario naturale).
+      const lockedTransitEndMins = trainDepMins;
+      const lockedTransitStartMins = Math.max(0, lockedTransitEndMins - transitMins);
+      initialStartMins = lockedTransitStartMins;
+
+      const isEarlyForLecture =
+        requiredDepartureFromCampusMins < lectureEndMins &&
+        trainDepMins > lectureStartMins;
+
+      let transitBadgeText = 'Ultimo mezzo utile';
+      let transitBadgeColor = '#64748b';
+      let transitBadgeBg = 'rgba(100, 116, 139, 0.15)';
+      let transitNotes = transitSolution.routeDescription || 'Ultimo mezzo utile prima del passaggio del treno';
+      let lostLectureMins: number | undefined = undefined;
+
+      if (isEarlyForLecture) {
+        const effectiveLeaveFromLecture = Math.max(lectureStartMins, lockedTransitStartMins);
+        const lostMins = Math.max(1, lectureEndMins - effectiveLeaveFromLecture);
+        const formattedLost = formatMinutesToHours(lostMins);
+        const lostBadge = `Perdi ${formattedLost} di lezione`;
+
+        lectureTimeStatus = {
+          type: 'early_departure',
+          minutes: lostMins,
+          badgeText: lostBadge,
+        };
+        lostLectureMins = lostMins;
+        transitBadgeText = lostBadge;
+        transitBadgeColor = '#f59e0b';
+        transitBadgeBg = 'rgba(245, 158, 11, 0.15)';
+        transitNotes = `Partenza anticipata durante la lezione • ${lostBadge} • Ultimo mezzo utile`;
+      }
+
+      legs.push({
+        id: 'return-transit-leg',
+        type: 'transit',
+        title: transitSolution.lineName,
+        subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name} • Ultimo mezzo utile`,
+        startTime: minutesToTime(lockedTransitStartMins),
+        endTime: minutesToTime(lockedTransitEndMins),
+        durationMinutes: transitMins,
+        details: {
+          transitLine: transitSolution.lineName,
+          transitMode: transitSolution.mode,
+          travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+          mapOriginQuery: targetLecture.address,
+          mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          targetDate: targetDateStr,
+          targetTime: minutesToTime(lockedTransitStartMins),
+          timeType: 'depart_at',
+          notes: transitNotes,
+          badgeText: transitBadgeText,
+          badgeColor: transitBadgeColor,
+          badgeBg: transitBadgeBg,
+          lostLectureMinutes: lostLectureMins,
+        },
+      });
+      // Nessuna attesa fittizia o negativa: il pullman è ancorato all'orario esatto di passaggio del treno.
+    } else if (isLectureFinished) {
+      // SCENARIO 1: Lezione già terminata (treno non ancora passato)
       // Elude la prima tappa "Fine lezione" e calcola il percorso partendo direttamente dall'orario attuale,
       // mostrando il pullman come primo mezzo utile nel caso del ritorno.
       const startTransitMins = nowMins;
@@ -966,20 +1044,25 @@ async function computeReturnItinerary(
     }
   } else {
     // Weekend o viaggio senza lezione
-    const waitAtStation = trainDepMins - stationArrivalMins;
-    if (waitAtStation > 3) {
-      legs.push({
-        id: 'station-wait-leg',
-        type: 'wait',
-        title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
-        subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
-        startTime: minutesToTime(stationArrivalMins),
-        endTime: minutesToTime(trainDepMins),
-        durationMinutes: waitAtStation,
-        details: {
-          platform: train.platformActual || train.platformPlanned,
-        },
-      });
+    if (isTrainAlreadyPassed) {
+      // Se il treno è già passato nel fine settimana o senza lezione, la partenza è agganciata al treno stesso
+      initialStartMins = trainDepMins;
+    } else {
+      const waitAtStation = trainDepMins - stationArrivalMins;
+      if (waitAtStation > 3) {
+        legs.push({
+          id: 'station-wait-leg',
+          type: 'wait',
+          title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
+          startTime: minutesToTime(stationArrivalMins),
+          endTime: minutesToTime(trainDepMins),
+          durationMinutes: waitAtStation,
+          details: {
+            platform: train.platformActual || train.platformPlanned,
+          },
+        });
+      }
     }
   }
 
