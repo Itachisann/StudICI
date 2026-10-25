@@ -279,3 +279,31 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
 - **Pillole Rapide di Selezione Data**:
   - I pulsanti rapidi `+1 Mese`, `+2 Mesi` e `Fine Semestre` sono sagomati a pillola arrotondata (`borderRadius: 18`, `height: 36`) con sfondo `#1c1c1e` scuro e testo colorato dal colore del tema.
 
+---
+
+## 15. Perfezionamenti Layout Modale, Spaziatori Orari, Fix DatePicker Nativo e Parser Fine Semestre
+
+### 1. Spaziatori e Layout "Orario Lezione"
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Risolto il problema per cui l'etichetta e l'orario (es. "Orario Inizio08:00 >") risultavano attaccati a causa del collasso della larghezza intrinseca del wrapper `MenuView` su iOS.
+  - Misurata dinamicamente la larghezza della card (`measuredCardWidth` con fallback immediato a `Dimensions.get('window').width - 32`).
+  - Assegnata larghezza esplicita a `MenuView` e a `tableRow` (`width: cardWidth`) con `justifyContent: 'space-between'`.
+  - Strutturato il contenuto sinistro (`iconBox` + etichetta) in un container flessibile (`rowLeftContent` con `flex: 1` e `marginRight: 16`), garantendo che l'etichetta rimanga allineata a sinistra e l'orario selezionato con il chevron siano ancorati all'estrema destra con un ampio spazio visivo intermedio.
+
+### 2. Risoluzione Touch e Layout DatePicker Nativo
+- **File**: `src/components/ManualEventModal.tsx`
+- **Descrizione**:
+  - Risolto il difetto per cui il componente `DateTimePicker` nativo usciva dai confini del modale tagliandosi a destra ("25 Oct 2...") e non rispondeva ai tocchi dell'utente a causa della mancanza di dimensioni orizzontali nel componente `Host` SwiftUI.
+  - Incapsulato il picker in un contenitore dedicato (`datePickerWrapper` con `width: 140, height: 36`) e assegnato `style={styles.datePickerControl}` (`width: 140, height: 36`) direttamente a `DateTimePicker`.
+  - Aggiunta localizzazione esplicita in italiano (`locale="it-IT"`) in stile scuro coordinato (`themeVariant="dark"`).
+  - La riga "Termina il:" risiede ora all'interno di una card elegante (`backgroundColor: '#1c1c1e'`, `borderRadius: 12`, `borderWidth: 1`), perfettamente contenuta nel padding del modale, senza alcuna sbordatura e con interazione touch immediata e fluida.
+
+### 3. Parser Data Conclusione Semestre (Risoluzione Bug Data Inizio)
+- **File**: `src/utils/manualEvents.ts`
+- **Descrizione**:
+  - Corretta la regressione nella funzione `extractSemesterEndDate`: la regex precedente `/al\s+/` matchava per errore la sottostringa `"al"` all'interno della parola `"dal"` (es. `"dal 24 Settembre 2026"`), impostando erroneamente la data d'inizio come data di fine semestre.
+  - Introdotti confini di parola rigidi (`\b(?:al|all['’]|alle|fino al|fino all['’]|termine)\b`) che impediscono categoricamente qualsiasi match con `"dal"`.
+  - Gestiti tutti i formati accademici Sapienza con range completi (`dal <inizio> al <fine>`, `<inizio> - <fine>`, ecc.), garantendo l'estrazione esclusiva e puntuale della vera data di termine del semestre (es. `16 Gennaio 2027` anziché `24 Settembre 2026`).
+
+

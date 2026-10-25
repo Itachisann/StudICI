@@ -10,6 +10,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   Modal,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -72,6 +73,10 @@ function ManualEventForm({
   const dynamicSemesterEnd = useMemo(() => {
     return extractSemesterEndDate(semesterText) || getDefaultSemesterEndDate();
   }, [semesterText]);
+
+  const initialCardWidth = Dimensions.get('window').width - 32;
+  const [measuredCardWidth, setMeasuredCardWidth] = useState(0);
+  const cardWidth = measuredCardWidth > 0 ? measuredCardWidth : initialCardWidth;
 
   const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 4);
 
@@ -300,7 +305,15 @@ function ManualEventForm({
 
           {/* Selezione Orari con struttura visuale nativa iOS (uguale alla selezione del tema) */}
           <Text style={styles.sectionTitle}>ORARIO LEZIONE</Text>
-          <View style={styles.sectionCard}>
+          <View
+            style={styles.sectionCard}
+            onLayout={(e) => {
+              const w = e.nativeEvent.layout.width;
+              if (w > 0 && Math.abs(w - measuredCardWidth) > 1) {
+                setMeasuredCardWidth(w);
+              }
+            }}
+          >
             {/* Riga Orario Inizio */}
             {isNativeComponentAvailable ? (
               <MenuView
@@ -318,9 +331,33 @@ function ManualEventForm({
                   }
                 }}
                 actions={startTimeMenuActions as any}
-                style={{ width: '100%' }}
+                style={{ width: cardWidth }}
               >
-                <View style={styles.tableRow}>
+                <View style={[styles.tableRow, { width: cardWidth }]}>
+                  <View style={styles.rowLeftContent}>
+                    <View
+                      style={[
+                        styles.iconBox,
+                        { backgroundColor: theme.subtle, borderColor: theme.border },
+                      ]}
+                    >
+                      <Ionicons name="time-outline" size={17} color={theme.accent} />
+                    </View>
+                    <Text style={styles.rowTitle}>Orario Inizio</Text>
+                  </View>
+                  <View style={styles.themeRowPreview}>
+                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{startTime}</Text>
+                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
+                  </View>
+                </View>
+              </MenuView>
+            ) : (
+              <TouchableOpacity
+                style={[styles.tableRow, { width: cardWidth }]}
+                activeOpacity={0.7}
+                onPress={() => setFallbackTimePickerField('start')}
+              >
+                <View style={styles.rowLeftContent}>
                   <View
                     style={[
                       styles.iconBox,
@@ -330,27 +367,7 @@ function ManualEventForm({
                     <Ionicons name="time-outline" size={17} color={theme.accent} />
                   </View>
                   <Text style={styles.rowTitle}>Orario Inizio</Text>
-                  <View style={styles.themeRowPreview}>
-                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{startTime}</Text>
-                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                  </View>
                 </View>
-              </MenuView>
-            ) : (
-              <TouchableOpacity
-                style={styles.tableRow}
-                activeOpacity={0.7}
-                onPress={() => setFallbackTimePickerField('start')}
-              >
-                <View
-                  style={[
-                    styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
-                  ]}
-                >
-                  <Ionicons name="time-outline" size={17} color={theme.accent} />
-                </View>
-                <Text style={styles.rowTitle}>Orario Inizio</Text>
                 <View style={styles.themeRowPreview}>
                   <Text style={[styles.rowDetail, { color: theme.accent }]}>{startTime}</Text>
                   <Ionicons name="chevron-forward" size={15} color="#48484a" />
@@ -368,9 +385,33 @@ function ManualEventForm({
                   setEndTime(nativeEvent.event);
                 }}
                 actions={endTimeMenuActions as any}
-                style={{ width: '100%' }}
+                style={{ width: cardWidth }}
               >
-                <View style={styles.tableRow}>
+                <View style={[styles.tableRow, { width: cardWidth }]}>
+                  <View style={styles.rowLeftContent}>
+                    <View
+                      style={[
+                        styles.iconBox,
+                        { backgroundColor: theme.subtle, borderColor: theme.border },
+                      ]}
+                    >
+                      <Ionicons name="time-outline" size={17} color={theme.accent} />
+                    </View>
+                    <Text style={styles.rowTitle}>Orario Fine</Text>
+                  </View>
+                  <View style={styles.themeRowPreview}>
+                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{endTime}</Text>
+                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
+                  </View>
+                </View>
+              </MenuView>
+            ) : (
+              <TouchableOpacity
+                style={[styles.tableRow, { width: cardWidth }]}
+                activeOpacity={0.7}
+                onPress={() => setFallbackTimePickerField('end')}
+              >
+                <View style={styles.rowLeftContent}>
                   <View
                     style={[
                       styles.iconBox,
@@ -380,27 +421,7 @@ function ManualEventForm({
                     <Ionicons name="time-outline" size={17} color={theme.accent} />
                   </View>
                   <Text style={styles.rowTitle}>Orario Fine</Text>
-                  <View style={styles.themeRowPreview}>
-                    <Text style={[styles.rowDetail, { color: theme.accent }]}>{endTime}</Text>
-                    <Ionicons name="chevron-forward" size={15} color="#48484a" />
-                  </View>
                 </View>
-              </MenuView>
-            ) : (
-              <TouchableOpacity
-                style={styles.tableRow}
-                activeOpacity={0.7}
-                onPress={() => setFallbackTimePickerField('end')}
-              >
-                <View
-                  style={[
-                    styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
-                  ]}
-                >
-                  <Ionicons name="time-outline" size={17} color={theme.accent} />
-                </View>
-                <Text style={styles.rowTitle}>Orario Fine</Text>
                 <View style={styles.themeRowPreview}>
                   <Text style={[styles.rowDetail, { color: theme.accent }]}>{endTime}</Text>
                   <Ionicons name="chevron-forward" size={15} color="#48484a" />
@@ -516,25 +537,29 @@ function ManualEventForm({
 
             {repetitionType === 'custom_date' && (
               <View style={styles.customDateContainer}>
-                {/* Expo native DateTimePicker */}
+                {/* Expo native DateTimePicker con vincoli e larghezza idonea */}
                 <View style={styles.datePickerRow}>
                   <Text style={styles.datePickerLabel}>Termina il:</Text>
-                  <DateTimePicker
-                    value={customDateObj}
-                    mode="date"
-                    display={Platform.OS === 'ios' ? 'compact' : 'default'}
-                    themeVariant="dark"
-                    accentColor={theme.primary}
-                    minimumDate={new Date()}
-                    onChange={(event, selectedDate) => {
-                      if (selectedDate) {
-                        const yyyy = selectedDate.getFullYear();
-                        const mm = String(selectedDate.getMonth() + 1).padStart(2, '0');
-                        const dd = String(selectedDate.getDate()).padStart(2, '0');
-                        setRepeatUntilDate(`${yyyy}-${mm}-${dd}`);
-                      }
-                    }}
-                  />
+                  <View style={styles.datePickerWrapper}>
+                    <DateTimePicker
+                      value={customDateObj}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                      locale="it-IT"
+                      themeVariant="dark"
+                      accentColor={theme.primary}
+                      minimumDate={new Date()}
+                      style={styles.datePickerControl}
+                      onChange={(event, selectedDate) => {
+                        if (selectedDate) {
+                          const yyyy = selectedDate.getFullYear();
+                          const mm = String(selectedDate.getMonth() + 1).padStart(2, '0');
+                          const dd = String(selectedDate.getDate()).padStart(2, '0');
+                          setRepeatUntilDate(`${yyyy}-${mm}-${dd}`);
+                        }
+                      }}
+                    />
+                  </View>
                 </View>
 
                 {/* Pulsanti rapidi arrotondati a pillola con testo colore del tema */}
@@ -828,8 +853,15 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 13,
+  },
+  rowLeftContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 16,
   },
   iconBox: {
     width: 30,
@@ -841,7 +873,6 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   rowTitle: {
-    flex: 1,
     fontSize: 15,
     fontWeight: '600',
     color: '#ffffff',
@@ -853,7 +884,7 @@ const styles = StyleSheet.create({
   },
   rowDetail: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 
   /* Pill preset orari in stile "Anticipo in aula" */
@@ -929,12 +960,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#1c1c1e',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2c2c2e',
+    marginTop: 6,
+    marginBottom: 8,
   },
   datePickerLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  datePickerWrapper: {
+    width: 140,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  datePickerControl: {
+    width: 140,
+    height: 36,
   },
   dateQuickChips: {
     flexDirection: 'row',

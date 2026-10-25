@@ -79,21 +79,65 @@ export function getDefaultSemesterEndDate(fromDate: Date = new Date()): string {
   return `${endYear}-${mm}-${dd}`;
 }
 
+const ITALIAN_MONTHS_MAP: Record<string, number> = {
+  gennaio: 1, gen: 1,
+  febbraio: 2, feb: 2,
+  marzo: 3, mar: 3,
+  aprile: 4, apr: 4,
+  maggio: 5, mag: 5,
+  giugno: 6, giu: 6,
+  luglio: 7, lug: 7,
+  agosto: 8, ago: 8,
+  settembre: 9, set: 9,
+  ottobre: 10, ott: 10,
+  novembre: 11, nov: 11,
+  dicembre: 12, dic: 12,
+};
+
 /**
- * Estrae dinamicamente la data finale del semestre dalle informazioni estratte dal foglio orari Sapienza
- * (ad esempio: "1° Semestre · Lezioni dal 29/09/2026 al 16/01/2027" o "al 16 Gennaio 2027").
- * Se non reperibile, restituisce null consentendo il fallback a getDefaultSemesterEndDate().
+ * Estrae dinamicamente la data finale del semestre dalle informazioni estratte dal foglio orari Sapienza.
+ * Gestisce correttamente i range (es. "dal 24 Settembre 2026 al 16 Gennaio 2027" o "24/09/2026 - 16/01/2027")
+ * ignorando rigorosamente la data di inizio ed estraendo SEMPRE e SOLTANTO la data di conclusione del semestre.
  */
 export function extractSemesterEndDate(semesterStr?: string): string | null {
   if (!semesterStr) return null;
 
-  // 1. Cerca pattern numerico "al DD/MM/YYYY" o "al DD-MM-YYYY" o "al DD/MM/YY"
-  const numericMatch = semesterStr.match(/al\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/i);
-  if (numericMatch) {
-    const day = parseInt(numericMatch[1], 10);
-    const month = parseInt(numericMatch[2], 10);
-    let year = numericMatch[3] ? parseInt(numericMatch[3], 10) : new Date().getFullYear();
+  const currentYear = new Date().getFullYear();
+
+  // 1. Cerca il termine di fine range con preposizione testuale ("al", "all'", "alle", "fino al", "termine lezioni")
+  // NOTA: Usiamo \b per evitare match parziali all'interno di "dal"!
+  const textEndMatch = semesterStr.match(
+    /\b(?:al|all['’]|alle|fino al|fino all['’]|termine(?:ranno)? (?:il|le)?(?:zioni)?)\s+(\d{1,2})\s+([a-zA-Zàèéìòù]+)(?:\s+(\d{4}))?/i
+  );
+  if (textEndMatch) {
+    const day = parseInt(textEndMatch[1], 10);
+    const monthName = textEndMatch[2].toLowerCase().trim();
+    const month = ITALIAN_MONTHS_MAP[monthName];
+    if (month && day >= 1 && day <= 31) {
+      let year = textEndMatch[3] ? parseInt(textEndMatch[3], 10) : currentYear;
+      // Se il mese di fine è nei primi mesi (es. gen-mar) e ci troviamo a inizio anno accademico (autunno), l'anno è il successivo
+      if (!textEndMatch[3] && month <= 3 && new Date().getMonth() >= 7) {
+        year += 1;
+      }
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      return `${year}-${mm}-${dd}`;
+    }
+  }
+
+  // 2. Cerca il termine di fine range con preposizione numerica (es. "al 16/01/2027" o "fino al 16-01-2027")
+  // NOTA: Usiamo \b per evitare di catturare per errore "dal 24/09/2026"!
+  const numEndMatch = semesterStr.match(
+    /\b(?:al|all['’]|alle|fino al|fino all['’]|termine(?:ranno)? (?:il|le)?(?:zioni)?)\s*(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/i
+  );
+  if (numEndMatch) {
+    const day = parseInt(numEndMatch[1], 10);
+    const month = parseInt(numEndMatch[2], 10);
+    let year = numEndMatch[3] ? parseInt(numEndMatch[3], 10) : currentYear;
     if (year < 100) year += 2000;
+    if (!numEndMatch[3] && month <= 3 && new Date().getMonth() >= 7) {
+      year += 1;
+    }
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
       const mm = String(month).padStart(2, '0');
       const dd = String(day).padStart(2, '0');
@@ -101,30 +145,32 @@ export function extractSemesterEndDate(semesterStr?: string): string | null {
     }
   }
 
-  // 2. Cerca pattern testuale "al DD [Mese] [YYYY]"
-  const textMatch = semesterStr.match(/al\s+(\d{1,2})\s+([a-zA-Zàèéìòù]+)(?:\s+(\d{4}))?/i);
-  if (textMatch) {
-    const day = parseInt(textMatch[1], 10);
-    const monthName = textMatch[2].toLowerCase();
-    const monthsMap: Record<string, number> = {
-      gennaio: 1, gen: 1,
-      febbraio: 2, feb: 2,
-      marzo: 3, mar: 3,
-      aprile: 4, apr: 4,
-      maggio: 5, mag: 5,
-      giugno: 6, giu: 6,
-      luglio: 7, lug: 7,
-      agosto: 8, ago: 8,
-      settembre: 9, set: 9,
-      ottobre: 10, ott: 10,
-      novembre: 11, nov: 11,
-      dicembre: 12, dic: 12,
-    };
-    const month = monthsMap[monthName];
+  // 3. Cerca range separati da trattino (es. "24/09/2026 - 16/01/2027")
+  const dashNumMatch = semesterStr.match(/[-–—]\s*(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/);
+  if (dashNumMatch) {
+    const day = parseInt(dashNumMatch[1], 10);
+    const month = parseInt(dashNumMatch[2], 10);
+    let year = dashNumMatch[3] ? parseInt(dashNumMatch[3], 10) : currentYear;
+    if (year < 100) year += 2000;
+    if (!dashNumMatch[3] && month <= 3 && new Date().getMonth() >= 7) {
+      year += 1;
+    }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      return `${year}-${mm}-${dd}`;
+    }
+  }
+
+  // 4. Cerca range separati da trattino con mese in lettere (es. "24/09/2026 - 16 Gennaio 2027")
+  const dashTextMatch = semesterStr.match(/[-–—]\s*(\d{1,2})\s+([a-zA-Zàèéìòù]+)(?:\s+(\d{4}))?/i);
+  if (dashTextMatch) {
+    const day = parseInt(dashTextMatch[1], 10);
+    const monthName = dashTextMatch[2].toLowerCase().trim();
+    const month = ITALIAN_MONTHS_MAP[monthName];
     if (month && day >= 1 && day <= 31) {
-      let year = textMatch[3] ? parseInt(textMatch[3], 10) : new Date().getFullYear();
-      const currentMonth = new Date().getMonth();
-      if (!textMatch[3] && month <= 2 && currentMonth >= 8) {
+      let year = dashTextMatch[3] ? parseInt(dashTextMatch[3], 10) : currentYear;
+      if (!dashTextMatch[3] && month <= 3 && new Date().getMonth() >= 7) {
         year += 1;
       }
       const mm = String(month).padStart(2, '0');
