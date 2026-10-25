@@ -12,6 +12,9 @@
       "buildNumber": "68",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
+        "CFBundleDevelopmentRegion": "it",
+        "CFBundleLocalizations": ["it", "it_IT"],
+        "CFBundleAllowMixedLocalizations": true,
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,

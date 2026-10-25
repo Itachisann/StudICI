@@ -292,11 +292,13 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
   - Strutturato il contenuto sinistro (`iconBox` + etichetta) in un container flessibile (`rowLeftContent` con `flex: 1` e `marginRight: 16`), garantendo che l'etichetta rimanga allineata a sinistra e l'orario selezionato con il chevron siano ancorati all'estrema destra con un ampio spazio visivo intermedio.
 
 ### 2. Risoluzione Touch e Layout DatePicker Nativo
-- **File**: `src/components/ManualEventModal.tsx`
+- **File**: `src/components/ManualEventModal.tsx`, `app.json`
 - **Descrizione**:
   - Risolto il difetto per cui il componente `DateTimePicker` nativo usciva dai confini del modale tagliandosi a destra ("25 Oct 2...") e non rispondeva ai tocchi dell'utente a causa della mancanza di dimensioni orizzontali nel componente `Host` SwiftUI.
   - Incapsulato il picker in un contenitore dedicato (`datePickerWrapper` con `width: 140, height: 36`) e assegnato `style={styles.datePickerControl}` (`width: 140, height: 36`) direttamente a `DateTimePicker`.
-  - Aggiunta localizzazione esplicita in italiano (`locale="it-IT"`) in stile scuro coordinato (`themeVariant="dark"`).
+  - **Localizzazione Nativa in Italiano (`it_IT`)**:
+    - Corretto l'identificatore da `it-IT` a `it_IT`: in Swift/iOS `Locale.availableIdentifiers` utilizza standard POSIX con underscore (`_`), per cui `it-IT` con trattino non veniva riconosciuto da SwiftUI tornando all'inglese di sistema.
+    - Configurate in `app.json` le chiavi iOS `CFBundleDevelopmentRegion: "it"`, `CFBundleLocalizations: ["it", "it_IT"]` e `CFBundleAllowMixedLocalizations: true`, garantendo che l'intero bundle iOS e tutti i componenti nativi (inclusi i selettori di data) operino nativamente in lingua italiana.
   - La riga "Termina il:" risiede ora all'interno di una card elegante (`backgroundColor: '#1c1c1e'`, `borderRadius: 12`, `borderWidth: 1`), perfettamente contenuta nel padding del modale, senza alcuna sbordatura e con interazione touch immediata e fluida.
 
 ### 3. Parser Data Conclusione Semestre (Risoluzione Bug Data Inizio)

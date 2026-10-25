@@ -545,7 +545,7 @@ function ManualEventForm({
                       value={customDateObj}
                       mode="date"
                       display={Platform.OS === 'ios' ? 'compact' : 'default'}
-                      locale="it-IT"
+                      locale="it_IT"
                       themeVariant="dark"
                       accentColor={theme.primary}
                       minimumDate={new Date()}
