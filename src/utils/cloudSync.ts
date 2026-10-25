@@ -368,7 +368,7 @@ export async function performCloudSync(): Promise<{
 
   const payload: CloudBackupPayload = {
     syncId,
-    version: "1.9.3",
+    version: "1.8.9",
     timestamp,
     formattedDate,
     course: {

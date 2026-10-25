@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
+  LayoutChangeEvent,
   Linking,
   Platform,
   RefreshControl,
@@ -75,16 +77,14 @@ interface WeekdayItem {
 }
 
 const WEEKDAYS: WeekdayItem[] = [
-  { label: "Lun", fullLabel: "Lunedì", dayIdx: 1 },
-  { label: "Mar", fullLabel: "Martedì", dayIdx: 2 },
-  { label: "Mer", fullLabel: "Mercoledì", dayIdx: 3 },
-  { label: "Gio", fullLabel: "Giovedì", dayIdx: 4 },
-  { label: "Ven", fullLabel: "Venerdì", dayIdx: 5 },
-  { label: "Sab", fullLabel: "Sabato", dayIdx: 6, isWeekend: true },
-  { label: "Dom", fullLabel: "Domenica", dayIdx: 0, isWeekend: true },
+  { label: "LUN", fullLabel: "Lunedì", dayIdx: 1 },
+  { label: "MAR", fullLabel: "Martedì", dayIdx: 2 },
+  { label: "MER", fullLabel: "Mercoledì", dayIdx: 3 },
+  { label: "GIO", fullLabel: "Giovedì", dayIdx: 4 },
+  { label: "VEN", fullLabel: "Venerdì", dayIdx: 5 },
+  { label: "SAB", fullLabel: "Sabato", dayIdx: 6, isWeekend: true },
+  { label: "DOM", fullLabel: "Domenica", dayIdx: 0, isWeekend: true },
 ];
-
-const WEEKDAY_TITLES = WEEKDAYS.map((w) => w.label);
 
 export default function ViaggioScreen() {
   const { theme } = useTheme();
@@ -117,25 +117,80 @@ export default function ViaggioScreen() {
 
   const currentWeekday = WEEKDAYS[currentWeekdayIndex];
 
-  const [contentFadeAnim] = useState(() => new Animated.Value(1));
-  const [contentSlideAnim] = useState(() => new Animated.Value(0));
+  // Transizione fluida da giorno a giorno (identica a quella della sezione Orari)
+  const prevWeekdayIndexRef = useRef(currentWeekdayIndex);
+  const [daySlideAnim] = useState(() => new Animated.Value(0));
+  const [dayFadeAnim] = useState(() => new Animated.Value(1));
 
-  const animateDayTransition = useCallback(() => {
-    contentFadeAnim.setValue(0.4);
-    contentSlideAnim.setValue(8);
+  useEffect(() => {
+    if (prevWeekdayIndexRef.current === currentWeekdayIndex) return;
+    const isForward = currentWeekdayIndex > prevWeekdayIndexRef.current;
+    prevWeekdayIndexRef.current = currentWeekdayIndex;
+
+    dayFadeAnim.setValue(0.25);
+    daySlideAnim.setValue(isForward ? 16 : -16);
+
     Animated.parallel([
-      Animated.timing(contentFadeAnim, {
+      Animated.timing(dayFadeAnim, {
         toValue: 1,
         duration: 220,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
-      Animated.timing(contentSlideAnim, {
+      Animated.timing(daySlideAnim, {
         toValue: 0,
         duration: 220,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start();
-  }, [contentFadeAnim, contentSlideAnim]);
+  }, [currentWeekdayIndex, dayFadeAnim, daySlideAnim]);
+
+  // Animazione fluida a scorrimento dello slider dei giorni della settimana
+  const segmentLayouts = useRef<{ [key: number]: { x: number; width: number } }>({});
+  const [sliderPillAnim] = useState(() => new Animated.Value(0));
+  const [sliderWidthAnim] = useState(() => new Animated.Value(44));
+  const [sliderReady, setSliderReady] = useState(false);
+  const initialSliderPositioned = useRef(false);
+
+  const handleSegmentLayout = useCallback(
+    (idx: number, e: LayoutChangeEvent) => {
+      const { x, width } = e.nativeEvent.layout;
+      const actualX = idx === 5 ? x + 4 : x;
+      const actualWidth = idx === 5 ? width - 4 : width;
+      segmentLayouts.current[idx] = { x: actualX, width: actualWidth };
+
+      if (idx === currentWeekdayIndex && !initialSliderPositioned.current) {
+        sliderPillAnim.setValue(actualX);
+        sliderWidthAnim.setValue(actualWidth);
+        initialSliderPositioned.current = true;
+        setSliderReady(true);
+      }
+    },
+    [currentWeekdayIndex, sliderPillAnim, sliderWidthAnim],
+  );
+
+  useEffect(() => {
+    const target = segmentLayouts.current[currentWeekdayIndex];
+    if (target && initialSliderPositioned.current) {
+      Animated.parallel([
+        Animated.spring(sliderPillAnim, {
+          toValue: target.x,
+          damping: 24,
+          mass: 0.8,
+          stiffness: 280,
+          useNativeDriver: false,
+        }),
+        Animated.spring(sliderWidthAnim, {
+          toValue: target.width,
+          damping: 24,
+          mass: 0.8,
+          stiffness: 280,
+          useNativeDriver: false,
+        }),
+      ]).start();
+    }
+  }, [currentWeekdayIndex, sliderPillAnim, sliderWidthAnim]);
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
@@ -448,7 +503,6 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
-    animateDayTransition();
     loadData(false, false, {
       selectedDayIdx: dayIdx,
       selectedClassIndex: null,
@@ -466,7 +520,6 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
-    animateDayTransition();
     loadData(false, false, {
       direction: newDir,
       selectedTrainOffset: 0,
@@ -790,80 +843,53 @@ export default function ViaggioScreen() {
                 )}
               </View>
 
-              {/* Selettore Giorno della settimana - Native Segmented Control per IPA / Glass Week Bar per Fallback */}
+              {/* Selettore Giorno della settimana - Liquid Glass Week Bar */}
               <View style={styles.daySelectorContainer}>
-                {isNativeIos ? (
-                  <SegmentedControl
-                    key={`seg-days-${currentWeekdayIndex}-${theme.primary}`}
-                    values={WEEKDAY_TITLES}
-                    selectedIndex={currentWeekdayIndex}
-                    onChange={(event) => {
-                      const idx = event.nativeEvent.selectedSegmentIndex;
-                      if (WEEKDAYS[idx]) {
-                        handleDayChange(WEEKDAYS[idx].dayIdx);
-                      }
-                    }}
-                    appearance="dark"
-                    tintColor={theme.primary}
-                    fontStyle={{
-                      fontSize: 12,
-                      fontWeight: "600",
-                      color: "#a1a1aa",
-                    }}
-                    activeFontStyle={{
-                      fontSize: 12,
-                      fontWeight: "700",
-                      color: "#ffffff",
-                    }}
-                    style={styles.nativeDaySegmentedControl}
-                  />
-                ) : (
-                  <View style={styles.daySegmentedBar}>
-                    {WEEKDAYS.map((w, idx) => {
-                      const isSelected = selectedDayIdx === w.dayIdx;
-                      const isItemToday = todayDayIdx === w.dayIdx;
-                      const isItemWeekend = Boolean(w.isWeekend);
+                <View style={styles.daySegmentedBar}>
+                  {sliderReady && (
+                    <Animated.View
+                      pointerEvents="none"
+                      style={[
+                        styles.slidingActivePill,
+                        {
+                          left: sliderPillAnim,
+                          width: sliderWidthAnim,
+                          backgroundColor: isWeekend
+                            ? "rgba(245, 158, 11, 0.22)"
+                            : theme.bg,
+                          borderColor: isWeekend ? "#f59e0b" : theme.primary,
+                          shadowColor: isWeekend ? "#f59e0b" : theme.primary,
+                        },
+                      ]}
+                    />
+                  )}
 
-                      const activeBg = isItemWeekend
-                        ? "rgba(245, 158, 11, 0.22)"
-                        : theme.bg;
-                      const activeBorder = isItemWeekend
-                        ? "#f59e0b"
-                        : theme.primary;
-                      const activeShadow = isItemWeekend
-                        ? "#f59e0b"
-                        : theme.primary;
+                  {WEEKDAYS.map((w, idx) => {
+                    const isSelected = selectedDayIdx === w.dayIdx;
+                    const isItemToday = todayDayIdx === w.dayIdx;
+                    const isItemWeekend = Boolean(w.isWeekend);
 
-                      return (
-                        <View
-                          key={w.dayIdx}
-                          style={[
-                            styles.daySegmentWrapper,
-                            idx === 5 && styles.daySegmentWrapperWithDivider,
-                          ]}
+                    return (
+                      <View
+                        key={w.dayIdx}
+                        onLayout={(e) => handleSegmentLayout(idx, e)}
+                        style={[
+                          styles.daySegmentWrapper,
+                          idx === 5 && styles.daySegmentWrapperWithDivider,
+                        ]}
+                      >
+                        {idx === 5 && <View style={styles.dayWeekendDivider} />}
+                        <TouchableOpacity
+                          onPress={() => handleDayChange(w.dayIdx)}
+                          activeOpacity={0.7}
+                          style={styles.daySegmentItem}
                         >
-                          {idx === 5 && <View style={styles.dayWeekendDivider} />}
-                          <TouchableOpacity
-                            onPress={() => handleDayChange(w.dayIdx)}
-                            activeOpacity={0.7}
+                          <Text
                             style={[
-                              styles.daySegmentItem,
-                              isSelected && [
-                                styles.daySegmentItemActive,
-                                {
-                                  backgroundColor: activeBg,
-                                  borderColor: activeBorder,
-                                  shadowColor: activeShadow,
-                                },
-                              ],
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.daySegmentLabel,
-                                isItemWeekend &&
-                                  !isSelected &&
-                                  styles.daySegmentLabelWeekend,
+                              styles.daySegmentLabel,
+                              isItemWeekend &&
+                                !isSelected &&
+                                styles.daySegmentLabelWeekend,
                               isSelected && styles.daySegmentLabelActive,
                             ]}
                           >
@@ -885,8 +911,7 @@ export default function ViaggioScreen() {
                     );
                   })}
                 </View>
-              )}
-            </View>
+              </View>
             </>
           )}
         </View>
@@ -947,10 +972,11 @@ export default function ViaggioScreen() {
               />
             }
           >
+            {/* Contenuto Viaggio con Transizione Animata da Giorno a Giorno */}
             <Animated.View
               style={{
-                opacity: contentFadeAnim,
-                transform: [{ translateY: contentSlideAnim }],
+                opacity: dayFadeAnim,
+                transform: [{ translateX: daySlideAnim }],
               }}
             >
               {/* Sezione Selettore Lezioni del Giorno */}
@@ -2443,12 +2469,6 @@ const styles = StyleSheet.create({
     maxWidth: 600,
     alignSelf: "center",
   },
-  nativeDaySegmentedControl: {
-    height: 36,
-    width: "100%",
-    maxWidth: 600,
-    alignSelf: "center",
-  },
   daySegmentedBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -2458,11 +2478,26 @@ const styles = StyleSheet.create({
     padding: 3.5,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.09)",
+    position: "relative",
+  },
+  slidingActivePill: {
+    position: "absolute",
+    top: 3.5,
+    bottom: 3.5,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.7,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 1,
   },
   daySegmentWrapper: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    zIndex: 2,
   },
   daySegmentWrapperWithDivider: {
     paddingLeft: 2,
@@ -2479,13 +2514,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-  },
-  daySegmentItemActive: {
-    borderWidth: 1.5,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.7,
-    shadowRadius: 6,
-    elevation: 4,
+    backgroundColor: "transparent",
+    borderWidth: 0,
   },
   daySegmentLabel: {
     fontSize: 12,

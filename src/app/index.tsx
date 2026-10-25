@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
   Linking,
   Modal,
   Platform,
@@ -136,6 +137,35 @@ export default function ScheduleScreen() {
   // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
   const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
   const [selectedDay, setSelectedDay] = useState(todayIdx);
+
+  // Transizione fluida da giorno a giorno (coerente con la sezione Viaggio)
+  const prevDayRef = useRef(todayIdx);
+  const [daySlideAnim] = useState(() => new Animated.Value(0));
+  const [dayFadeAnim] = useState(() => new Animated.Value(1));
+
+  useEffect(() => {
+    if (prevDayRef.current === selectedDay) return;
+    const isForward = selectedDay > prevDayRef.current;
+    prevDayRef.current = selectedDay;
+
+    dayFadeAnim.setValue(0.25);
+    daySlideAnim.setValue(isForward ? 16 : -16);
+
+    Animated.parallel([
+      Animated.timing(dayFadeAnim, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(daySlideAnim, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [selectedDay, dayFadeAnim, daySlideAnim]);
   const [schedulesMap, setSchedulesMap] = useState<
     Record<string, ScheduleData>
   >({});
@@ -612,8 +642,14 @@ export default function ScheduleScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── Day label con indicatore ── */}
-        <View style={styles.dayLabelRow}>
+        {/* ── Day label con indicatore & Classes List con Transizione Animata ── */}
+        <Animated.View
+          style={{
+            opacity: dayFadeAnim,
+            transform: [{ translateX: daySlideAnim }],
+          }}
+        >
+          <View style={styles.dayLabelRow}>
           <Text style={styles.dayLabel}>
             {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
           </Text>
@@ -794,6 +830,7 @@ export default function ScheduleScreen() {
             })}
           </View>
         )}
+        </Animated.View>
       </ScrollView>
 
       {/* ── Modal Avvisi (Alerts) Nativo iOS ── */}

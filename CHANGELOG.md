@@ -5,46 +5,33 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
-## 1.9.3
+## 1.8.9
+
+### Animazioni & Transizioni Fluide
+- **Transizione da Giorno a Giorno (Sezione Orari e Sezione Viaggio)**:
+  - Creata un'animazione di transizione direzionale identica per entrambe le schermate: scorrimento orizzontale morbido (`translateX: ±16 → 0`) e dissolvenza (`opacity: 0.25 → 1`) con curva cubica a 220ms guidata su thread nativo a 60/120fps.
+  - Spostandosi in avanti (es. da Lunedì a Martedì), il contenuto scivola con naturalezza da destra; tornando indietro, da sinistra.
+- **Animazione a Scorrimento dello Slider Settimanale (Sezione Viaggio)**:
+  - Eliminato il passaggio netto dell'evidenziatore del giorno: introdotta una capsula attiva fluttuante a molla (`Animated.spring` con fisica Apple, `damping: 24`, `stiffness: 280`) che scorre fluidamente sotto le etichette dei giorni da una posizione all'altra quando viene toccato un giorno.
+  - La capsula si adatta istantaneamente alla larghezza e posizione esatta misurata del segmento, con transizione cromatica coerente (Rosso Sapienza nei feriali, ambra caldo nel weekend).
 
 ### Sezione Viaggio & Selettore Giorni Settimanali
-- **Segmented UI Nativo per IPA con Animazione di Scorrimento**:
-  - **Supporto Nativo UISegmentedControl**: su build IPA e dispositivi iOS (`isNativeIos`), il selettore dei 7 giorni (`Lun`, `Mar`, `Mer`, `Gio`, `Ven`, `Sab`, `Dom`) adotta ora il controllo nativo `UISegmentedControl` coordinato al selettore Andata/Ritorno.
-  - **Animazione di Scorrimento Nativa Apple**: il cursore a pillola scivola fluidamente da un giorno all'altro con fisica a molla e feedback aptico nativo di iOS.
-  - **Animazione Fluida di Transizione Contenuti**: al cambio giorno (e al cambio direzione), l'intera area contenuti della sezione Viaggio (lezioni, convoglio target, timeline) transiziona morbidamente con cross-fade e scorrimento verticale (`opacity: 0.4 -> 1`, `translateY: 8 -> 0`).
-  - **Barra Vetro Satinato per Fallback**: su ambienti non nativi viene mantenuta la barra segmentata liquid glass a 7 pillole con separatore feriale/weekend.
-  - **Allineamento Perfetto ai Margini**: entrambi i controlli segmentati rispettano fedelmente i margini interni delle card sottostanti (`paddingHorizontal: 16`, `maxWidth: 600`).
-
-## 1.9.2
-
-### Sezione Viaggio & Orari Programmati
+- **Design Ultra-Pulito Apple Liquid Glass**:
+  - **Eliminazione Toolbar Superflue**: rimossa la riga superiore di pulsanti e badge che appesantiva visivamente l'header creando troppi livelli sovrapposti.
+  - **Barra Segmentata Liquid Glass a 7 Pillole**: i 7 giorni (`LUN`, `MAR`, `MER`, `GIO`, `VEN`, `SAB`, `DOM`) sono racchiusi in un'unica elegante barra di vetro scuro satinato (`rgba(255,255,255,0.05)` con raggio 16px e bordo 1px `0.09`).
+  - **Separatore Elegante Feriale / Weekend**: introdotta una sottile linea verticale tra Venerdì e Sabato per distinguere intuitivamente i giorni accademici da quelli del fine settimana.
+  - **Glow Sapienza & Micro-Dot Oggi**: l'elemento selezionato si illumina in rosso Sapienza (`theme.bg` / `theme.primary`) con glow sfumato e dot dedicato per la giornata odierna.
+  - **Contesto e Tasto "Torna a Oggi" Integrati nella Sezione**: il nome completo del giorno e l'eventuale tasto rapido `[↩ Torna a oggi]` sono ora integrati con naturalezza nell'intestazione della sezione lezioni, liberando completamente l'header.
 - **Modalità Programmata per Giorni Precedenti e Successivi**:
-  - Quando si consulta un giorno diverso da quello odierno (giorni precedenti o successivi), la sezione Viaggio mostra ora l'orario ufficiale programmato pulito (`departureTimePlanned` e `arrivalTimePlanned`).
-  - Rimossi i calcoli di ritardo live e i controlli sull'ora attuale di oggi (`currentNowM >= depPlanM`) per i giorni non odierni, evitando orari barrati o sfasati di ore.
-  - La pill di stato mostra chiaramente **"Programmato"** con icona calendario e binario previsto da tabellone, senza falsi allarmi o badge di convoglio fermo.
+  - Quando si consulta un giorno diverso da quello odierno (giorni precedenti o successivi), la sezione Viaggio mostra l'orario ufficiale programmato pulito (`departureTimePlanned` e `arrivalTimePlanned`).
+  - Rimossi i calcoli di ritardo live e i controlli sull'ora attuale di oggi per i giorni non odierni, evitando orari barrati o sfasati di ore.
+  - La pill di stato mostra chiaramente **"Programmato"** con icona calendario e binario previsto da tabellone.
 
 ### Icona dell'App
 - **Sfondo Rosso Sapienza & Colonna Verticale Bianca Risaltata**:
   - Ripristinato lo sfondo dell'icona in Rosso Sapienza (`#822433` -> `#4c0519`) con profondità radiale.
   - La colonna verticale centrale ("I") è ora in bianco puro brillante (`#ffffff`, spessore 7.5) perfettamente nitida e visibile.
   - Spirale multi-tono argentata con accenti caldi e cuspide di Sant'Ivo in oro brillante (`#fbbf24`), perfettamente centrata a livello sub-pixel.
-
-## 1.9.1
-
-### Icona & Grafica Vettoriale
-- **Icona App con Stile Primo Avvio & Centratura Geometrica**:
-  - L'icona dell'app adotta ora la variante cromatica completa della schermata di primo avvio: sfondo scuro OLED (`#0d0e12`) con halo glow radiale rosso Sapienza, spirale con gradiente cremisi-argento, colonna verticale cremisi, cuspide in oro vivo e accento argentato.
-  - Calcolata la centratura geometrica sub-pixel perfetta (margini superiore/inferiore e sinistro/destro esattamente identici).
-- **Rimozione Completa Logo Vecchio in Verifica Orari**:
-  - Nella schermata di verifica orari all'avvio (`StartupCheckScreen`), rimosso ogni riferimento al vecchio logo raster sostituendolo con la variante SVG vettoriale e halo glow coordinato identica a quella del primo avvio.
-
-## 1.9.0
-
-### Icona & Grafica Vettoriale
-- **Nuova Icona dell'App Vettoriale SVG**:
-  - Logo ufficiale in pura grafica vettoriale SVG impostato come icona dell'applicazione (1024x1024 full-bleed per iOS e Store, icone adattive Android 512x512 con livelli foreground/background e icona monocromatica per Material You).
-- **Logo Originale all'Avvio Normale**:
-  - Nella schermata di verifica orari all'avvio (`StartupCheckScreen`), ripristinato il logo badge originale con lo sfondo rosso Sapienza iconico e bordo sottile.
 
 ### Interfaccia Utente & Uniformazione Sfondi
 - **Uniformazione Sfondo Schermate e Modali**:
@@ -62,8 +49,6 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
   - Algoritmo di hashing deterministico del nome materia per garantire che ogni materia mantenga esattamente lo stesso colore ad ogni avvio dell'app.
 - **Badge Accademici Glowing**:
   - Badge glowing per Tipologia di Corso (Laurea Triennale/Magistrale) e pill della Classe di Laurea (es. L-9R) con colori e ombreggiature coordinati al tema.
-
-## 1.8.9
 
 ### Interfaccia & Modali iOS
 - **Schermata di Avvio & Verifica Orari**:
