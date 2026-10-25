@@ -119,3 +119,18 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
 - **File**: `src/app/viaggio.tsx`, `src/utils/trenitaliaApi.ts`
 - **Descrizione**:
   - Nel box di selezione ed evidenziazione del treno (`trainHighlightCard`), la pillola di stato **"Programmato"** è ora visualizzata in grigio Apple sobrio (`badgeColor: '#94a3b8'`, `badgeBg: 'rgba(148, 163, 184, 0.12)'`, `badgeBorder: 'rgba(148, 163, 184, 0.25)'`), distinguendosi chiaramente dai badge operativi live.
+
+---
+
+## 9. Disambiguazione Grafica tra Tempo di Sosta in Banchina e Ritardo di Corsa
+
+### Separazione del Badge di Posizione dal Ritardo e Sosta
+- **File**: `src/app/viaggio.tsx`, `src/utils/trenitaliaApi.ts`
+- **Problema riscontrato**:
+  - Per treni fermi in stazione con ritardo (es. RV 7461 a Terni), venivano mostrati affiancati due badge numerici: `[ ⏸ Fermo a Terni (da 13m) ]` e `[ ⏱ +8 min ]`.
+  - Questo generava confusione visiva, facendo sembrare i 13 minuti e gli 8 minuti due stime di ritardo discordanti. In realtà, 13m è il tempo fisico di stazionamento in banchina dall'arrivo reale (comprensivo di 5m di sosta programmata da orario), mentre +8m è il ritardo accumulato rispetto all'orario ufficiale di partenza da quella stazione ($13\text{m} - 5\text{m} = 8\text{m}$).
+- **Risoluzione grafica**:
+  - **Badge di Posizione Puro**: Quando è presente un ritardo, il badge di stato principale indica unicamente la posizione e lo stato del treno: **`[ ⏸ Fermo a Terni ]`**, senza minutaggio tra parentesi.
+  - **Badge di Ritardo Ufficiale**: Mostra chiaramente la discrepanza rispetto alla tabella di marcia: **`[ ⏱ +8 min ]`** (in ambra `#f59e0b` o rosso).
+  - **Dwell Badge Dedicato (`dwellBadge`)**: Il tempo di stazionamento fisico al binario è convogliato in una terza pillola autonoma in grigio sobrio con icona a clessidra: **`[ ⏳ In banchina da 13m ]`**.
+  - In questo modo, l'interfaccia separa in modo cristallino lo stato (`Fermo a Terni`), il ritardo (`+8 min`) e la durata della sosta fisica (`In banchina da 13m`), eliminando ogni possibile confusione.

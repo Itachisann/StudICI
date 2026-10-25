@@ -2502,6 +2502,12 @@ export interface TrainStatusResult {
     bg: string;
     border: string;
   };
+  dwellBadge?: {
+    label: string;
+    color: string;
+    bg: string;
+    border: string;
+  };
 }
 
 /**
@@ -2711,13 +2717,26 @@ export function evaluateTrainStatus(
     // Se è fermo oltre la partenza stimata: mostra "Fermo a [Stazione]" + l'eventuale ritardo rispetto al programma
     const lateAccumulated = programDelay;
     const stoppedTime = train.stoppedMinutes ?? (nowMins > estimatedDepMins ? nowMins - estimatedDepMins : undefined);
-    const stoppedInfo = stoppedTime !== undefined && stoppedTime > 0 ? ` (da ${stoppedTime}m)` : '';
+
+    // Quando è presente un ritardo, il badge principale indica puramente la posizione ("Fermo a [Stazione]"),
+    // senza appendere i minuti di sosta ("da 13m") nello stesso testo per non creare confusione con "+8 min".
+    // I minuti di sosta fisica al binario vengono convogliati in un dwellBadge dedicato e sobrio in grigio.
+    const stoppedInfo = lateAccumulated === 0 && stoppedTime !== undefined && stoppedTime > 0
+      ? ` (da ${stoppedTime}m)`
+      : '';
 
     const delayBadge = lateAccumulated > 0 ? {
       label: `+${lateAccumulated} min`,
       color: lateAccumulated > 5 ? '#ef4444' : '#f59e0b',
       bg: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
       border: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+    } : undefined;
+
+    const dwellBadge = (lateAccumulated > 0 && stoppedTime !== undefined && stoppedTime > 0) ? {
+      label: `In banchina da ${stoppedTime}m`,
+      color: '#94a3b8',
+      bg: 'rgba(148, 163, 184, 0.12)',
+      border: 'rgba(148, 163, 184, 0.25)',
     } : undefined;
 
     return {
@@ -2740,6 +2759,7 @@ export function evaluateTrainStatus(
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
       delayBadge,
+      dwellBadge,
     };
   }
 

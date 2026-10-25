@@ -1439,6 +1439,34 @@ export default function ViaggioScreen() {
                           </View>
                         ) : null}
 
+                        {/* Badge Distinto per Tempo di Sosta Fisica in Banchina (grigio neutro anti-confusione) */}
+                        {isSelectedDayToday && trainStatus?.dwellBadge ? (
+                          <View
+                            style={[
+                              styles.trainStatusPill,
+                              {
+                                backgroundColor: trainStatus.dwellBadge.bg,
+                                borderColor: trainStatus.dwellBadge.border,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name="hourglass-outline"
+                              size={11}
+                              color={trainStatus.dwellBadge.color}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.trainStatusPillText,
+                                { color: trainStatus.dwellBadge.color },
+                              ]}
+                            >
+                              {trainStatus.dwellBadge.label}
+                            </Text>
+                          </View>
+                        ) : null}
+
                         {/* Badge Permanente Origine Corsa */}
                         {(() => {
                           const cleanCommuter = (commuterStationName || "")
