@@ -378,4 +378,27 @@ Questo file raccoglie in modo strutturato tutti i cambiamenti recenti effettuati
     - **Request ID Sequence (`loadRequestIdRef`)**: ogni invocazione di `loadData` incrementa un contatore di richiesta univoco. Tutte le chiamate asincrone precedenti in volo vengono identificate come stale e scartate prima di aggiornare `schedule`, `itinerary` o lo stato di loading.
     - **Active Day Reference (`activeDayIdxRef`)**: prima di applicare l'itinerario calcolato, il sistema convalida che il giorno dell'itinerario corrisponda rigidamente al giorno attualmente attivo, impedendo categoricamente a treni o orari di giorni precedenti di comparire nel tabellone odierno o selezionato.
 
+---
+
+## 18. Integrazione @react-native-community/datetimepicker per Orario Lezioni e Tasto Copia Header Sincronizzazione
+
+### 1. Sostituzione Lista Orari con @react-native-community/datetimepicker Nativo
+- **File**: `src/components/ManualEventModal.tsx`, `package.json`, `app.json`
+- **Descrizione**:
+  - Installato e integrato il modulo nativo `@react-native-community/datetimepicker` in sostituzione della lista popup statica (`MenuView` e fallback modal con 25 intervalli).
+  - Nelle colonne "Inizio" e "Fine" della modale di aggiunta/modifica lezione:
+    - **Su iOS**: integrato il componente nativo `DateTimePicker` con `mode="time"`, `display="compact"`, `locale="it_IT"`, `themeVariant="dark"`, `minuteInterval={5}` e colore d'accento del tema. Mostra esattamente il pulsante arrotondato compatto nativo di iOS (`[ 08:30 ]`) e all'interazione dell'utente apre il selettore nativo rotante con tastierino numerico per impostare ore e minuti.
+    - **Su Android**: gestita l'apertura tramite `DateTimePickerAndroid.open` in modalità orologio nativo 24 ore.
+  - Selezionando un orario di inizio posteriore o uguale alla fine, l'orario di fine viene automaticamente allineato a +2 ore mantenendo la coerenza del range.
+  - Mantenuti operativi i pulsanti pill di preset rapido ("08:00 - 10:00", ecc.) che aggiornano istantaneamente il picker nativo.
+
+### 2. Spostamento Tasto "Copia Codice" nell'Header Nativo del Modale Sincronizzazione
+- **File**: `src/app/settings.tsx`
+- **Descrizione**:
+  - Nel modale "Sincronizzazione" del Profilo (`NativeSheetModal`), rimosso il pulsante "Copia codice" interno alla card delle azioni hero.
+  - Inserito il pulsante di copia in alto a destra nell'header native-stack (`rightActions`), esattamente come nel modale delle aule (`ClassroomModal`):
+    - Icona nativa SF Symbol `doc.on.doc` ad alto contrasto bianco (`#ffffff`).
+    - Al tocco copia il codice di sincronizzazione cloud negli appunti di sistema e mostra un feedback immediato `Alert.alert("Copiato", "Codice di sincronizzazione copiato negli appunti.")`.
+  - Il pulsante principale "Sincronizza" nella card hero si estende elegantemente a tutta larghezza per una leggibilità ottimale.
+
 

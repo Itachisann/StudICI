@@ -854,6 +854,7 @@ export default function ProfiloScreen() {
       if (code) {
         await Clipboard.setStringAsync(code);
         setCloudSyncId(code);
+        Alert.alert("Copiato", "Codice di sincronizzazione copiato negli appunti.");
         if (isCloudConfigured()) {
           syncWithICloudStorage().catch(() => {});
         }
@@ -2158,6 +2159,15 @@ export default function ProfiloScreen() {
         onClose={() => setCloudModalVisible(false)}
         title="Sincronizzazione"
         backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Copia",
+            sfSymbol: "doc.on.doc",
+            onPress: handleCopyCloudCode,
+            tintColor: "#ffffff",
+            accessibilityLabel: "Copia codice di sincronizzazione",
+          },
+        ]}
       >
         <View style={styles.modalContainer}>
           <ScrollView
@@ -2270,7 +2280,7 @@ export default function ProfiloScreen() {
               {/* Separatore orizzontale centrale */}
               <View style={styles.separator} />
 
-              {/* Azioni Principali: Tasti Sincronizza & Copia codice */}
+              {/* Azioni Principali: Tasto Sincronizza */}
               <View style={styles.cloudHeroActionRow}>
                 <NativeActionButton
                   label={isSyncingCloud ? "In corso..." : "Sincronizza"}
@@ -2289,50 +2299,19 @@ export default function ProfiloScreen() {
                   }
                   style={{
                     flex: 1,
-                    height: 42,
-                    borderRadius: 21,
+                    width: "100%",
+                    height: 44,
+                    borderRadius: 22,
                     shadowColor: theme.accent,
                     shadowOpacity: 0.45,
                     shadowRadius: 8,
                   }}
                   pillStyle={{
-                    height: 42,
-                    borderRadius: 21,
+                    height: 44,
+                    borderRadius: 22,
                     paddingHorizontal: 14,
                   }}
                   textStyle={styles.cloudPrimaryBtnPillText}
-                />
-
-                <NativeActionButton
-                  label="Copia codice"
-                  onPress={handleCopyCloudCode}
-                  variant="glass"
-                  glow={false}
-                  icon={
-                    <Ionicons
-                      name="copy-outline"
-                      size={16}
-                      color="#ffffff"
-                    />
-                  }
-                  style={{
-                    flex: 1,
-                    height: 42,
-                    borderRadius: 21,
-                  }}
-                  pillStyle={{
-                    height: 42,
-                    borderRadius: 21,
-                    paddingHorizontal: 14,
-                    backgroundColor: "#2c2c2e",
-                    borderColor: "rgba(255, 255, 255, 0.12)",
-                  }}
-                  textStyle={{
-                    color: "#ffffff",
-                    fontSize: 13.5,
-                    fontWeight: "600",
-                    letterSpacing: -0.2,
-                  }}
                 />
               </View>
             </View>

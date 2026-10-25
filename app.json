@@ -13,7 +13,10 @@
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "CFBundleDevelopmentRegion": "it",
-        "CFBundleLocalizations": ["it", "it_IT"],
+        "CFBundleLocalizations": [
+          "it",
+          "it_IT"
+        ],
         "CFBundleAllowMixedLocalizations": true,
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
@@ -73,7 +76,8 @@
         }
       ],
       "react-native-bottom-tabs",
-      "expo-sharing"
+      "expo-sharing",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

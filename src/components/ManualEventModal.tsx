@@ -9,12 +9,12 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
-  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { MenuView } from '@expo/ui/community/menu';
-import { DateTimePicker } from '@expo/ui/community/datetime-picker';
+import DateTimePicker, {
+  DateTimePickerEvent,
+  DateTimePickerAndroid,
+} from '@react-native-community/datetimepicker';
 import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '@/context/ThemeContext';
@@ -27,9 +27,6 @@ import {
   formatDisplayDate,
 } from '@/utils/manualEvents';
 import { getDateForDayIndex } from '@/utils/attendance';
-
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 
 interface ManualEventModalProps {
   visible: boolean;
@@ -52,12 +49,18 @@ const TIME_PRESETS = [
   { start: '17:00', end: '19:00', label: '17:00 - 19:00' },
 ];
 
-const TIME_SLOTS = [
-  '08:00', '08:30', '09:00', '09:30', '10:00', '10:30',
-  '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',
-  '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
-  '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00',
-];
+const parseTimeToDate = (timeStr: string): Date => {
+  const d = new Date();
+  const [h, m] = (timeStr || '08:00').split(':').map(Number);
+  d.setHours(isNaN(h) ? 8 : h, isNaN(m) ? 0 : m, 0, 0);
+  return d;
+};
+
+const formatTimeFromDate = (date: Date): string => {
+  const h = String(date.getHours()).padStart(2, '0');
+  const m = String(date.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+};
 
 function ManualEventForm({
   editingEvent,
@@ -91,8 +94,29 @@ function ManualEventForm({
     editingEvent?.repeatUntilDate || dynamicSemesterEnd
   );
 
-  // Fallback modal per selezione orario su Expo Go
-  const [fallbackTimePickerField, setFallbackTimePickerField] = useState<'start' | 'end' | null>(null);
+  const startTimeDate = useMemo(() => parseTimeToDate(startTime), [startTime]);
+  const endTimeDate = useMemo(() => parseTimeToDate(endTime), [endTime]);
+
+  const handleStartTimeChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+    if (selectedDate && (event.type === 'set' || Platform.OS === 'ios')) {
+      const newStartStr = formatTimeFromDate(selectedDate);
+      setStartTime(newStartStr);
+
+      const startMins = selectedDate.getHours() * 60 + selectedDate.getMinutes();
+      const endD = parseTimeToDate(endTime);
+      const endMins = endD.getHours() * 60 + endD.getMinutes();
+      if (endMins <= startMins) {
+        const newEndD = new Date(selectedDate.getTime() + 2 * 60 * 60 * 1000);
+        setEndTime(formatTimeFromDate(newEndD));
+      }
+    }
+  };
+
+  const handleEndTimeChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+    if (selectedDate && (event.type === 'set' || Platform.OS === 'ios')) {
+      setEndTime(formatTimeFromDate(selectedDate));
+    }
+  };
 
   const { dateStr: currentDayDateStr, displayDate: currentDayDisplayDate } = useMemo(() => {
     return getDateForDayIndex(dayIndex);
@@ -170,28 +194,6 @@ function ManualEventForm({
     } catch {}
     return new Date();
   }, [repeatUntilDate]);
-
-  // Menu actions native per orario inizio
-  const startTimeMenuActions = useMemo(
-    () =>
-      TIME_SLOTS.map((t) => ({
-        id: t,
-        title: t,
-        state: (t === startTime ? 'on' : 'off') as 'on' | 'off',
-      })),
-    [startTime]
-  );
-
-  // Menu actions native per orario fine
-  const endTimeMenuActions = useMemo(
-    () =>
-      TIME_SLOTS.map((t) => ({
-        id: t,
-        title: t,
-        state: (t === endTime ? 'on' : 'off') as 'on' | 'off',
-      })),
-    [endTime]
-  );
 
   return (
     <NativeSheetModal
@@ -299,38 +301,38 @@ function ManualEventForm({
             })}
           </View>
 
-          {/* Selezione Orari Grafica (Inizio -> Fine a due colonne ispirata a iOS) */}
+          {/* Selezione Orari Grafica (Inizio -> Fine a due colonne con @react-native-community/datetimepicker) */}
           <Text style={styles.sectionTitle}>ORARIO LEZIONE</Text>
           <View style={styles.timeSelectorCard}>
             {/* Colonna Orario Inizio */}
             <View style={styles.timeColumn}>
               <Text style={styles.timeColumnLabel}>Inizio</Text>
-              {isNativeComponentAvailable ? (
-                <MenuView
-                  title="Orario Inizio"
-                  onPressAction={({ nativeEvent }) => {
-                    setStartTime(nativeEvent.event);
-                    const startIdx = TIME_SLOTS.indexOf(nativeEvent.event);
-                    if (startIdx >= 0) {
-                      const endIdx = TIME_SLOTS.indexOf(endTime);
-                      if (endIdx <= startIdx) {
-                        const newEndIdx = Math.min(startIdx + 4, TIME_SLOTS.length - 1);
-                        setEndTime(TIME_SLOTS[newEndIdx]);
-                      }
-                    }
-                  }}
-                  actions={startTimeMenuActions as any}
-                  style={styles.timeBoxTouch}
-                >
-                  <View style={styles.timeBox}>
-                    <Text style={styles.timeBoxValue}>{startTime}</Text>
-                  </View>
-                </MenuView>
+              {Platform.OS === 'ios' ? (
+                <View style={styles.timePickerWrapper}>
+                  <DateTimePicker
+                    value={startTimeDate}
+                    mode="time"
+                    display="compact"
+                    locale="it_IT"
+                    themeVariant="dark"
+                    minuteInterval={5}
+                    accentColor={theme.primary}
+                    onChange={handleStartTimeChange}
+                    style={styles.timePickerControl}
+                  />
+                </View>
               ) : (
                 <TouchableOpacity
                   style={styles.timeBox}
                   activeOpacity={0.7}
-                  onPress={() => setFallbackTimePickerField('start')}
+                  onPress={() => {
+                    DateTimePickerAndroid.open({
+                      value: startTimeDate,
+                      onChange: handleStartTimeChange,
+                      mode: 'time',
+                      is24Hour: true,
+                    });
+                  }}
                 >
                   <Text style={styles.timeBoxValue}>{startTime}</Text>
                 </TouchableOpacity>
@@ -345,24 +347,32 @@ function ManualEventForm({
             {/* Colonna Orario Fine */}
             <View style={styles.timeColumn}>
               <Text style={styles.timeColumnLabel}>Fine</Text>
-              {isNativeComponentAvailable ? (
-                <MenuView
-                  title="Orario Fine"
-                  onPressAction={({ nativeEvent }) => {
-                    setEndTime(nativeEvent.event);
-                  }}
-                  actions={endTimeMenuActions as any}
-                  style={styles.timeBoxTouch}
-                >
-                  <View style={styles.timeBox}>
-                    <Text style={styles.timeBoxValue}>{endTime}</Text>
-                  </View>
-                </MenuView>
+              {Platform.OS === 'ios' ? (
+                <View style={styles.timePickerWrapper}>
+                  <DateTimePicker
+                    value={endTimeDate}
+                    mode="time"
+                    display="compact"
+                    locale="it_IT"
+                    themeVariant="dark"
+                    minuteInterval={5}
+                    accentColor={theme.primary}
+                    onChange={handleEndTimeChange}
+                    style={styles.timePickerControl}
+                  />
+                </View>
               ) : (
                 <TouchableOpacity
                   style={styles.timeBox}
                   activeOpacity={0.7}
-                  onPress={() => setFallbackTimePickerField('end')}
+                  onPress={() => {
+                    DateTimePickerAndroid.open({
+                      value: endTimeDate,
+                      onChange: handleEndTimeChange,
+                      mode: 'time',
+                      is24Hour: true,
+                    });
+                  }}
                 >
                   <Text style={styles.timeBoxValue}>{endTime}</Text>
                 </TouchableOpacity>
@@ -630,67 +640,6 @@ function ManualEventForm({
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Fallback picker modal per ambienti non-iOS-standalone */}
-      {fallbackTimePickerField && (
-        <Modal
-          visible={!!fallbackTimePickerField}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={() => setFallbackTimePickerField(null)}
-        >
-          <TouchableOpacity
-            style={styles.fallbackModalOverlay}
-            activeOpacity={1}
-            onPress={() => setFallbackTimePickerField(null)}
-          >
-            <View style={styles.fallbackModalCard}>
-              <Text style={styles.fallbackModalTitle}>
-                {fallbackTimePickerField === 'start' ? 'Seleziona Orario Inizio' : 'Seleziona Orario Fine'}
-              </Text>
-              <ScrollView style={{ maxHeight: 300 }}>
-                {TIME_SLOTS.map((t) => {
-                  const isCurrent =
-                    fallbackTimePickerField === 'start' ? t === startTime : t === endTime;
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[
-                        styles.fallbackTimeRow,
-                        isCurrent && { backgroundColor: `${theme.primary}25` },
-                      ]}
-                      onPress={() => {
-                        if (fallbackTimePickerField === 'start') {
-                          setStartTime(t);
-                          const startIdx = TIME_SLOTS.indexOf(t);
-                          const endIdx = TIME_SLOTS.indexOf(endTime);
-                          if (startIdx >= 0 && endIdx <= startIdx) {
-                            const newEndIdx = Math.min(startIdx + 4, TIME_SLOTS.length - 1);
-                            setEndTime(TIME_SLOTS[newEndIdx]);
-                          }
-                        } else {
-                          setEndTime(t);
-                        }
-                        setFallbackTimePickerField(null);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.fallbackTimeText,
-                          isCurrent && { color: theme.accent, fontWeight: '700' },
-                        ]}
-                      >
-                        {t}
-                      </Text>
-                      {isCurrent && <Ionicons name="checkmark" size={18} color={theme.accent} />}
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      )}
     </NativeSheetModal>
   );
 }
@@ -823,11 +772,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     textAlign: 'center',
   },
-  timeBoxTouch: {
+  timePickerWrapper: {
     width: 110,
     height: 48,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  timePickerControl: {
+    width: 100,
+    height: 38,
   },
   timeBox: {
     width: 110,
@@ -978,41 +931,5 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 8,
     width: '100%',
-  },
-
-  /* Fallback modal per ambienti senza MenuView */
-  fallbackModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  fallbackModalCard: {
-    width: '100%',
-    backgroundColor: '#1c1c1e',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    padding: 16,
-  },
-  fallbackModalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  fallbackTimeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  fallbackTimeText: {
-    fontSize: 15,
-    color: '#ffffff',
   },
 });
