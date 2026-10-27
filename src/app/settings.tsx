@@ -2179,6 +2179,9 @@ export default function ProfiloScreen() {
             style={styles.modalScroll}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{
+              paddingBottom: Math.max(90, insets.bottom + 70),
+            }}
           >
             {groupedAttendance.length === 0 ? (
               <View style={styles.attendanceEmptyBox}>

@@ -100,13 +100,23 @@ export function StartupCheckScreen({
     }, 3500);
 
     async function runCheck() {
+      const startTime = Date.now();
       try {
         const result = await checkCourseUpdates(degreeUrl);
 
         if (finishedRef.current) return;
 
+        // Assicura una visualizzazione minima di 450ms del loader per evitare flash istantanei
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 450) {
+          await new Promise((r) => setTimeout(r, 450 - elapsed));
+        }
+
+        if (finishedRef.current) return;
+
+        clearTimeout(checkTimeout);
+
         if (result.hasChanges) {
-          clearTimeout(checkTimeout);
           setStatus('updating');
           setStatusMessage(result.reason || 'Aggiornamento lezioni in corso...');
 
@@ -128,10 +138,22 @@ export function StartupCheckScreen({
 
           setTimeout(() => {
             safeFinish();
-          }, 450);
+          }, 500);
         } else {
-          clearTimeout(checkTimeout);
-          safeFinish();
+          // Nessuna modifica: mostra il feedback positivo "Orario verificato" prima di entrare
+          setStatus('up_to_date');
+          setStatusMessage('Orario verificato');
+
+          Animated.spring(checkScale, {
+            toValue: 1,
+            friction: 5,
+            tension: 50,
+            useNativeDriver: true,
+          }).start();
+
+          setTimeout(() => {
+            safeFinish();
+          }, 550);
         }
       } catch (err) {
         console.warn('Errore durante check di avvio:', err);
