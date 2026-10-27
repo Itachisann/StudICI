@@ -7,41 +7,19 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ## 1.9.0
 
-### Lezioni Personalizzate & Gestione Corsi
-- **Aggiunta e Modifica di Lezioni Manuali**:
-  - Possibilità di inserire lezioni personalizzate direttamente dalla schermata **Orari** tramite il pulsante `+` in stile Callstack Liquid Glass, specificando insegnamento, docente, aula, giorno della settimana e fascia oraria.
-  - Selettori di orario e data nativi iOS (`DateTimePicker` compatto localizzato in italiano) affiancati da scorciatoie rapide per le fasce orarie più comuni.
-  - Tre modalità di ripetizione: **Tutto il semestre** (con rilevamento automatico della data di fine semestre dal foglio orari Sapienza), **Fino a data specifica** (`+1 mese`, `+2 mesi`, `Fine semestre`) o **Solo questa data**.
-  - Palette cromatica dedicata che assegna automaticamente alle lezioni manuali colori distinti da quelli già usati per gli insegnamenti ufficiali del corso.
-  - Pieno supporto nell'esportazione PDF settimanale, nel calendario Apple (`StudICI - Lezioni Sapienza`) e nella sincronizzazione Cloud tra dispositivi.
-- **Isolamento Dati per Corso e Canale**:
-  - Presenze, lezioni manuali e canale predefinito sono ora archiviati separatamente per ciascun corso di laurea e filtrati per canale/anno accademico.
-  - Il passaggio tra corsi di laurea già scaricati in precedenza avviene ora istantaneamente dalla cache locale, senza attendere un nuovo download completo.
+### Orari e Lezioni Personalizzate
+- **Aggiunta di lezioni manuali (`manualEvents.ts`, `ManualEventModal.tsx`, `index.tsx`)**: è ora possibile inserire lezioni personalizzate direttamente dalla schermata Orari indicando materia, docente, aula, giorno e orario, scegliendo se ripeterle per tutto il semestre, fino a una data specifica o solo per una singola giornata.
+- **Integrazione completa (`pdfExport.ts`, `appleCalendar.ts`, `cloudSync.ts`, `subjectColors.ts`)**: le lezioni aggiunte manualmente ricevono colori dedicati distinti da quelli delle materie ufficiali, possono essere segnate tra le presenze e vengono incluse nell'esportazione PDF, nel calendario Apple e nella sincronizzazione Cloud tra dispositivi.
+- **Isolamento dati per corso e canale (`attendance.ts`, `manualEvents.ts`, `settings.tsx`)**: presenze, lezioni manuali e canale predefinito vengono mantenuti separati per ciascun corso di laurea e anno/canale. Il passaggio tra corsi già scaricati in precedenza avviene ora istantaneamente dalla cache locale.
 
-### Registro Presenze & Recupero Presenze Passate
-- **Recupero Presenze Passate (Data Singola e Intervallo Date)**:
-  - Nuova finestra **Presenze passate** accessibile dal pulsante `+` nel registro presenze, con `SegmentedControl` nativo per scegliere tra **Data singola** e **Intervallo date**.
-  - Scorciatoie rapide per selezionare al volo `-1 giorno`, `-1 settimana`, `-2 settimane`, `Settimana scorsa`, `Questa settimana` o `Ultimi 7 giorni`, e pulsante rapido **Segna tutte le presenze** per registrare o rimuovere in blocco le lezioni di un intero periodo.
-- **Sincronizzazione Istantanea e Colori Materie**:
-  - Le presenze segnate o rimosse si aggiornano in tempo reale tra la schermata Orari e il Registro nel Profilo, con indicatori colorati coordinati alla tinta di ciascuna materia.
-- **Eliminazione con Swipe Fluido a 60/120fps**:
-  - Nuovo scorrimento laterale fluido su thread nativo (`Reanimated 4` + `GestureDetector`) per eliminare lezioni manuali e presenze registrate: l'area scoperta si tinge progressivamente di rosso con la sola icona del cestino e la riga collassa istantaneamente al rilascio senza attese.
+### Presenze
+- **Recupero presenze passate (`PastAttendanceModal.tsx`, `attendance.ts`)**: dal pulsante `+` nella schermata Presenze è possibile registrare o rimuovere presenze relative a date passate, sia per un singolo giorno sia per un intero intervallo di date con selezione rapida in blocco (`batchSetAttendance`).
+- **Rimozione con swipe e sincronizzazione in tempo reale (`SwipeToDeleteRow.tsx`, `index.tsx`, `settings.tsx`)**: le presenze e le lezioni manuali si possono eliminare scorrendo la riga verso sinistra; le modifiche si aggiornano immediatamente tra la schermata Orari e il riepilogo nel Profilo.
 
-### Sezione Viaggio & Treni Pendolari
-- **Scorrimento Completo di Tutti i Treni della Giornata**:
-  - Lo slider orizzontale e i pulsanti *Treno prima* / *Treno dopo* permettono ora di consultare liberamente tutti i treni della tratta dall'inizio alla fine della giornata, inclusi i convogli già transitati.
-- **Precisione sugli Stati di Circolazione e Coincidenze**:
-  - Distinzione visiva chiara tra lo stato del convoglio (`Fermo a [Stazione]`), il ritardo maturato (`+X min`) e il tempo effettivo di sosta al binario (`In banchina da Xm`), evitando falsi avvisi di treno fermo quando il convoglio è in anticipo o in sosta regolare.
-  - I treni non ancora partiti dalla stazione di origine mostrano lo stato neutro **Non partito** anziché *In orario*.
-  - Prevenzione di orari di partenza nel passato quando si consulta il viaggio a giornata inoltrata o nel fine settimana, e ancoraggio coerente della tappa mezzi urbani per i treni già passati.
-
-### Interfaccia, Modali Nativi & Sincronizzazione
-- **Stabilità e Navigazione dei Modali Nativi (`formSheet`)**:
-  - Risolto il blocco in apertura e chiusura dei fogli modali nativi (`Presenze`, `Presenze passate`, `Nuova lezione`), assicurando la chiusura fluida sia tramite il tasto indietro sia tramite la spunta di conferma in alto a destra.
-  - Allineate le tonalità cromatiche delle pillole di selezione rapida, centrati i titoli nelle barre di navigazione e uniformati i testi seguendo la convenzione *Sentence case*.
-- **Collegamento Dispositivo Cloud**:
-  - Nel pannello **Sincronizzazione**, l'associazione tramite codice viene ora avviata esclusivamente premendo il pulsante **Collega**, evitando avvii involontari alla semplice chiusura della tastiera.
-  - Aggiunto nella barra superiore del pannello Sincronizzazione il tasto rapido per copiare il proprio codice dispositivo.
+### Viaggio e Sincronizzazione
+- **Consultazione completa dei treni della giornata (`trenitaliaApi.ts`, `commuterOptimizer.ts`, `viaggio.tsx`)**: rimosso il limite che tagliava i convogli precedenti nello slider; è ora possibile scorrere tutte le corse della giornata, incluse quelle già passate, mantenendo coerenti gli orari dei mezzi urbani e impedendo il calcolo di partenze da casa nel passato.
+- **Stato dei treni e soste in banchina (`trenitaliaApi.ts`, `viaggio.tsx`)**: separata l'indicazione del treno fermo in stazione dal ritardo accumulato e dai minuti effettivi di sosta al binario; i treni non ancora partiti dall'origine vengono mostrati come *Non partito* anziché *In orario*, e risolta la race condition cambiando rapidamente giorno nella barra settimanale.
+- **Pannello Sincronizzazione (`settings.tsx`)**: aggiunto nell'header il pulsante rapido per copiare il codice dispositivo e corretto il campo codice affinché il collegamento parta solo premendo il tasto *Collega*.
 
 ## 1.8.9
 

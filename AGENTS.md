@@ -44,12 +44,15 @@ Docs: https://docs.expo.dev/eas/index.md
 
 - **Per ogni prompt / task**:
   - Eseguire sempre `npx tsc --noEmit` e `npx expo lint` prima di dichiarare completato il lavoro.
-  - Aggiungere sempre in fondo a `CHANGELOG_INTERNAL.md` il riepilogo tecnico dettagliato delle modifiche apportate.
+  - Aggiungere sempre in fondo a `CHANGELOG_INTERNAL.md` il riepilogo tecnico dettagliato delle modifiche apportate (inclusi sviluppi progressivi, iterazioni e bug fix intermedi).
   - **NON fare MAI `git commit` o `git push`** finché l'utente non lo richiede esplicitamente. Tutte le modifiche rimangono locali.
 
 - **Al comando esplicito di commit/rilascio dell'utente**:
-  - Incrementare la versione dell'app in `package.json` e `app.json`.
-  - Elaborare e trasferire il resoconto da `CHANGELOG_INTERNAL.md` al changelog classico `CHANGELOG.md` con un tono umano, professionale, chiaro e privo di cliché AI.
+  - Incrementare la versione dell'app in `package.json`, `app.json` e `apps.json`.
+  - Elaborare e trasferire il resoconto da `CHANGELOG_INTERNAL.md` al changelog ufficiale `CHANGELOG.md` rispettando rigorosamente queste direttive:
+    1. **Zero stile AI e zero fronzoli superflui**: vietato qualsiasi tono enfatico o tipico delle intelligenze artificiali, così come descrizioni fittizie, ridondanti o dettagli estetici banali privi di valore informativo (es. *"realizzato in Liquid Glass"*, *"aggiornato il Callstack"*, *"Sentence case"* o dettagli architetturali gonfiati).
+    2. **Citazione esatta di file, moduli e componenti quando informativa**: è consentito e incoraggiato citare i nomi esatti dei moduli, dei componenti o dei file interessati (es. `trenitaliaApi.ts`, `commuterOptimizer.ts`, `PastAttendanceModal.tsx`, `manualEvents.ts`) quando ciò apporta reale chiarezza tecnica — in particolare se un modulo specifico presentava un problema ed è stato corretto o se è stato introdotto un nuovo modulo/componente rilevante.
+    3. **Sintesi diretta del risultato finale (nessun passaggio intermedio)**: mentre `CHANGELOG_INTERNAL.md` conserva l'intero storico cronologico (creazione di una funzione e successive correzioni di bug o ritocchi sulla stessa), in `CHANGELOG.md` **non va mai riportata la sequenza "aggiunta funzione → risolto bug della funzione"**. Tutto va fuso e presentato direttamente nel suo risultato finale pulito e definitivo. Vanno citati come bug fix solo i problemi che esistevano già nelle versioni precedentemente rilasciate.
   - Resettare `CHANGELOG_INTERNAL.md` con la testata pulita per il ciclo successivo.
   - Eseguire lo staging, il commit descrittivo e il push su entrambi i branch (`main` e `dev`).
 

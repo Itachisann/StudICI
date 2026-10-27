@@ -36,13 +36,14 @@ Quando l'utente richiede espressamente di effettuare il commit (es. *"fai il com
      - `app.json` (`expo.version`)
      - Eventuali riferimenti interni (es. footer in `settings.tsx`).
 
-2. **Sintesi Professionale in `CHANGELOG.md`**:
-   - Raccogliere tutte le modifiche accumulate in `CHANGELOG_INTERNAL.md` relative alle sessioni di lavoro recenti.
-   - Creare la nuova sezione di versione in cima a `CHANGELOG.md` (es. `## 1.9.0`).
-   - **Tono e Stile di Scrittura**:
-     - Scrivere un resoconto curato, asciutto, chiaro e professionale, pensato per le note di rilascio ufficiali (GitHub Release).
-     - **Evitare assolutamente cliché da intelligenza artificiale** (es. frasi roboanti, enfasi vuota come *"rivoluzionario"*, *"potenziato all'infinito"*, *"magico"*, elenchi infantili o prolissi).
-     - Usare il linguaggio di uno sviluppatore esperto: evidenziare il valore concreto per l'utente, le rifiniture grafiche (UI/UX), le ottimizzazioni di performance e le correzioni tecniche puntuali.
+2. **Sintesi nel Changelog di Rilascio (`CHANGELOG.md`)**:
+   - Raccogliere le modifiche accumulate in `CHANGELOG_INTERNAL.md` e creare la nuova sezione di versione in cima a `CHANGELOG.md` (es. `## 1.9.0`).
+   - **Rapporto tra `CHANGELOG_INTERNAL.md` e `CHANGELOG.md`**:
+     - `CHANGELOG_INTERNAL.md` è il registro tecnico interno completo: può e deve contenere l'intera cronologia di sviluppo, incluse la creazione di nuove funzionalità e la successiva risoluzione di bug o rifiniture ad esse correlati.
+     - `CHANGELOG.md` è il changelog ufficiale destinato al rilascio: **non inserire mai la sequenza in cui prima viene aggiunta una funzione e poi viene corretto il relativo bug o ritoccata la UI**, ma sintetizzare direttamente il risultato finale pulito e definitivo, senza passaggi intermedi inutili. Menzionare correzioni di bug solo se riguardavano funzionalità già presenti nelle release precedenti.
+   - **Stile, Contenuto e Riferimenti a Moduli/File**:
+     - Eliminare qualsiasi stile tipico delle intelligenze artificiali, frasi fatte, descrizioni fittizie o dettagli estetici banali e superflui (es. *"realizzato in Liquid Glass"*, *"aggiornato il Callstack"*, *"Sentence case"* o dettagli architetturali inventati/gonfiati).
+     - **Citazione di file, moduli e componenti**: non vietare l'uso dei nomi di file, moduli o componenti nei report e nei changelog. Al contrario, citare esplicitamente il nome del modulo, componente o file interessato (es. `trenitaliaApi.ts`, `commuterOptimizer.ts`, `manualEvents.ts`, `PastAttendanceModal.tsx`) ogni volta che ciò apporta reale valore informativo e chiarezza tecnica — ad esempio quando un modulo specifico presentava un problema ed è stato corretto.
 
 3. **Reset di `CHANGELOG_INTERNAL.md`**:
    - Svuotare `CHANGELOG_INTERNAL.md` reimpostando l'intestazione pulita per la nuova versione in arrivo, pronto ad accogliere le note tecniche dei prompt successivi.
