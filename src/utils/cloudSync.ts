@@ -561,6 +561,63 @@ function remoteUrl(syncId: string): string {
   return `${SYNC_DB_URL.replace(/\/+$/, "")}/sync/${syncId}.json`;
 }
 
+/**
+ * Firebase Realtime Database vieta nei nomi delle chiavi i caratteri:
+ * '.', '$', '#', '[', ']', '/' e caratteri ASCII di controllo.
+ * I percorsi URL dei corsi universitari contengono '/' e '.'.
+ * Utilizziamo encodeURIComponent sostituendo anche i punti per renderli chiavi valide al 100%.
+ */
+export function encodeFirebaseKey(key: string): string {
+  return encodeURIComponent(key).replace(/\./g, "%2E");
+}
+
+export function decodeFirebaseKey(key: string): string {
+  try {
+    return decodeURIComponent(key.replace(/%2E/gi, "."));
+  } catch {
+    return key;
+  }
+}
+
+function encodeSafeKeys<T>(map?: Record<string, T>): Record<string, T> | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const encoded: Record<string, T> = {};
+  for (const [k, v] of Object.entries(map)) {
+    encoded[encodeFirebaseKey(k)] = v;
+  }
+  return encoded;
+}
+
+function decodeSafeKeys<T>(map?: Record<string, T>): Record<string, T> | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const decoded: Record<string, T> = {};
+  for (const [k, v] of Object.entries(map)) {
+    decoded[decodeFirebaseKey(k)] = v;
+  }
+  return decoded;
+}
+
+function sanitizeDocForFirebase(doc: RemoteDoc): RemoteDoc {
+  return {
+    ...doc,
+    allCoursesAttendance: encodeSafeKeys(doc.allCoursesAttendance),
+    allCoursesManualEvents: encodeSafeKeys(doc.allCoursesManualEvents),
+    tombstones: encodeSafeKeys(doc.tombstones),
+    manualTombstones: encodeSafeKeys(doc.manualTombstones),
+  };
+}
+
+function parseDocFromFirebase(rawDoc: RemoteDoc | null): RemoteDoc | null {
+  if (!rawDoc || typeof rawDoc !== "object") return null;
+  return {
+    ...rawDoc,
+    allCoursesAttendance: decodeSafeKeys(rawDoc.allCoursesAttendance),
+    allCoursesManualEvents: decodeSafeKeys(rawDoc.allCoursesManualEvents),
+    tombstones: decodeSafeKeys(rawDoc.tombstones),
+    manualTombstones: decodeSafeKeys(rawDoc.manualTombstones),
+  };
+}
+
 async function fetchWithTimeout(
   url: string,
   init?: RequestInit,
@@ -584,17 +641,33 @@ async function fetchRemote(syncId: string): Promise<RemoteDoc | null> {
     );
   }
   const json = await res.json();
-  return json && typeof json === "object" ? (json as RemoteDoc) : null;
+  const rawDoc = json && typeof json === "object" ? (json as RemoteDoc) : null;
+  return parseDocFromFirebase(rawDoc);
 }
 
 async function pushRemote(syncId: string, doc: RemoteDoc): Promise<void> {
+  const payload = sanitizeDocForFirebase(doc);
   const res = await fetchWithTimeout(remoteUrl(syncId), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(doc),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(`Impossibile salvare sul cloud (${res.status}).`);
+    let detail = "";
+    try {
+      const errJson = await res.json();
+      detail = errJson?.error || JSON.stringify(errJson);
+    } catch {
+      try {
+        detail = await res.text();
+      } catch {}
+    }
+    console.error(`Firebase PUT error ${res.status}:`, detail);
+    throw new Error(
+      detail
+        ? `Impossibile salvare sul cloud (${res.status}): ${detail}`
+        : `Impossibile salvare sul cloud (${res.status}).`,
+    );
   }
 }
 

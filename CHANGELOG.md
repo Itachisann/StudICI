@@ -14,14 +14,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 ### Presenze
 - **Recupero presenze passate (`PastAttendanceModal.tsx`, `attendance.ts`)**: dal pulsante `+` nella schermata Presenze è possibile registrare o rimuovere presenze relative a date passate, sia per un singolo giorno sia per un intero intervallo di date con selezione rapida in blocco (`batchSetAttendance`).
-- **Rimozione con swipe e sincronizzazione in tempo reale (`SwipeToDeleteRow.tsx`, `index.tsx`, `settings.tsx`)**: le presenze e le lezioni manuali si possono eliminare scorrendo la riga verso sinistra; le modifiche si aggiornano immediatamente tra la schermata Orari e il riepilogo nel Profilo.
-- **Accessibilità pulsante di azzeramento (`settings.tsx`)**: aggiunto un margine inferiore esteso al contenitore di scorrimento del registro presenze, garantendo che il pulsante *Azzera il registro* rimanga sempre completamente visibile e facilmente cliccabile anche in presenza di elenchi molto lunghi.
+- **Rimozione con swipe e sincronizzazione in tempo reale (`SwipeToDeleteRow.tsx`, `index.tsx`, `settings.tsx`)**: le presenze e le lezioni manuali si possono eliminare scorrendo la riga verso sinistra; le modifiche si aggiornano immediatamente tra la schermata Orari e il riepilogo nel Profilo. Il registro include ora un margine inferiore dedicato per garantire la piena visibilità e reattività al tocco del pulsante *Azzera il registro* anche con elenchi lunghi.
 
 ### Viaggio e Sincronizzazione
 - **Consultazione completa dei treni della giornata (`trenitaliaApi.ts`, `commuterOptimizer.ts`, `viaggio.tsx`)**: rimosso il limite che tagliava i convogli precedenti nello slider; è ora possibile scorrere tutte le corse della giornata, incluse quelle già passate, mantenendo coerenti gli orari dei mezzi urbani e impedendo il calcolo di partenze da casa nel passato.
 - **Stato dei treni e soste in banchina (`trenitaliaApi.ts`, `viaggio.tsx`)**: separata l'indicazione del treno fermo in stazione dal ritardo accumulato e dai minuti effettivi di sosta al binario; i treni non ancora partiti dall'origine vengono mostrati come *Non partito* anziché *In orario*, e risolta la race condition cambiando rapidamente giorno nella barra settimanale.
-- **Pannello Sincronizzazione (`settings.tsx`)**: aggiunto nell'header il pulsante rapido per copiare il codice dispositivo e corretto il campo codice affinché il collegamento parta solo premendo il tasto *Collega*.
-- **Verifica orari all'avvio (`StartupCheckScreen.tsx`)**: garantita la corretta visualizzazione della verifica orario e del relativo stato di conferma visiva anche su build di produzione ad alta velocità di esecuzione.
+- **Pannello Sincronizzazione e Avvio (`settings.tsx`, `cloudSync.ts`, `OnboardingCourseSelector.tsx`)**: aggiunto nell'header il pulsante rapido per copiare il codice dispositivo e corretto il campo codice affinché il collegamento parta solo premendo il tasto *Collega*. Risolto inoltre l'errore 400 di salvataggio cloud su Firebase causato dai caratteri speciali nei percorsi URL dei corsi durante il collegamento iniziale.
 
 ## 1.8.9
 
