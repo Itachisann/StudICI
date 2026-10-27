@@ -27,6 +27,7 @@ export interface OptimizeOptions {
   selectedTrainOffset?: number; // -1 = treno prima, 0 = consigliato, +1 = treno dopo
   selectedTrainNumber?: string; // override selezione treno specifico
   forceRefresh?: boolean;
+  ignoreCurrentTime?: boolean; // calcola l'orario programmato canonico senza filtrare rispetto all'ora attuale
 }
 
 export interface DayLectureTarget {
@@ -57,6 +58,7 @@ export async function computeCommuterItinerary(
     selectedTrainOffset = 0,
     selectedTrainNumber,
     forceRefresh = false,
+    ignoreCurrentTime = false,
   } = options;
   const isOutbound = direction === 'outbound';
 
@@ -66,7 +68,8 @@ export async function computeCommuterItinerary(
     targetDate,
     direction,
     manualHour,
-    selectedClass
+    selectedClass,
+    ignoreCurrentTime
   );
 
   // 2. Calcola i tempi in base alla direzione
@@ -77,7 +80,8 @@ export async function computeCommuterItinerary(
       targetDate,
       selectedTrainOffset,
       selectedTrainNumber,
-      forceRefresh
+      forceRefresh,
+      ignoreCurrentTime
     );
   } else {
     return computeReturnItinerary(
@@ -96,7 +100,8 @@ function findDayLecture(
   targetDate: Date = new Date(),
   direction: 'outbound' | 'return' = 'outbound',
   manualHour?: string,
-  explicitClass?: ClassEvent | null
+  explicitClass?: ClassEvent | null,
+  ignoreCurrentTime = false
 ): DayLectureTarget | null {
   if (manualHour) {
     const resolved = resolveClassroom('Aula 1');
@@ -166,6 +171,7 @@ function findDayLecture(
     let chosenClass: ClassEvent;
     const now = new Date();
     const isToday =
+      !ignoreCurrentTime &&
       targetDate.getDate() === now.getDate() &&
       targetDate.getMonth() === now.getMonth();
 
@@ -256,7 +262,8 @@ async function computeOutboundItinerary(
   targetDate: Date,
   selectedTrainOffset = 0,
   selectedTrainNumber?: string,
-  forceRefresh = false
+  forceRefresh = false,
+  ignoreCurrentTime = false
 ): Promise<CommuterItinerary> {
   const bufferMins = config.bufferMinutes || 10;
 
@@ -281,6 +288,7 @@ async function computeOutboundItinerary(
 
   const now = new Date();
   const isToday =
+    !ignoreCurrentTime &&
     targetDate.getDate() === now.getDate() &&
     targetDate.getMonth() === now.getMonth() &&
     targetDate.getFullYear() === now.getFullYear();
@@ -336,6 +344,7 @@ async function computeOutboundItinerary(
       selectedTrainNumber,
       forceRefresh,
       minDepartureMins: isToday ? minTrainDepartureMins : undefined,
+      ignoreCurrentTime,
     }),
     carEnabled
       ? calculateDrivingEstimate(
@@ -605,10 +614,26 @@ async function computeOutboundItinerary(
   } else {
     const outboundStatusDesc = (train?.statusDescription || '').toLowerCase();
     const delayMins = train?.delayMinutes || 0;
+    const isTrainDeparted = Boolean(
+      train?.isDeparted &&
+      train?.statusDescription !== 'Non partito' &&
+      !outboundStatusDesc.includes('non partito')
+    );
+
     if (outboundStatusDesc.includes('soppresso') || outboundStatusDesc.includes('cancellato')) {
       badgeText = 'Treno Soppresso';
       badgeColor = '#ef4444'; // red
       isWarning = true;
+    } else if (!isTrainDeparted || train?.isDeparted === false || outboundStatusDesc.includes('non partito')) {
+      if (delayMins > 0) {
+        badgeText = `Non partito (+${delayMins}m)`;
+        badgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';
+        isWarning = delayMins > 10;
+      } else {
+        badgeText = 'Non partito';
+        badgeColor = '#94a3b8';
+        isWarning = false;
+      }
     } else if (delayMins > 0) {
       badgeText = `+${delayMins}m ritardo`;
       badgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';
@@ -1124,10 +1149,26 @@ async function computeReturnItinerary(
   } else {
     const returnStatusDesc = (train?.statusDescription || '').toLowerCase();
     const delayMins = train?.delayMinutes || 0;
+    const isTrainDeparted = Boolean(
+      train?.isDeparted &&
+      train?.statusDescription !== 'Non partito' &&
+      !returnStatusDesc.includes('non partito')
+    );
+
     if (returnStatusDesc.includes('soppresso') || returnStatusDesc.includes('cancellato')) {
       returnBadgeText = 'Treno Soppresso';
       returnBadgeColor = '#ef4444';
       isReturnWarning = true;
+    } else if (!isTrainDeparted || train?.isDeparted === false || returnStatusDesc.includes('non partito')) {
+      if (delayMins > 0) {
+        returnBadgeText = `Non partito (+${delayMins}m)`;
+        returnBadgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';
+        isReturnWarning = delayMins > 10;
+      } else {
+        returnBadgeText = 'Non partito';
+        returnBadgeColor = '#94a3b8';
+        isReturnWarning = false;
+      }
     } else if (delayMins > 0) {
       returnBadgeText = `+${delayMins}m ritardo`;
       returnBadgeColor = delayMins > 15 ? '#ef4444' : '#f59e0b';

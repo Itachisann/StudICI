@@ -78,7 +78,7 @@ export function ClassroomModal({
         },
       ]}
     >
-      <View style={styles.sheetContent}>
+      <View collapsable={false} style={styles.sheetContent}>
         {/* Header Sottotitolo Edificio e Campus Badge */}
         {Boolean(classroom.buildingName || classroom.campus) && (
           <View style={styles.headerInfoRow}>

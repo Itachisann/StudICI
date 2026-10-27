@@ -197,15 +197,16 @@ export function calculateLessonDuration(startTime: string, endTime: string, defa
 }
 
 /**
- * Segna o rimuove la presenza per una singola lezione (Toggle)
+ * Segna o rimuove la presenza per una specifica data arbitraria (es. date e settimane passate).
  */
-export async function toggleAttendance(
+export async function toggleAttendanceForDate(
+  dateStr: string,
+  displayDate: string,
   dayIndex: number,
   dayName: string,
   cls: ClassEvent,
   courseUrl?: string
 ): Promise<{ added: boolean; records: AttendanceRecord[] }> {
-  const { dateStr, displayDate } = getDateForDayIndex(dayIndex);
   const id = generateAttendanceId(dateStr, cls.subject, cls.startTime);
   const currentRecords = await getAttendanceRecords(courseUrl);
 
@@ -239,6 +240,85 @@ export async function toggleAttendance(
     await saveAttendanceList(updated, courseUrl);
     return { added: true, records: updated };
   }
+}
+
+export interface BatchAttendanceItem {
+  dateStr: string;
+  displayDate: string;
+  dayIndex: number;
+  dayName: string;
+  cls: ClassEvent;
+}
+
+/**
+ * Segna o rimuove in blocco (in un'unica operazione sincrona) un insieme di presenze per date arbitrarie.
+ */
+export async function batchSetAttendance(
+  items: BatchAttendanceItem[],
+  markAll: boolean,
+  courseUrl?: string
+): Promise<AttendanceRecord[]> {
+  const currentRecords = await getAttendanceRecords(courseUrl);
+  const currentMap = new Map<string, AttendanceRecord>();
+  for (const r of currentRecords) {
+    currentMap.set(r.id, r);
+  }
+
+  const tombstonesToAdd: string[] = [];
+
+  for (const item of items) {
+    const id = generateAttendanceId(item.dateStr, item.cls.subject, item.cls.startTime);
+    if (markAll) {
+      if (!currentMap.has(id)) {
+        const duration = calculateLessonDuration(
+          item.cls.startTime,
+          item.cls.endTime,
+          item.cls.duration
+        );
+        const newRecord: AttendanceRecord = {
+          id,
+          date: item.dateStr,
+          displayDate: item.displayDate,
+          dayIndex: item.dayIndex,
+          dayName: item.dayName,
+          subject: item.cls.subject,
+          startTime: item.cls.startTime,
+          endTime: item.cls.endTime,
+          room: item.cls.room,
+          teacher: item.cls.teacher,
+          duration,
+          isManual: item.cls.isManual || false,
+          timestamp: Date.now(),
+        };
+        currentMap.set(id, newRecord);
+      }
+    } else {
+      if (currentMap.has(id)) {
+        currentMap.delete(id);
+        tombstonesToAdd.push(id);
+      }
+    }
+  }
+
+  const updated = Array.from(currentMap.values());
+  if (tombstonesToAdd.length > 0) {
+    await addTombstones(tombstonesToAdd, courseUrl);
+  }
+  await saveAttendanceList(updated, courseUrl);
+  return updated;
+}
+
+/**
+ * Segna o rimuove la presenza per una singola lezione della settimana corrente (Toggle)
+ */
+export async function toggleAttendance(
+  dayIndex: number,
+  dayName: string,
+  cls: ClassEvent,
+  courseUrl?: string
+): Promise<{ added: boolean; records: AttendanceRecord[] }> {
+  const { dateStr, displayDate } = getDateForDayIndex(dayIndex);
+  return toggleAttendanceForDate(dateStr, displayDate, dayIndex, dayName, cls, courseUrl);
 }
 
 /**

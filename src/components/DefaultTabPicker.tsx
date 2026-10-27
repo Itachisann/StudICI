@@ -119,7 +119,7 @@ export function DefaultTabPicker({
   const showChannelSection = channelsForSelectedYear.length > 1;
 
   return (
-    <View style={styles.container}>
+    <View collapsable={false} style={styles.container}>
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,

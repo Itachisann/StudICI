@@ -6,6 +6,7 @@ import { AppState, AppStateStatus, Platform } from "react-native";
 import { SYNC_DB_URL } from "../config/syncConfig";
 import { CommuterConfig } from "../types/commuter";
 import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
+import { refreshCommuterAlarmsInBackground } from "./alarmSync";
 import {
   AttendanceRecord,
   getAttendanceRecords,
@@ -1742,6 +1743,7 @@ async function checkRemoteLiveChanges(): Promise<void> {
 
       if (syncResult.updated) {
         await refreshAppleCalendarIfConfigured();
+        refreshCommuterAlarmsInBackground(true).catch(() => {});
       }
     }
   } catch {

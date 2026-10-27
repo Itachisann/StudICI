@@ -10,7 +10,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
+  Keyboard,
   LayoutAnimation,
   Linking,
   Modal,
@@ -24,13 +24,16 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import Swipeable from "react-native-gesture-handler/Swipeable";
+import Reanimated, { FadeOut, LinearTransition } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { AlarmsConfigModal } from "../components/AlarmsConfigModal";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
+import { PastAttendanceModal } from "../components/PastAttendanceModal";
+import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
 import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
@@ -40,12 +43,17 @@ import {
   syncScheduleToAppleCalendar,
 } from "../utils/appleCalendar";
 import {
+  ManualClassEvent,
+  getManualEvents,
+} from "../utils/manualEvents";
+import {
   AttendanceRecord,
   AttendanceStats,
   clearAllAttendance,
   deleteAttendanceRecord,
   getAttendanceRecords,
   getAttendanceStats,
+  subscribeToAttendanceChanges,
 } from "../utils/attendance";
 import {
   copyCloudSyncCodeToClipboard,
@@ -69,10 +77,19 @@ import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
+import {
+  AlarmSettings,
+  DEFAULT_ALARM_SETTINGS,
+  ENABLE_COMMUTER_ALARMS,
+  getAlarmSettings,
+  refreshCommuterAlarmsInBackground,
+  subscribeToAlarmChanges,
+} from "../utils/alarmSync";
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
-import { getManualEvents } from "../utils/manualEvents";
+import { getSubjectColor, getManualSubjectColor } from "../utils/subjectColors";
 import {
   Degree,
+  ScheduleData,
   checkCourseUpdates,
   fetchAllCourseData,
   fetchDegrees,
@@ -119,6 +136,10 @@ export default function ProfiloScreen() {
   const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
     useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
+  const [pastAttendanceModalVisible, setPastAttendanceModalVisible] = useState(false);
+  const [pastAttendanceSchedule, setPastAttendanceSchedule] = useState<ScheduleData | null>(null);
+  const [pastAttendanceManualEvents, setPastAttendanceManualEvents] = useState<ManualClassEvent[]>([]);
+  const [pastAttendanceTabUrl, setPastAttendanceTabUrl] = useState<string | null>(null);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
     null,
@@ -150,6 +171,10 @@ export default function ProfiloScreen() {
     null,
   );
   const [commuterModalVisible, setCommuterModalVisible] = useState(false);
+  const [alarmSettings, setAlarmSettings] = useState<AlarmSettings>(
+    DEFAULT_ALARM_SETTINGS,
+  );
+  const [alarmsModalVisible, setAlarmsModalVisible] = useState(false);
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -238,13 +263,14 @@ export default function ProfiloScreen() {
       setAttendanceStats(getAttendanceStats(attList));
 
       // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
-      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig] =
+      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig, alarmCfg] =
         await Promise.all([
           getCloudSyncId(),
           getLastCloudSync(),
           getLastCalendarSync(),
           getICloudAutoSyncEnabled(),
           getCommuterConfig(),
+          getAlarmSettings(),
         ]);
 
       setCloudSyncId(cloudId);
@@ -252,6 +278,7 @@ export default function ProfiloScreen() {
       setLastCalendarSyncTime(lastCal);
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
+      setAlarmSettings(alarmCfg);
 
       // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
       getPairedDevicesInfo()
@@ -300,6 +327,40 @@ export default function ProfiloScreen() {
       unsubscribe();
     };
   }, [loadProfileData]);
+
+  // Sincronizzazione istantanea in tempo reale del Registro Presenze
+  useEffect(() => {
+    const unsubAtt = subscribeToAttendanceChanges(async () => {
+      try {
+        const currentUrl = await AsyncStorage.getItem("selectedDegreeUrl");
+        const attList = await getAttendanceRecords(currentUrl || undefined);
+        setAttendanceRecords((prev) => {
+          if (
+            prev.length === attList.length &&
+            prev.every((r, idx) => r.id === attList[idx]?.id)
+          ) {
+            return prev;
+          }
+          setAttendanceStats(getAttendanceStats(attList));
+          return attList;
+        });
+      } catch (e) {
+        console.warn("Errore aggiornamento reattivo presenze:", e);
+      }
+    });
+    return () => {
+      unsubAtt();
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubAlarms = subscribeToAlarmChanges((nextSettings) => {
+      setAlarmSettings(nextSettings);
+    });
+    return () => {
+      unsubAlarms();
+    };
+  }, []);
 
   const selectDegree = async (degree: Degree) => {
     setCourseModalVisible(false);
@@ -414,6 +475,7 @@ export default function ProfiloScreen() {
       await AsyncStorage.setItem(`defaultTabUrl_${degreeUrl}`, tab.url);
     }
     setChannelModalVisible(false);
+    refreshCommuterAlarmsInBackground(true).catch(() => {});
   };
 
   const clearCacheAndReload = async () => {
@@ -476,14 +538,58 @@ export default function ProfiloScreen() {
     );
   };
 
+  const handleOpenAttendanceModal = async () => {
+    try {
+      const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+      const attList = await getAttendanceRecords(currentUrl || undefined);
+      setAttendanceRecords(attList);
+      setAttendanceStats(getAttendanceStats(attList));
+    } catch (e) {
+      console.warn("Errore caricamento presenze per modale:", e);
+    }
+    setAttendanceModalVisible(true);
+  };
+
+  const handleOpenPastAttendance = () => {
+    setAttendanceModalVisible(false);
+    setTimeout(() => {
+      setPastAttendanceModalVisible(true);
+    }, 320);
+
+    (async () => {
+      try {
+        const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+        if (currentUrl) {
+          const [manuals, allCourseData, currentTabUrl] = await Promise.all([
+            getManualEvents(currentUrl),
+            fetchAllCourseData(currentUrl, false),
+            selectedTabForSpecifiche?.url
+              ? Promise.resolve(selectedTabForSpecifiche.url)
+              : defaultTabUrl
+              ? Promise.resolve(defaultTabUrl)
+              : AsyncStorage.getItem(`defaultTabUrl_${currentUrl}`),
+          ]);
+          setPastAttendanceManualEvents(manuals);
+          const activeTab = currentTabUrl || allCourseData.tabs[0]?.url;
+          setPastAttendanceTabUrl(activeTab || null);
+          if (activeTab && allCourseData.schedules[activeTab]) {
+            setPastAttendanceSchedule(allCourseData.schedules[activeTab]);
+          }
+        }
+      } catch (e) {
+        console.warn("Errore caricamento dati per presenze passate:", e);
+      }
+    })();
+  };
+
   const handleDeleteAttendanceDirect = async (record: AttendanceRecord) => {
     try {
-      if (Platform.OS === "ios") {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      }
-      const updated = await deleteAttendanceRecord(record.id, degreeUrl || undefined);
-      setAttendanceRecords(updated);
-      setAttendanceStats(getAttendanceStats(updated));
+      setAttendanceRecords((prev) => {
+        const next = prev.filter((r) => r.id !== record.id);
+        setAttendanceStats(getAttendanceStats(next));
+        return next;
+      });
+      await deleteAttendanceRecord(record.id, degreeUrl || undefined);
       if (iCloudAutoSync) {
         syncWithICloudStorage().catch(() => {});
       }
@@ -509,12 +615,12 @@ export default function ProfiloScreen() {
 
   const handleClearAllAttendance = () => {
     Alert.alert(
-      "Azzera Registro presenze",
+      "Azzera registro presenze",
       "Sei sicuro di voler cancellare tutte le presenze registrate finora? Questa operazione non può essere annullata.",
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Azzera Tutto",
+          text: "Azzera tutto",
           style: "destructive",
           onPress: async () => {
             if (Platform.OS === "ios") {
@@ -522,7 +628,7 @@ export default function ProfiloScreen() {
                 LayoutAnimation.Presets.easeInEaseOut,
               );
             }
-            await clearAllAttendance();
+            await clearAllAttendance(degreeUrl || undefined);
             setAttendanceRecords([]);
             setAttendanceStats(getAttendanceStats([]));
             setAttendanceModalVisible(false);
@@ -535,107 +641,83 @@ export default function ProfiloScreen() {
     );
   };
 
-  const renderRightActions = (
-    _progress: Animated.AnimatedInterpolation<number | string>,
-    dragX: Animated.AnimatedInterpolation<number | string>,
-    item: AttendanceRecord,
-  ) => {
-    const scale = dragX.interpolate({
-      inputRange: [-160, -70, 0],
-      outputRange: [1.15, 1, 0.5],
-      extrapolate: "clamp",
-    });
-    const opacity = dragX.interpolate({
-      inputRange: [-90, -30, 0],
-      outputRange: [1, 1, 0],
-      extrapolate: "clamp",
-    });
-    const trans = dragX.interpolate({
-      inputRange: [-240, -70, 0],
-      outputRange: [0, 0, 30],
-      extrapolate: "clamp",
-    });
+  const renderAttendanceCardContent = (item: AttendanceRecord) => {
+    const subjectColor = item.isManual
+      ? getManualSubjectColor(item.subject)
+      : getSubjectColor(item.subject);
 
     return (
-      <TouchableOpacity
-        style={styles.swipeDeleteContainer}
-        activeOpacity={0.85}
-        onPress={() => handleDeleteAttendanceDirect(item)}
-      >
-        <Animated.View
+      <>
+        <View
           style={[
-            styles.swipeDeleteContent,
+            styles.attendanceDateSquircle,
             {
-              opacity,
-              transform: [{ scale }, { translateX: trans }],
+              backgroundColor: `${subjectColor}18`,
+              borderColor: `${subjectColor}40`,
             },
           ]}
         >
-          <Ionicons name="trash" size={20} color="#ffffff" />
-          <Text style={styles.swipeDeleteText}>Elimina</Text>
-        </Animated.View>
-      </TouchableOpacity>
-    );
-  };
-
-  const renderAttendanceCardContent = (item: AttendanceRecord) => (
-    <>
-      <View style={styles.attendanceDateSquircle}>
-        <Text style={styles.attendanceDayName}>
-          {item.dayName?.slice(0, 3).toUpperCase() || "GIORNO"}
-        </Text>
-        <Text style={styles.attendanceDateNum}>
-          {item.displayDate?.split(" ")[0] || ""}
-        </Text>
-      </View>
-
-      <View style={{ flex: 1, marginHorizontal: 12 }}>
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <Text style={[styles.attendanceHistorySubject, { flexShrink: 1 }]} numberOfLines={1}>
-            {item.subject?.toUpperCase()}
+          <Text style={[styles.attendanceDayName, { color: subjectColor }]}>
+            {item.dayName?.slice(0, 3).toUpperCase() || "GIORNO"}
           </Text>
-          {item.isManual && (
-            <View style={styles.manualAttendanceBadge}>
-              <Text style={styles.manualAttendanceBadgeText}>MANUALE</Text>
-            </View>
-          )}
-        </View>
-        <View style={styles.attendanceTimeRow}>
-          <Ionicons
-            name="time-outline"
-            size={13}
-            color="#94a3b8"
-            style={{ marginRight: 4 }}
-          />
-          <Text style={styles.attendanceHistoryTime}>
-            {item.startTime} - {item.endTime} ({item.duration}h)
+          <Text style={styles.attendanceDateNum}>
+            {item.displayDate?.split(" ")[0] || ""}
           </Text>
         </View>
-        {item.room ? (
-          <View style={styles.attendanceRoomRow}>
+
+        {/* Barra di accento colore materia */}
+        <View
+          style={[
+            styles.attendanceAccentBar,
+            { backgroundColor: subjectColor },
+          ]}
+        />
+
+        <View style={{ flex: 1, marginHorizontal: 12 }}>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text
+              style={[
+                styles.attendanceHistorySubject,
+                { flexShrink: 1, color: "#ffffff" },
+              ]}
+              numberOfLines={1}
+            >
+              {item.subject?.toUpperCase()}
+            </Text>
+            {item.isManual && (
+              <View style={styles.manualAttendanceBadge}>
+                <Text style={styles.manualAttendanceBadgeText}>MANUALE</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.attendanceTimeRow}>
             <Ionicons
-              name="location-outline"
-              size={12}
-              color="#ef4444"
-              style={{ marginRight: 3 }}
+              name="time-outline"
+              size={13}
+              color="#94a3b8"
+              style={{ marginRight: 4 }}
             />
-            <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
-              {item.room}
+            <Text style={styles.attendanceHistoryTime}>
+              {item.startTime} - {item.endTime} ({item.duration}h)
             </Text>
           </View>
-        ) : null}
-      </View>
-
-      <TouchableOpacity
-        style={styles.attendanceDeleteButton}
-        activeOpacity={0.7}
-        onPress={() => handleDeleteAttendance(item)}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        <Ionicons name="trash-outline" size={17} color="#ef4444" />
-      </TouchableOpacity>
-    </>
-  );
+          {item.room ? (
+            <View style={styles.attendanceRoomRow}>
+              <Ionicons
+                name="location-outline"
+                size={12}
+                color={subjectColor}
+                style={{ marginRight: 3 }}
+              />
+              <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+                {item.room}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </>
+    );
+  };
 
   const openSourceWebsite = async () => {
     await WebBrowser.openBrowserAsync("https://ici.web.uniroma1.it/node/388");
@@ -867,6 +949,7 @@ export default function ProfiloScreen() {
   };
 
   const handleRestoreFromCloud = async () => {
+    Keyboard.dismiss();
     if (!restoreCodeInput.trim()) {
       Alert.alert("Codice mancante", "Incolla il codice nel campo di testo.");
       return;
@@ -882,6 +965,8 @@ export default function ProfiloScreen() {
           await loadProfileData();
           const updatedPairs = await getPairedDevicesInfo();
           setPairedDevices(updatedPairs);
+          refreshCommuterAlarmsInBackground(true).catch(() => {});
+          Alert.alert("Dispositivo collegato", res.message);
         } else {
           Alert.alert("Associazione non riuscita", res.message);
         }
@@ -1067,7 +1152,7 @@ export default function ProfiloScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
+      <View collapsable={false} style={styles.header}>
         <Text style={styles.largeTitle}>Profilo</Text>
       </View>
 
@@ -1435,7 +1520,7 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={() => setAttendanceModalVisible(true)}
+            onPress={handleOpenAttendanceModal}
           >
             <View
               style={[
@@ -1622,10 +1707,47 @@ export default function ProfiloScreen() {
               style={{ marginLeft: 6 }}
             />
           </TouchableOpacity>
+
+          {ENABLE_COMMUTER_ALARMS && (
+            <>
+              <View style={styles.separator} />
+
+              {/* Riga 2: Sveglie Automatiche */}
+              <TouchableOpacity
+                style={styles.tableRow}
+                activeOpacity={0.7}
+                onPress={() => setAlarmsModalVisible(true)}
+              >
+                <View
+                  style={[
+                    styles.iconBox,
+                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                  ]}
+                >
+                  <Ionicons name="alarm-outline" size={17} color={theme.accent} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>Sveglie automatiche</Text>
+                  <Text style={styles.rowSubTitle}>
+                    {alarmSettings.enabled
+                      ? `Attive • ${alarmSettings.minutesBeforeDeparture} min prima della partenza stimata`
+                      : "Disattivate • Sul treno ideale della prima lezione"}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={15}
+                  color="#48484a"
+                  style={{ marginLeft: 6 }}
+                />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
         <Text style={styles.sectionFooter}>
-          Configura il tuo itinerario pendolare per ricevere gli aggiornamenti
-          sullo stato dei treni.
+          {ENABLE_COMMUTER_ALARMS
+            ? "Configura il tuo itinerario pendolare e le sveglie native calcolate automaticamente sul treno ideale della prima lezione."
+            : "Configura il tuo itinerario pendolare per calcolare gli orari di partenza."}
         </Text>
 
         {/* Gruppo: ESPORTA & CONDIVIDI */}
@@ -1850,7 +1972,7 @@ export default function ProfiloScreen() {
           onCancelButtonPress: () => setSearchCourse(""),
         }}
       >
-        <View style={styles.modalContainer}>
+        <View collapsable={false} style={styles.modalContainer}>
           {degrees.length === 0 ? (
             <ActivityIndicator
               size="large"
@@ -2006,31 +2128,41 @@ export default function ProfiloScreen() {
           },
         ]}
       >
-        <DefaultTabPicker
-          tabs={availableTabs}
-          initialTabUrl={defaultTabUrl}
-          degreeName={degreeName}
-          title="Specifiche"
-          subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
-          confirmButtonText="Salva"
-          hideFooterButton={true}
-          onActiveTabChange={(tab) => {
-            setSelectedTabForSpecifiche(tab);
-          }}
-          onConfirm={async (tab) => {
-            await selectDefaultTab(tab);
-          }}
-        />
+        <View collapsable={false} style={styles.modalContainer}>
+          <DefaultTabPicker
+            tabs={availableTabs}
+            initialTabUrl={defaultTabUrl}
+            degreeName={degreeName}
+            title="Specifiche"
+            subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
+            confirmButtonText="Salva"
+            hideFooterButton={true}
+            onActiveTabChange={(tab) => {
+              setSelectedTabForSpecifiche(tab);
+            }}
+            onConfirm={async (tab) => {
+              await selectDefaultTab(tab);
+            }}
+          />
+        </View>
       </NativeSheetModal>
 
       {/* Modal Registro presenze Completo */}
       <NativeSheetModal
         visible={attendanceModalVisible}
         onClose={() => setAttendanceModalVisible(false)}
-        title="Registro presenze"
+        title="Presenze"
         backgroundColor={UNIFORM_MODAL_BG}
-        rightActions={
-          attendanceRecords.length > 0
+        rightActions={[
+          {
+            label: "Aggiungi",
+            sfSymbol: "plus",
+            tintColor: "#ffffff",
+            dismissOnPress: true,
+            onPress: handleOpenPastAttendance,
+            accessibilityLabel: "Aggiungi presenza passata",
+          },
+          ...(attendanceRecords.length > 0
             ? [
                 {
                   label: "Esporta",
@@ -2039,15 +2171,15 @@ export default function ProfiloScreen() {
                   tintColor: "#ffffff",
                 },
               ]
-            : undefined
-        }
+            : []),
+        ]}
       >
-        <View style={styles.modalContainer}>
+        <View collapsable={false} style={styles.modalContainer}>
           <ScrollView
             style={styles.modalScroll}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            >
+          >
             {groupedAttendance.length === 0 ? (
               <View style={styles.attendanceEmptyBox}>
                 <Ionicons
@@ -2066,7 +2198,12 @@ export default function ProfiloScreen() {
               </View>
             ) : (
               groupedAttendance.map((group) => (
-                <View key={group.date} style={styles.dayGroupContainer}>
+                <Reanimated.View
+                  key={group.date}
+                  style={styles.dayGroupContainer}
+                  layout={LinearTransition.duration(200)}
+                  exiting={FadeOut.duration(150)}
+                >
                   {/* Intestazione del Giorno */}
                   <View style={styles.dayGroupHeader}>
                     <Ionicons
@@ -2087,71 +2224,86 @@ export default function ProfiloScreen() {
                     </View>
                   </View>
 
-                  {/* Lista Lezioni: Slide Nativo iOS per IPA, Card con cestino e long press per Expo Go */}
-                  {group.records.map((item) =>
-                    isNativeComponentAvailable ? (
-                      <Swipeable
-                        key={item.id}
-                        renderRightActions={(progress, dragX) =>
-                          renderRightActions(progress, dragX, item)
-                        }
-                        rightThreshold={110}
-                        overshootRight={true}
-                        onSwipeableOpen={(direction) => {
-                          if (direction === "right") {
-                            handleDeleteAttendanceDirect(item);
-                          }
-                        }}
-                        containerStyle={{
-                          marginBottom: 10,
-                          borderRadius: 16,
-                          overflow: "hidden",
-                        }}
-                      >
-                        <View
-                          style={[
-                            styles.attendanceHistoryItem,
-                            { marginBottom: 0 },
-                          ]}
-                        >
-                          {renderAttendanceCardContent(item)}
-                        </View>
-                      </Swipeable>
-                    ) : (
+                  {/* Lista Lezioni con SwipeToDeleteRow fluido su UI thread */}
+                  {group.records.map((item) => (
+                    <SwipeToDeleteRow
+                      key={item.id}
+                      marginBottom={10}
+                      borderRadius={16}
+                      onDelete={() => handleDeleteAttendanceDirect(item)}
+                    >
                       <TouchableOpacity
-                        key={item.id}
-                        style={styles.attendanceHistoryItem}
-                        activeOpacity={0.8}
+                        style={[
+                          styles.attendanceHistoryItem,
+                          { marginBottom: 0 },
+                        ]}
+                        activeOpacity={0.9}
                         onLongPress={() => handleDeleteAttendance(item)}
                       >
                         {renderAttendanceCardContent(item)}
                       </TouchableOpacity>
-                    ),
-                  )}
-                </View>
+                    </SwipeToDeleteRow>
+                  ))}
+                </Reanimated.View>
               ))
             )}
 
             {attendanceRecords.length > 0 && (
-              <TouchableOpacity
-                style={styles.clearAttendanceBtn}
-                activeOpacity={0.7}
+              <NativeActionButton
+                label="Azzera il registro"
                 onPress={handleClearAllAttendance}
-              >
-                <Ionicons
-                  name="trash"
-                  size={16}
-                  color="#ef4444"
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={styles.clearAttendanceText}>
-                  Azzera Tutto il Registro
-                </Text>
-              </TouchableOpacity>
+                variant="filled"
+                glow={true}
+                glowColor="rgba(239, 68, 68, 0.45)"
+                accentColor="#ef4444"
+                icon={
+                  <Ionicons
+                    name="trash-outline"
+                    size={16}
+                    color="#ffffff"
+                  />
+                }
+                style={{
+                  marginTop: 18,
+                  marginBottom: 30,
+                  height: 44,
+                  borderRadius: 22,
+                }}
+                pillStyle={{
+                  height: 44,
+                  borderRadius: 22,
+                  paddingHorizontal: 16,
+                  backgroundColor: "#ef4444",
+                  borderColor: "rgba(255, 255, 255, 0.15)",
+                }}
+                textStyle={{
+                  color: "#ffffff",
+                  fontSize: 14,
+                  fontWeight: "700",
+                  letterSpacing: -0.2,
+                }}
+              />
             )}
           </ScrollView>
         </View>
       </NativeSheetModal>
+
+      {/* Modal Segnatura Presenza Passata */}
+      <PastAttendanceModal
+        visible={pastAttendanceModalVisible}
+        onClose={() => {
+          setPastAttendanceModalVisible(false);
+          loadProfileData();
+          setTimeout(() => {
+            handleOpenAttendanceModal();
+          }, 320);
+        }}
+        schedule={pastAttendanceSchedule}
+        manualEvents={pastAttendanceManualEvents}
+        attendanceRecords={attendanceRecords}
+        degreeUrl={degreeUrl}
+        tabUrl={pastAttendanceTabUrl || selectedTabForSpecifiche?.url || defaultTabUrl || undefined}
+      />
 
       {/* Modal Gestione Sincronizzazione */}
       <NativeSheetModal
@@ -2169,7 +2321,7 @@ export default function ProfiloScreen() {
           },
         ]}
       >
-        <View style={styles.modalContainer}>
+        <View collapsable={false} style={styles.modalContainer}>
           <ScrollView
             style={styles.modalScroll}
             showsVerticalScrollIndicator={false}
@@ -2529,7 +2681,6 @@ export default function ProfiloScreen() {
                         autoCapitalize="characters"
                         autoCorrect={false}
                         returnKeyType="done"
-                        onSubmitEditing={handleRestoreFromCloud}
                       />
                       {restoreCodeInput.length > 0 && (
                         <TouchableOpacity
@@ -2620,6 +2771,18 @@ export default function ProfiloScreen() {
           onSave={async (newCfg) => {
             const saved = await saveCommuterConfig(newCfg);
             setCommuterConfig(saved);
+          }}
+        />
+      )}
+
+      {/* Modal Sveglie Automatiche */}
+      {ENABLE_COMMUTER_ALARMS && (
+        <AlarmsConfigModal
+          visible={alarmsModalVisible}
+          initialSettings={alarmSettings}
+          onClose={() => setAlarmsModalVisible(false)}
+          onSaved={(updatedSettings) => {
+            setAlarmSettings(updatedSettings);
           }}
         />
       )}
@@ -3016,6 +3179,36 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   /* Full Modal Attendance History */
+  addPastAttendanceBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    marginBottom: 14,
+  },
+  addPastIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    marginRight: 12,
+  },
+  addPastTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#ffffff",
+  },
+  addPastSub: {
+    fontSize: 11.5,
+    color: "#94a3b8",
+    marginTop: 2,
+    lineHeight: 15,
+  },
   attendanceHistoryItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -3035,6 +3228,12 @@ const styles = StyleSheet.create({
     borderColor: "rgba(16, 185, 129, 0.3)",
     justifyContent: "center",
     alignItems: "center",
+  },
+  attendanceAccentBar: {
+    width: 3.5,
+    height: 38,
+    borderRadius: 2,
+    marginLeft: 6,
   },
   attendanceDayName: {
     color: "#10b981",

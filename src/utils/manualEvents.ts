@@ -7,6 +7,8 @@ export type ManualEventRepetition = 'semester' | 'custom_date' | 'single';
 export interface ManualClassEvent {
   id: string;
   courseUrl: string;
+  tabUrl?: string;
+  channelName?: string;
   subject: string;
   teacher?: string;
   room?: string;
@@ -356,7 +358,6 @@ export function isManualEventActiveOnDate(event: ManualClassEvent, dateStr: stri
   }
 
   if (event.repetitionType === 'semester') {
-    if (dateStr < event.startDate) return false;
     const semesterEnd = event.repeatUntilDate || getDefaultSemesterEndDate(new Date(event.startDate));
     if (dateStr > semesterEnd) return false;
     return true;

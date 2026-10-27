@@ -70,12 +70,23 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
 }
 
 export type CommuterChangeListener = (config: CommuterConfig) => void;
-let commuterChangeListener: CommuterChangeListener | null = null;
+const commuterChangeListeners = new Set<CommuterChangeListener>();
+
+export function subscribeToCommuterChanges(
+  listener: CommuterChangeListener,
+): () => void {
+  commuterChangeListeners.add(listener);
+  return () => {
+    commuterChangeListeners.delete(listener);
+  };
+}
 
 export function setCommuterChangeListener(
   listener: CommuterChangeListener | null,
 ): void {
-  commuterChangeListener = listener;
+  if (listener) {
+    commuterChangeListeners.add(listener);
+  }
 }
 
 export async function saveCommuterConfig(
@@ -109,9 +120,9 @@ export async function saveCommuterConfig(
       },
     };
     await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
-    if (commuterChangeListener) {
+    for (const listener of commuterChangeListeners) {
       try {
-        commuterChangeListener(updated);
+        listener(updated);
       } catch {}
     }
     return updated;

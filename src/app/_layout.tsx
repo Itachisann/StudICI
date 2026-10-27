@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Platform, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { AppState, Platform, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Tabs as ExpoTabs } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Linking from 'expo-linking';
 import { linkDeviceWithCode } from '@/utils/cloudSync';
+import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
@@ -104,6 +105,21 @@ function AppLayoutContent() {
       clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!degreeUrl || !startupCheckDone) return;
+    // Aggiorna in background le sveglie native all'ingresso nell'app
+    refreshCommuterAlarmsInBackground().catch(() => {});
+
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        refreshCommuterAlarmsInBackground().catch(() => {});
+      }
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [degreeUrl, startupCheckDone]);
 
   if (!isReady) {
     return (

@@ -1,0 +1,6 @@
+{
+  "name": "studici-alarms",
+  "version": "1.0.0",
+  "description": "Native iOS 26 AlarmKit and system alarm scheduler for StudICI",
+  "main": "src/index.ts"
+}

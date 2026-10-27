@@ -61,6 +61,16 @@ const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeIos = Platform.OS === "ios" && !isExpoGo;
 
+let CallstackLiquidGlass: any = null;
+if (isNativeIos) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    CallstackLiquidGlass = require("@callstack/liquid-glass");
+  } catch {
+    CallstackLiquidGlass = null;
+  }
+}
+
 function formatDuration(minutes: number): string {
   if (!minutes || minutes <= 0) return "0m";
   if (minutes < 60) return `${minutes}m`;
@@ -782,7 +792,17 @@ export default function ViaggioScreen() {
                   activeOpacity={0.7}
                   disabled={refreshing}
                   onPress={() => loadData(true)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Aggiorna orari treni"
                 >
+                  {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
+                    <CallstackLiquidGlass.LiquidGlassView
+                      effect="regular"
+                      colorScheme="dark"
+                      tintColor="rgba(255, 255, 255, 0.12)"
+                      style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
+                    />
+                  ) : null}
                   {refreshing ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
@@ -793,7 +813,17 @@ export default function ViaggioScreen() {
                   style={[styles.headerIconBtn, { marginLeft: 8 }]}
                   activeOpacity={0.7}
                   onPress={() => setConfigModalVisible(true)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Impostazioni viaggio pendolare"
                 >
+                  {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
+                    <CallstackLiquidGlass.LiquidGlassView
+                      effect="regular"
+                      colorScheme="dark"
+                      tintColor="rgba(255, 255, 255, 0.12)"
+                      style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
+                    />
+                  ) : null}
                   <Ionicons name="options-outline" size={20} color="#fff" />
                 </TouchableOpacity>
               </View>
@@ -1262,6 +1292,15 @@ export default function ViaggioScreen() {
                       let badgeBg = `${itinerary.statusBadge.color}22`;
                       let badgeBorder = `${itinerary.statusBadge.color}35`;
 
+                      const liveTrain = itinerary.liveTrain;
+                      const isNotDeparted = Boolean(
+                        liveTrain &&
+                          (liveTrain.isDeparted === false ||
+                            (liveTrain.statusDescription || "")
+                              .toLowerCase()
+                              .includes("non partito")),
+                      );
+
                       if (!isSelectedDayToday) {
                         badgeText = "Programmato";
                         badgeColor = "#38bdf8";
@@ -1271,10 +1310,64 @@ export default function ViaggioScreen() {
                         badgeText === "Fonte: Trenitalia" ||
                         badgeText === "Dati Trenitalia"
                       ) {
-                        badgeText = "In orario";
-                        badgeColor = "#10b981";
-                        badgeBg = "rgba(16, 185, 129, 0.15)";
-                        badgeBorder = "rgba(16, 185, 129, 0.3)";
+                        if (isNotDeparted) {
+                          const delayMins = liveTrain?.delayMinutes || 0;
+                          badgeText =
+                            delayMins > 0
+                              ? `Non partito (+${delayMins}m)`
+                              : "Non partito";
+                          badgeColor =
+                            delayMins > 15
+                              ? "#ef4444"
+                              : delayMins > 0
+                              ? "#f59e0b"
+                              : "#94a3b8";
+                          badgeBg =
+                            delayMins > 15
+                              ? "rgba(239, 68, 68, 0.15)"
+                              : delayMins > 0
+                              ? "rgba(245, 158, 11, 0.15)"
+                              : "rgba(148, 163, 184, 0.15)";
+                          badgeBorder =
+                            delayMins > 15
+                              ? "rgba(239, 68, 68, 0.3)"
+                              : delayMins > 0
+                              ? "rgba(245, 158, 11, 0.3)"
+                              : "rgba(148, 163, 184, 0.3)";
+                        } else {
+                          badgeText = "In orario";
+                          badgeColor = "#10b981";
+                          badgeBg = "rgba(16, 185, 129, 0.15)";
+                          badgeBorder = "rgba(16, 185, 129, 0.3)";
+                        }
+                      } else if (
+                        isNotDeparted &&
+                        (badgeText === "In orario" ||
+                          badgeText === "Rientro in orario")
+                      ) {
+                        const delayMins = liveTrain?.delayMinutes || 0;
+                        badgeText =
+                          delayMins > 0
+                            ? `Non partito (+${delayMins}m)`
+                            : "Non partito";
+                        badgeColor =
+                          delayMins > 15
+                            ? "#ef4444"
+                            : delayMins > 0
+                            ? "#f59e0b"
+                            : "#94a3b8";
+                        badgeBg =
+                          delayMins > 15
+                            ? "rgba(239, 68, 68, 0.15)"
+                            : delayMins > 0
+                            ? "rgba(245, 158, 11, 0.15)"
+                            : "rgba(148, 163, 184, 0.15)";
+                        badgeBorder =
+                          delayMins > 15
+                            ? "rgba(239, 68, 68, 0.3)"
+                            : delayMins > 0
+                            ? "rgba(245, 158, 11, 0.3)"
+                            : "rgba(148, 163, 184, 0.3)";
                       }
 
                       return (
@@ -2513,7 +2606,10 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    overflow: "hidden",
     justifyContent: "center",
     alignItems: "center",
   },

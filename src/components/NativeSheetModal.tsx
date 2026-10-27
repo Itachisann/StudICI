@@ -7,6 +7,7 @@ import {
   createNativeStackNavigator,
   type NativeStackHeaderItem,
   type NativeStackNavigationOptions,
+  type NativeStackNavigationProp,
 } from '@react-navigation/native-stack';
 import {
   DarkTheme,
@@ -27,6 +28,8 @@ export interface SheetAction {
   /** Colore personalizzato (es. theme.primary, #ef4444) */
   tintColor?: string;
   accessibilityLabel?: string;
+  /** Se true o se è un'azione di chiusura/salvataggio, esegue il dismiss nativo controllato */
+  dismissOnPress?: boolean;
 }
 
 export { UNIFORM_MODAL_BG };
@@ -56,26 +59,31 @@ interface SheetContextValue {
   children: React.ReactNode;
   backgroundColor: string;
   onDismiss: () => void;
+  isDismissingRef: React.MutableRefObject<boolean>;
 }
 
 const SheetContext = React.createContext<SheetContextValue>({
   children: null,
   backgroundColor: UNIFORM_MODAL_BG,
   onDismiss: () => {},
+  isDismissingRef: { current: false },
 });
 
 /** Schermata statica stabile: non si smonta mai durante i re-render dei dati figli */
 function SheetBodyScreen() {
-  const { children, backgroundColor, onDismiss } = React.useContext(SheetContext);
-  const navigation = useNavigation();
+  const { children, backgroundColor, onDismiss, isDismissingRef } = React.useContext(SheetContext);
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
 
   useEffect(() => {
-    const unsub = navigation.addListener('beforeRemove', () => {
-      // Chiamato quando la rotta viene rimossa fisicamente (es. swipe down nativo o gesture iOS)
-      onDismiss();
+    // Gestione swipe down o rimozione fisica nativa
+    const unsubRemove = navigation.addListener('beforeRemove', () => {
+      if (!isDismissingRef.current) {
+        onDismiss();
+      }
     });
-    return unsub;
-  }, [navigation, onDismiss]);
+
+    return unsubRemove;
+  }, [navigation, onDismiss, isDismissingRef]);
 
   return (
     <View collapsable={false} style={[styles.contentRoot, { backgroundColor }]}>
@@ -85,7 +93,7 @@ function SheetBodyScreen() {
 }
 
 function RootPlaceholderScreen() {
-  return <View style={styles.placeholder} />;
+  return <View collapsable={false} style={styles.placeholder} />;
 }
 
 export function NativeSheetModal({
@@ -105,6 +113,54 @@ export function NativeSheetModal({
   const effectiveTitleColor = '#ffffff';
   // Colore universale neutro per icone (Indietro, Chiudi, Condividi)
   const universalIconColor = '#ffffff';
+
+  const isDismissingRef = React.useRef(false);
+
+  useEffect(() => {
+    if (visible) {
+      isDismissingRef.current = false;
+    }
+  }, [visible]);
+
+  // Handler unificato per chiusura coordinata con animazione nativa
+  const dismissModal = React.useCallback(
+    (nav: any, customAction?: () => void) => {
+      if (isDismissingRef.current) {
+        return;
+      }
+      isDismissingRef.current = true;
+
+      // Se la customAction è definita e non coincide con onClose, eseguila prima del pop
+      if (customAction && customAction !== onClose) {
+        try {
+          customAction();
+        } catch (err) {
+          console.warn('Errore in customAction prima del dismiss:', err);
+        }
+      }
+
+      let closeFired = false;
+      const doClose = () => {
+        if (!closeFired) {
+          closeFired = true;
+          onClose();
+        }
+      };
+
+      if (nav?.canGoBack?.()) {
+        try {
+          nav.goBack();
+        } catch (e) {
+          console.warn('Errore durante nav.goBack():', e);
+        }
+        // Attesa pari alla durata dell'animazione nativa prima di smontare dal parent
+        setTimeout(doClose, 250);
+      } else {
+        doClose();
+      }
+    },
+    [onClose]
+  );
 
   const navTheme = useMemo(
     () => ({
@@ -130,19 +186,26 @@ export function NativeSheetModal({
           : undefined,
         tintColor: action.tintColor || universalIconColor,
         disabled: action.disabled,
-        onPress: action.onPress,
+        onPress: () => {
+          if (action.dismissOnPress || action.onPress === onClose) {
+            dismissModal(nav, action.onPress);
+          } else {
+            action.onPress();
+          }
+        },
         accessibilityLabel: action.label,
       }));
     }
 
     const backHandler = () => {
       if (onBack) {
-        onBack();
-      } else if (nav?.canGoBack?.()) {
-        nav.goBack();
-      } else {
-        onClose();
+        try {
+          onBack();
+        } catch (e) {
+          console.warn('Errore in onBack:', e);
+        }
       }
+      dismissModal(nav);
     };
 
     return [
@@ -157,7 +220,7 @@ export function NativeSheetModal({
     ];
   };
 
-  const buildRightItems = (): NativeStackHeaderItem[] =>
+  const buildRightItems = (nav: any): NativeStackHeaderItem[] =>
     (rightActions || []).map((a) => ({
       type: 'button' as const,
       label: a.label ?? '',
@@ -168,7 +231,18 @@ export function NativeSheetModal({
       tintColor: a.tintColor || universalIconColor,
       sharesBackground: true,
       disabled: a.disabled,
-      onPress: a.onPress,
+      onPress: () => {
+        const isDismissAction =
+          a.dismissOnPress ||
+          a.sfSymbol === 'checkmark' ||
+          a.onPress === onClose;
+
+        if (isDismissAction) {
+          dismissModal(nav, a.onPress);
+        } else {
+          a.onPress?.();
+        }
+      },
       accessibilityLabel: a.accessibilityLabel || a.label || 'Conferma',
     }));
 
@@ -177,6 +251,7 @@ export function NativeSheetModal({
       children,
       backgroundColor,
       onDismiss: onClose,
+      isDismissingRef,
     }),
     [children, backgroundColor, onClose]
   );
@@ -186,7 +261,7 @@ export function NativeSheetModal({
   }
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+    <View collapsable={false} style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <SheetContext.Provider value={contextValue}>
         <NavigationIndependentTree>
           <NavigationContainer
@@ -220,6 +295,7 @@ export function NativeSheetModal({
                   animation: 'slide_from_bottom',
                   headerShown: true,
                   title,
+                  headerTitleAlign: 'center',
                   headerTintColor: effectiveTitleColor,
                   headerStyle: { backgroundColor },
                   headerShadowVisible: false, // Header e sfondo sono tutt'uno senza linee divisorie
@@ -238,7 +314,7 @@ export function NativeSheetModal({
                     : undefined,
                   contentStyle: { backgroundColor },
                   unstable_headerLeftItems: () => buildLeftItems(navigation),
-                  unstable_headerRightItems: buildRightItems,
+                  unstable_headerRightItems: () => buildRightItems(navigation),
                 })}
               />
             </Stack.Navigator>

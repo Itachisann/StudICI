@@ -26,13 +26,15 @@ import {
   extractSemesterEndDate,
   formatDisplayDate,
 } from '@/utils/manualEvents';
-import { getDateForDayIndex } from '@/utils/attendance';
+import { getDateForDayIndex, calculateLessonDuration } from '@/utils/attendance';
 
 interface ManualEventModalProps {
   visible: boolean;
   editingEvent?: ManualClassEvent | null;
   initialDayIndex?: number;
   semesterText?: string;
+  tabUrl?: string;
+  channelName?: string;
   onClose: () => void;
   onSave: (eventData: Omit<ManualClassEvent, 'id' | 'createdAt' | 'courseUrl'>, id?: string) => void;
   onDelete?: (id: string) => void;
@@ -66,6 +68,8 @@ function ManualEventForm({
   editingEvent,
   initialDayIndex = 0,
   semesterText,
+  tabUrl,
+  channelName,
   onClose,
   onSave,
   onDelete,
@@ -136,6 +140,7 @@ function ManualEventForm({
       return;
     }
 
+    const duration = calculateLessonDuration(startTime.trim(), endTime.trim());
     const payload: Omit<ManualClassEvent, 'id' | 'createdAt' | 'courseUrl'> = {
       subject: trimmedSubject,
       teacher: teacher.trim() || undefined,
@@ -143,6 +148,9 @@ function ManualEventForm({
       dayIndex,
       startTime: startTime.trim(),
       endTime: endTime.trim(),
+      duration: duration > 0 ? duration : undefined,
+      tabUrl: editingEvent?.tabUrl || tabUrl,
+      channelName: editingEvent?.channelName || channelName,
       repetitionType,
       startDate: editingEvent?.startDate || currentDayDateStr,
       repeatUntilDate: repetitionType === 'semester'
@@ -184,6 +192,24 @@ function ManualEventForm({
     setRepeatUntilDate(`${yyyy}-${mm}-${dd}`);
   };
 
+  const plus1Date = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const plus2Date = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 2);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const DATE_PRESETS = [
+    { label: '+1 mese', date: plus1Date, onPress: () => setCustomDateRelative(1) },
+    { label: '+2 mesi', date: plus2Date, onPress: () => setCustomDateRelative(2) },
+    { label: 'Fine semestre', date: dynamicSemesterEnd, onPress: () => setRepeatUntilDate(dynamicSemesterEnd) },
+  ];
+
   // Converti stringa repeatUntilDate in oggetto Date per il DateTimePicker nativo
   const customDateObj = useMemo(() => {
     try {
@@ -199,7 +225,7 @@ function ManualEventForm({
     <NativeSheetModal
       visible={true}
       onClose={onClose}
-      title={editingEvent ? 'Modifica Lezione' : 'Nuova Lezione'}
+      title={editingEvent ? 'Modifica lezione' : 'Nuova lezione'}
       backgroundColor={UNIFORM_MODAL_BG}
       rightActions={[
         {
@@ -212,16 +238,18 @@ function ManualEventForm({
         },
       ]}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
-        <ScrollView
-          style={styles.container}
-          contentContainerStyle={styles.contentContainer}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+      <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
+        <KeyboardAvoidingView
+          collapsable={false}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}
         >
+          <ScrollView
+            style={styles.container}
+            contentContainerStyle={styles.contentContainer}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
           {/* Sezione Dati Principali */}
           <View style={styles.sectionCard}>
             <View style={styles.fieldRow}>
@@ -476,75 +504,49 @@ function ManualEventForm({
                   </View>
                 </View>
 
-                {/* Pulsanti rapidi arrotondati a pillola con testo colore del tema */}
+                {/* Pulsanti rapidi arrotondati identici graficamente ai preset orari */}
                 <View style={styles.dateQuickChips}>
-                  <TouchableOpacity
-                    style={[
-                      styles.dateQuickPill,
-                      repeatUntilDate === (() => {
-                        const d = new Date();
-                        d.setMonth(d.getMonth() + 1);
-                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                      })() && [
-                        styles.chipActive,
-                        {
-                          backgroundColor: `${theme.primary}25`,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                    onPress={() => setCustomDateRelative(1)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.dateQuickPillText, { color: theme.primary }]}>
-                      +1 Mese
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.dateQuickPill,
-                      repeatUntilDate === (() => {
-                        const d = new Date();
-                        d.setMonth(d.getMonth() + 2);
-                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                      })() && [
-                        styles.chipActive,
-                        {
-                          backgroundColor: `${theme.primary}25`,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                    onPress={() => setCustomDateRelative(2)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.dateQuickPillText, { color: theme.primary }]}>
-                      +2 Mesi
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.dateQuickPill,
-                      repeatUntilDate === dynamicSemesterEnd && [
-                        styles.chipActive,
-                        {
-                          backgroundColor: `${theme.primary}25`,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                    onPress={() => setRepeatUntilDate(dynamicSemesterEnd)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.dateQuickPillText, { color: theme.primary }]}>
-                      Fine Semestre
-                    </Text>
-                  </TouchableOpacity>
+                  {DATE_PRESETS.map((preset) => {
+                    const isSelected = repeatUntilDate === preset.date;
+                    return (
+                      <TouchableOpacity
+                        key={preset.label}
+                        style={[
+                          styles.dateQuickPill,
+                          isSelected && [
+                            styles.chipActive,
+                            {
+                              backgroundColor: `${theme.primary}25`,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={preset.onPress}
+                      >
+                        <Ionicons
+                          name={isSelected ? 'checkmark-circle' : 'calendar-outline'}
+                          size={12}
+                          color={isSelected ? theme.accent : '#8e8e93'}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={[
+                            styles.dateQuickPillText,
+                            isSelected
+                              ? { color: theme.accent, fontWeight: '700' }
+                              : { color: '#94a3b8' },
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit={true}
+                          minimumFontScale={0.8}
+                        >
+                          {preset.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
             )}
@@ -602,8 +604,9 @@ function ManualEventForm({
           )}
 
           <View style={{ height: 40 }} />
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
     </NativeSheetModal>
   );
 }
@@ -841,7 +844,6 @@ const styles = StyleSheet.create({
   customDateContainer: {
     paddingHorizontal: 14,
     paddingBottom: 14,
-    backgroundColor: 'rgba(0,0,0,0.2)',
   },
   datePickerRow: {
     flexDirection: 'row',
@@ -849,10 +851,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: '#1c1c1e',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#2c2c2e',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
     marginTop: 6,
     marginBottom: 8,
   },
@@ -873,22 +875,25 @@ const styles = StyleSheet.create({
   },
   dateQuickChips: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     marginTop: 10,
   },
   dateQuickPill: {
     flex: 1,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1c1c1e',
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 6,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
   },
   dateQuickPillText: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#94a3b8',
   },
 
   bottomActionContainer: {

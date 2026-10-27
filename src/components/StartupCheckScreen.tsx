@@ -12,6 +12,7 @@ import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
+import { refreshCommuterAlarmsInBackground } from '../utils/alarmSync';
 
 interface StartupCheckScreenProps {
   degreeUrl: string;
@@ -112,6 +113,8 @@ export function StartupCheckScreen({
           await fetchAllCourseData(degreeUrl, true, (stepMsg) => {
             setProgressDetail(stepMsg);
           });
+
+          refreshCommuterAlarmsInBackground(true).catch(() => {});
 
           setStatus('up_to_date');
           setStatusMessage('Orario aggiornato');

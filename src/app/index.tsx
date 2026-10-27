@@ -1,4 +1,5 @@
-import { MenuView } from "@expo/ui/community/menu";
+import { CardContextMenu } from "../components/CardContextMenu";
+import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
@@ -242,7 +243,23 @@ export default function ScheduleScreen() {
     try {
       const storedUrl = courseUrlParam !== undefined ? courseUrlParam : await AsyncStorage.getItem("selectedDegreeUrl");
       const list = await getManualEvents(storedUrl || undefined);
-      setManualEvents(list);
+      setManualEvents((prev) => {
+        if (
+          prev.length === list.length &&
+          prev.every(
+            (e, idx) =>
+              e.id === list[idx]?.id &&
+              e.subject === list[idx]?.subject &&
+              e.startTime === list[idx]?.startTime &&
+              e.endTime === list[idx]?.endTime &&
+              e.room === list[idx]?.room &&
+              e.repetitionType === list[idx]?.repetitionType
+          )
+        ) {
+          return prev;
+        }
+        return list;
+      });
     } catch {}
   }, []);
 
@@ -388,7 +405,12 @@ export default function ScheduleScreen() {
       const scraped = schedule?.days[dayIdx] || [];
       const { dateStr } = getDateForDayIndex(dayIdx);
       const manualForDay = manualEvents
-        .filter((e) => e.dayIndex === dayIdx && isManualEventActiveOnDate(e, dateStr))
+        .filter(
+          (e) =>
+            e.dayIndex === dayIdx &&
+            (!e.tabUrl || e.tabUrl === selectedTab?.url) &&
+            isManualEventActiveOnDate(e, dateStr),
+        )
         .map(manualEventToClassEvent);
       const dayClasses = [...scraped, ...manualForDay];
       if (dayClasses.length === 0) return;
@@ -407,7 +429,7 @@ export default function ScheduleScreen() {
         console.error(err);
       }
     },
-    [schedule, manualEvents, degreeUrl],
+    [schedule, manualEvents, degreeUrl, selectedTab?.url],
   );
 
   const checkIsAttended = useCallback(
@@ -457,17 +479,22 @@ export default function ScheduleScreen() {
     id?: string,
   ) => {
     try {
+      const dataWithTab = {
+        ...data,
+        tabUrl: data.tabUrl || selectedTab?.url,
+        channelName: data.channelName || selectedTab?.name,
+      };
       if (id) {
         const existing = manualEvents.find((e) => e.id === id);
         if (existing) {
           const updated: ManualClassEvent = {
             ...existing,
-            ...data,
+            ...dataWithTab,
           };
           await updateManualEvent(updated, degreeUrl || undefined);
         }
       } else {
-        await addManualEvent(data, degreeUrl || undefined);
+        await addManualEvent(dataWithTab, degreeUrl || undefined);
       }
       await loadManualEvents();
       getICloudAutoSyncEnabled().then((enabled) => {
@@ -480,8 +507,8 @@ export default function ScheduleScreen() {
 
   const handleDeleteManualEvent = async (id: string) => {
     try {
+      setManualEvents((prev) => prev.filter((e) => e.id !== id));
       await deleteManualEvent(id, degreeUrl || undefined);
-      await loadManualEvents();
       getICloudAutoSyncEnabled().then((enabled) => {
         if (enabled) syncWithICloudStorage().catch(() => {});
       }).catch(() => {});
@@ -529,12 +556,17 @@ export default function ScheduleScreen() {
     const scraped = schedule?.days[selectedDay] || [];
     const { dateStr } = getDateForDayIndex(selectedDay);
     const manualForDay = manualEvents
-      .filter((e) => e.dayIndex === selectedDay && isManualEventActiveOnDate(e, dateStr))
+      .filter(
+        (e) =>
+          e.dayIndex === selectedDay &&
+          (!e.tabUrl || e.tabUrl === selectedTab?.url) &&
+          isManualEventActiveOnDate(e, dateStr),
+      )
       .map(manualEventToClassEvent);
 
     const combined = [...scraped, ...manualForDay];
     return combined.sort((a, b) => a.startTime.localeCompare(b.startTime));
-  }, [schedule, selectedDay, manualEvents]);
+  }, [schedule, selectedDay, manualEvents, selectedTab?.url]);
 
   const officialUsedColors = useMemo(() => {
     const set = new Set<string>();
@@ -575,6 +607,7 @@ export default function ScheduleScreen() {
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safeArea}>
       {/* ── Liquid Glass Header: Titolo "Orari" + Selezione Anni & Canali (fino ai canali) ── */}
       <View
+        collapsable={false}
         style={[
           styles.liquidGlassHeader,
           { paddingTop: insets.top > 0 ? insets.top + 6 : 14 },
@@ -746,21 +779,22 @@ export default function ScheduleScreen() {
                       {day}
                     </Text>
                   </View>
-                  {hasAttendance ? (
+                  {isToday ? (
+                    <View
+                      style={[
+                        styles.dayDot,
+                        isActive
+                          ? { backgroundColor: "#ffffff" }
+                          : hasAttendance
+                          ? { backgroundColor: theme.primary }
+                          : null,
+                      ]}
+                    />
+                  ) : hasAttendance ? (
                     <View
                       style={[
                         styles.attendanceDayDot,
                         { backgroundColor: theme.primary },
-                      ]}
-                    />
-                  ) : isToday ? (
-                    <View
-                      style={[
-                        styles.dayDot,
-                        isActive && [
-                          styles.dayDotActive,
-                          { backgroundColor: theme.primary },
-                        ],
                       ]}
                     />
                   ) : null}
@@ -810,7 +844,7 @@ export default function ScheduleScreen() {
                   style={[StyleSheet.absoluteFill, { borderRadius: 14 }]}
                 />
               ) : null}
-              <Ionicons name="add" size={19} color={theme.accent} />
+              <Ionicons name="add" size={19} color="#ffffff" />
             </TouchableOpacity>
           </View>
 
@@ -962,109 +996,55 @@ export default function ScheduleScreen() {
                 </View>
               );
 
-              // In standalone iOS (.IPA), usa UIContextMenuInteraction nativo
-              if (isNativeComponentAvailable) {
-                const menuActions = [
-                  {
-                    id: "toggle_presence",
-                    title: isAttended
-                      ? "Rimuovi Presenza"
-                      : "Segna Presenza",
-                    image: isAttended
-                      ? "checkmark.circle.badge.xmark"
-                      : "checkmark.circle",
-                    attributes: {
-                      destructive: isAttended,
-                    },
-                  },
-                  ...(cls.isManual
-                    ? [
-                        {
-                          id: "edit_manual",
-                          title: "Modifica Lezione Manuale",
-                          image: "pencil",
-                        },
-                        {
-                          id: "delete_manual",
-                          title: "Elimina Lezione Manuale",
-                          image: "trash",
-                          attributes: {
-                            destructive: true,
-                          },
-                        },
-                      ]
-                    : []),
-                ];
+              const isManualRow = Boolean(cls.isManual && cls.manualId);
 
-                return (
-                  <MenuView
-                    key={i}
-                    title={cls.subject}
-                    style={[styles.cardMenuWrapper, { width: cardWidth }]}
-                    shouldOpenOnLongPress={true}
-                    onPressAction={({ nativeEvent }) => {
-                      if (nativeEvent.event === "toggle_presence") {
-                        handleClassLongPress(cls);
-                      } else if (nativeEvent.event === "edit_manual" && cls.manualId) {
-                        const found = manualEvents.find((e) => e.id === cls.manualId);
-                        if (found) {
-                          setEditingManualEvent(found);
-                          setManualModalVisible(true);
-                        }
-                      } else if (nativeEvent.event === "delete_manual" && cls.manualId) {
-                        handleDeleteManualEvent(cls.manualId);
+              const cardElement = (
+                <CardContextMenu
+                  key={cls.manualId ? `manual-${cls.manualId}` : `class-${i}`}
+                  title={cls.subject}
+                  isAttended={isAttended}
+                  isManual={isManualRow}
+                  isNativeAvailable={isNativeComponentAvailable}
+                  style={[
+                    styles.cardMenuWrapper,
+                    { width: cardWidth },
+                    isManualRow && { marginBottom: 0 },
+                  ]}
+                  onTogglePresence={() => handleClassLongPress(cls)}
+                  onEditManual={() => {
+                    if (cls.manualId) {
+                      const found = manualEvents.find((e) => e.id === cls.manualId);
+                      if (found) {
+                        setEditingManualEvent(found);
+                        setManualModalVisible(true);
                       }
-                    }}
-                    actions={menuActions as any}
+                    }
+                  }}
+                  onDeleteManual={() => {
+                    if (cls.manualId) handleDeleteManualEvent(cls.manualId);
+                  }}
+                >
+                  {cardView}
+                </CardContextMenu>
+              );
+
+              // Solo le lezioni aggiunte manualmente possono essere rimosse tramite swipe
+              if (isManualRow && cls.manualId) {
+                const manualId = cls.manualId;
+                return (
+                  <SwipeToDeleteRow
+                    key={`swipe-${manualId}`}
+                    marginBottom={12}
+                    borderRadius={18}
+                    style={{ width: cardWidth }}
+                    onDelete={() => handleDeleteManualEvent(manualId)}
                   >
-                    {cardView}
-                  </MenuView>
+                    {cardElement}
+                  </SwipeToDeleteRow>
                 );
               }
 
-              // Fallback per Expo Go o piattaforme non native
-              return (
-                <TouchableOpacity
-                  key={i}
-                  style={[styles.cardMenuWrapper, { width: cardWidth }]}
-                  activeOpacity={0.85}
-                  onLongPress={() => {
-                    if (cls.isManual && cls.manualId) {
-                      Alert.alert(
-                        cls.subject,
-                        "Gestisci lezione o presenza",
-                        [
-                          {
-                            text: isAttended ? "Rimuovi Presenza" : "Segna Presenza",
-                            onPress: () => handleClassLongPress(cls),
-                          },
-                          {
-                            text: "Modifica Lezione",
-                            onPress: () => {
-                              const found = manualEvents.find((e) => e.id === cls.manualId);
-                              if (found) {
-                                setEditingManualEvent(found);
-                                setManualModalVisible(true);
-                              }
-                            },
-                          },
-                          {
-                            text: "Elimina Lezione",
-                            style: "destructive",
-                            onPress: () => handleDeleteManualEvent(cls.manualId!),
-                          },
-                          { text: "Annulla", style: "cancel" },
-                        ]
-                      );
-                    } else {
-                      handleClassLongPress(cls);
-                    }
-                  }}
-                  delayLongPress={400}
-                >
-                  {cardView}
-                </TouchableOpacity>
-              );
+              return cardElement;
             })}
           </View>
         )}
@@ -1078,41 +1058,43 @@ export default function ScheduleScreen() {
         title="Comunicazioni"
         backgroundColor={UNIFORM_MODAL_BG}
       >
-        <ScrollView
-          style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}
-          contentContainerStyle={{ paddingBottom: 32 }}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {schedule?.alerts && schedule.alerts.length > 0 ? (
-            schedule.alerts.map((alert, idx) => (
-              <View key={idx} style={styles.modalAlertItem}>
-                <View style={styles.alertItemAccent} />
-                <View style={styles.alertItemContent}>
-                  <Text style={styles.modalAlertText}>{alert}</Text>
+        <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
+          <ScrollView
+            style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}
+            contentContainerStyle={{ paddingBottom: 32 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {schedule?.alerts && schedule.alerts.length > 0 ? (
+              schedule.alerts.map((alert, idx) => (
+                <View key={idx} style={styles.modalAlertItem}>
+                  <View style={styles.alertItemAccent} />
+                  <View style={styles.alertItemContent}>
+                    <Text style={styles.modalAlertText}>{alert}</Text>
+                  </View>
                 </View>
+              ))
+            ) : (
+              <View
+                style={{
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingVertical: 40,
+                }}
+              >
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={40}
+                  color="#8e8e93"
+                  style={{ marginBottom: 12 }}
+                />
+                <Text style={{ color: "#8e8e93", fontSize: 15 }}>
+                  Nessuna comunicazione presente
+                </Text>
               </View>
-            ))
-          ) : (
-            <View
-              style={{
-                alignItems: "center",
-                justifyContent: "center",
-                paddingVertical: 40,
-              }}
-            >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={40}
-                color="#8e8e93"
-                style={{ marginBottom: 12 }}
-              />
-              <Text style={{ color: "#8e8e93", fontSize: 15 }}>
-                Nessuna comunicazione presente
-              </Text>
-            </View>
-          )}
-        </ScrollView>
+            )}
+          </ScrollView>
+        </View>
       </NativeSheetModal>
 
       {/* Modal Mappe per l'aula */}
@@ -1129,6 +1111,8 @@ export default function ScheduleScreen() {
         editingEvent={editingManualEvent}
         initialDayIndex={selectedDay}
         semesterText={schedule?.info?.semester}
+        tabUrl={selectedTab?.url}
+        channelName={selectedTab?.name}
         onClose={() => {
           setManualModalVisible(false);
           setEditingManualEvent(null);
@@ -2056,5 +2040,24 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 16,
     paddingHorizontal: 16,
+  },
+  swipeDeleteContainer: {
+    backgroundColor: "#ff3b30",
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "flex-end",
+    paddingRight: 22,
+    borderRadius: 16,
+    height: "100%",
+  },
+  swipeDeleteContent: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  swipeDeleteText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 4,
   },
 });

@@ -39,3 +39,17 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## Workflow & Commit Rules (Antigravity)
+
+- **Per ogni prompt / task**:
+  - Eseguire sempre `npx tsc --noEmit` e `npx expo lint` prima di dichiarare completato il lavoro.
+  - Aggiungere sempre in fondo a `CHANGELOG_INTERNAL.md` il riepilogo tecnico dettagliato delle modifiche apportate.
+  - **NON fare MAI `git commit` o `git push`** finché l'utente non lo richiede esplicitamente. Tutte le modifiche rimangono locali.
+
+- **Al comando esplicito di commit/rilascio dell'utente**:
+  - Incrementare la versione dell'app in `package.json` e `app.json`.
+  - Elaborare e trasferire il resoconto da `CHANGELOG_INTERNAL.md` al changelog classico `CHANGELOG.md` con un tono umano, professionale, chiaro e privo di cliché AI.
+  - Resettare `CHANGELOG_INTERNAL.md` con la testata pulita per il ciclo successivo.
+  - Eseguire lo staging, il commit descrittivo e il push su entrambi i branch (`main` e `dev`).
+

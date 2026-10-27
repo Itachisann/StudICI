@@ -822,6 +822,7 @@ export interface OptimalTrainOptions {
   selectedTrainNumber?: string; // override selezione esplicita treno
   forceRefresh?: boolean; // true per forzare chiamata diretta a Trenitalia bypassando la cache
   minDepartureMins?: number; // Orario minimo (in minuti da mezzanotte) di partenza del treno affinché sia prendibile dal viaggiatore
+  ignoreCurrentTime?: boolean; // true per usare esclusivamente l'orario programmato ufficiale senza ritardi live né filtro sull'ora corrente
 }
 
 export interface OptimalTrainResult {
@@ -864,10 +865,12 @@ export async function fetchLiveTrenitaliaTimetable(
   targetDate: Date,
   targetTimeStr: string,
   direction: 'outbound' | 'return',
-  forceRefresh = false
+  forceRefresh = false,
+  ignoreCurrentTime = false
 ): Promise<LiveTrainInfo[]> {
   try {
     const isToday =
+      !ignoreCurrentTime &&
       targetDate.getDate() === new Date().getDate() &&
       targetDate.getMonth() === new Date().getMonth() &&
       targetDate.getFullYear() === new Date().getFullYear();
@@ -888,7 +891,7 @@ export async function fetchLiveTrenitaliaTimetable(
     // Verifica Cache in Memoria ad alte prestazioni
     const dateKey = `${targetDate.getFullYear()}-${targetDate.getMonth() + 1}-${targetDate.getDate()}`;
     const timeBucket = Math.floor(targetDepMins / 30);
-    const cacheKey = `${depCode}_${arrCode}_${dateKey}_${timeBucket}_${direction}`;
+    const cacheKey = `${depCode}_${arrCode}_${dateKey}_${timeBucket}_${direction}_${ignoreCurrentTime ? 'sched' : 'live'}`;
 
     if (!forceRefresh) {
       const cached = timetableCache.get(cacheKey);
@@ -1036,7 +1039,7 @@ export async function fetchLiveTrenitaliaTimetable(
       }
 
       let depActual = depPlanned;
-      if (cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
+      if (isToday && cleanLiveDep && parseTimeToMinutes(cleanLiveDep) >= parseTimeToMinutes(depPlanned)) {
         depActual = cleanLiveDep;
       } else if (delay > 0) {
         depActual = minutesToTime(dh * 60 + dm + delay);
@@ -1044,7 +1047,7 @@ export async function fetchLiveTrenitaliaTimetable(
 
       let arrActual = arrPlanned;
       const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-      if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
+      if (isToday && cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
         arrActual = cleanLiveArr;
       } else if (delay > 0) {
         arrActual = minutesToTime(ah * 60 + am + delay);
@@ -2012,6 +2015,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     selectedTrainNumber,
     forceRefresh = false,
     minDepartureMins,
+    ignoreCurrentTime = false,
   } = options;
 
   const departureStation = normalizeStationInfo(rawDepartureStation);
@@ -2021,6 +2025,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');
   const now = new Date();
   const isToday =
+    !ignoreCurrentTime &&
     targetDate.getDate() === now.getDate() &&
     targetDate.getMonth() === now.getMonth() &&
     targetDate.getFullYear() === now.getFullYear();
@@ -2032,7 +2037,8 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     targetDate,
     targetTimeStr,
     direction,
-    forceRefresh
+    forceRefresh,
+    ignoreCurrentTime
   );
 
   // 2. Unione con la tabella oraria ufficiale completa della tratta
