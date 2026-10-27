@@ -55,6 +55,10 @@ function notifyManualChange(): void {
   } catch {}
 }
 
+export function notifyManualEventsChanged(): void {
+  notifyManualChange();
+}
+
 /**
  * Calcola la data stimata di fine semestre universitario a Sapienza:
  * - Se ci troviamo nel I semestre (Settembre - Febbraio): fine ~ 28 Febbraio.

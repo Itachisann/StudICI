@@ -5,6 +5,12 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.1
+
+### Sincronizzazione e Ripristino Applicazione
+- **Ripristino totale dell'applicazione (`settings.tsx`, `cloudSync.ts`, `manualEvents.ts`)**: la funzione di ripristino esegue la dissociazione automatica da eventuali gruppi di sincronizzazione (notificando il master se slave o dissociando gli slave collegati se master), elimina il vecchio codice e il relativo documento remoto da Firebase, cancella file di backup locali e allarmi nativi, e azzera completamente lo storage locale (presenze di ogni corso, lezioni manuali, orari e impostazioni).
+- **Resilienza sincronizzazione per dispositivi slave (`cloudSync.ts`)**: se il documento master remoto non è più presente sul cloud (a seguito di ripristino o eliminazione da parte del master), i dispositivi slave rilevano immediatamente la rimozione nel ciclo di controllo in background e tornano allo stato autonomo senza rimanere bloccati o tentare di ricreare dati sul vecchio codice.
+
 ## 1.9.0
 
 ### Orari e Lezioni Personalizzate

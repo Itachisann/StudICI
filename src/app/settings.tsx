@@ -522,8 +522,8 @@ export default function ProfiloScreen() {
 
   const resetApp = async () => {
     Alert.alert(
-      "Ripristina",
-      "Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso e le impostazioni salvate.",
+      "Ripristina applicazione",
+      "Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso, tutte le presenze, le lezioni e le impostazioni salvate. Il dispositivo verrà inoltre dissociato dalla sincronizzazione eliminando il vecchio codice cloud.",
       [
         { text: "Annulla", style: "cancel" },
         {

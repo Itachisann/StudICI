@@ -6,7 +6,10 @@ import { AppState, AppStateStatus, Platform } from "react-native";
 import { SYNC_DB_URL } from "../config/syncConfig";
 import { CommuterConfig } from "../types/commuter";
 import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
-import { refreshCommuterAlarmsInBackground } from "./alarmSync";
+import {
+  refreshCommuterAlarmsInBackground,
+  cancelAllNativeAlarms,
+} from "./alarmSync";
 import {
   AttendanceRecord,
   getAttendanceRecords,
@@ -16,6 +19,7 @@ import {
   setAttendanceTombstones,
   getAllAttendanceAcrossCourses,
   saveAllAttendanceAcrossCourses,
+  notifyAttendanceChanged,
 } from "./attendance";
 import {
   ManualClassEvent,
@@ -26,6 +30,7 @@ import {
   setManualEventsChangeListener,
   getAllManualEventsAcrossCourses,
   saveAllManualEventsAcrossCourses,
+  notifyManualEventsChanged,
 } from "./manualEvents";
 import {
   DEFAULT_COMMUTER_CONFIG,
@@ -1113,6 +1118,18 @@ async function runSync(): Promise<CloudSyncResult> {
     const remote = await fetchRemote(activeSyncId);
     const myDevice = await getLocalDeviceInfo();
 
+    // Se questo dispositivo è slave e il documento master remoto non esiste più sul cloud (ripristinato o cancellato)
+    if (isSlave && !remote) {
+      await handleLocalDeviceWasKickedOut(myDevice);
+      return {
+        success: false,
+        updated: true,
+        notPaired: true,
+        message:
+          "Il dispositivo principale non è più disponibile o è stato ripristinato.",
+      };
+    }
+
     // Verifica se questo dispositivo è stato dissociato o rimosso
     const isDissociated = Boolean(
       remote?.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
@@ -1773,7 +1790,14 @@ async function checkRemoteLiveChanges(): Promise<void> {
   try {
     const activeSyncId = await getActiveSyncId();
     const remote = await fetchRemote(activeSyncId);
-    if (!remote) return;
+    if (!remote) {
+      const isSlave = await isCurrentDeviceSlave();
+      if (isSlave) {
+        const myDevice = await getLocalDeviceInfo();
+        await handleLocalDeviceWasKickedOut(myDevice);
+      }
+      return;
+    }
 
     const myDevice = await getLocalDeviceInfo();
     const isDissociated = Boolean(
@@ -1851,17 +1875,51 @@ AppState.addEventListener("change", (nextState: AppStateStatus) => {
 /**
  * Ripristina l'app dissociandola da tutti gli altri dispositivi,
  * eliminando il vecchio documento sul cloud Firebase, cancellando
- * lo storage locale e generando un nuovo codice univoco garantito.
+ * lo storage locale (presenze, lezioni manuali, orari, credenziali e impostazioni)
+ * e generando una nuova identità garantita.
  */
 export async function resetAppCloudAndStorage(): Promise<string> {
+  stopLiveSyncLoop();
   try {
     const ownId = await AsyncStorage.getItem(CLOUD_SYNC_ID_KEY);
     const activeSyncId = await getActiveSyncId().catch(() => null);
+    const isSlave = await isCurrentDeviceSlave().catch(() => false);
+    const myDevice = await getLocalDeviceInfo().catch(() => ({
+      id: "unknown",
+      name: "Dispositivo",
+      role: "master" as const,
+      code: ownId || "UNKNOWN",
+      pairedAt: Date.now(),
+      lastActive: Date.now(),
+    }));
 
     // 1. Dissocia da master o dispositivi collegati a cascata
     try {
-      if (activeSyncId) {
+      if (isSlave && activeSyncId) {
+        // Se è uno slave, notifica il master rimuovendo se stesso
         await dissociateDevice();
+      } else if (!isSlave && activeSyncId && isCloudConfigured()) {
+        // Se è un master, notifica tutti gli eventuali slave collegati prima di eliminare
+        const remote = await fetchRemote(activeSyncId);
+        if (remote && remote.devices) {
+          const otherDevIds = Object.keys(remote.devices).filter(
+            (id) => id !== myDevice.id,
+          );
+          if (otherDevIds.length > 0) {
+            const dissociated: Record<string, number> = {
+              ...(remote.dissociatedDevices || {}),
+            };
+            for (const id of otherDevIds) {
+              dissociated[id] = Date.now();
+            }
+            await pushRemote(activeSyncId, {
+              ...remote,
+              updatedAt: Date.now(),
+              devices: {},
+              dissociatedDevices: dissociated,
+            });
+          }
+        }
       }
     } catch (e) {
       console.warn("Dissociation error during app reset:", e);
@@ -1876,16 +1934,36 @@ export async function resetAppCloudAndStorage(): Promise<string> {
       }
     }
 
-    // 3. Svuota completamente la memoria locale
+    // 3. Cancella file di backup locale ed eventuali allarmi/sveglie create dall'app
+    try {
+      const filePath = `${FileSystem.documentDirectory}${ICLOUD_BACKUP_FILENAME}`;
+      await FileSystem.deleteAsync(filePath, { idempotent: true });
+    } catch {}
+
+    try {
+      await cancelAllNativeAlarms();
+    } catch {}
+
+    // 4. Svuota completamente la memoria locale (presenze, lezioni manuali, orari, credenziali, impostazioni)
     await AsyncStorage.clear();
 
-    // 4. Genera un codice univoco nuovo e pulito
+    // 5. Resetta la cache e lo stato del live sync in memoria
+    lastKnownDevicesHash = "";
+    lastKnownRemoteUpdatedAt = 0;
+
+    // 6. Genera un codice univoco nuovo e pulito
     const newCode = await generateUniqueInitialSyncCode();
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, newCode);
 
-    // 5. Genera un nuovo ID per l'istanza del dispositivo
+    // 7. Genera un nuovo ID per l'istanza del dispositivo
     const newDevId = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     await AsyncStorage.setItem(LOCAL_DEVICE_ID_KEY, newDevId);
+    await setICloudAutoSyncEnabled(false);
+
+    // 8. Notifica gli ascoltatori dell'azzeramento di presenze, lezioni e sincronizzazione
+    notifyAttendanceChanged();
+    notifyManualEventsChanged();
+    await notifyLiveSyncListeners(true);
 
     return newCode;
   } catch (err) {
@@ -1893,6 +1971,8 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     await AsyncStorage.clear();
     const fallbackCode = generateInitialSyncCode();
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, fallbackCode);
+    notifyAttendanceChanged();
+    notifyManualEventsChanged();
     return fallbackCode;
   }
 }
