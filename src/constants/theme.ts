@@ -35,6 +35,12 @@ export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 export const UNIFORM_SCREEN_BG = '#0d0e12';
 export const UNIFORM_MODAL_BG = '#0d0e12';
 
+/**
+ * Larghezza massima universale per contenitori e selettori su iPad e schermi larghi.
+ * Garantisce un allineamento e un'estensione uniforme in tutte le viste (Orari, Viaggi, Aule).
+ */
+export const MAX_CONTENT_WIDTH = 600;
+
 export interface AppTheme {
   id: string;
   name: string;

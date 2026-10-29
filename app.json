@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "70",
+      "buildNumber": "71",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "CFBundleDevelopmentRegion": "it",
@@ -49,7 +49,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 63,
+      "versionCode": 64,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.READ_CALENDAR",

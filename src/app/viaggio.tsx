@@ -4,13 +4,12 @@ import SegmentedControl from "@react-native-segmented-control/segmented-control"
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Animated,
-  Easing,
   LayoutChangeEvent,
   Linking,
   Platform,
@@ -20,6 +19,9 @@ import {
   Text,
   TouchableOpacity,
   View,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  useWindowDimensions,
 } from "react-native";
 import {
   SafeAreaView,
@@ -27,7 +29,7 @@ import {
 } from "react-native-safe-area-context";
 
 import { useTheme } from "@/context/ThemeContext";
-import { UNIFORM_SCREEN_BG } from "@/constants/theme";
+import { UNIFORM_SCREEN_BG, MAX_CONTENT_WIDTH } from "@/constants/theme";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
@@ -96,6 +98,61 @@ const WEEKDAYS: WeekdayItem[] = [
   { label: "DOM", fullLabel: "Domenica", dayIdx: 0, isWeekend: true },
 ];
 
+function getAutoTargetClass(
+  classes: ClassEvent[],
+  isToday: boolean,
+  direction: "outbound" | "return",
+  now: Date = new Date(),
+): ClassEvent | null {
+  if (!classes || classes.length === 0) return null;
+
+  // Se non è oggi (es. domani, dopodomani o giorni futuri):
+  // All'andata seleziona sempre la prima lezione in programma del giorno; al ritorno l'ultima.
+  if (!isToday) {
+    return direction === "outbound" ? classes[0] : classes[classes.length - 1];
+  }
+
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  if (direction === "outbound") {
+    const firstClass = classes[0];
+    const firstStart = parseTimeToMinutes(firstClass.startTime || "08:30");
+
+    // Se l'orario attuale è precedente all'orario di inizio della prima lezione:
+    // seleziona come target la prima lezione in programma
+    if (nowMins < firstStart) {
+      return firstClass;
+    }
+
+    // Se l'orario ricade all'interno della fascia di una lezione o tra una lezione finita e la successiva:
+    // seleziona automaticamente la lezione corrente o la prossima lezione in arrivo
+    const activeOrUpcoming = classes.find(
+      (c) => parseTimeToMinutes(c.endTime || "18:00") > nowMins,
+    );
+    if (activeOrUpcoming) {
+      return activeOrUpcoming;
+    }
+
+    // Se tutte le lezioni sono finite:
+    // seleziona come target l'ultima anche all'andata, mostrando i treni di adesso
+    return classes[classes.length - 1];
+  } else {
+    // Ritorno:
+    // Se c'è una lezione in corso o appena terminata prendi quella, altrimenti l'ultima del giorno
+    const activeClass = classes.find((c) => {
+      const s = parseTimeToMinutes(c.startTime || "08:30");
+      const e = parseTimeToMinutes(c.endTime || "18:00");
+      return s <= nowMins && e > nowMins;
+    });
+    const pastOrActive = [...classes]
+      .reverse()
+      .find(
+        (c) => parseTimeToMinutes(c.endTime || "18:00") <= nowMins + 30,
+      );
+    return activeClass || pastOrActive || classes[classes.length - 1];
+  }
+}
+
 export default function ViaggioScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
@@ -133,86 +190,125 @@ export default function ViaggioScreen() {
 
   const currentWeekday = WEEKDAYS[currentWeekdayIndex];
 
-  // Transizione fluida da giorno a giorno (identica a quella della sezione Orari)
-  const prevWeekdayIndexRef = useRef(currentWeekdayIndex);
-  const [daySlideAnim] = useState(() => new Animated.Value(0));
-  const [dayFadeAnim] = useState(() => new Animated.Value(1));
+  const { width: screenWidth } = useWindowDimensions();
+  const initialWeekdayIndex = useMemo(() => {
+    const idx = WEEKDAYS.findIndex((w) => w.dayIdx === todayDayIdx);
+    return idx >= 0 ? idx : 0;
+  }, [todayDayIdx]);
 
-  useEffect(() => {
-    if (prevWeekdayIndexRef.current === currentWeekdayIndex) return;
-    const isForward = currentWeekdayIndex > prevWeekdayIndexRef.current;
-    prevWeekdayIndexRef.current = currentWeekdayIndex;
+  const horizontalPagerRef = useRef<ScrollView>(null);
+  const initialPagerPositioned = useRef(false);
+  const activeWeekdayIndexRef = useRef(initialWeekdayIndex);
+  const handleDayChangeRef = useRef<(dayIdx: number) => void>(() => {});
+  const itinerariesCacheRef = useRef<{
+    [dayIdx: number]: CommuterItinerary | null;
+  }>({});
+  const [itinerariesByDay, setItinerariesByDay] = useState<{
+    [dayIdx: number]: CommuterItinerary | null;
+  }>({});
 
-    dayFadeAnim.setValue(0.25);
-    daySlideAnim.setValue(isForward ? 16 : -16);
-
-    Animated.parallel([
-      Animated.timing(dayFadeAnim, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(daySlideAnim, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [currentWeekdayIndex, dayFadeAnim, daySlideAnim]);
-
-  // Animazione fluida a scorrimento dello slider dei giorni della settimana
+  // Animazione fluida a scorrimento dello slider dei giorni della settimana (sincronizzato al pager)
   const segmentLayouts = useRef<{ [key: number]: { x: number; width: number } }>({});
   const [sliderPillAnim] = useState(() => new Animated.Value(0));
   const [sliderWidthAnim] = useState(() => new Animated.Value(44));
+  const initialIsWeekend = initialWeekdayIndex >= 5;
+  const [weekendPillAnim] = useState(() => new Animated.Value(initialIsWeekend ? 1 : 0));
+  const [pagerScrollAnim] = useState(
+    () => new Animated.Value(initialWeekdayIndex * 390),
+  );
   const [sliderReady, setSliderReady] = useState(false);
   const initialSliderPositioned = useRef(false);
 
   const handleSegmentLayout = useCallback(
     (idx: number, e: LayoutChangeEvent) => {
       const { x, width } = e.nativeEvent.layout;
-      const actualX = idx === 5 ? x + 4 : x;
-      const actualWidth = idx === 5 ? width - 4 : width;
-      segmentLayouts.current[idx] = { x: actualX, width: actualWidth };
+      segmentLayouts.current[idx] = { x, width };
 
-      if (idx === currentWeekdayIndex && !initialSliderPositioned.current) {
-        sliderPillAnim.setValue(actualX);
-        sliderWidthAnim.setValue(actualWidth);
-        initialSliderPositioned.current = true;
-        setSliderReady(true);
+      if (idx === activeWeekdayIndexRef.current) {
+        sliderPillAnim.setValue(x);
+        sliderWidthAnim.setValue(width);
+        if (!initialSliderPositioned.current) {
+          weekendPillAnim.setValue(idx >= 5 ? 1 : 0);
+          initialSliderPositioned.current = true;
+          setSliderReady(true);
+        }
       }
     },
-    [currentWeekdayIndex, sliderPillAnim, sliderWidthAnim],
+    [sliderPillAnim, sliderWidthAnim, weekendPillAnim],
+  );
+
+  const handlePagerScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetX = e.nativeEvent.contentOffset.x;
+      if (screenWidth <= 0) return;
+      pagerScrollAnim.setValue(offsetX);
+      const progress = Math.max(0, Math.min(6, offsetX / screenWidth));
+      const baseIdx = Math.floor(progress);
+      const nextIdx = Math.min(baseIdx + 1, 6);
+      const frac = progress - baseIdx;
+
+      const baseLayout = segmentLayouts.current[baseIdx];
+      const nextLayout = segmentLayouts.current[nextIdx];
+
+      if (baseLayout && nextLayout) {
+        const currentX = baseLayout.x + (nextLayout.x - baseLayout.x) * frac;
+        const currentW = baseLayout.width + (nextLayout.width - baseLayout.width) * frac;
+        sliderPillAnim.setValue(currentX);
+        sliderWidthAnim.setValue(currentW);
+      }
+
+      // Transizione cromatica continua in live tra feriali e weekend
+      const weekendFactor = Math.max(0, Math.min(1, (progress - 4.2) / 0.6));
+      weekendPillAnim.setValue(weekendFactor);
+    },
+    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
+  );
+
+  const handleMomentumScrollEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetX = e.nativeEvent.contentOffset.x;
+      const pageIndex = Math.round(offsetX / screenWidth);
+      if (pageIndex >= 0 && pageIndex < WEEKDAYS.length) {
+        const targetDayIdx = WEEKDAYS[pageIndex].dayIdx;
+
+        pagerScrollAnim.setValue(pageIndex * screenWidth);
+        const target = segmentLayouts.current[pageIndex];
+        if (target) {
+          sliderPillAnim.setValue(target.x);
+          sliderWidthAnim.setValue(target.width);
+        }
+        weekendPillAnim.setValue(pageIndex >= 5 ? 1 : 0);
+
+        if (targetDayIdx !== activeDayIdxRef.current) {
+          activeDayIdxRef.current = targetDayIdx;
+          activeWeekdayIndexRef.current = pageIndex;
+          setSelectedDayIdx(targetDayIdx);
+          handleDayChangeRef.current(targetDayIdx);
+        }
+      }
+    },
+    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
   );
 
   useEffect(() => {
-    const target = segmentLayouts.current[currentWeekdayIndex];
-    if (target && initialSliderPositioned.current) {
-      Animated.parallel([
-        Animated.spring(sliderPillAnim, {
-          toValue: target.x,
-          damping: 24,
-          mass: 0.8,
-          stiffness: 280,
-          useNativeDriver: false,
-        }),
-        Animated.spring(sliderWidthAnim, {
-          toValue: target.width,
-          damping: 24,
-          mass: 0.8,
-          stiffness: 280,
-          useNativeDriver: false,
-        }),
-      ]).start();
+    if (!initialPagerPositioned.current && screenWidth > 0) {
+      if (initialWeekdayIndex > 0) {
+        horizontalPagerRef.current?.scrollTo({
+          x: initialWeekdayIndex * screenWidth,
+          animated: false,
+        });
+        pagerScrollAnim.setValue(initialWeekdayIndex * screenWidth);
+      }
+      initialPagerPositioned.current = true;
     }
-  }, [currentWeekdayIndex, sliderPillAnim, sliderWidthAnim]);
+  }, [initialWeekdayIndex, screenWidth, pagerScrollAnim]);
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
   const chipLayoutsRef = useRef<{
     [key: string]: { x: number; width: number };
   }>({});
+  const lecturesScrollRef = useRef<ScrollView>(null);
 
   const centerSelectedTrain = useCallback((trainNum: string) => {
     const cleanNum = trainNum.replace(/\D/g, "");
@@ -299,28 +395,51 @@ export default function ViaggioScreen() {
 
     const now = new Date();
     const isToday = now.getDay() === selectedDayIdx;
-
-    if (isToday) {
-      const nowMins = now.getHours() * 60 + now.getMinutes();
-      if (direction === "outbound") {
-        const upcoming = dayClasses.find(
-          (c) => parseTimeToMinutes(c.startTime || "08:30") >= nowMins - 15,
-        );
-        return upcoming || dayClasses[0];
-      } else {
-        const pastOrActive = [...dayClasses]
-          .reverse()
-          .find(
-            (c) => parseTimeToMinutes(c.endTime || "18:00") <= nowMins + 30,
-          );
-        return pastOrActive || dayClasses[dayClasses.length - 1];
-      }
-    }
-
-    return direction === "outbound"
-      ? dayClasses[0]
-      : dayClasses[dayClasses.length - 1];
+    return getAutoTargetClass(dayClasses, isToday, direction, now);
   }, [dayClasses, selectedClassIndex, selectedDayIdx, direction]);
+
+  const activeSelectedClassIndex = useMemo(() => {
+    if (!activeSelectedClass || dayClasses.length === 0) return 0;
+    const idx = dayClasses.findIndex(
+      (c) =>
+        c.subject === activeSelectedClass.subject &&
+        c.startTime === activeSelectedClass.startTime,
+    );
+    return idx >= 0 ? idx : 0;
+  }, [activeSelectedClass, dayClasses]);
+
+  const heroDelayMin = useMemo(() => {
+    if (!isSelectedDayToday || !itinerary?.liveTrain) return 0;
+    const trainDelay = itinerary.liveTrain.delayMinutes ?? 0;
+    if (trainDelay > 0) return trainDelay;
+    if (trainStatus?.delayBadge) {
+      const parsed = parseInt(
+        trainStatus.delayBadge.label.replace(/\D/g, ""),
+        10,
+      );
+      return isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+  }, [isSelectedDayToday, itinerary, trainStatus]);
+
+  // Scorrimento automatico orizzontale della lista lezioni per visualizzare e centrare la lezione target
+  useEffect(() => {
+    if (dayClasses.length > 0 && activeSelectedClassIndex >= 0) {
+      const halfScreen =
+        screenWidth > 0 ? Math.max(0, (screenWidth - 200) / 2) : 80;
+      const targetOffset = Math.max(
+        0,
+        activeSelectedClassIndex * 208 - halfScreen,
+      );
+      const timer = setTimeout(() => {
+        lecturesScrollRef.current?.scrollTo({
+          x: targetOffset,
+          animated: true,
+        });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSelectedClassIndex, selectedDayIdx, dayClasses.length, screenWidth]);
 
   const loadData = useCallback(
     async (
@@ -428,34 +547,16 @@ export default function ViaggioScreen() {
         const nowMins = now.getHours() * 60 + now.getMinutes();
 
         let targetClassForCalculation: ClassEvent | null = null;
-        if (!isEffWeekend) {
+        if (!isEffWeekend && currentDayClasses.length > 0) {
           if (effClassIdx !== null && currentDayClasses[effClassIdx]) {
             targetClassForCalculation = currentDayClasses[effClassIdx];
-          } else if (currentDayClasses.length > 0) {
-            if (isToday) {
-              if (effDir === "outbound") {
-                const upcoming = currentDayClasses.find(
-                  (c) =>
-                    parseTimeToMinutes(c.startTime || "08:30") >= nowMins - 15,
-                );
-                targetClassForCalculation = upcoming || currentDayClasses[0];
-              } else {
-                const pastOrActive = [...currentDayClasses]
-                  .reverse()
-                  .find(
-                    (c) =>
-                      parseTimeToMinutes(c.endTime || "18:00") <= nowMins + 30,
-                  );
-                targetClassForCalculation =
-                  pastOrActive ||
-                  currentDayClasses[currentDayClasses.length - 1];
-              }
-            } else {
-              targetClassForCalculation =
-                effDir === "outbound"
-                  ? currentDayClasses[0]
-                  : currentDayClasses[currentDayClasses.length - 1];
-            }
+          } else {
+            targetClassForCalculation = getAutoTargetClass(
+              currentDayClasses,
+              isToday,
+              effDir,
+              now,
+            );
           }
         }
 
@@ -463,15 +564,26 @@ export default function ViaggioScreen() {
           isToday &&
           !isEffWeekend &&
           targetClassForCalculation &&
-          (effDir === "outbound"
-            ? nowMins >
-              parseTimeToMinutes(targetClassForCalculation.startTime || "08:30")
-            : nowMins >
-              parseTimeToMinutes(targetClassForCalculation.endTime || "18:00")),
+          nowMins >=
+            parseTimeToMinutes(targetClassForCalculation.endTime || "18:00"),
+        );
+
+        const isTargetClassInProgress = Boolean(
+          isToday &&
+          !isEffWeekend &&
+          targetClassForCalculation &&
+          nowMins >=
+            parseTimeToMinutes(targetClassForCalculation.startTime || "08:30") &&
+          nowMins <
+            parseTimeToMinutes(targetClassForCalculation.endTime || "18:00"),
         );
 
         // Imposta l'orario del viaggio su targetDate per centrare la ricerca ViaggiaTreno
-        if (targetClassForCalculation && !isTargetClassFinished) {
+        if (
+          targetClassForCalculation &&
+          !isTargetClassFinished &&
+          !isTargetClassInProgress
+        ) {
           const timeToUse =
             effDir === "outbound"
               ? targetClassForCalculation.startTime || "08:30"
@@ -501,7 +613,9 @@ export default function ViaggioScreen() {
         // Ignora il risultato se l'utente ha già switchato a un altro giorno
         if (effDayIdx !== activeDayIdxRef.current) return;
 
+        itinerariesCacheRef.current[effDayIdx] = itin;
         setItinerary(itin);
+        setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
         setLastUpdated(new Date());
       } catch (err: any) {
         console.warn("Errore calcolo itinerario pendolare", err);
@@ -532,25 +646,77 @@ export default function ViaggioScreen() {
     }, [loadData]),
   );
 
-  const handleDayChange = (dayIdx: number) => {
-    activeDayIdxRef.current = dayIdx;
-    setSelectedDayIdx(dayIdx);
-    setSelectedClassIndex(null);
-    setSelectedTrainOffset(0);
-    setSelectedTrainNumber(null);
-    setItinerary(null);
-    loadData(false, false, {
-      selectedDayIdx: dayIdx,
-      selectedClassIndex: null,
-      selectedTrainOffset: 0,
-      selectedTrainNumber: null,
-    });
+  const handleDayChange = useCallback(
+    (dayIdx: number) => {
+      activeDayIdxRef.current = dayIdx;
+      setSelectedDayIdx(dayIdx);
+      setSelectedClassIndex(null);
+      setSelectedTrainOffset(0);
+      setSelectedTrainNumber(null);
+      const cached =
+        itinerariesCacheRef.current[dayIdx] || itinerariesByDay[dayIdx];
+      if (cached) {
+        setItinerary(cached);
+        setLoading(false);
+      } else {
+        setItinerary(null);
+        setLoading(true);
+      }
+      loadData(false, Boolean(cached), {
+        selectedDayIdx: dayIdx,
+        selectedClassIndex: null,
+        selectedTrainOffset: 0,
+        selectedTrainNumber: null,
+      });
+    },
+    [loadData, itinerariesByDay],
+  );
+
+  useEffect(() => {
+    handleDayChangeRef.current = handleDayChange;
+  }, [handleDayChange]);
+
+  const handleDayPress = (dayIdx: number) => {
+    const pageIdx = WEEKDAYS.findIndex((w) => w.dayIdx === dayIdx);
+    if (pageIdx >= 0) {
+      activeWeekdayIndexRef.current = pageIdx;
+      setSelectedDayIdx(dayIdx);
+      const target = segmentLayouts.current[pageIdx];
+      if (target) {
+        Animated.parallel([
+          Animated.spring(sliderPillAnim, {
+            toValue: target.x,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+          Animated.spring(sliderWidthAnim, {
+            toValue: target.width,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+          Animated.timing(weekendPillAnim, {
+            toValue: pageIdx >= 5 ? 1 : 0,
+            duration: 200,
+            useNativeDriver: false,
+          }),
+          Animated.spring(pagerScrollAnim, {
+            toValue: pageIdx * screenWidth,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+        ]).start();
+      }
+      horizontalPagerRef.current?.scrollTo({
+        x: pageIdx * screenWidth,
+        animated: true,
+      });
+      handleDayChange(dayIdx);
+    }
   };
 
   const handleResetToToday = () => {
     const today = new Date().getDay();
-    activeDayIdxRef.current = today;
-    handleDayChange(today);
+    handleDayPress(today);
   };
 
   const handleDirectionChange = (newDir: "outbound" | "return") => {
@@ -558,6 +724,8 @@ export default function ViaggioScreen() {
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
     setItinerary(null);
+    itinerariesCacheRef.current = {};
+    setItinerariesByDay({});
     loadData(false, false, {
       direction: newDir,
       selectedTrainOffset: 0,
@@ -569,6 +737,10 @@ export default function ViaggioScreen() {
     setSelectedClassIndex(idx);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
+    const halfScreen =
+      screenWidth > 0 ? Math.max(0, (screenWidth - 200) / 2) : 80;
+    const targetOffset = Math.max(0, idx * 208 - halfScreen);
+    lecturesScrollRef.current?.scrollTo({ x: targetOffset, animated: true });
     loadData(false, false, {
       selectedClassIndex: idx,
       selectedTrainOffset: 0,
@@ -751,6 +923,288 @@ export default function ViaggioScreen() {
         parseTimeToMinutes(itinerary.targetLecture.endTime || "18:00")),
   );
 
+  const renderLoadingItinerary = () => (
+    <View
+      style={{
+        minHeight: 190,
+        justifyContent: "center",
+        alignItems: "center",
+        marginTop: 4,
+        marginBottom: 12,
+      }}
+    >
+      <ActivityIndicator size="large" color={theme.primary} />
+      <Text style={[styles.loadingText, { marginTop: 12 }]}>
+        Calcolo tempi...
+      </Text>
+    </View>
+  );
+
+  const renderEmptyItinerary = () => (
+    <View
+      style={[
+        styles.heroCard,
+        {
+          backgroundColor: theme.cardTint,
+          borderColor: theme.border,
+          minHeight: 190,
+          justifyContent: "center",
+          alignItems: "center",
+          marginTop: 4,
+        },
+      ]}
+    >
+      <Ionicons
+        name="train-outline"
+        size={38}
+        color="#64748b"
+        style={{ marginBottom: 8 }}
+      />
+      <Text style={[styles.emptyTitle, { color: theme.light, fontSize: 15 }]}>
+        Nessun collegamento trovato
+      </Text>
+      <TouchableOpacity
+        style={[
+          styles.primaryBtn,
+          { marginTop: 14, paddingHorizontal: 20, paddingVertical: 10 },
+        ]}
+        onPress={() => loadData(true)}
+      >
+        <Text style={styles.primaryBtnText}>Ricalcola</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderAdjacentDayPreview = (
+    w: WeekdayItem,
+    pageClasses: ClassEvent[],
+  ) => {
+    const isPageToday = todayDayIdx === w.dayIdx;
+    const cachedItin = itinerariesByDay[w.dayIdx];
+
+    return (
+      <View>
+        {/* Sezione Selettore Lezioni del Giorno */}
+        <View style={styles.lecturesSection}>
+          <View style={styles.sectionHeaderRow}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                flex: 1,
+              }}
+            >
+              <Ionicons
+                name={w.isWeekend ? "sunny-outline" : "school-outline"}
+                size={13}
+                color={theme.accent}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.sectionTitle, { color: theme.accent }]}>
+                {w.isWeekend
+                  ? `FINE SETTIMANA • ${w.fullLabel.toUpperCase()}`
+                  : `${w.fullLabel.toUpperCase()} • ${
+                      isPageToday ? "LEZIONI DI OGGI" : "PROGRAMMATO"
+                    }`}
+              </Text>
+            </View>
+
+            {!isPageToday && (
+              <TouchableOpacity
+                onPress={handleResetToToday}
+                style={[
+                  styles.jumpToTodayPill,
+                  { borderColor: `${theme.primary}50` },
+                ]}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="arrow-undo-outline"
+                  size={11}
+                  color={theme.primary}
+                  style={{ marginRight: 4 }}
+                />
+                <Text
+                  style={[
+                    styles.jumpToTodayText,
+                    { color: theme.primary },
+                  ]}
+                >
+                  Torna a oggi
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {w.isWeekend ? (
+            <View
+              style={[styles.noClassesCard, { borderColor: theme.border }]}
+            >
+              <Ionicons
+                name="train-outline"
+                size={18}
+                color={theme.primary}
+                style={{ marginRight: 8 }}
+              />
+              <Text style={[styles.noClassesText, { color: theme.light }]}>
+                Nessuna lezione universitaria • Monitoraggio treni
+                stazione-stazione
+              </Text>
+            </View>
+          ) : pageClasses.length === 0 ? (
+            <View
+              style={[styles.noClassesCard, { borderColor: theme.border }]}
+            >
+              <Ionicons
+                name="sunny-outline"
+                size={18}
+                color="#94a3b8"
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.noClassesText}>
+                Nessuna lezione in programma per questo giorno
+              </Text>
+            </View>
+          ) : (
+            (() => {
+              const previewTarget = getAutoTargetClass(
+                pageClasses,
+                isPageToday,
+                direction,
+                new Date(),
+              );
+              const previewTargetIndex = previewTarget
+                ? pageClasses.findIndex(
+                    (c) =>
+                      c.subject === previewTarget.subject &&
+                      c.startTime === previewTarget.startTime,
+                  )
+                : 0;
+              const validPreviewIdx =
+                previewTargetIndex >= 0 ? previewTargetIndex : 0;
+              const halfScreen =
+                screenWidth > 0 ? Math.max(0, (screenWidth - 200) / 2) : 80;
+              const previewOffset = Math.max(
+                0,
+                validPreviewIdx * 208 - halfScreen,
+              );
+
+              return (
+                <ScrollView
+                  horizontal
+                  nestedScrollEnabled={true}
+                  showsHorizontalScrollIndicator={false}
+                  contentOffset={{ x: previewOffset, y: 0 }}
+                  contentContainerStyle={styles.classesScrollContainer}
+                >
+                  {pageClasses.map((item, idx) => {
+                    const isSelected = previewTarget
+                      ? item.subject === previewTarget.subject &&
+                        item.startTime === previewTarget.startTime
+                      : idx === 0;
+
+                    return (
+                      <View
+                        key={`${item.subject}-${item.startTime}-${idx}`}
+                        style={[
+                          styles.classCard,
+                          isSelected && [
+                            styles.classCardSelected,
+                            {
+                              backgroundColor: theme.cardTint,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                      >
+                        <View style={styles.classCardTopRow}>
+                          <View
+                            style={[
+                              styles.classTimeBadge,
+                              { backgroundColor: theme.subtle },
+                              isSelected && [
+                                styles.classTimeBadgeSelected,
+                                { backgroundColor: theme.primary },
+                              ],
+                            ]}
+                          >
+                            <Ionicons
+                              name="time-outline"
+                              size={11}
+                              color={isSelected ? "#fff" : theme.accent}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.classTimeText,
+                                { color: theme.accent },
+                                isSelected && styles.classTimeTextSelected,
+                              ]}
+                            >
+                              {item.startTime} - {item.endTime}
+                            </Text>
+                          </View>
+                          {isSelected && (
+                            <View
+                              style={[
+                                styles.targetBadge,
+                                { backgroundColor: theme.primary },
+                              ]}
+                            >
+                              <Ionicons
+                                name="checkmark-circle"
+                                size={12}
+                                color="#fff"
+                                style={{ marginRight: 3 }}
+                              />
+                              <Text style={styles.targetBadgeText}>Target</Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <Text
+                          style={[
+                            styles.classSubjectText,
+                            isSelected && styles.classSubjectTextSelected,
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {item.subject}
+                        </Text>
+
+                        <View style={styles.classRoomRow}>
+                          <Ionicons
+                            name="location-outline"
+                            size={12}
+                            color={isSelected ? theme.light : "#94a3b8"}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.classRoomText,
+                              isSelected && [{ color: theme.light }],
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {item.room || "Aula"}
+                            {item.building ? ` • ${item.building}` : ""}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              );
+            })()
+          )}
+        </View>
+
+        {/* Corpo Itinerario per giorno adiacente: se non ancora scaricato mostra il loader uniforme "Calcolo tempi...", altrimenti evita la card parziale monca durante lo swipe */}
+        {!cachedItin && renderLoadingItinerary()}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safeArea}>
@@ -926,70 +1380,107 @@ export default function ViaggioScreen() {
               {/* Selettore Giorno della settimana - Liquid Glass Week Bar */}
               <View style={styles.daySelectorContainer}>
                 <View style={styles.daySegmentedBar}>
-                  {sliderReady && (
-                    <Animated.View
-                      pointerEvents="none"
-                      style={[
-                        styles.slidingActivePill,
-                        {
-                          left: sliderPillAnim,
-                          width: sliderWidthAnim,
-                          backgroundColor: isWeekend
-                            ? "rgba(245, 158, 11, 0.22)"
-                            : theme.bg,
-                          borderColor: isWeekend ? "#f59e0b" : theme.primary,
-                          shadowColor: isWeekend ? "#f59e0b" : theme.primary,
-                        },
-                      ]}
-                    />
-                  )}
-
-                  {WEEKDAYS.map((w, idx) => {
-                    const isSelected = selectedDayIdx === w.dayIdx;
-                    const isItemToday = todayDayIdx === w.dayIdx;
-                    const isItemWeekend = Boolean(w.isWeekend);
-
-                    return (
-                      <View
-                        key={w.dayIdx}
-                        onLayout={(e) => handleSegmentLayout(idx, e)}
+                  <View style={styles.daySegmentInnerContainer}>
+                    {sliderReady && (
+                      <Animated.View
+                        pointerEvents="none"
                         style={[
-                          styles.daySegmentWrapper,
-                          idx === 5 && styles.daySegmentWrapperWithDivider,
+                          styles.slidingActivePill,
+                          {
+                            left: sliderPillAnim,
+                            width: sliderWidthAnim,
+                            backgroundColor: weekendPillAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [theme.bg, "rgba(245, 158, 11, 0.22)"],
+                            }),
+                            borderColor: weekendPillAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [theme.primary, "#f59e0b"],
+                            }),
+                            shadowColor: weekendPillAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [theme.primary, "#f59e0b"],
+                            }),
+                          },
                         ]}
-                      >
-                        {idx === 5 && <View style={styles.dayWeekendDivider} />}
-                        <TouchableOpacity
-                          onPress={() => handleDayChange(w.dayIdx)}
-                          activeOpacity={0.7}
-                          style={styles.daySegmentItem}
-                        >
-                          <Text
-                            style={[
-                              styles.daySegmentLabel,
-                              isItemWeekend &&
-                                !isSelected &&
-                                styles.daySegmentLabelWeekend,
-                              isSelected && styles.daySegmentLabelActive,
-                            ]}
-                          >
-                            {w.label}
-                          </Text>
+                      />
+                    )}
 
-                          {isItemToday && (
-                            <View
+                    {WEEKDAYS.map((w, idx) => {
+                      const isSelected = selectedDayIdx === w.dayIdx;
+                      const isItemToday = todayDayIdx === w.dayIdx;
+                      const isItemWeekend = Boolean(w.isWeekend);
+
+                      const textScale =
+                        screenWidth > 0
+                          ? pagerScrollAnim.interpolate({
+                              inputRange: [
+                                (idx - 1) * screenWidth,
+                                idx * screenWidth,
+                                (idx + 1) * screenWidth,
+                              ],
+                              outputRange: [1, 1.15, 1],
+                              extrapolate: "clamp",
+                            })
+                          : 1;
+
+                      const textColor =
+                        screenWidth > 0
+                          ? pagerScrollAnim.interpolate({
+                              inputRange: [
+                                (idx - 1) * screenWidth,
+                                idx * screenWidth,
+                                (idx + 1) * screenWidth,
+                              ],
+                              outputRange: [
+                                isItemWeekend ? "#d4d4d8" : "#a1a1aa",
+                                "#ffffff",
+                                isItemWeekend ? "#d4d4d8" : "#a1a1aa",
+                              ],
+                              extrapolate: "clamp",
+                            })
+                          : isSelected
+                          ? "#ffffff"
+                          : isItemWeekend
+                          ? "#d4d4d8"
+                          : "#a1a1aa";
+
+                      return (
+                        <Fragment key={w.dayIdx}>
+                          {idx === 5 && <View style={styles.dayWeekendDivider} />}
+                          <TouchableOpacity
+                            onLayout={(e) => handleSegmentLayout(idx, e)}
+                            onPress={() => handleDayPress(w.dayIdx)}
+                            activeOpacity={0.7}
+                            style={styles.daySegmentItem}
+                          >
+                            <Animated.Text
                               style={[
-                                styles.daySegmentDot,
-                                isSelected
-                                  ? styles.daySegmentDotActive
-                                  : { backgroundColor: theme.primary },
+                                styles.daySegmentLabel,
+                                {
+                                  transform: [{ scale: textScale }],
+                                  color: textColor,
+                                },
                               ]}
-                            />
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })}
+                            >
+                              {w.label}
+                            </Animated.Text>
+
+                            {isItemToday && (
+                              <View
+                                style={[
+                                  styles.daySegmentDot,
+                                  isSelected
+                                    ? styles.daySegmentDotActive
+                                    : { backgroundColor: theme.primary },
+                                ]}
+                              />
+                            )}
+                          </TouchableOpacity>
+                        </Fragment>
+                      );
+                    })}
+                  </View>
                 </View>
               </View>
             </>
@@ -1038,29 +1529,57 @@ export default function ViaggioScreen() {
           </View>
         ) : (
           <ScrollView
-            style={styles.scrollBody}
-            contentContainerStyle={[
-              styles.scrollContent,
-              { paddingBottom: insets.bottom + 90 },
-            ]}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => loadData(true)}
-                tintColor={theme.primary}
-                colors={[theme.primary]}
-              />
-            }
+            ref={horizontalPagerRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            directionalLockEnabled
+            nestedScrollEnabled
+            contentOffset={{ x: initialWeekdayIndex * screenWidth, y: 0 }}
+            onScroll={handlePagerScroll}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
+            scrollEventThrottle={16}
+            style={styles.horizontalPager}
+            contentContainerStyle={{ flexGrow: 1 }}
           >
-            {/* Contenuto Viaggio con Transizione Animata da Giorno a Giorno */}
-            <Animated.View
-              style={{
-                opacity: dayFadeAnim,
-                transform: [{ translateX: daySlideAnim }],
-              }}
-            >
-              {/* Sezione Selettore Lezioni del Giorno */}
-            <View style={styles.lecturesSection}>
+            {WEEKDAYS.map((w, pageIdx) => {
+              const isCurrentDayPage = pageIdx === currentWeekdayIndex;
+              const isPageWeekend = Boolean(w.isWeekend);
+              const pageSchedIdx = w.dayIdx - 1;
+              const pageClasses =
+                !isPageWeekend && schedule?.days && schedule.days[pageSchedIdx]
+                  ? [...schedule.days[pageSchedIdx]].sort(
+                      (a, b) =>
+                        parseTimeToMinutes(a.startTime || "08:30") -
+                        parseTimeToMinutes(b.startTime || "08:30"),
+                    )
+                  : [];
+
+              return (
+                <View
+                  key={w.dayIdx}
+                  style={[styles.pagerPage, { width: screenWidth }]}
+                >
+                  <ScrollView
+                    style={styles.scrollBody}
+                    contentContainerStyle={[
+                      styles.scrollContent,
+                      { paddingBottom: insets.bottom + 90 },
+                    ]}
+                    refreshControl={
+                      isCurrentDayPage ? (
+                        <RefreshControl
+                          refreshing={refreshing}
+                          onRefresh={() => loadData(true)}
+                          tintColor={theme.primary}
+                          colors={[theme.primary]}
+                        />
+                      ) : undefined
+                    }
+                  >
+                    {isCurrentDayPage ? (
+                      <View>
+<View style={styles.lecturesSection}>
               <View style={styles.sectionHeaderRow}>
                 <View
                   style={{
@@ -1144,6 +1663,7 @@ export default function ViaggioScreen() {
                 </View>
               ) : (
                 <ScrollView
+                  ref={lecturesScrollRef}
                   horizontal
                   nestedScrollEnabled={true}
                   showsHorizontalScrollIndicator={false}
@@ -1254,25 +1774,11 @@ export default function ViaggioScreen() {
               )}
             </View>
 
-            {/* Corpo Principale Itinerario */}
-            {loading ? (
-              <View style={[styles.centerContainer, { minHeight: 280 }]}>
-                <ActivityIndicator size="large" color={theme.primary} />
-                <Text style={styles.loadingText}>Calcolo tempi ...</Text>
-              </View>
+            {/* Corpo Principale Itinerario: se l'itinerario è già disponibile, lo renderizza direttamente azzerando sovrapposizioni e lampeggi con "Calcolo tempi..." */}
+            {!itinerary && loading ? (
+              renderLoadingItinerary()
             ) : !itinerary ? (
-              <View style={[styles.centerContainer, { minHeight: 280 }]}>
-                <Ionicons name="train-outline" size={44} color="#64748b" />
-                <Text style={styles.emptyTitle}>
-                  Nessun itinerario calcolato
-                </Text>
-                <TouchableOpacity
-                  style={styles.primaryBtn}
-                  onPress={() => loadData(true)}
-                >
-                  <Text style={styles.primaryBtnText}>Ricalcola</Text>
-                </TouchableOpacity>
-              </View>
+              renderEmptyItinerary()
             ) : (
               <>
                 {/* Hero Card */}
@@ -1285,142 +1791,67 @@ export default function ViaggioScreen() {
                     },
                   ]}
                 >
-                  <View style={styles.heroTopRow}>
-                    {(() => {
-                      let badgeText = itinerary.statusBadge.text;
-                      let badgeColor = itinerary.statusBadge.color;
-                      let badgeBg = `${itinerary.statusBadge.color}22`;
-                      let badgeBorder = `${itinerary.statusBadge.color}35`;
+                  {/* Badge in alto a destra: Durata + eventuale Ritardo a distanza ravvicinata (sganciati dal flusso verticale) */}
+                  <View style={styles.heroTopRightBadgeStack} pointerEvents="none">
+                    <View style={styles.durationBadge}>
+                      <Ionicons
+                        name="time-outline"
+                        size={13}
+                        color="#94a3b8"
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text style={styles.durationBadgeText}>
+                        {formatDuration(itinerary.totalDurationMinutes)}
+                      </Text>
+                    </View>
 
-                      const liveTrain = itinerary.liveTrain;
-                      const isNotDeparted = Boolean(
-                        liveTrain &&
-                          (liveTrain.isDeparted === false ||
-                            (liveTrain.statusDescription || "")
-                              .toLowerCase()
-                              .includes("non partito")),
-                      );
-
-                      if (!isSelectedDayToday) {
-                        badgeText = "Programmato";
-                        badgeColor = "#38bdf8";
-                        badgeBg = "rgba(56, 189, 248, 0.12)";
-                        badgeBorder = "rgba(56, 189, 248, 0.25)";
-                      } else if (
-                        badgeText === "Fonte: Trenitalia" ||
-                        badgeText === "Dati Trenitalia"
-                      ) {
-                        if (isNotDeparted) {
-                          const delayMins = liveTrain?.delayMinutes || 0;
-                          badgeText =
-                            delayMins > 0
-                              ? `Non partito (+${delayMins}m)`
-                              : "Non partito";
-                          badgeColor =
-                            delayMins > 15
-                              ? "#ef4444"
-                              : delayMins > 0
-                              ? "#f59e0b"
-                              : "#94a3b8";
-                          badgeBg =
-                            delayMins > 15
-                              ? "rgba(239, 68, 68, 0.15)"
-                              : delayMins > 0
-                              ? "rgba(245, 158, 11, 0.15)"
-                              : "rgba(148, 163, 184, 0.15)";
-                          badgeBorder =
-                            delayMins > 15
-                              ? "rgba(239, 68, 68, 0.3)"
-                              : delayMins > 0
-                              ? "rgba(245, 158, 11, 0.3)"
-                              : "rgba(148, 163, 184, 0.3)";
-                        } else {
-                          badgeText = "In orario";
-                          badgeColor = "#10b981";
-                          badgeBg = "rgba(16, 185, 129, 0.15)";
-                          badgeBorder = "rgba(16, 185, 129, 0.3)";
-                        }
-                      } else if (
-                        isNotDeparted &&
-                        (badgeText === "In orario" ||
-                          badgeText === "Rientro in orario")
-                      ) {
-                        const delayMins = liveTrain?.delayMinutes || 0;
-                        badgeText =
-                          delayMins > 0
-                            ? `Non partito (+${delayMins}m)`
-                            : "Non partito";
-                        badgeColor =
-                          delayMins > 15
-                            ? "#ef4444"
-                            : delayMins > 0
-                            ? "#f59e0b"
-                            : "#94a3b8";
-                        badgeBg =
-                          delayMins > 15
-                            ? "rgba(239, 68, 68, 0.15)"
-                            : delayMins > 0
-                            ? "rgba(245, 158, 11, 0.15)"
-                            : "rgba(148, 163, 184, 0.15)";
-                        badgeBorder =
-                          delayMins > 15
-                            ? "rgba(239, 68, 68, 0.3)"
-                            : delayMins > 0
-                            ? "rgba(245, 158, 11, 0.3)"
-                            : "rgba(148, 163, 184, 0.3)";
-                      }
-
-                      return (
-                        <View
+                    {isSelectedDayToday && heroDelayMin > 0 && (
+                      <View
+                        style={[
+                          styles.heroDelayPill,
+                          {
+                            backgroundColor:
+                              heroDelayMin > 5
+                                ? "rgba(239, 68, 68, 0.16)"
+                                : "rgba(245, 158, 11, 0.16)",
+                            borderColor:
+                              heroDelayMin > 5
+                                ? "rgba(239, 68, 68, 0.35)"
+                                : "rgba(245, 158, 11, 0.35)",
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={11}
+                          color={heroDelayMin > 5 ? "#ef4444" : "#f59e0b"}
+                          style={{ marginRight: 3 }}
+                        />
+                        <Text
                           style={[
-                            styles.statusBadge,
+                            styles.heroDelayPillText,
                             {
-                              backgroundColor: badgeBg,
-                              borderColor: badgeBorder,
-                              borderWidth: 1,
+                              color:
+                                heroDelayMin > 5 ? "#ef4444" : "#f59e0b",
                             },
                           ]}
                         >
-                          <View
-                            style={[
-                              styles.statusDot,
-                              { backgroundColor: badgeColor },
-                            ]}
-                          />
-                          <Text
-                            style={[
-                              styles.statusBadgeText,
-                              { color: badgeColor },
-                            ]}
-                          >
-                            {badgeText}
-                          </Text>
-                        </View>
-                      );
-                    })()}
-
-                    <View style={styles.heroTopRowRight}>
-                      <View style={styles.durationBadge}>
-                        <Ionicons
-                          name="time-outline"
-                          size={13}
-                          color="#94a3b8"
-                          style={{ marginRight: 4 }}
-                        />
-                        <Text style={styles.durationBadgeText}>
-                          {formatDuration(itinerary.totalDurationMinutes)}
+                          {`+${heroDelayMin}m ritardo`}
                         </Text>
                       </View>
-                    </View>
+                    )}
                   </View>
 
-                  <Text style={styles.heroHeadline}>
-                    {direction === "return"
-                      ? "Rientro stimato alle"
-                      : isWeekend || isTargetLectureFinished
-                        ? "Prossima partenza da casa alle"
-                        : "Parti da casa alle"}
-                  </Text>
+                  {/* Riga Intestazione Hero Card con Titolo */}
+                  <View style={styles.heroHeadlineRow}>
+                    <Text style={styles.heroHeadline}>
+                      {direction === "return"
+                        ? "Rientro stimato alle"
+                        : "Partenza stimata alle"}
+                    </Text>
+                  </View>
+
+                  {/* Orario Principale */}
                   <Text style={styles.heroBigTime}>
                     {direction === "outbound"
                       ? itinerary.departureTime
@@ -1480,7 +1911,9 @@ export default function ViaggioScreen() {
                           : isTargetLectureFinished
                             ? "Terminata • Treni da adesso"
                             : direction === "outbound"
-                              ? `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
+                              ? itinerary.lectureTimeStatus?.type === "late_arrival"
+                                ? `${itinerary.targetLecture?.room} • In corso (${itinerary.lectureTimeStatus.badgeText})`
+                                : `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
                               : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
                       </Text>
                     </View>
@@ -1499,225 +1932,245 @@ export default function ViaggioScreen() {
                       },
                     ]}
                   >
-                    <View style={styles.trainHighlightHeader}>
-                      <View style={styles.trainHighlightHeaderLeft}>
-                        <View
-                          style={[
-                            styles.trainNumberBadge,
-                            { backgroundColor: theme.primary },
-                          ]}
-                        >
-                          <Ionicons
-                            name="train"
-                            size={14}
-                            color="#fff"
-                            style={{ marginRight: 5 }}
-                          />
-                          <Text style={styles.trainNumberText}>
-                            {itinerary.liveTrain.trainNumber}
-                          </Text>
-                        </View>
+                    {(() => {
+                      const depM = parseTimeToMinutes(
+                        isSelectedDayToday
+                          ? itinerary.liveTrain.departureTimePlanned ||
+                              itinerary.liveTrain.departureTimeActual ||
+                              "00:00"
+                          : itinerary.liveTrain.departureTimePlanned || "00:00",
+                      );
+                      const arrM = parseTimeToMinutes(
+                        isSelectedDayToday
+                          ? itinerary.liveTrain.arrivalTimeActual ||
+                              itinerary.liveTrain.arrivalTimePlanned ||
+                              "00:00"
+                          : itinerary.liveTrain.arrivalTimePlanned || "00:00",
+                      );
+                      const tDuration =
+                        itinerary.liveTrain.durationMinutes ||
+                        (arrM > depM ? arrM - depM : 0);
 
-                        {trainStatus && (
-                          <View
-                            style={[
-                              styles.trainStatusPill,
-                              {
-                                backgroundColor: trainStatus.badgeBg,
-                                borderColor: trainStatus.badgeBorder,
-                              },
-                            ]}
-                          >
-                            <Ionicons
-                              name={trainStatus.iconName as any}
-                              size={12}
-                              color={trainStatus.badgeColor}
-                              style={{ marginRight: 4 }}
-                            />
-                            <Text
-                              style={[
-                                styles.trainStatusPillText,
-                                { color: trainStatus.badgeColor },
-                              ]}
-                            >
-                              {trainStatus.badgeLabel}
-                            </Text>
-                          </View>
-                        )}
+                      const cleanCommuter = (commuterStationName || "")
+                        .trim()
+                        .toLowerCase();
+                      let rawOrigin = (
+                        itinerary.liveTrain.originStationName || ""
+                      ).trim();
+                      if (/^S\d+$/i.test(rawOrigin)) {
+                        rawOrigin = "";
+                      }
+                      const isOriginRef = Boolean(
+                        itinerary.liveTrain.isOriginStation ||
+                        (rawOrigin &&
+                          cleanCommuter &&
+                          rawOrigin
+                            .toLowerCase()
+                            .includes(cleanCommuter)) ||
+                        (cleanCommuter &&
+                          rawOrigin &&
+                          cleanCommuter.includes(rawOrigin.toLowerCase())),
+                      );
+                      const displayOrigin = formatStationName(
+                        (isOriginRef ? commuterStationName : rawOrigin) ||
+                          commuterStationName ||
+                          "Stazione",
+                      );
 
-                        {/* Badge Dedicato al Ritardo (mostrato solo per la data odierna se presente ritardo live) */}
-                        {isSelectedDayToday && trainStatus?.delayBadge ? (
-                          <View
-                            style={[
-                              styles.trainStatusPill,
-                              {
-                                backgroundColor: trainStatus.delayBadge.bg,
-                                borderColor: trainStatus.delayBadge.border,
-                              },
-                            ]}
-                          >
-                            <Ionicons
-                              name="time-outline"
-                              size={12}
-                              color={trainStatus.delayBadge.color}
-                              style={{ marginRight: 4 }}
-                            />
-                            <Text
-                              style={[
-                                styles.trainStatusPillText,
-                                { color: trainStatus.delayBadge.color },
-                              ]}
-                            >
-                              {trainStatus.delayBadge.label}
-                            </Text>
-                          </View>
-                        ) : null}
+                      const statusLabel = trainStatus?.badgeLabel || "";
+                      const hasSeparateDelay = Boolean(
+                        isSelectedDayToday && trainStatus?.delayBadge,
+                      );
+                      const hasDwell = Boolean(
+                        isSelectedDayToday && trainStatus?.dwellBadge,
+                      );
 
-                        {/* Badge Distinto per Tempo di Sosta Fisica in Banchina (grigio neutro anti-confusione) */}
-                        {isSelectedDayToday && trainStatus?.dwellBadge ? (
-                          <View
-                            style={[
-                              styles.trainStatusPill,
-                              {
-                                backgroundColor: trainStatus.dwellBadge.bg,
-                                borderColor: trainStatus.dwellBadge.border,
-                              },
-                            ]}
-                          >
-                            <Ionicons
-                              name="hourglass-outline"
-                              size={11}
-                              color={trainStatus.dwellBadge.color}
-                              style={{ marginRight: 4 }}
-                            />
-                            <Text
-                              style={[
-                                styles.trainStatusPillText,
-                                { color: trainStatus.dwellBadge.color },
-                              ]}
-                            >
-                              {trainStatus.dwellBadge.label}
-                            </Text>
-                          </View>
-                        ) : null}
+                      // Un badge di stato entra comodamente sulla riga 1 tra il numero del treno e la durata
+                      // solo se sintetico (es. "+4m ritardo", "In orario", "Programmato") e non ci sono badge multipli
+                      const isShortStatus = Boolean(
+                        trainStatus &&
+                          !hasSeparateDelay &&
+                          !hasDwell &&
+                          statusLabel.length <= 13 &&
+                          !statusLabel.toLowerCase().includes("(") &&
+                          !statusLabel.toLowerCase().includes("interruz"),
+                      );
 
-                        {/* Badge Permanente Origine Corsa */}
-                        {(() => {
-                          const cleanCommuter = (commuterStationName || "")
-                            .trim()
-                            .toLowerCase();
-                          let rawOrigin = (
-                            itinerary.liveTrain.originStationName || ""
-                          ).trim();
-                          if (/^S\d+$/i.test(rawOrigin)) {
-                            rawOrigin = "";
-                          }
-                          const isOriginRef = Boolean(
-                            itinerary.liveTrain.isOriginStation ||
-                            (rawOrigin &&
-                              cleanCommuter &&
-                              rawOrigin
-                                .toLowerCase()
-                                .includes(cleanCommuter)) ||
-                            (cleanCommuter &&
-                              rawOrigin &&
-                              cleanCommuter.includes(rawOrigin.toLowerCase())),
-                          );
-                          const displayOrigin = formatStationName(
-                            (isOriginRef ? commuterStationName : rawOrigin) ||
-                              commuterStationName ||
-                              "Stazione",
-                          );
-
-                          return (
-                            <View
-                              style={[
-                                styles.trainOriginPill,
-                                isOriginRef
-                                  ? {
-                                      backgroundColor:
-                                        "rgba(14, 165, 233, 0.16)",
-                                      borderColor: "rgba(14, 165, 233, 0.35)",
-                                    }
-                                  : {
-                                      backgroundColor:
-                                        "rgba(148, 163, 184, 0.12)",
-                                      borderColor: "rgba(148, 163, 184, 0.25)",
-                                    },
-                              ]}
-                            >
-                              <Ionicons
-                                name="navigate-outline"
-                                size={11}
-                                color={isOriginRef ? "#38bdf8" : "#94a3b8"}
-                                style={{ marginRight: 4 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.trainOriginPillText,
-                                  {
-                                    color: isOriginRef ? "#38bdf8" : "#cbd5e1",
-                                  },
-                                ]}
-                              >
-                                {`Origine corsa • ${displayOrigin}`}
-                              </Text>
-                            </View>
-                          );
-                        })()}
-
-                        {/* Nuova Pill Durata Viaggio Treno */}
-                        {(() => {
-                          const depM = parseTimeToMinutes(
-                            isSelectedDayToday
-                              ? itinerary.liveTrain.departureTimePlanned ||
-                                  itinerary.liveTrain.departureTimeActual ||
-                                  "00:00"
-                              : itinerary.liveTrain.departureTimePlanned ||
-                                  "00:00",
-                          );
-                          const arrM = parseTimeToMinutes(
-                            isSelectedDayToday
-                              ? itinerary.liveTrain.arrivalTimeActual ||
-                                  itinerary.liveTrain.arrivalTimePlanned ||
-                                  "00:00"
-                              : itinerary.liveTrain.arrivalTimePlanned ||
-                                  "00:00",
-                          );
-                          const tDuration =
-                            itinerary.liveTrain.durationMinutes ||
-                            (arrM > depM ? arrM - depM : 0);
-                          if (tDuration <= 0) return null;
-
-                          return (
+                      const renderStatusBadges = () => (
+                        <>
+                          {/* Badge Stato (Non partito / In orario / Programmato / Cancellato / ecc.) */}
+                          {trainStatus && (
                             <View
                               style={[
                                 styles.trainStatusPill,
                                 {
-                                  backgroundColor: "rgba(56, 189, 248, 0.14)",
-                                  borderColor: "rgba(56, 189, 248, 0.32)",
+                                  backgroundColor: trainStatus.badgeBg,
+                                  borderColor: trainStatus.badgeBorder,
                                 },
                               ]}
                             >
                               <Ionicons
-                                name="timer-outline"
+                                name={trainStatus.iconName as any}
                                 size={12}
-                                color="#38bdf8"
+                                color={trainStatus.badgeColor}
                                 style={{ marginRight: 4 }}
                               />
                               <Text
                                 style={[
                                   styles.trainStatusPillText,
-                                  { color: "#38bdf8", fontWeight: "600" },
+                                  { color: trainStatus.badgeColor },
                                 ]}
                               >
-                                {`Durata: ${formatDuration(tDuration)}`}
+                                {trainStatus.badgeLabel}
                               </Text>
                             </View>
-                          );
-                        })()}
-                      </View>
-                    </View>
+                          )}
+
+                          {/* Badge Dedicato al Ritardo (mostrato solo per la data odierna se presente ritardo live) */}
+                          {isSelectedDayToday && trainStatus?.delayBadge ? (
+                            <View
+                              style={[
+                                styles.trainStatusPill,
+                                {
+                                  backgroundColor: trainStatus.delayBadge.bg,
+                                  borderColor: trainStatus.delayBadge.border,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="time-outline"
+                                size={12}
+                                color={trainStatus.delayBadge.color}
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.trainStatusPillText,
+                                  { color: trainStatus.delayBadge.color },
+                                ]}
+                              >
+                                {trainStatus.delayBadge.label}
+                              </Text>
+                            </View>
+                          ) : null}
+
+                          {/* Badge Distinto per Tempo di Sosta Fisica in Banchina (grigio neutro anti-confusione) */}
+                          {isSelectedDayToday && trainStatus?.dwellBadge ? (
+                            <View
+                              style={[
+                                styles.trainStatusPill,
+                                {
+                                  backgroundColor: trainStatus.dwellBadge.bg,
+                                  borderColor: trainStatus.dwellBadge.border,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="hourglass-outline"
+                                size={11}
+                                color={trainStatus.dwellBadge.color}
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.trainStatusPillText,
+                                  { color: trainStatus.dwellBadge.color },
+                                ]}
+                              >
+                                {trainStatus.dwellBadge.label}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </>
+                      );
+
+                      const renderOriginPill = () => (
+                        <View
+                          style={[
+                            styles.trainOriginPill,
+                            isOriginRef
+                              ? {
+                                  backgroundColor: "rgba(14, 165, 233, 0.16)",
+                                  borderColor: "rgba(14, 165, 233, 0.35)",
+                                }
+                              : {
+                                  backgroundColor: "rgba(148, 163, 184, 0.12)",
+                                  borderColor: "rgba(148, 163, 184, 0.25)",
+                                },
+                          ]}
+                        >
+                          <Ionicons
+                            name="navigate-outline"
+                            size={11}
+                            color={isOriginRef ? "#38bdf8" : "#94a3b8"}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.trainOriginPillText,
+                              {
+                                color: isOriginRef ? "#38bdf8" : "#cbd5e1",
+                              },
+                            ]}
+                          >
+                            {`Origine corsa • ${displayOrigin}`}
+                          </Text>
+                        </View>
+                      );
+
+                      const showSecondRow = !isShortStatus || Boolean(displayOrigin);
+
+                      return (
+                        <View style={styles.trainHighlightHeader}>
+                          {/* Riga superiore: Numero treno + eventuale badge sintetico a sinistra, Durata viaggio fissa a destra */}
+                          <View style={styles.trainHighlightTopRow}>
+                            <View style={styles.trainHighlightTopLeft}>
+                              <View
+                                style={[
+                                  styles.trainNumberBadge,
+                                  { backgroundColor: theme.primary },
+                                ]}
+                              >
+                                <Ionicons
+                                  name="train"
+                                  size={14}
+                                  color="#fff"
+                                  style={{ marginRight: 5 }}
+                                />
+                                <Text style={styles.trainNumberText}>
+                                  {itinerary.liveTrain.trainNumber}
+                                </Text>
+                              </View>
+
+                              {isShortStatus && renderStatusBadges()}
+                            </View>
+
+                            {/* Durata del Viaggio ancorata fissa in alto a destra */}
+                            {tDuration > 0 && (
+                              <View style={styles.durationBadge}>
+                                <Ionicons
+                                  name="time-outline"
+                                  size={13}
+                                  color="#94a3b8"
+                                  style={{ marginRight: 4 }}
+                                />
+                                <Text style={styles.durationBadgeText}>
+                                  {formatDuration(tDuration)}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+
+                          {/* Riga inferiore compatta: Stato esteso (es. Non partito (+34m)) affiancato ad Origine corsa */}
+                          {showSecondRow && (
+                            <View style={styles.trainHighlightPillsRow}>
+                              {!isShortStatus && renderStatusBadges()}
+                              {renderOriginPill()}
+                            </View>
+                          )}
+                        </View>
+                      );
+                })()}
 
                     {/* Eventuale Avviso / Variazione / Interruzione Trenitalia (solo se oggi) */}
                     {isSelectedDayToday && trainStatus?.alertMessage ? (
@@ -2519,7 +2972,14 @@ export default function ViaggioScreen() {
                 </View>
               </>
             )}
-            </Animated.View>
+                                  </View>
+                    ) : (
+                      renderAdjacentDayPreview(w, pageClasses)
+                    )}
+                  </ScrollView>
+                </View>
+              );
+            })}
           </ScrollView>
         )}
 
@@ -2619,13 +3079,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 10,
     width: "100%",
-    maxWidth: 600,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: "center",
   },
   nativeSegmentedControl: {
     height: 36,
     width: "100%",
-    maxWidth: 600,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: "center",
   },
   customSegmentedControl: {
@@ -2634,7 +3094,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     width: "100%",
-    maxWidth: 600,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: "center",
   },
   customSegmentBtn: {
@@ -2670,24 +3130,28 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     paddingTop: 2,
     width: "100%",
-    maxWidth: 600,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: "center",
   },
   daySegmentedBar: {
-    flexDirection: "row",
-    alignItems: "center",
     width: "100%",
     backgroundColor: "rgba(255, 255, 255, 0.05)",
     borderRadius: 16,
-    padding: 3.5,
+    padding: 3,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.09)",
+  },
+  daySegmentInnerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    height: 38,
     position: "relative",
   },
   slidingActivePill: {
     position: "absolute",
-    top: 3.5,
-    bottom: 3.5,
+    top: 0,
+    bottom: 0,
     height: 38,
     borderRadius: 12,
     borderWidth: 1.5,
@@ -2697,35 +3161,32 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 1,
   },
-  daySegmentWrapper: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    zIndex: 2,
-  },
-  daySegmentWrapperWithDivider: {
-    paddingLeft: 2,
-  },
-  dayWeekendDivider: {
-    width: 1,
-    height: 18,
-    backgroundColor: "rgba(255, 255, 255, 0.14)",
-    marginRight: 3,
-  },
   daySegmentItem: {
     flex: 1,
     height: 38,
     borderRadius: 12,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
+    paddingTop: 8,
     backgroundColor: "transparent",
     borderWidth: 0,
+    zIndex: 2,
+    position: "relative",
+  },
+  dayWeekendDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.14)",
+    alignSelf: "center",
+    marginHorizontal: 1,
   },
   daySegmentLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    lineHeight: 14,
+    fontWeight: "800",
     color: "#a1a1aa",
-    letterSpacing: 0.3,
+    textAlign: "center",
+    includeFontPadding: false,
   },
   daySegmentLabelWeekend: {
     color: "#d4d4d8",
@@ -2735,10 +3196,12 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   daySegmentDot: {
-    width: 3.5,
-    height: 3.5,
+    position: "absolute",
+    bottom: 6,
+    alignSelf: "center",
+    width: 4,
+    height: 4,
     borderRadius: 2,
-    marginTop: 2,
   },
   daySegmentDotActive: {
     backgroundColor: "#ffffff",
@@ -2906,6 +3369,14 @@ const styles = StyleSheet.create({
   },
 
   /* Scroll Body */
+  horizontalPager: {
+    flex: 1,
+    width: "100%",
+  },
+  pagerPage: {
+    flex: 1,
+    height: "100%",
+  },
   scrollBody: {
     flex: 1,
   },
@@ -2916,12 +3387,21 @@ const styles = StyleSheet.create({
 
   /* Hero Card */
   heroCard: {
+    position: "relative",
     backgroundColor: "rgba(255,255,255,0.05)",
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
     padding: 16,
     marginBottom: 12,
+  },
+  heroTopRightBadgeStack: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    alignItems: "flex-end",
+    gap: 8,
+    zIndex: 2,
   },
   heroTopRow: {
     flexDirection: "row",
@@ -2967,6 +3447,22 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#cbd5e1",
   },
+  heroDelayPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  heroDelayPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  heroHeadlineRow: {
+    marginBottom: 0,
+    paddingRight: 115,
+  },
   heroHeadline: {
     fontSize: 13,
     color: "#94a3b8",
@@ -2974,10 +3470,13 @@ const styles = StyleSheet.create({
   },
   heroBigTime: {
     fontSize: 42,
+    lineHeight: 46,
     fontWeight: "800",
     color: "#ffffff",
     letterSpacing: -1,
-    marginVertical: 4,
+    includeFontPadding: false,
+    marginTop: 6,
+    marginBottom: 8,
   },
   heroTargetLectureBox: {
     flexDirection: "row",
@@ -2985,7 +3484,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(130, 36, 51, 0.15)",
     borderRadius: 12,
     padding: 10,
-    marginTop: 6,
+    marginTop: 0,
     borderWidth: 1,
     borderColor: "rgba(130, 36, 51, 0.3)",
   },
@@ -3010,10 +3509,26 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   trainHighlightHeader: {
+    marginBottom: 12,
+  },
+  trainHighlightTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  trainHighlightTopLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  trainHighlightPillsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
   },
   trainHighlightHeaderLeft: {
     flexDirection: "row",

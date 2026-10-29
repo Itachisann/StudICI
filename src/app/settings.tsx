@@ -8,6 +8,7 @@ import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Keyboard,
@@ -46,6 +47,23 @@ import {
   ManualClassEvent,
   getManualEvents,
 } from "../utils/manualEvents";
+import * as Sharing from "expo-sharing";
+import {
+  StudentInfo,
+  getStudentInfo,
+  saveStudentInfo,
+  subscribeToStudentInfoChanges,
+} from "../utils/studentInfo";
+import {
+  SavedDocument,
+  SavedItemType,
+  getSavedDocuments,
+  saveSavedDocument,
+  saveSavedDocumentsBatch,
+  deleteSavedDocument,
+  persistPickedFile,
+  subscribeToSavedDocumentsChanges,
+} from "../utils/savedDocuments";
 import {
   AttendanceRecord,
   AttendanceStats,
@@ -58,6 +76,7 @@ import {
 import {
   copyCloudSyncCodeToClipboard,
   dissociateDevice,
+  ensureDeviceRegisteredInCloud,
   getCloudSyncId,
   getICloudAutoSyncEnabled,
   getLastCloudSync,
@@ -122,6 +141,34 @@ const formatSyncDate = (ts: number | null): string => {
   return `${d.toLocaleDateString("it-IT", { day: "numeric", month: "short" })} alle ${timeStr}`;
 };
 
+function getSafeDocumentPicker(): typeof import("expo-document-picker") | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("expo-document-picker");
+  } catch {
+    return null;
+  }
+}
+
+interface BatchDraftItem {
+  tempId: string;
+  type: SavedItemType;
+  title: string;
+  url: string;
+  fileName?: string;
+  fileUri?: string;
+  fileSize?: number;
+  mimeType?: string;
+  note: string;
+}
+
+function formatDocFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function ProfiloScreen() {
   const insets = useSafeAreaInsets();
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
@@ -178,6 +225,22 @@ export default function ProfiloScreen() {
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // Stati Dati Studente (Matricola & Email)
+  const [studentInfo, setStudentInfo] = useState<StudentInfo>({
+    matricola: "",
+    email: "",
+    updatedAt: 0,
+  });
+  const [studentModalVisible, setStudentModalVisible] = useState(false);
+  const [tempMatricola, setTempMatricola] = useState("");
+  const [tempEmail, setTempEmail] = useState("");
+
+  // Stati Documenti e Link da conservare (supporto batch multi-item)
+  const [savedDocs, setSavedDocs] = useState<SavedDocument[]>([]);
+  const [editingDoc, setEditingDoc] = useState<SavedDocument | null>(null);
+  const [batchDrafts, setBatchDrafts] = useState<BatchDraftItem[]>([]);
+  const [batchModalVisible, setBatchModalVisible] = useState(false);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => setAppUpdate(info));
@@ -263,15 +326,25 @@ export default function ProfiloScreen() {
       setAttendanceStats(getAttendanceStats(attList));
 
       // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
-      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig, alarmCfg] =
-        await Promise.all([
-          getCloudSyncId(),
-          getLastCloudSync(),
-          getLastCalendarSync(),
-          getICloudAutoSyncEnabled(),
-          getCommuterConfig(),
-          getAlarmSettings(),
-        ]);
+      const [
+        cloudId,
+        lastCloud,
+        lastCal,
+        icloudEnabled,
+        commConfig,
+        alarmCfg,
+        student,
+        docs,
+      ] = await Promise.all([
+        getCloudSyncId(),
+        getLastCloudSync(),
+        getLastCalendarSync(),
+        getICloudAutoSyncEnabled(),
+        getCommuterConfig(),
+        getAlarmSettings(),
+        getStudentInfo(),
+        getSavedDocuments(),
+      ]);
 
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
@@ -279,6 +352,8 @@ export default function ProfiloScreen() {
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
       setAlarmSettings(alarmCfg);
+      setStudentInfo(student);
+      setSavedDocs(docs);
 
       // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
       getPairedDevicesInfo()
@@ -286,6 +361,8 @@ export default function ProfiloScreen() {
           if (pairs) setPairedDevices(pairs);
         })
         .catch(() => {});
+
+      ensureDeviceRegisteredInCloud().catch(() => {});
 
       if (storedUrl && localTabs.length === 0) {
         fetchTabs(storedUrl)
@@ -357,10 +434,337 @@ export default function ProfiloScreen() {
     const unsubAlarms = subscribeToAlarmChanges((nextSettings) => {
       setAlarmSettings(nextSettings);
     });
+    const unsubStudent = subscribeToStudentInfoChanges(async () => {
+      const s = await getStudentInfo();
+      setStudentInfo(s);
+    });
+    const unsubDocs = subscribeToSavedDocumentsChanges(async () => {
+      const d = await getSavedDocuments();
+      setSavedDocs(d);
+    });
     return () => {
       unsubAlarms();
+      unsubStudent();
+      unsubDocs();
     };
   }, []);
+
+  const handleOpenDocumentUrl = useCallback(async (urlStr: string) => {
+    try {
+      let clean = urlStr.trim();
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(clean)) {
+        clean = `https://${clean}`;
+      }
+      const canOpen = await Linking.canOpenURL(clean);
+      if (canOpen) {
+        await Linking.openURL(clean);
+      } else {
+        Alert.alert("Link non valido", `Impossibile aprire l'URL: ${clean}`);
+      }
+    } catch (e: any) {
+      Alert.alert("Errore apertura", e?.message || "Impossibile aprire il link.");
+    }
+  }, []);
+
+  const handleOpenItem = useCallback(
+    async (doc: SavedDocument) => {
+      try {
+        if (doc.type === "link" && doc.url) {
+          await handleOpenDocumentUrl(doc.url);
+        } else if (doc.type === "file") {
+          if (doc.fileUri) {
+            const isSharingAvailable = await Sharing.isAvailableAsync();
+            if (isSharingAvailable) {
+              await Sharing.shareAsync(doc.fileUri, {
+                mimeType: doc.mimeType,
+                dialogTitle: doc.title,
+              });
+            } else {
+              await Linking.openURL(doc.fileUri);
+            }
+          } else if (doc.url) {
+            await handleOpenDocumentUrl(doc.url);
+          } else {
+            Alert.alert(doc.title, "Nessun percorso file associato.");
+          }
+        } else if (doc.type === "note") {
+          Alert.alert(doc.title, doc.note || "(Nessun testo)", [
+            { text: "Chiudi", style: "cancel" },
+            {
+              text: "Copia testo",
+              onPress: async () => {
+                if (doc.note) {
+                  await Clipboard.setStringAsync(doc.note);
+                  Alert.alert("Copiato", "Testo della nota copiato negli appunti.");
+                }
+              },
+            },
+          ]);
+        }
+      } catch (err: any) {
+        Alert.alert("Errore apertura", err?.message || "Impossibile aprire l'elemento.");
+      }
+    },
+    [handleOpenDocumentUrl],
+  );
+
+  const handleOpenBatchModal = useCallback(() => {
+    setEditingDoc(null);
+    setBatchDrafts([
+      {
+        tempId: `draft_${Date.now()}_0`,
+        type: "link",
+        title: "",
+        url: "",
+        note: "",
+      },
+    ]);
+    setBatchModalVisible(true);
+  }, []);
+
+  const handleOpenEditModal = useCallback((doc: SavedDocument) => {
+    setEditingDoc(doc);
+    setBatchDrafts([
+      {
+        tempId: doc.id,
+        type: doc.type,
+        title: doc.title,
+        url: doc.url || "",
+        fileName: doc.fileName,
+        fileUri: doc.fileUri,
+        fileSize: doc.fileSize,
+        mimeType: doc.mimeType,
+        note: doc.note || "",
+      },
+    ]);
+    setBatchModalVisible(true);
+  }, []);
+
+  const handleAddBatchSlot = useCallback(() => {
+    setBatchDrafts((prev) => [
+      ...prev,
+      {
+        tempId: `draft_${Date.now()}_${prev.length}`,
+        type: "link",
+        title: "",
+        url: "",
+        note: "",
+      },
+    ]);
+  }, []);
+
+  const handleRemoveBatchSlot = useCallback((tempId: string) => {
+    setBatchDrafts((prev) => prev.filter((d) => d.tempId !== tempId));
+  }, []);
+
+  const handleUpdateDraft = useCallback(
+    (tempId: string, field: keyof BatchDraftItem, value: any) => {
+      setBatchDrafts((prev) =>
+        prev.map((d) => (d.tempId === tempId ? { ...d, [field]: value } : d)),
+      );
+    },
+    [],
+  );
+
+  const handlePickFileForDraft = useCallback(async (tempId: string) => {
+    try {
+      const DocumentPicker = getSafeDocumentPicker();
+      if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
+        Alert.alert(
+          "Selezione file non disponibile",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android).\n\nNel frattempo puoi incollare il link web/cloud al file (es. Google Drive, OneDrive o URL diretto del PDF) nel campo sottostante.",
+          [{ text: "OK" }],
+        );
+        return;
+      }
+
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+      const file = res.assets[0];
+      const permanentUri = await persistPickedFile(file.uri, file.name);
+
+      setBatchDrafts((prev) =>
+        prev.map((d) => {
+          if (d.tempId !== tempId) return d;
+          return {
+            ...d,
+            fileName: file.name,
+            fileUri: permanentUri,
+            fileSize: file.size,
+            mimeType: file.mimeType || undefined,
+            title: d.title.trim() ? d.title : file.name.replace(/\.[^/.]+$/, ""),
+          };
+        }),
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore selezione file",
+        err?.message || "Impossibile caricare il file dal dispositivo.",
+      );
+    }
+  }, []);
+
+  const handleSaveBatchDrafts = useCallback(async () => {
+    if (editingDoc) {
+      const draft = batchDrafts[0];
+      if (!draft) return;
+      const fallbackTitle =
+        draft.title.trim() ||
+        draft.fileName ||
+        (draft.url ? draft.url.replace(/^https?:\/\//i, "").split("/")[0] : "") ||
+        editingDoc.title;
+
+      await saveSavedDocument({
+        id: editingDoc.id,
+        type: draft.type,
+        title: fallbackTitle,
+        url: draft.url ? draft.url.trim() : undefined,
+        fileName: draft.type === "file" ? draft.fileName : undefined,
+        fileUri: draft.type === "file" ? draft.fileUri : undefined,
+        fileSize: draft.type === "file" ? draft.fileSize : undefined,
+        mimeType: draft.type === "file" ? draft.mimeType : undefined,
+        note: draft.note.trim() || undefined,
+      });
+      const updated = await getSavedDocuments();
+      setSavedDocs(updated);
+      setBatchModalVisible(false);
+      setEditingDoc(null);
+      setBatchDrafts([]);
+      return;
+    }
+
+    const validDrafts = batchDrafts.filter((d) => {
+      if (d.type === "link") return d.url.trim().length > 0 || d.title.trim().length > 0;
+      if (d.type === "file")
+        return !!d.fileUri || d.url.trim().length > 0 || d.title.trim().length > 0;
+      if (d.type === "note") return d.note.trim().length > 0 || d.title.trim().length > 0;
+      return false;
+    });
+
+    if (validDrafts.length === 0) {
+      Alert.alert(
+        "Campi non compilati",
+        "Inserisci almeno un link, un file o una nota prima di procedere.",
+      );
+      return;
+    }
+
+    const itemsToSave = validDrafts.map((d) => {
+      let fallbackTitle = d.title.trim();
+      if (!fallbackTitle) {
+        if (d.type === "file" && d.fileName) fallbackTitle = d.fileName;
+        else if (d.type === "link" && d.url)
+          fallbackTitle = d.url.replace(/^https?:\/\//i, "").split("/")[0] || "Link";
+        else if (d.type === "note") fallbackTitle = d.note.slice(0, 30) || "Nota";
+        else fallbackTitle = "Elemento";
+      }
+
+      return {
+        type: d.type,
+        title: fallbackTitle,
+        url: d.url ? d.url.trim() : undefined,
+        fileName: d.type === "file" ? d.fileName : undefined,
+        fileUri: d.type === "file" ? d.fileUri : undefined,
+        fileSize: d.type === "file" ? d.fileSize : undefined,
+        mimeType: d.type === "file" ? d.mimeType : undefined,
+        note: d.note.trim() || undefined,
+      };
+    });
+
+    try {
+      await saveSavedDocumentsBatch(itemsToSave);
+      const updated = await getSavedDocuments();
+      setSavedDocs(updated);
+      setBatchModalVisible(false);
+      setBatchDrafts([]);
+    } catch (err: any) {
+      Alert.alert(
+        "Errore salvataggio",
+        err?.message || "Impossibile salvare gli elementi.",
+      );
+    }
+  }, [batchDrafts, editingDoc]);
+
+  const handleDocumentOptions = useCallback(
+    (doc: SavedDocument) => {
+      const isLink = doc.type === "link";
+      const isFile = doc.type === "file";
+      const openLabel = isLink ? "Apri link" : isFile ? "Apri / Condividi file" : "Visualizza nota";
+      const copyLabel = isLink ? "Copia link" : isFile ? "Copia nome file" : "Copia testo nota";
+      const messageText = isLink
+        ? doc.url
+        : isFile
+        ? doc.fileName || doc.fileUri
+        : doc.note;
+
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: doc.title,
+            message: messageText,
+            options: [
+              "Annulla",
+              openLabel,
+              copyLabel,
+              "Modifica",
+              "Elimina",
+            ],
+            destructiveButtonIndex: 4,
+            cancelButtonIndex: 0,
+          },
+          async (buttonIndex: number) => {
+            if (buttonIndex === 1) {
+              handleOpenItem(doc);
+            } else if (buttonIndex === 2) {
+              const textToCopy = isLink ? doc.url || "" : isFile ? doc.fileName || "" : doc.note || "";
+              if (textToCopy) {
+                await Clipboard.setStringAsync(textToCopy);
+                Alert.alert("Copiato", "Copiato negli appunti.");
+              }
+            } else if (buttonIndex === 3) {
+              handleOpenEditModal(doc);
+            } else if (buttonIndex === 4) {
+              Alert.alert(
+                "Elimina elemento",
+                `Vuoi davvero eliminare "${doc.title}"?`,
+                [
+                  { text: "Annulla", style: "cancel" },
+                  {
+                    text: "Elimina",
+                    style: "destructive",
+                    onPress: async () => {
+                      await deleteSavedDocument(doc.id);
+                      const updated = await getSavedDocuments();
+                      setSavedDocs(updated);
+                    },
+                  },
+                ],
+              );
+            }
+          },
+        );
+      } else {
+        Alert.alert(doc.title, messageText, [
+          { text: "Annulla", style: "cancel" },
+          { text: openLabel, onPress: () => handleOpenItem(doc) },
+          { text: "Modifica", onPress: () => handleOpenEditModal(doc) },
+          {
+            text: "Elimina",
+            style: "destructive",
+            onPress: async () => {
+              await deleteSavedDocument(doc.id);
+              const updated = await getSavedDocuments();
+              setSavedDocs(updated);
+            },
+          },
+        ]);
+      }
+    },
+    [handleOpenItem, handleOpenEditModal],
+  );
 
   const selectDegree = async (degree: Degree) => {
     setCourseModalVisible(false);
@@ -1246,6 +1650,62 @@ export default function ProfiloScreen() {
                 );
               })() : null}
             </View>
+
+            {/* Dati Studente: Matricola ed Email se impostate escono sotto ai badge Laurea triennale ecc. */}
+            {Boolean(studentInfo.matricola || studentInfo.email) && (
+              <View style={styles.profileStudentInfoRow}>
+                {Boolean(studentInfo.matricola) && (
+                  <TouchableOpacity
+                    style={styles.profileStudentPill}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Clipboard.setStringAsync(studentInfo.matricola);
+                      Alert.alert(
+                        "Copiato",
+                        `Matricola ${studentInfo.matricola} copiata negli appunti.`,
+                      );
+                    }}
+                  >
+                    <Ionicons
+                      name="card-outline"
+                      size={11}
+                      color={theme.accent}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={styles.profileStudentPillText}>
+                      Matr. {studentInfo.matricola}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {Boolean(studentInfo.email) && (
+                  <TouchableOpacity
+                    style={styles.profileStudentPill}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Clipboard.setStringAsync(studentInfo.email);
+                      Alert.alert(
+                        "Copiato",
+                        `Email ${studentInfo.email} copiata negli appunti.`,
+                      );
+                    }}
+                  >
+                    <Ionicons
+                      name="mail-outline"
+                      size={11}
+                      color={theme.accent}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text
+                      style={styles.profileStudentPillText}
+                      numberOfLines={1}
+                    >
+                      {studentInfo.email}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </View>
         </View>
 
@@ -1314,6 +1774,169 @@ export default function ProfiloScreen() {
           Modifica il corso di laurea e il canale/anno predefinito per
           l&apos;app. Queste impostazioni influenzano le lezioni, gli orari e le
           aule visualizzate.
+        </Text>
+
+        {/* Gruppo: DATI STUDENTE (Sezione Unica) */}
+        <Text style={styles.sectionHeader}>DATI STUDENTE</Text>
+        <View style={styles.groupedCard}>
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              setTempMatricola(studentInfo.matricola || "");
+              setTempEmail(studentInfo.email || "");
+              setStudentModalVisible(true);
+            }}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="id-card-outline" size={17} color={theme.accent} />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Dati studente</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {studentInfo.matricola || studentInfo.email
+                  ? [
+                      studentInfo.matricola ? `Matr. ${studentInfo.matricola}` : null,
+                      studentInfo.email || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ")
+                  : "Tocca per inserire matricola ed email"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>
+          La matricola e l&apos;email istituzionale vengono visualizzate nell&apos;intestazione del profilo e sincronizzate su tutti i tuoi dispositivi collegati.
+        </Text>
+
+        {/* Gruppo: DOCUMENTI E LINK */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderNoMargin}>DOCUMENTI E LINK</Text>
+          <TouchableOpacity
+            onPress={handleOpenBatchModal}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={[styles.sectionHeaderAction, { color: theme.accent }]}>
+              + Aggiungi
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.groupedCard}>
+          {savedDocs.length === 0 ? (
+            <TouchableOpacity
+              style={styles.tableRow}
+              activeOpacity={0.7}
+              onPress={handleOpenBatchModal}
+            >
+              <View
+                style={[
+                  styles.iconBox,
+                  { backgroundColor: theme.subtle, borderColor: theme.border },
+                ]}
+              >
+                <Ionicons name="add" size={18} color={theme.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>Aggiungi link, file o note</Text>
+                <Text style={styles.docRowSubtitle}>
+                  PDF, dispense, link Google Drive, appunti...
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={15} color="#48484a" />
+            </TouchableOpacity>
+          ) : (
+            <>
+              {savedDocs.map((doc, idx) => {
+                let iconName: any = "link-outline";
+                if (doc.type === "file") {
+                  iconName = "document-text-outline";
+                } else if (doc.type === "note") {
+                  iconName = "reader-outline";
+                } else if (doc.url?.includes("drive.google") || doc.url?.includes("docs.google")) {
+                  iconName = "cloud-outline";
+                }
+
+                let subtitle = "";
+                if (doc.type === "link") {
+                  subtitle = doc.url ? doc.url.replace(/^https?:\/\//i, "").split("/")[0] : "Link web";
+                  if (doc.note) subtitle += ` • ${doc.note}`;
+                } else if (doc.type === "file") {
+                  subtitle = [doc.fileName || "File", formatDocFileSize(doc.fileSize), doc.note]
+                    .filter(Boolean)
+                    .join(" • ");
+                } else if (doc.type === "note") {
+                  subtitle = doc.note || "Nota personale";
+                }
+
+                return (
+                  <View key={doc.id}>
+                    {idx > 0 && <View style={styles.separator} />}
+                    <TouchableOpacity
+                      style={styles.tableRow}
+                      activeOpacity={0.7}
+                      onPress={() => handleOpenItem(doc)}
+                      onLongPress={() => handleDocumentOptions(doc)}
+                    >
+                      <View
+                        style={[
+                          styles.iconBox,
+                          { backgroundColor: theme.subtle, borderColor: theme.border },
+                        ]}
+                      >
+                        <Ionicons name={iconName} size={17} color={theme.accent} />
+                      </View>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={styles.rowTitle} numberOfLines={1}>
+                          {doc.title}
+                        </Text>
+                        <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                          {subtitle}
+                        </Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.docEditIconBtn}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        onPress={() => handleDocumentOptions(doc)}
+                      >
+                        <Ionicons name="ellipsis-horizontal" size={17} color="#8e8e93" />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={styles.tableRow}
+                activeOpacity={0.7}
+                onPress={handleOpenBatchModal}
+              >
+                <View
+                  style={[
+                    styles.iconBox,
+                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                  ]}
+                >
+                  <Ionicons name="add" size={18} color={theme.accent} />
+                </View>
+                <Text style={[styles.rowTitle, { color: theme.accent }]}>
+                  Aggiungi altri documenti o link
+                </Text>
+                <Ionicons name="chevron-forward" size={15} color="#48484a" />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+        <Text style={styles.sectionFooter}>
+          Conserva documenti didattici, dispense e link utili (Google Drive, Teams, PDF) sincronizzati tra tutti i tuoi dispositivi.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -2750,7 +3373,446 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Schermata Download Unificato */}
+      {/* Modal Dati Studente (Matricola & Email) */}
+      <NativeSheetModal
+        visible={studentModalVisible}
+        onClose={() => setStudentModalVisible(false)}
+        title="Dati Studente"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Salva",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: async () => {
+              await saveStudentInfo({
+                matricola: tempMatricola,
+                email: tempEmail,
+              });
+              const fresh = await getStudentInfo();
+              setStudentInfo(fresh);
+              setStudentModalVisible(false);
+            },
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.modalCardGroup}>
+            <View style={styles.modalInputRow}>
+              <View style={styles.modalInputIconBox}>
+                <Ionicons name="card-outline" size={18} color={theme.accent} />
+              </View>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Matricola (es. 2012345)"
+                placeholderTextColor="#71717a"
+                value={tempMatricola}
+                onChangeText={setTempMatricola}
+                keyboardType="numeric"
+                returnKeyType="next"
+              />
+              {tempMatricola.length > 0 && (
+                <TouchableOpacity onPress={() => setTempMatricola("")}>
+                  <Ionicons name="close-circle" size={17} color="#71717a" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.separator} />
+
+            <View style={styles.modalInputRow}>
+              <View style={styles.modalInputIconBox}>
+                <Ionicons name="mail-outline" size={18} color={theme.accent} />
+              </View>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Email (es. cognome.1234567@studenti.uniroma1.it)"
+                placeholderTextColor="#71717a"
+                value={tempEmail}
+                onChangeText={setTempEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+              />
+              {tempEmail.length > 0 && (
+                <TouchableOpacity onPress={() => setTempEmail("")}>
+                  <Ionicons name="close-circle" size={17} color="#71717a" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          <Text style={styles.modalCardHelperText}>
+            La matricola e l&apos;email istituzionale sono salvate sul dispositivo e sincronizzate in cloud su tutti i tuoi dispositivi collegati. Appaiono sotto i badge della scheda del tuo profilo.
+          </Text>
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Modal Aggiunta Multipla Batch & Modifica Documenti / Link / Note */}
+      <NativeSheetModal
+        visible={batchModalVisible}
+        onClose={() => {
+          setBatchModalVisible(false);
+          setEditingDoc(null);
+          setBatchDrafts([]);
+        }}
+        title={editingDoc ? "Modifica Elemento" : "Aggiungi Documenti e Link"}
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Salva",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleSaveBatchDrafts,
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {batchDrafts.map((draft, idx) => (
+            <View key={draft.tempId} style={styles.batchCardContainer}>
+              {/* Intestazione elemento e tasto elimina slot se più di 1 */}
+              <View style={styles.batchCardHeader}>
+                <Text style={styles.batchCardTitle}>
+                  {editingDoc ? "Elemento" : `Elemento ${idx + 1}`}
+                </Text>
+                {!editingDoc && batchDrafts.length > 1 && (
+                  <TouchableOpacity
+                    onPress={() => handleRemoveBatchSlot(draft.tempId)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={17} color="#ef4444" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Selettore tipo elemento: Link | File / PDF | Nota */}
+              <View style={styles.batchTypeSelector}>
+                <TouchableOpacity
+                  style={[
+                    styles.batchTypeBtn,
+                    draft.type === "link" && [
+                      styles.batchTypeBtnActive,
+                      { backgroundColor: theme.primary },
+                    ],
+                  ]}
+                  onPress={() => handleUpdateDraft(draft.tempId, "type", "link")}
+                >
+                  <Ionicons
+                    name="link-outline"
+                    size={14}
+                    color={draft.type === "link" ? "#ffffff" : "#a1a1aa"}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.batchTypeBtnText,
+                      draft.type === "link" && styles.batchTypeBtnTextActive,
+                    ]}
+                  >
+                    Link
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.batchTypeBtn,
+                    draft.type === "file" && [
+                      styles.batchTypeBtnActive,
+                      { backgroundColor: theme.primary },
+                    ],
+                  ]}
+                  onPress={() => handleUpdateDraft(draft.tempId, "type", "file")}
+                >
+                  <Ionicons
+                    name="document-text-outline"
+                    size={14}
+                    color={draft.type === "file" ? "#ffffff" : "#a1a1aa"}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.batchTypeBtnText,
+                      draft.type === "file" && styles.batchTypeBtnTextActive,
+                    ]}
+                  >
+                    File / PDF
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.batchTypeBtn,
+                    draft.type === "note" && [
+                      styles.batchTypeBtnActive,
+                      { backgroundColor: theme.primary },
+                    ],
+                  ]}
+                  onPress={() => handleUpdateDraft(draft.tempId, "type", "note")}
+                >
+                  <Ionicons
+                    name="reader-outline"
+                    size={14}
+                    color={draft.type === "note" ? "#ffffff" : "#a1a1aa"}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.batchTypeBtnText,
+                      draft.type === "note" && styles.batchTypeBtnTextActive,
+                    ]}
+                  >
+                    Nota
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Gruppo input per l'elemento */}
+              <View style={styles.modalCardGroup}>
+                {/* Campo Titolo */}
+                <View style={styles.modalInputRow}>
+                  <View style={styles.modalInputIconBox}>
+                    <Ionicons name="text-outline" size={17} color={theme.accent} />
+                  </View>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder={
+                      draft.type === "link"
+                        ? "Titolo link (es. Drive, Teams, Portale)"
+                        : draft.type === "file"
+                        ? "Titolo file (es. Dispensa, Regolamento)"
+                        : "Titolo nota (es. Appunti, Credenziali)"
+                    }
+                    placeholderTextColor="#71717a"
+                    value={draft.title}
+                    onChangeText={(text) =>
+                      handleUpdateDraft(draft.tempId, "title", text)
+                    }
+                    returnKeyType="next"
+                  />
+                  {draft.title.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => handleUpdateDraft(draft.tempId, "title", "")}
+                    >
+                      <Ionicons name="close-circle" size={16} color="#71717a" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {draft.type === "link" && (
+                  <>
+                    <View style={styles.separator} />
+                    <View style={styles.modalInputRow}>
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons name="globe-outline" size={17} color={theme.accent} />
+                      </View>
+                      <TextInput
+                        style={styles.modalTextInput}
+                        placeholder="Link / URL (es. drive.google.com/...)"
+                        placeholderTextColor="#71717a"
+                        value={draft.url}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "url", text)
+                        }
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                      />
+                      {draft.url.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => handleUpdateDraft(draft.tempId, "url", "")}
+                        >
+                          <Ionicons name="close-circle" size={16} color="#71717a" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {draft.type === "file" && (
+                  <>
+                    <View style={styles.separator} />
+                    <TouchableOpacity
+                      style={styles.batchFilePickerRow}
+                      activeOpacity={0.7}
+                      onPress={() => handlePickFileForDraft(draft.tempId)}
+                    >
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons
+                          name={
+                            draft.fileName ? "document-attach" : "cloud-upload-outline"
+                          }
+                          size={19}
+                          color={theme.accent}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        {draft.fileName ? (
+                          <>
+                            <Text style={styles.batchPickedFileName} numberOfLines={1}>
+                              {draft.fileName}
+                            </Text>
+                            <Text style={styles.batchPickedFileSize}>
+                              {formatDocFileSize(draft.fileSize)} • Tocca per sostituire
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={styles.batchFilePlaceholder}>
+                            Tocca per selezionare PDF o file dal dispositivo
+                          </Text>
+                        )}
+                      </View>
+                      <Ionicons name="folder-open-outline" size={18} color="#8e8e93" />
+                    </TouchableOpacity>
+
+                    <View style={styles.separator} />
+                    <View style={styles.modalInputRow}>
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons name="link-outline" size={17} color={theme.accent} />
+                      </View>
+                      <TextInput
+                        style={styles.modalTextInput}
+                        placeholder="Oppure inserisci URL del file (es. https://.../file.pdf)"
+                        placeholderTextColor="#71717a"
+                        value={draft.url}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "url", text)
+                        }
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                      />
+                      {draft.url.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => handleUpdateDraft(draft.tempId, "url", "")}
+                        >
+                          <Ionicons name="close-circle" size={16} color="#71717a" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {draft.type === "note" ? (
+                  <>
+                    <View style={styles.separator} />
+                    <View
+                      style={[
+                        styles.modalInputRow,
+                        { alignItems: "flex-start", minHeight: 84 },
+                      ]}
+                    >
+                      <View style={[styles.modalInputIconBox, { marginTop: 2 }]}>
+                        <Ionicons name="create-outline" size={17} color={theme.accent} />
+                      </View>
+                      <TextInput
+                        style={[
+                          styles.modalTextInput,
+                          { minHeight: 74, textAlignVertical: "top" },
+                        ]}
+                        placeholder="Scrivi qui il testo della nota..."
+                        placeholderTextColor="#71717a"
+                        value={draft.note}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "note", text)
+                        }
+                        multiline
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.separator} />
+                    <View style={styles.modalInputRow}>
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons name="pencil-outline" size={17} color={theme.accent} />
+                      </View>
+                      <TextInput
+                        style={styles.modalTextInput}
+                        placeholder="Nota o descrizione facoltativa"
+                        placeholderTextColor="#71717a"
+                        value={draft.note}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "note", text)
+                        }
+                      />
+                    </View>
+                  </>
+                )}
+              </View>
+            </View>
+          ))}
+
+          {/* Bottone Aggiungi un altro elemento (+ slot) */}
+          {!editingDoc && (
+            <TouchableOpacity
+              style={styles.batchAddAnotherBtn}
+              activeOpacity={0.7}
+              onPress={handleAddBatchSlot}
+            >
+              <Ionicons
+                name="add-circle-outline"
+                size={19}
+                color={theme.accent}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.batchAddAnotherText, { color: theme.accent }]}>
+                Aggiungi un altro elemento
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {editingDoc && (
+            <TouchableOpacity
+              style={styles.modalDeleteButton}
+              activeOpacity={0.7}
+              onPress={() => {
+                Alert.alert(
+                  "Elimina elemento",
+                  `Vuoi davvero eliminare "${editingDoc.title}"?`,
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Elimina",
+                      style: "destructive",
+                      onPress: async () => {
+                        await deleteSavedDocument(editingDoc.id);
+                        const fresh = await getSavedDocuments();
+                        setSavedDocs(fresh);
+                        setBatchModalVisible(false);
+                        setEditingDoc(null);
+                        setBatchDrafts([]);
+                      },
+                    },
+                  ],
+                );
+              }}
+            >
+              <Ionicons
+                name="trash-outline"
+                size={16}
+                color="#ef4444"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.modalDeleteButtonText}>Elimina elemento</Text>
+            </TouchableOpacity>
+          )}
+
+          <Text style={styles.modalCardHelperText}>
+            Puoi aggiungere più elementi contemporaneamente premendo &quot;Aggiungi un altro elemento&quot;. Quando hai finito, tocca la spunta in alto a destra per salvare. Tutti i link, note e file sono conservati e sincronizzati in tempo reale.
+          </Text>
+        </ScrollView>
+      </NativeSheetModal>
       <Modal
         visible={Boolean(downloadingCourse)}
         animationType="fade"
@@ -2819,7 +3881,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 8,
     borderWidth: 0.5,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -2832,6 +3894,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
+    marginTop: 2,
     shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
@@ -2858,6 +3921,30 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8,
   },
+  profileStudentInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  profileStudentPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    maxWidth: "100%",
+  },
+  profileStudentPillText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#e2e8f0",
+    letterSpacing: 0.1,
+  },
   profileBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -2875,6 +3962,176 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.1,
+  },
+  /* Sezioni e Gruppi Inset Grouped iOS */
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingRight: 16,
+    marginTop: 22,
+    marginBottom: 6,
+  },
+  sectionHeaderNoMargin: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#8e8e93",
+    textTransform: "uppercase",
+    letterSpacing: -0.08,
+    marginLeft: 16,
+  },
+  sectionHeaderAction: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  docRowSubtitle: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  docEditIconBtn: {
+    padding: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  batchCardContainer: {
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    padding: 12,
+    marginBottom: 16,
+  },
+  batchCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  batchCardTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#e4e4e7",
+    letterSpacing: -0.2,
+  },
+  batchTypeSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#18181b",
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  batchTypeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  batchTypeBtnActive: {
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  batchTypeBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#a1a1aa",
+  },
+  batchTypeBtnTextActive: {
+    color: "#ffffff",
+    fontWeight: "700",
+  },
+  batchFilePickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  batchFilePlaceholder: {
+    fontSize: 14,
+    color: "#71717a",
+  },
+  batchPickedFileName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
+  batchPickedFileSize: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  batchAddAnotherBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  batchAddAnotherText: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  modalCardGroup: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    overflow: "hidden",
+    marginBottom: 10,
+  },
+  modalInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  modalInputIconBox: {
+    width: 28,
+    alignItems: "center",
+    marginRight: 10,
+  },
+  modalTextInput: {
+    flex: 1,
+    fontSize: 16,
+    color: "#ffffff",
+    paddingVertical: 0,
+  },
+  modalCardHelperText: {
+    fontSize: 13,
+    color: "#8e8e93",
+    lineHeight: 18,
+    marginHorizontal: 4,
+    marginTop: 4,
+  },
+  modalDeleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.3)",
+    paddingVertical: 12,
+    marginTop: 16,
+    marginBottom: 10,
+  },
+  modalDeleteButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#ef4444",
   },
   /* Sezioni e Gruppi Inset Grouped iOS */
   sectionHeader: {

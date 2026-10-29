@@ -5,14 +5,16 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
-  Easing,
+  LayoutChangeEvent,
   Linking,
   Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
   RefreshControl,
   ScrollView,
@@ -31,7 +33,11 @@ import { ManualEventModal } from "../components/ManualEventModal";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
-import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
+import {
+  UNIFORM_SCREEN_BG,
+  UNIFORM_MODAL_BG,
+  MAX_CONTENT_WIDTH,
+} from "@/constants/theme";
 import { hasDateInfo } from "../utils/aiParser";
 import { ACCENT_COLORS, getSubjectColor, getManualSubjectColor } from "../utils/subjectColors";
 import {
@@ -81,18 +87,41 @@ const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeComponentAvailable = Platform.OS === "ios" && !isExpoGo;
 
-let CallstackLiquidGlass: any = null;
+let _CallstackLiquidGlass: any = null;
 if (isNativeComponentAvailable) {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    CallstackLiquidGlass = require("@callstack/liquid-glass");
+    _CallstackLiquidGlass = require("@callstack/liquid-glass");
   } catch {
-    CallstackLiquidGlass = null;
+    _CallstackLiquidGlass = null;
   }
 }
+void _CallstackLiquidGlass;
 
-const DAYS = ["LUN", "MAR", "MER", "GIO", "VEN"];
-const DAYS_FULL = ["LUNEDÌ", "MARTEDÌ", "MERCOLEDÌ", "GIOVEDÌ", "VENERDÌ"];
+
+const DAYS_FULL = [
+  "LUNEDÌ",
+  "MARTEDÌ",
+  "MERCOLEDÌ",
+  "GIOVEDÌ",
+  "VENERDÌ",
+  "SABATO",
+  "DOMENICA",
+];
+const WEEKDAYS_ORARI: {
+  label: string;
+  fullLabel: string;
+  dayIdx: number;
+  isWeekend?: boolean;
+}[] = [
+  { label: "LUN", fullLabel: "Lunedì", dayIdx: 0 },
+  { label: "MAR", fullLabel: "Martedì", dayIdx: 1 },
+  { label: "MER", fullLabel: "Mercoledì", dayIdx: 2 },
+  { label: "GIO", fullLabel: "Giovedì", dayIdx: 3 },
+  { label: "VEN", fullLabel: "Venerdì", dayIdx: 4 },
+  { label: "SAB", fullLabel: "Sabato", dayIdx: 5, isWeekend: true },
+  { label: "DOM", fullLabel: "Domenica", dayIdx: 6, isWeekend: true },
+];
 export { ACCENT_COLORS, getSubjectColor };
 
 function formatReleaseDate(isoString?: string): string {
@@ -158,38 +187,143 @@ export default function ScheduleScreen() {
   useEffect(() => {
     degreeUrlRef.current = degreeUrl;
   }, [degreeUrl]);
-  // Default al giorno corrente (0=LUN, 4=VEN). Weekend → LUN.
-  const todayIdx = Math.min(Math.max(new Date().getDay() - 1, 0), 4);
+  // Calcolo giorno corrente: 0=LUN, ..., 4=VEN, 5=SAB, 6=DOM
+  const jsDay = new Date().getDay();
+  const todayIdx = jsDay === 0 ? 6 : jsDay - 1;
   const [selectedDay, setSelectedDay] = useState(todayIdx);
+  const activeDayRef = useRef(todayIdx);
+  const { width: screenWidth } = useWindowDimensions();
 
-  // Transizione fluida da giorno a giorno (coerente con la sezione Viaggio)
-  const prevDayRef = useRef(todayIdx);
-  const [daySlideAnim] = useState(() => new Animated.Value(0));
-  const [dayFadeAnim] = useState(() => new Animated.Value(1));
+  const horizontalPagerRef = useRef<ScrollView>(null);
+  const initialPagerPositioned = useRef(false);
+
+  // Animazione fluida a scorrimento dello slider dei giorni della settimana (Uniforme a Viaggi)
+  const segmentLayouts = useRef<{ [key: number]: { x: number; width: number } }>({});
+  const [sliderPillAnim] = useState(() => new Animated.Value(0));
+  const [sliderWidthAnim] = useState(() => new Animated.Value(44));
+  const [weekendPillAnim] = useState(() => new Animated.Value(todayIdx >= 5 ? 1 : 0));
+  const [pagerScrollAnim] = useState(() => new Animated.Value(todayIdx * 390));
+  const [sliderReady, setSliderReady] = useState(false);
+  const initialSliderPositioned = useRef(false);
+
+  const handleSegmentLayout = useCallback(
+    (idx: number, e: LayoutChangeEvent) => {
+      const { x, width } = e.nativeEvent.layout;
+      segmentLayouts.current[idx] = { x, width };
+
+      if (idx === activeDayRef.current) {
+        sliderPillAnim.setValue(x);
+        sliderWidthAnim.setValue(width);
+        if (!initialSliderPositioned.current) {
+          weekendPillAnim.setValue(idx >= 5 ? 1 : 0);
+          initialSliderPositioned.current = true;
+          setSliderReady(true);
+        }
+      }
+    },
+    [sliderPillAnim, sliderWidthAnim, weekendPillAnim],
+  );
+
+  const handlePagerScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetX = e.nativeEvent.contentOffset.x;
+      if (screenWidth <= 0) return;
+      pagerScrollAnim.setValue(offsetX);
+      const progress = Math.max(0, Math.min(6, offsetX / screenWidth));
+      const baseIdx = Math.floor(progress);
+      const nextIdx = Math.min(baseIdx + 1, 6);
+      const frac = progress - baseIdx;
+
+      const baseLayout = segmentLayouts.current[baseIdx];
+      const nextLayout = segmentLayouts.current[nextIdx];
+
+      if (baseLayout && nextLayout) {
+        const currentX = baseLayout.x + (nextLayout.x - baseLayout.x) * frac;
+        const currentW = baseLayout.width + (nextLayout.width - baseLayout.width) * frac;
+        sliderPillAnim.setValue(currentX);
+        sliderWidthAnim.setValue(currentW);
+      }
+
+      // Transizione cromatica continua in live tra feriali e weekend
+      const weekendFactor = Math.max(0, Math.min(1, (progress - 4.2) / 0.6));
+      weekendPillAnim.setValue(weekendFactor);
+    },
+    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
+  );
+
+  const handleDayChange = useCallback(
+    (newDay: number) => {
+      activeDayRef.current = newDay;
+      setSelectedDay(newDay);
+      const target = segmentLayouts.current[newDay];
+      if (target) {
+        Animated.parallel([
+          Animated.spring(sliderPillAnim, {
+            toValue: target.x,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+          Animated.spring(sliderWidthAnim, {
+            toValue: target.width,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+          Animated.timing(weekendPillAnim, {
+            toValue: newDay >= 5 ? 1 : 0,
+            duration: 200,
+            useNativeDriver: false,
+          }),
+          Animated.spring(pagerScrollAnim, {
+            toValue: newDay * screenWidth,
+            useNativeDriver: false,
+            bounciness: 0,
+          }),
+        ]).start();
+      }
+      if (screenWidth > 0) {
+        horizontalPagerRef.current?.scrollTo({
+          x: newDay * screenWidth,
+          animated: true,
+        });
+      }
+    },
+    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
+  );
+
+  const handleMomentumScrollEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetX = e.nativeEvent.contentOffset.x;
+      const pageIndex = Math.round(offsetX / screenWidth);
+      if (pageIndex >= 0 && pageIndex < 7) {
+        pagerScrollAnim.setValue(pageIndex * screenWidth);
+        if (activeDayRef.current !== pageIndex) {
+          activeDayRef.current = pageIndex;
+          setSelectedDay(pageIndex);
+        }
+        weekendPillAnim.setValue(pageIndex >= 5 ? 1 : 0);
+        const target = segmentLayouts.current[pageIndex];
+        if (target) {
+          sliderPillAnim.setValue(target.x);
+          sliderWidthAnim.setValue(target.width);
+        }
+      }
+    },
+    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
+  );
 
   useEffect(() => {
-    if (prevDayRef.current === selectedDay) return;
-    const isForward = selectedDay > prevDayRef.current;
-    prevDayRef.current = selectedDay;
+    if (!initialPagerPositioned.current && screenWidth > 0) {
+      if (todayIdx > 0) {
+        horizontalPagerRef.current?.scrollTo({
+          x: todayIdx * screenWidth,
+          animated: false,
+        });
+        pagerScrollAnim.setValue(todayIdx * screenWidth);
+      }
+      initialPagerPositioned.current = true;
+    }
+  }, [todayIdx, screenWidth, pagerScrollAnim]);
 
-    dayFadeAnim.setValue(0.25);
-    daySlideAnim.setValue(isForward ? 16 : -16);
-
-    Animated.parallel([
-      Animated.timing(dayFadeAnim, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(daySlideAnim, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [selectedDay, dayFadeAnim, daySlideAnim]);
   const [schedulesMap, setSchedulesMap] = useState<
     Record<string, ScheduleData>
   >({});
@@ -236,8 +370,7 @@ export default function ScheduleScreen() {
   }, []);
 
   const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
-  const cardWidth = Math.max(windowWidth - 32, 280);
+  const cardWidth = Math.min(Math.max(screenWidth - 32, 280), MAX_CONTENT_WIDTH - 32);
 
   const loadManualEvents = useCallback(async (courseUrlParam?: string | null) => {
     try {
@@ -381,11 +514,11 @@ export default function ScheduleScreen() {
   }, [loadAttendance, loadManualEvents]);
 
   const handleClassLongPress = useCallback(
-    async (cls: ClassEvent) => {
+    async (cls: ClassEvent, dayIdx: number = selectedDay) => {
       try {
         const res = await toggleAttendance(
-          selectedDay,
-          DAYS_FULL[selectedDay],
+          dayIdx,
+          DAYS_FULL[dayIdx],
           cls,
           degreeUrl || undefined,
         );
@@ -433,8 +566,8 @@ export default function ScheduleScreen() {
   );
 
   const checkIsAttended = useCallback(
-    (cls: ClassEvent) => {
-      const { dateStr } = getDateForDayIndex(selectedDay);
+    (cls: ClassEvent, dayIdx: number = selectedDay) => {
+      const { dateStr } = getDateForDayIndex(dayIdx);
       const id = generateAttendanceId(dateStr, cls.subject, cls.startTime);
       return attendanceRecords.some((r) => r.id === id);
     },
@@ -552,21 +685,25 @@ export default function ScheduleScreen() {
     setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
   };
 
-  const todayClasses = useMemo(() => {
-    const scraped = schedule?.days[selectedDay] || [];
-    const { dateStr } = getDateForDayIndex(selectedDay);
-    const manualForDay = manualEvents
-      .filter(
-        (e) =>
-          e.dayIndex === selectedDay &&
-          (!e.tabUrl || e.tabUrl === selectedTab?.url) &&
-          isManualEventActiveOnDate(e, dateStr),
-      )
-      .map(manualEventToClassEvent);
+  const classesByDay = useMemo(() => {
+    const map: ClassEvent[][] = [];
+    for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+      const scraped = schedule?.days[dayIdx] || [];
+      const { dateStr } = getDateForDayIndex(dayIdx);
+      const manualForDay = manualEvents
+        .filter(
+          (e) =>
+            e.dayIndex === dayIdx &&
+            (!e.tabUrl || e.tabUrl === selectedTab?.url) &&
+            isManualEventActiveOnDate(e, dateStr),
+        )
+        .map(manualEventToClassEvent);
 
-    const combined = [...scraped, ...manualForDay];
-    return combined.sort((a, b) => a.startTime.localeCompare(b.startTime));
-  }, [schedule, selectedDay, manualEvents, selectedTab?.url]);
+      const combined = [...scraped, ...manualForDay];
+      map[dayIdx] = combined.sort((a, b) => a.startTime.localeCompare(b.startTime));
+    }
+    return map;
+  }, [schedule, manualEvents, selectedTab?.url]);
 
   const officialUsedColors = useMemo(() => {
     const set = new Set<string>();
@@ -580,13 +717,12 @@ export default function ScheduleScreen() {
     return set;
   }, [schedule]);
 
-
-
   const isCurrentClass = useCallback(
-    (cls: ClassEvent) => {
-      if (selectedDay !== todayIdx) return false;
+    (cls: ClassEvent, dayIdx: number) => {
+      if (dayIdx !== todayIdx) return false;
       const now = new Date();
-      const currentDayOfWeek = now.getDay() - 1; // 0=lun, 4=ven
+      const jsDayNow = now.getDay();
+      const currentDayOfWeek = jsDayNow === 0 ? 6 : jsDayNow - 1;
       if (currentDayOfWeek !== todayIdx) return false;
 
       if (!cls.startTime || !cls.endTime) return false;
@@ -600,8 +736,191 @@ export default function ScheduleScreen() {
 
       return currentMinutes >= startMinutes && currentMinutes < endMinutes;
     },
-    [selectedDay, todayIdx],
+    [todayIdx],
   );
+
+  const renderClassCard = (cls: ClassEvent, i: number, dayIdx: number) => {
+    const accentColor = cls.isManual
+      ? getManualSubjectColor(cls.subject, officialUsedColors)
+      : getSubjectColor(cls.subject);
+    const isLive = isCurrentClass(cls, dayIdx);
+    const isAttended = checkIsAttended(cls, dayIdx);
+
+    const cardView = (
+      <View
+        style={[
+          styles.classCard,
+          { width: cardWidth },
+          isLive && styles.classCardLive,
+        ]}
+      >
+        {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
+        <View style={styles.timeColumn}>
+          <Text style={styles.timeStartText}>{cls.startTime}</Text>
+          <View style={styles.timeLineConnector}>
+            <View
+              style={[
+                styles.timeLineBar,
+                { backgroundColor: accentColor },
+              ]}
+            />
+            <View style={styles.durationBadge}>
+              <Text style={styles.durationBadgeText}>
+                {cls.duration}h
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.timeLineBar,
+                { backgroundColor: accentColor },
+              ]}
+            />
+          </View>
+          <Text style={styles.timeEndText}>{cls.endTime}</Text>
+        </View>
+
+        {/* Barra di Accento Verticale Colorata stile Calendario */}
+        <View
+          style={[
+            styles.calendarAccentBar,
+            { backgroundColor: accentColor },
+          ]}
+        />
+
+        {/* Dettagli Lezione */}
+        <View style={styles.cardBody}>
+          <View style={styles.cardTitleRow}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.subjectText} numberOfLines={2}>
+                {cls.subject?.toUpperCase()}
+              </Text>
+              {cls.isManual && (
+                <TouchableOpacity
+                  style={styles.manualBadgeRow}
+                  onPress={() => {
+                    const found = manualEvents.find((e) => e.id === cls.manualId);
+                    if (found) {
+                      setEditingManualEvent(found);
+                      setManualModalVisible(true);
+                    }
+                  }}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                >
+                  <View style={styles.manualBadge}>
+                    <Ionicons name="pencil" size={10} color="#f59e0b" style={{ marginRight: 3 }} />
+                    <Text style={styles.manualBadgeText}>Manuale</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.badgesCluster}>
+              {/* Simbolo colorato distintivo della presenza */}
+              {isAttended && <AttendanceCheckmark />}
+              {isLive && (
+                <View style={styles.liveBadge}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>ORA</Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Docente */}
+          {cls.teacher ? (
+            <View style={styles.infoRow}>
+              <Ionicons
+                name="person-outline"
+                size={13}
+                color="#8e8e93"
+              />
+              <Text style={styles.teacherText} numberOfLines={1}>
+                {cls.teacher}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Badge Aula */}
+          {cls.room ? (
+            <TouchableOpacity
+              style={[
+                styles.roomBadge,
+                {
+                  backgroundColor: theme.cardTint,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                },
+              ]}
+              onPress={() => handleRoomClick(cls)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="location" size={12} color={theme.accent} />
+              <Text
+                style={[styles.roomBadgeText, { color: theme.accent }]}
+                numberOfLines={1}
+              >
+                {cls.room}
+              </Text>
+              <Ionicons
+                name="chevron-forward"
+                size={11}
+                color={theme.accent}
+                style={{ marginLeft: 2, opacity: 0.8 }}
+              />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+    );
+
+    const isManualRow = Boolean(cls.isManual && cls.manualId);
+
+    const cardElement = (
+      <CardContextMenu
+        key={cls.manualId ? `manual-${cls.manualId}` : `class-${dayIdx}-${i}`}
+        title={cls.subject}
+        isAttended={isAttended}
+        isManual={isManualRow}
+        isNativeAvailable={isNativeComponentAvailable}
+        style={[
+          styles.cardMenuWrapper,
+          { width: cardWidth },
+          isManualRow && { marginBottom: 0 },
+        ]}
+        onTogglePresence={() => handleClassLongPress(cls, dayIdx)}
+        onEditManual={() => {
+          if (cls.manualId) {
+            const found = manualEvents.find((e) => e.id === cls.manualId);
+            if (found) {
+              setEditingManualEvent(found);
+              setManualModalVisible(true);
+            }
+          }
+        }}
+        onDeleteManual={() => {
+          if (cls.manualId) handleDeleteManualEvent(cls.manualId);
+        }}
+      >
+        {cardView}
+      </CardContextMenu>
+    );
+
+    if (isManualRow && cls.manualId) {
+      const manualId = cls.manualId;
+      return (
+        <SwipeToDeleteRow
+          key={`swipe-${manualId}`}
+          marginBottom={12}
+          borderRadius={18}
+          style={{ width: cardWidth }}
+          onDelete={() => handleDeleteManualEvent(manualId)}
+        >
+          {cardElement}
+        </SwipeToDeleteRow>
+      );
+    }
+
+    return cardElement;
+  };
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safeArea}>
@@ -629,22 +948,9 @@ export default function ScheduleScreen() {
         />
       </View>
 
-      {/* ── ScrollView Principale: Pull-to-refresh dall'alto dello schermo ── */}
-      <ScrollView
-        style={styles.mainScrollView}
-        contentContainerStyle={{ paddingBottom: 130 }}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={theme.primary}
-            colors={[theme.primary]}
-          />
-        }
-      >
-        {/* ── Banner Aggiornamento App Disponibile ── */}
-        {appUpdate?.hasUpdate && !updateBannerDismissed ? (
+            {/* ── Banner Aggiornamento App Disponibile ── */}
+      {appUpdate?.hasUpdate && !updateBannerDismissed ? (
+        <View style={styles.centeredCardContainer}>
           <TouchableOpacity
             style={[
               styles.updateBanner,
@@ -689,10 +995,12 @@ export default function ScheduleScreen() {
               <Ionicons name="close" size={16} color="#8e8e93" />
             </TouchableOpacity>
           </TouchableOpacity>
-        ) : null}
+        </View>
+      ) : null}
 
-        {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
-        {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
+      {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
+      {schedule?.info?.semester && hasDateInfo(schedule.info.semester) ? (
+        <View style={styles.centeredCardContainer}>
           <View style={[styles.semesterCard, { borderColor: theme.border }]}>
             <View style={[styles.semesterIconBox, { backgroundColor: theme.primary }]}>
               <Ionicons name="calendar" size={16} color="#ffffff" />
@@ -704,10 +1012,12 @@ export default function ScheduleScreen() {
               </Text>
             </View>
           </View>
-        ) : null}
+        </View>
+      ) : null}
 
-        {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
-        {schedule?.alerts && schedule.alerts.length > 0 ? (
+      {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
+      {schedule?.alerts && schedule.alerts.length > 0 ? (
+        <View style={styles.centeredCardContainer}>
           <TouchableOpacity
             style={styles.infoBanner}
             onPress={() => setAlertsModalVisible(true)}
@@ -734,324 +1044,214 @@ export default function ScheduleScreen() {
               />
             )}
           </TouchableOpacity>
-        ) : null}
-
-        {/* ── Day Selector (Allineamento Orizzontale Perfetto & Navigazione Ciclica) ── */}
-        <View style={styles.daySelectorContainer}>
-          <TouchableOpacity
-            style={styles.navArrow}
-            onPress={() => setSelectedDay((d) => (d === 0 ? 4 : d - 1))}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="chevron-back" size={18} color="#ffffff" />
-          </TouchableOpacity>
-
-          <View style={styles.daysRow}>
-            {DAYS.map((day, i) => {
-              const isActive = selectedDay === i;
-              const isToday = i === todayIdx;
-              const hasAttendance = dayHasAttendance(i);
-              return (
-                <TouchableOpacity
-                  key={i}
-                  onPress={() => setSelectedDay(i)}
-                  onLongPress={() => handleDayLongPress(i)}
-                  delayLongPress={400}
-                  style={styles.dayItem}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.dayCircle,
-                      isActive && [
-                        styles.dayCircleActive,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                  >
-                    <Text
-                      style={[styles.dayText, isActive && styles.dayTextActive]}
-                    >
-                      {day}
-                    </Text>
-                  </View>
-                  {isToday ? (
-                    <View
-                      style={[
-                        styles.dayDot,
-                        isActive
-                          ? { backgroundColor: "#ffffff" }
-                          : hasAttendance
-                          ? { backgroundColor: theme.primary }
-                          : null,
-                      ]}
-                    />
-                  ) : hasAttendance ? (
-                    <View
-                      style={[
-                        styles.attendanceDayDot,
-                        { backgroundColor: theme.primary },
-                      ]}
-                    />
-                  ) : null}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <TouchableOpacity
-            style={styles.navArrow}
-            onPress={() => setSelectedDay((d) => (d === 4 ? 0 : d + 1))}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="chevron-forward" size={18} color="#ffffff" />
-          </TouchableOpacity>
         </View>
+      ) : null}
 
-        {/* ── Day label con indicatore & Classes List con Transizione Animata ── */}
-        <Animated.View
-          style={{
-            opacity: dayFadeAnim,
-            transform: [{ translateX: daySlideAnim }],
-          }}
-        >
-          <View style={styles.dayLabelRow}>
-            <View style={styles.dayLabelLeft}>
-              <Text style={styles.dayLabel}>
-                {DAYS_FULL[selectedDay]} · {todayClasses.length} LEZIONI
-              </Text>
-              <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.addManualButton}
-              onPress={() => {
-                setEditingManualEvent(null);
-                setManualModalVisible(true);
-              }}
-              activeOpacity={0.7}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Aggiungi lezione manuale"
-            >
-              {isNativeComponentAvailable && CallstackLiquidGlass?.LiquidGlassView ? (
-                <CallstackLiquidGlass.LiquidGlassView
-                  effect="regular"
-                  colorScheme="dark"
-                  tintColor="rgba(255, 255, 255, 0.12)"
-                  style={[StyleSheet.absoluteFill, { borderRadius: 14 }]}
-                />
-              ) : null}
-              <Ionicons name="add" size={19} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
-
-        {/* ── Classes List ── */}
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.primary} />
-            <Text style={styles.loadingText}>Caricamento lezioni...</Text>
-          </View>
-        ) : (
-          <View style={styles.classList}>
-            {todayClasses.length === 0 && (
-              <View style={styles.emptyDay}>
-                <Ionicons name="sunny-outline" size={48} color="#3a3a3c" />
-                <Text style={styles.emptyDayText}>Nessuna lezione oggi</Text>
-              </View>
+      {/* ── Selettore Giorno della settimana - Liquid Glass Week Bar (Posizione originale con Sabato e Domenica) ── */}
+      <View style={styles.daySelectorContainer}>
+        <View style={styles.daySegmentedBar}>
+          <View style={styles.daySegmentInnerContainer}>
+            {sliderReady && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.slidingActivePill,
+                  {
+                    left: sliderPillAnim,
+                    width: sliderWidthAnim,
+                    backgroundColor: weekendPillAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [theme.bg, "rgba(245, 158, 11, 0.22)"],
+                    }),
+                    borderColor: weekendPillAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [theme.primary, "#f59e0b"],
+                    }),
+                    shadowColor: weekendPillAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [theme.primary, "#f59e0b"],
+                    }),
+                  },
+                ]}
+              />
             )}
 
-            {todayClasses.map((cls: ClassEvent, i: number) => {
-              const accentColor = cls.isManual
-                ? getManualSubjectColor(cls.subject, officialUsedColors)
-                : getSubjectColor(cls.subject);
-              const isLive = isCurrentClass(cls);
-              const isAttended = checkIsAttended(cls);
+            {WEEKDAYS_ORARI.map((w, idx) => {
+              const isSelected = selectedDay === w.dayIdx;
+              const isItemToday = todayIdx === w.dayIdx;
+              const isItemWeekend = Boolean(w.isWeekend);
+              const hasAttendance = dayHasAttendance(w.dayIdx);
 
-              const cardView = (
-                <View
-                  style={[
-                    styles.classCard,
-                    { width: cardWidth },
-                    isLive && styles.classCardLive,
-                  ]}
-                >
-                  {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
-                  <View style={styles.timeColumn}>
-                    <Text style={styles.timeStartText}>{cls.startTime}</Text>
-                    <View style={styles.timeLineConnector}>
-                      <View
-                        style={[
-                          styles.timeLineBar,
-                          { backgroundColor: accentColor },
-                        ]}
-                      />
-                      <View style={styles.durationBadge}>
-                        <Text style={styles.durationBadgeText}>
-                          {cls.duration}h
-                        </Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.timeLineBar,
-                          { backgroundColor: accentColor },
-                        ]}
-                      />
-                    </View>
-                    <Text style={styles.timeEndText}>{cls.endTime}</Text>
-                  </View>
+              const textScale =
+                screenWidth > 0
+                  ? pagerScrollAnim.interpolate({
+                      inputRange: [
+                        (idx - 1) * screenWidth,
+                        idx * screenWidth,
+                        (idx + 1) * screenWidth,
+                      ],
+                      outputRange: [1, 1.15, 1],
+                      extrapolate: "clamp",
+                    })
+                  : 1;
 
-                  {/* Barra di Accento Verticale Colorata stile Calendario */}
-                  <View
-                    style={[
-                      styles.calendarAccentBar,
-                      { backgroundColor: accentColor },
-                    ]}
-                  />
+              const textColor =
+                screenWidth > 0
+                  ? pagerScrollAnim.interpolate({
+                      inputRange: [
+                        (idx - 1) * screenWidth,
+                        idx * screenWidth,
+                        (idx + 1) * screenWidth,
+                      ],
+                      outputRange: [
+                        isItemWeekend ? "#d4d4d8" : "#a1a1aa",
+                        "#ffffff",
+                        isItemWeekend ? "#d4d4d8" : "#a1a1aa",
+                      ],
+                      extrapolate: "clamp",
+                    })
+                  : isSelected
+                  ? "#ffffff"
+                  : isItemWeekend
+                  ? "#d4d4d8"
+                  : "#a1a1aa";
 
-                  {/* Dettagli Lezione */}
-                  <View style={styles.cardBody}>
-                    <View style={styles.cardTitleRow}>
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text style={styles.subjectText} numberOfLines={2}>
-                          {cls.subject?.toUpperCase()}
-                        </Text>
-                        {cls.isManual && (
-                          <TouchableOpacity
-                            style={styles.manualBadgeRow}
-                            onPress={() => {
-                              const found = manualEvents.find((e) => e.id === cls.manualId);
-                              if (found) {
-                                setEditingManualEvent(found);
-                                setManualModalVisible(true);
-                              }
-                            }}
-                            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                          >
-                            <View style={styles.manualBadge}>
-                              <Ionicons name="pencil" size={10} color="#f59e0b" style={{ marginRight: 3 }} />
-                              <Text style={styles.manualBadgeText}>Manuale</Text>
-                            </View>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                      <View style={styles.badgesCluster}>
-                        {/* Simbolo colorato distintivo della presenza (con animazione spring all'apparizione) */}
-                        {isAttended && <AttendanceCheckmark />}
-                        {isLive && (
-                          <View style={styles.liveBadge}>
-                            <View style={styles.liveDot} />
-                            <Text style={styles.liveText}>ORA</Text>
-                          </View>
-                        )}
-                      </View>
-                    </View>
-
-                    {/* Docente */}
-                    {cls.teacher ? (
-                      <View style={styles.infoRow}>
-                        <Ionicons
-                          name="person-outline"
-                          size={13}
-                          color="#8e8e93"
-                        />
-                        <Text style={styles.teacherText} numberOfLines={1}>
-                          {cls.teacher}
-                        </Text>
-                      </View>
-                    ) : null}
-
-                    {/* Badge Aula */}
-                    {cls.room ? (
-                      <TouchableOpacity
-                        style={[
-                          styles.roomBadge,
-                          {
-                            backgroundColor: theme.cardTint,
-                            borderColor: theme.border,
-                            borderWidth: 1,
-                          },
-                        ]}
-                        onPress={() => handleRoomClick(cls)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="location" size={12} color={theme.accent} />
-                        <Text
-                          style={[styles.roomBadgeText, { color: theme.accent }]}
-                          numberOfLines={1}
-                        >
-                          {cls.room}
-                        </Text>
-                        <Ionicons
-                          name="chevron-forward"
-                          size={11}
-                          color={theme.accent}
-                          style={{ marginLeft: 2, opacity: 0.8 }}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                </View>
-              );
-
-              const isManualRow = Boolean(cls.isManual && cls.manualId);
-
-              const cardElement = (
-                <CardContextMenu
-                  key={cls.manualId ? `manual-${cls.manualId}` : `class-${i}`}
-                  title={cls.subject}
-                  isAttended={isAttended}
-                  isManual={isManualRow}
-                  isNativeAvailable={isNativeComponentAvailable}
-                  style={[
-                    styles.cardMenuWrapper,
-                    { width: cardWidth },
-                    isManualRow && { marginBottom: 0 },
-                  ]}
-                  onTogglePresence={() => handleClassLongPress(cls)}
-                  onEditManual={() => {
-                    if (cls.manualId) {
-                      const found = manualEvents.find((e) => e.id === cls.manualId);
-                      if (found) {
-                        setEditingManualEvent(found);
-                        setManualModalVisible(true);
-                      }
-                    }
-                  }}
-                  onDeleteManual={() => {
-                    if (cls.manualId) handleDeleteManualEvent(cls.manualId);
-                  }}
-                >
-                  {cardView}
-                </CardContextMenu>
-              );
-
-              // Solo le lezioni aggiunte manualmente possono essere rimosse tramite swipe
-              if (isManualRow && cls.manualId) {
-                const manualId = cls.manualId;
-                return (
-                  <SwipeToDeleteRow
-                    key={`swipe-${manualId}`}
-                    marginBottom={12}
-                    borderRadius={18}
-                    style={{ width: cardWidth }}
-                    onDelete={() => handleDeleteManualEvent(manualId)}
+              return (
+                <Fragment key={w.dayIdx}>
+                  {idx === 5 && <View style={styles.dayWeekendDivider} />}
+                  <TouchableOpacity
+                    onLayout={(e) => handleSegmentLayout(idx, e)}
+                    onPress={() => handleDayChange(w.dayIdx)}
+                    onLongPress={() => handleDayLongPress(w.dayIdx)}
+                    delayLongPress={400}
+                    activeOpacity={0.7}
+                    style={styles.daySegmentItem}
                   >
-                    {cardElement}
-                  </SwipeToDeleteRow>
-                );
-              }
+                    <Animated.Text
+                      style={[
+                        styles.daySegmentLabel,
+                        {
+                          transform: [{ scale: textScale }],
+                          color: textColor,
+                        },
+                      ]}
+                    >
+                      {w.label}
+                    </Animated.Text>
 
-              return cardElement;
+                    {/* Pallino indicatore (Oggi / Presenza registrata) */}
+                    {isItemToday ? (
+                      <View
+                        style={[
+                          styles.daySegmentDot,
+                          isSelected
+                            ? styles.daySegmentDotActive
+                            : hasAttendance
+                            ? { backgroundColor: theme.primary }
+                            : { backgroundColor: "#ffffff" },
+                        ]}
+                      />
+                    ) : hasAttendance ? (
+                      <View
+                        style={[
+                          styles.daySegmentDot,
+                          isSelected
+                            ? styles.daySegmentDotActive
+                            : { backgroundColor: theme.primary },
+                        ]}
+                      />
+                    ) : null}
+                  </TouchableOpacity>
+                </Fragment>
+              );
             })}
           </View>
-        )}
-        </Animated.View>
-      </ScrollView>
+        </View>
+      </View>
 
-      {/* ── Modal Avvisi (Alerts) Nativo iOS ── */}
+      {/* ── Pager Orizzontale Continuo dei Giorni (Visualizzazione continua metà e metà al 50% di swipe) ── */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+          <Text style={styles.loadingText}>{"Carico l'orario delle lezioni..."}</Text>
+        </View>
+      ) : (
+        <ScrollView
+          ref={horizontalPagerRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          directionalLockEnabled
+          nestedScrollEnabled
+          contentOffset={{ x: todayIdx * screenWidth, y: 0 }}
+          onScroll={handlePagerScroll}
+          onMomentumScrollEnd={handleMomentumScrollEnd}
+          scrollEventThrottle={16}
+          style={styles.horizontalPager}
+          contentContainerStyle={{ flexGrow: 1 }}
+        >
+          {WEEKDAYS_ORARI.map((w) => {
+            const dayClasses = classesByDay[w.dayIdx] || [];
+            return (
+              <View key={w.dayIdx} style={[styles.pagerPage, { width: screenWidth }]}>
+                <ScrollView
+                  style={styles.mainScrollView}
+                  contentContainerStyle={{ paddingTop: 8, paddingBottom: 130 }}
+                  showsVerticalScrollIndicator={false}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={onRefresh}
+                      tintColor={theme.primary}
+                      colors={[theme.primary]}
+                    />
+                  }
+                >
+                  {/* Day label con indicatore */}
+                  <View style={styles.dayLabelRow}>
+                    <View style={styles.dayLabelLeft}>
+                      <Text style={styles.dayLabel}>
+                        {DAYS_FULL[w.dayIdx]} · {dayClasses.length} LEZIONI
+                      </Text>
+                      <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.addManualButton}
+                      onPress={() => {
+                        setEditingManualEvent(null);
+                        setManualModalVisible(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="add" size={17} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Class cards */}
+                  {dayClasses.length === 0 ? (
+                    <View style={styles.emptyDay}>
+                      <Ionicons
+                        name={w.dayIdx === todayIdx ? "sunny-outline" : "calendar-outline"}
+                        size={48}
+                        color="#3a3a3c"
+                      />
+                      <Text style={styles.emptyDayText}>
+                        {w.dayIdx === todayIdx ? "Nessuna lezione oggi" : "Nessuna lezione prevista"}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={styles.classList}>
+                      {dayClasses.map((cls, i) => renderClassCard(cls, i, w.dayIdx))}
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
+
+{/* ── Modal Avvisi (Alerts) Nativo iOS ── */}
       <NativeSheetModal
         visible={alertsModalVisible}
         onClose={() => setAlertsModalVisible(false)}
@@ -1339,18 +1539,33 @@ const styles = StyleSheet.create({
   tabChipText: { color: "#8e8e93", fontWeight: "600", fontSize: 12 },
   tabChipTextActive: { color: "#fff" },
 
+  centeredCardContainer: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  horizontalPager: {
+    flex: 1,
+    width: "100%",
+  },
+  pagerPage: {
+    flex: 1,
+    height: "100%",
+  },
+
   /* Semester Card */
   semesterCard: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
-    marginHorizontal: 16,
     borderRadius: 16,
     paddingVertical: 9,
     paddingHorizontal: 12,
-    marginBottom: 10,
     borderWidth: 1,
     borderColor: "rgba(130, 36, 51, 0.4)",
+    width: "100%",
   },
   semesterIconBox: {
     width: 32,
@@ -1383,14 +1598,13 @@ const styles = StyleSheet.create({
   infoBanner: {
     flexDirection: "row",
     backgroundColor: "rgba(255, 159, 10, 0.08)",
-    marginHorizontal: 16,
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    marginBottom: 14,
     alignItems: "center",
     borderWidth: 1,
     borderColor: "rgba(255, 159, 10, 0.22)",
+    width: "100%",
   },
   alertIconSquircle: {
     width: 28,
@@ -1419,85 +1633,97 @@ const styles = StyleSheet.create({
   },
   moreAlertsText: { color: "#ff9f0a", fontSize: 11, fontWeight: "700" },
 
-  /* Day selector (Allineato sull'asse orizzontale) */
+  /* Day selector - Liquid Glass Week Bar (Uniforme a Viaggi con Sabato e Domenica) */
   daySelectorContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
     paddingHorizontal: 16,
-    marginBottom: 16,
+    paddingBottom: 12,
+    paddingTop: 2,
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
   },
-  navArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1c1c1e",
-    justifyContent: "center",
-    alignItems: "center",
+  daySegmentedBar: {
+    width: "100%",
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    borderRadius: 16,
+    padding: 3,
     borderWidth: 1,
-    borderColor: "#2c2c2e",
+    borderColor: "rgba(255, 255, 255, 0.09)",
   },
-  daysRow: {
+  daySegmentInnerContainer: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 8,
-    gap: 8,
-  },
-  dayItem: {
-    alignItems: "center",
-    justifyContent: "center",
+    width: "100%",
+    height: 38,
     position: "relative",
-    height: 36,
   },
-  dayCircle: {
-    width: 44,
-    height: 36,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2c2c2e",
-    backgroundColor: "#1c1c1e",
-  },
-  dayCircleActive: {
-    borderWidth: 1.5,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  dayText: {
-    color: "#8e8e93",
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  dayTextActive: {
-    color: "#ffffff",
-  },
-  dayDot: {
+  slidingActivePill: {
     position: "absolute",
-    bottom: -7,
+    top: 0,
+    bottom: 0,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.7,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 1,
+  },
+  daySegmentItem: {
+    flex: 1,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 8,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    zIndex: 2,
+    position: "relative",
+  },
+  dayWeekendDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.14)",
+    alignSelf: "center",
+    marginHorizontal: 1,
+  },
+  daySegmentLabel: {
+    fontSize: 12,
+    lineHeight: 14,
+    fontWeight: "800",
+    color: "#a1a1aa",
+    textAlign: "center",
+    includeFontPadding: false,
+  },
+  daySegmentLabelWeekend: {
+    color: "#d4d4d8",
+  },
+  daySegmentLabelActive: {
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  daySegmentDot: {
+    position: "absolute",
+    bottom: 6,
+    alignSelf: "center",
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#8e8e93",
   },
-  dayDotActive: {
+  daySegmentDotActive: {
     backgroundColor: "#ffffff",
-  },
-  attendanceDayDot: {
-    position: "absolute",
-    bottom: -7,
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: "#38bdf8",
   },
 
   /* Loading State */
-  loadingContainer: { alignItems: "center", marginTop: 60 },
+  loadingContainer: {
+    alignItems: "center",
+    marginTop: 60,
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+  },
   loadingText: { color: "#8e8e93", marginTop: 16, fontSize: 14 },
 
   /* Day label */
@@ -1507,9 +1733,24 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 12,
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
   },
   dayLabelLeft: {
     flex: 1,
+  },
+  dayLabel: {
+    color: "#8e8e93",
+    fontSize: 12,
+    fontWeight: "bold",
+    letterSpacing: 1,
+  },
+  dayHintText: {
+    color: "#71717a",
+    fontSize: 10.5,
+    fontWeight: "500",
+    marginTop: 2,
   },
   addManualButton: {
     width: 28,
@@ -1548,25 +1789,24 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  dayLabel: {
-    color: "#8e8e93",
-    fontSize: 12,
-    fontWeight: "bold",
-    letterSpacing: 1,
-  },
-  dayHintText: {
-    color: "#71717a",
-    fontSize: 10.5,
-    fontWeight: "500",
-    marginTop: 2,
-  },
-
   /* Empty state */
-  emptyDay: { alignItems: "center", marginTop: 60 },
+  emptyDay: {
+    alignItems: "center",
+    marginTop: 60,
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+  },
   emptyDayText: { color: "#3a3a3c", fontSize: 16, marginTop: 12 },
 
   /* Class cards (Formato Calendario ad Alto Impatto con Orari Evidenti) */
-  classList: { flex: 1, paddingHorizontal: 16 },
+  classList: {
+    flex: 1,
+    paddingHorizontal: 16,
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+  },
   cardMenuWrapper: {
     width: "100%",
     marginBottom: 12,
@@ -1856,12 +2096,12 @@ const styles = StyleSheet.create({
   updateBanner: {
     flexDirection: "row",
     alignItems: "center",
-    marginHorizontal: 16,
-    marginTop: 10,
+    marginTop: 2,
     marginBottom: 4,
     padding: 10,
     borderRadius: 14,
     borderWidth: 1,
+    width: "100%",
   },
   updateIconSquircle: {
     width: 32,

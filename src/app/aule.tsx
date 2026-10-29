@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
   RefreshControl
@@ -10,11 +10,17 @@ import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchAllCourseData, Tab, ScheduleData } from '../utils/scraper';
 import { resolveClassroom, ResolvedClassroom, getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress } from '../utils/classroomLocations';
+import {
+  getManualEvents,
+  subscribeToManualEventsChanges,
+  ManualClassEvent,
+} from '../utils/manualEvents';
+import { subscribeToLiveSync } from '../utils/cloudSync';
 import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 import { useTheme } from '@/context/ThemeContext';
-import { UNIFORM_SCREEN_BG } from '@/constants/theme';
+import { UNIFORM_SCREEN_BG, MAX_CONTENT_WIDTH } from '@/constants/theme';
 
 const SAPIENZA_RED = '#822433';
 
@@ -24,7 +30,11 @@ interface RoomEntry {
   subjects: string[];
 }
 
-function extractRoomEntries(data: ScheduleData): RoomEntry[] {
+function extractRoomEntries(
+  data: ScheduleData,
+  manualEvents: ManualClassEvent[] = [],
+  tabUrl?: string
+): RoomEntry[] {
   const roomMap = new Map<string, { resolved: ResolvedClassroom; subjects: Set<string> }>();
 
   const contextHeader = [
@@ -53,7 +63,7 @@ function extractRoomEntries(data: ScheduleData): RoomEntry[] {
     }
   });
 
-  // 2. Estrai da tutte le lezioni dei 5 giorni
+  // 2. Estrai da tutte le lezioni dei 5 giorni del corso ufficiale
   (data.days || []).forEach(day => {
     day.forEach(cls => {
       if (cls.room) {
@@ -88,6 +98,41 @@ function extractRoomEntries(data: ScheduleData): RoomEntry[] {
     });
   });
 
+  // 3. Estrai da lezioni manuali dell'utente (aule custom aggiunte dinamicamente e sincronizzate)
+  manualEvents.forEach(evt => {
+    if (evt.room && (!evt.tabUrl || !tabUrl || evt.tabUrl === tabUrl)) {
+      const canon = getCanonicalRoomKey(evt.room);
+      const dispName = normalizeDisplayName(evt.room);
+      if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
+      const fallbackRes = resolveClassroom(evt.room, contextHeader);
+      const bCode = (fallbackRes.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+      const finalAddress = formatSapienzaAddress(fallbackRes.address, bCode);
+      const res: ResolvedClassroom = {
+        displayName: dispName,
+        buildingName: fallbackRes.buildingName,
+        buildingCode: bCode ? `RM${bCode}` : fallbackRes.buildingCode,
+        address: finalAddress,
+        campus: fallbackRes.campus,
+        latitude: fallbackRes.latitude,
+        longitude: fallbackRes.longitude,
+      };
+      if (!roomMap.has(canon)) {
+        roomMap.set(canon, { resolved: res, subjects: new Set() });
+      } else {
+        const existing = roomMap.get(canon)!;
+        if (fallbackRes.buildingName && (!existing.resolved.buildingName || existing.resolved.buildingName === 'Edificio Sapienza')) {
+          existing.resolved.buildingName = fallbackRes.buildingName;
+        }
+        if (finalAddress && !existing.resolved.address) {
+          existing.resolved.address = finalAddress;
+        }
+      }
+      if (evt.subject) {
+        roomMap.get(canon)!.subjects.add(evt.subject.toUpperCase());
+      }
+    }
+  });
+
   return Array.from(roomMap.values()).map(item => ({
     rawRoom: item.resolved.displayName,
     resolved: item.resolved,
@@ -103,6 +148,7 @@ export default function AuleScreen() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
   const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
   const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
   const insets = useSafeAreaInsets();
@@ -122,6 +168,7 @@ export default function AuleScreen() {
         setTabs([]);
         setSelectedTab(null);
         setSchedulesMap({});
+        setManualEvents([]);
         setRoomEntries([]);
       }
 
@@ -131,8 +178,15 @@ export default function AuleScreen() {
         setLoading(true);
       }
 
-      // Usa la cache condivisa di tutti i canali scaricati in un'unica botta
-      const { tabs: fetchedTabs, schedules } = await fetchAllCourseData(storedUrl, force);
+      // Usa la cache condivisa di tutti i canali scaricati e carica le lezioni manuali
+      const [courseData, fetchedManual] = await Promise.all([
+        fetchAllCourseData(storedUrl, force),
+        getManualEvents(storedUrl || undefined),
+      ]);
+
+      setManualEvents(fetchedManual);
+
+      const { tabs: fetchedTabs, schedules } = courseData;
 
       if (fetchedTabs.length > 0) {
         setTabs(fetchedTabs);
@@ -143,7 +197,7 @@ export default function AuleScreen() {
 
         setSelectedTab(target);
         if (schedules[target.url]) {
-          setRoomEntries(extractRoomEntries(schedules[target.url]));
+          setRoomEntries(extractRoomEntries(schedules[target.url], fetchedManual, target.url));
         }
       }
       setLoading(false);
@@ -159,6 +213,35 @@ export default function AuleScreen() {
     }, [loadData])
   );
 
+  // Ascolta modifiche alle lezioni manuali (aggiunta o eliminazione lezione con nuova aula)
+  useEffect(() => {
+    const unsub = subscribeToManualEventsChanges(async () => {
+      const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+      const list = await getManualEvents(storedUrl || undefined);
+      setManualEvents(list);
+      if (selectedTab && schedulesMap[selectedTab.url]) {
+        setRoomEntries(extractRoomEntries(schedulesMap[selectedTab.url], list, selectedTab.url));
+      }
+    });
+    return unsub;
+  }, [selectedTab, schedulesMap]);
+
+  // Ascolta la sincronizzazione cloud live per aggiornare le aule su altri dispositivi
+  useEffect(() => {
+    const unsubSync = subscribeToLiveSync((status, updated) => {
+      if (updated) {
+        AsyncStorage.getItem('selectedDegreeUrl').then(async (storedUrl) => {
+          const list = await getManualEvents(storedUrl || undefined);
+          setManualEvents(list);
+          if (selectedTab && schedulesMap[selectedTab.url]) {
+            setRoomEntries(extractRoomEntries(schedulesMap[selectedTab.url], list, selectedTab.url));
+          }
+        }).catch(() => {});
+      }
+    });
+    return unsubSync;
+  }, [selectedTab, schedulesMap]);
+
   const onRefresh = useCallback(async () => {
     if (!degreeUrl) return;
     setRefreshing(true);
@@ -170,7 +253,7 @@ export default function AuleScreen() {
   const onSelectTab = (tab: Tab) => {
     setSelectedTab(tab);
     if (schedulesMap[tab.url]) {
-      setRoomEntries(extractRoomEntries(schedulesMap[tab.url]));
+      setRoomEntries(extractRoomEntries(schedulesMap[tab.url], manualEvents, tab.url));
     }
   };
 
@@ -212,15 +295,17 @@ export default function AuleScreen() {
       >
         {/* ── Periodo Didattico / Semestre (Mostrato solo se contiene informazioni sulla data) ── */}
         {currentSemester && hasDateInfo(currentSemester) ? (
-          <View style={[styles.semesterCard, { borderColor: theme.border }]}>
-            <View style={[styles.semesterIconBox, { backgroundColor: theme.primary }]}>
-              <Ionicons name="calendar" size={16} color="#ffffff" />
-            </View>
-            <View style={styles.semesterContent}>
-              <Text style={[styles.semesterTitle, { color: theme.accent }]}>CALENDARIO DIDATTICO</Text>
-              <Text style={styles.semesterValue} numberOfLines={2}>
-                {currentSemester}
-              </Text>
+          <View style={styles.centeredCardContainer}>
+            <View style={[styles.semesterCard, { borderColor: theme.border }]}>
+              <View style={[styles.semesterIconBox, { backgroundColor: theme.primary }]}>
+                <Ionicons name="calendar" size={16} color="#ffffff" />
+              </View>
+              <View style={styles.semesterContent}>
+                <Text style={[styles.semesterTitle, { color: theme.accent }]}>CALENDARIO DIDATTICO</Text>
+                <Text style={styles.semesterValue} numberOfLines={2}>
+                  {currentSemester}
+                </Text>
+              </View>
             </View>
           </View>
         ) : null}
@@ -370,17 +455,23 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     letterSpacing: 0.35,
   },
+  centeredCardContainer: {
+    width: '100%',
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
   semesterCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1c1c1e',
-    marginHorizontal: 16,
     borderRadius: 16,
     paddingVertical: 9,
     paddingHorizontal: 12,
-    marginBottom: 10,
     borderWidth: 1,
     borderColor: 'rgba(130, 36, 51, 0.4)',
+    width: '100%',
   },
   semesterIconBox: {
     width: 32,
@@ -411,6 +502,9 @@ const styles = StyleSheet.create({
   list: {
     flex: 1,
     paddingHorizontal: 16,
+    width: '100%',
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
   },
   card: {
     backgroundColor: '#1c1c1e',
@@ -498,6 +592,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    width: '100%',
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
   },
   loadingText: {
     color: '#8e8e93',
@@ -507,6 +604,9 @@ const styles = StyleSheet.create({
   emptyContainer: {
     alignItems: 'center',
     marginTop: 80,
+    width: '100%',
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
   },
   emptyText: {
     color: '#3a3a3c',

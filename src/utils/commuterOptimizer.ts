@@ -186,13 +186,7 @@ function findDayLecture(
         if (activeOrUpcoming) {
           chosenClass = activeOrUpcoming;
         } else {
-          const refClass = dayClasses[0];
-          chosenClass = {
-            ...refClass,
-            startTime: minutesToTime(nowMins + 60),
-            endTime: minutesToTime(nowMins + 180),
-            duration: 120,
-          };
+          chosenClass = dayClasses[dayClasses.length - 1];
         }
       } else {
         // Ritorno: se c'è una lezione in corso o appena finita, prendi quella, altrimenti l'ultima del giorno

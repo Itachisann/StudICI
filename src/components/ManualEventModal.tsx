@@ -40,7 +40,7 @@ interface ManualEventModalProps {
   onDelete?: (id: string) => void;
 }
 
-const DAYS_SHORT = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
+const DAYS_SHORT = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
 
 // Preset orari richiesti dall'utente
 const TIME_PRESETS = [
@@ -81,7 +81,7 @@ function ManualEventForm({
     return extractSemesterEndDate(semesterText) || getDefaultSemesterEndDate();
   }, [semesterText]);
 
-  const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 4);
+  const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 6);
 
   const [subject, setSubject] = useState(editingEvent?.subject || '');
   const [teacher, setTeacher] = useState(editingEvent?.teacher || '');
@@ -683,7 +683,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    gap: 8,
+    gap: 4,
   },
   dayItem: {
     flex: 1,
@@ -708,7 +708,7 @@ const styles = StyleSheet.create({
   },
   dayText: {
     color: '#8e8e93',
-    fontSize: 12.5,
+    fontSize: 11.5,
     fontWeight: '700',
   },
   dayTextActive: {
