@@ -1,5 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
+import {
+  MAX_CLOUD_FILE_BYTES,
+  deleteCloudFile,
+  downloadFileFromCloud,
+  uploadFileToCloud,
+} from "./cloudFiles";
 
 export type SavedItemType = "link" | "file" | "note";
 
@@ -12,6 +18,8 @@ export interface SavedDocument {
   fileUri?: string;
   fileSize?: number;
   mimeType?: string;
+  /** Numero di blocchi caricati sul cloud (presente = il file è scaricabile da altri dispositivi). Il `fileUri` è invece locale al dispositivo e NON viene sincronizzato. */
+  cloudChunks?: number;
   note?: string;
   createdAt: number;
   updatedAt: number;
@@ -57,6 +65,7 @@ export async function getSavedDocuments(): Promise<SavedDocument[]> {
         fileUri: item.fileUri || undefined,
         fileSize: item.fileSize || undefined,
         mimeType: item.mimeType || undefined,
+        cloudChunks: item.cloudChunks || undefined,
         note: item.note || undefined,
         createdAt: item.createdAt || Date.now(),
         updatedAt: item.updatedAt || item.createdAt || Date.now(),
@@ -109,6 +118,94 @@ export async function persistPickedFile(
   }
 }
 
+let uploadingFiles = false;
+
+/**
+ * Carica sul cloud i file locali non ancora sincronizzati (in background) e
+ * aggiorna i metadati del documento, così gli altri dispositivi possono scaricarli.
+ */
+export async function uploadPendingFiles(): Promise<void> {
+  if (uploadingFiles) return;
+  uploadingFiles = true;
+  try {
+    const docs = await getSavedDocuments();
+    let changed = false;
+    for (const d of docs) {
+      if (d.type !== "file" || !d.fileUri || d.cloudChunks) continue;
+      if (d.fileSize && d.fileSize > MAX_CLOUD_FILE_BYTES) continue;
+      const local = await resolveSavedFileUri(d.fileUri);
+      if (!local) continue;
+      const chunks = await uploadFileToCloud(d.id, local);
+      if (chunks) {
+        const fresh = await getSavedDocuments();
+        const idx = fresh.findIndex((x) => x.id === d.id);
+        if (idx >= 0) {
+          fresh[idx] = { ...fresh[idx], cloudChunks: chunks, updatedAt: Date.now() };
+          await AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(fresh));
+          await AsyncStorage.setItem(SAVED_DOCUMENTS_MODIFIED_KEY, String(Date.now()));
+          changed = true;
+        }
+      }
+    }
+    if (changed) notifySavedDocumentsChanged();
+  } finally {
+    uploadingFiles = false;
+  }
+}
+
+/**
+ * Scarica dal cloud un file creato su un altro dispositivo, lo salva in locale
+ * (senza modificare il documento sincronizzato) e ritorna il nuovo percorso.
+ */
+export async function downloadCloudFileForDoc(
+  doc: SavedDocument
+): Promise<string | null> {
+  if (!doc.cloudChunks) return null;
+  try {
+    const docsDir = `${FileSystem.documentDirectory}saved_docs/`;
+    const dirInfo = await FileSystem.getInfoAsync(docsDir);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(docsDir, { intermediates: true });
+    }
+    const safeName = (doc.fileName || "documento").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const dest = `${docsDir}${doc.id}_${safeName}`;
+    const ok = await downloadFileFromCloud(doc.id, doc.cloudChunks, dest);
+    if (!ok) return null;
+
+    const current = await getSavedDocuments();
+    const idx = current.findIndex((d) => d.id === doc.id);
+    if (idx >= 0) {
+      current[idx] = { ...current[idx], fileUri: dest };
+      await AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(current));
+    }
+    return dest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ricostruisce il percorso assoluto di un file salvato. Su iOS il percorso del container
+ * dell'app può cambiare dopo un aggiornamento/reinstallazione (es. SideStore), per cui
+ * si risolve sempre la cartella `saved_docs/` rispetto alla `documentDirectory` corrente.
+ */
+export async function resolveSavedFileUri(
+  fileUri?: string
+): Promise<string | null> {
+  if (!fileUri) return null;
+  try {
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (info.exists) return fileUri;
+    const idx = fileUri.lastIndexOf("/saved_docs/");
+    if (idx >= 0 && FileSystem.documentDirectory) {
+      const rebuilt = `${FileSystem.documentDirectory}${fileUri.slice(idx + 1)}`;
+      const rebuiltInfo = await FileSystem.getInfoAsync(rebuilt);
+      if (rebuiltInfo.exists) return rebuilt;
+    }
+  } catch {}
+  return null;
+}
+
 export async function saveSavedDocument(
   doc: {
     id?: string;
@@ -144,6 +241,10 @@ export async function saveSavedDocument(
         fileUri: doc.fileUri || current[existingIdx].fileUri,
         fileSize: doc.fileSize !== undefined ? doc.fileSize : current[existingIdx].fileSize,
         mimeType: doc.mimeType || current[existingIdx].mimeType,
+        cloudChunks:
+          doc.fileUri && doc.fileUri !== current[existingIdx].fileUri
+            ? undefined
+            : current[existingIdx].cloudChunks,
         note: doc.note?.trim() || undefined,
         updatedAt: now,
       };
@@ -188,6 +289,10 @@ export async function saveSavedDocument(
 
   if (!silent) {
     notifySavedDocumentsChanged();
+  }
+
+  if (updatedDoc.type === "file" && updatedDoc.fileUri && !updatedDoc.cloudChunks) {
+    uploadPendingFiles().catch(() => {});
   }
 
   return updatedDoc;
@@ -244,6 +349,10 @@ export async function saveSavedDocumentsBatch(
     notifySavedDocumentsChanged();
   }
 
+  if (createdList.some((d) => d.type === "file" && d.fileUri)) {
+    uploadPendingFiles().catch(() => {});
+  }
+
   return createdList;
 }
 
@@ -258,6 +367,9 @@ export async function deleteSavedDocument(
   const toDelete = current.find((d) => d.id === id);
   if (toDelete?.fileUri) {
     FileSystem.deleteAsync(toDelete.fileUri, { idempotent: true }).catch(() => {});
+  }
+  if (toDelete?.cloudChunks) {
+    deleteCloudFile(id).catch(() => {});
   }
 
   const filtered = current.filter((d) => d.id !== id);

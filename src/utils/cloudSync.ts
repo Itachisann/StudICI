@@ -716,6 +716,11 @@ function sanitizeDocForFirebase(doc: RemoteDoc): RemoteDoc {
     allCoursesManualEvents: encodeSafeKeys(doc.allCoursesManualEvents),
     tombstones: encodeSafeKeys(doc.tombstones),
     manualTombstones: encodeSafeKeys(doc.manualTombstones),
+    // Il percorso file locale è specifico del dispositivo: non va mai sincronizzato
+    savedDocuments: doc.savedDocuments?.map((d) => {
+      const { fileUri, ...rest } = d;
+      return rest as SavedDocument;
+    }),
   };
 }
 
@@ -1538,6 +1543,10 @@ async function runSync(): Promise<CloudSyncResult> {
       }
     }
     const mergedDocs = Array.from(byDocId.values())
+      .map((d) => {
+        const l = localDocs.find((x) => x.id === d.id);
+        return l?.fileUri ? { ...d, fileUri: l.fileUri } : d;
+      })
       .filter(
         (d) =>
           !(
@@ -1890,6 +1899,10 @@ export async function linkDeviceWithCode(
       }
     }
     const mergedDocs = Array.from(byDocId.values())
+      .map((d) => {
+        const l = localDocs.find((x) => x.id === d.id);
+        return l?.fileUri ? { ...d, fileUri: l.fileUri } : d;
+      })
       .filter((d) => !(docTombstones[d.id] && docTombstones[d.id] >= (d.updatedAt || d.createdAt || 0)))
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 

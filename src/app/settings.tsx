@@ -49,6 +49,7 @@ import {
   getManualEvents,
 } from "../utils/manualEvents";
 import * as Sharing from "expo-sharing";
+import { MAX_CLOUD_FILE_BYTES } from "../utils/cloudFiles";
 import {
   StudentInfo,
   getStudentInfo,
@@ -63,6 +64,9 @@ import {
   saveSavedDocumentsBatch,
   deleteSavedDocument,
   persistPickedFile,
+  resolveSavedFileUri,
+  downloadCloudFileForDoc,
+  uploadPendingFiles,
   subscribeToSavedDocumentsChanges,
 } from "../utils/savedDocuments";
 import {
@@ -151,6 +155,18 @@ function getSafeDocumentPicker(): typeof import("expo-document-picker") | null {
   }
 }
 
+function getSafeWebView(): typeof import("react-native-webview").WebView | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("react-native-webview");
+    return mod?.WebView || mod?.default || null;
+  } catch {
+    return null;
+  }
+}
+
+const SafeWebView = getSafeWebView();
+
 interface BatchDraftItem {
   tempId: string;
   type: SavedItemType;
@@ -168,6 +184,53 @@ function formatDocFileSize(bytes?: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Riga di selezione file (solo caricamento da dispositivo, niente link) */
+function FileSourceSection({
+  item,
+  accent,
+  onPick,
+}: {
+  item: BatchDraftItem;
+  accent: string;
+  onPick: () => void;
+}) {
+  return (
+    <>
+      <View style={styles.separator} />
+      <TouchableOpacity
+        style={styles.batchFilePickerRow}
+        activeOpacity={0.7}
+        onPress={onPick}
+      >
+        <View style={styles.modalInputIconBox}>
+          <Ionicons
+            name={item.fileName ? "document-attach" : "cloud-upload-outline"}
+            size={19}
+            color={accent}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          {item.fileName ? (
+            <>
+              <Text style={styles.batchPickedFileName} numberOfLines={1}>
+                {item.fileName}
+              </Text>
+              <Text style={styles.batchPickedFileSize}>
+                {formatDocFileSize(item.fileSize)} • Tocca per sostituire
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.batchFilePlaceholder}>
+              Tocca per caricare un PDF o un file
+            </Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="#48484a" />
+      </TouchableOpacity>
+    </>
+  );
 }
 
 export default function ProfiloScreen() {
@@ -236,6 +299,15 @@ export default function ProfiloScreen() {
   const [studentModalVisible, setStudentModalVisible] = useState(false);
   const [tempMatricola, setTempMatricola] = useState("");
   const [tempEmail, setTempEmail] = useState("");
+  const [isStudentInfoHidden, setIsStudentInfoHidden] = useState(false);
+
+  const handleToggleStudentInfoHidden = useCallback(() => {
+    setIsStudentInfoHidden((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem("@studici_student_info_hidden", String(next)).catch(() => {});
+      return next;
+    });
+  }, []);
 
   // Stati Documenti e Link da conservare (Lista modale, Batch aggiunta, Dettaglio modifica)
   const [savedDocs, setSavedDocs] = useState<SavedDocument[]>([]);
@@ -251,6 +323,9 @@ export default function ProfiloScreen() {
     note: "",
   });
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState<
+    (SavedDocument & { resolvedUri: string | null }) | null
+  >(null);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => setAppUpdate(info));
@@ -345,6 +420,7 @@ export default function ProfiloScreen() {
         alarmCfg,
         student,
         docs,
+        studentHiddenVal,
       ] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
@@ -354,6 +430,7 @@ export default function ProfiloScreen() {
         getAlarmSettings(),
         getStudentInfo(),
         getSavedDocuments(),
+        AsyncStorage.getItem("@studici_student_info_hidden"),
       ]);
 
       setCloudSyncId(cloudId);
@@ -364,6 +441,10 @@ export default function ProfiloScreen() {
       setAlarmSettings(alarmCfg);
       setStudentInfo(student);
       setSavedDocs(docs);
+      uploadPendingFiles().catch(() => {});
+      if (studentHiddenVal !== null) {
+        setIsStudentInfoHidden(studentHiddenVal === "true");
+      }
 
       // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
       getPairedDevicesInfo()
@@ -482,20 +563,50 @@ export default function ProfiloScreen() {
         if (doc.type === "link" && doc.url) {
           await handleOpenDocumentUrl(doc.url);
         } else if (doc.type === "file") {
-          if (doc.fileUri) {
-            const isSharingAvailable = await Sharing.isAvailableAsync();
-            if (isSharingAvailable) {
-              await Sharing.shareAsync(doc.fileUri, {
+          // 1) copia locale (anche dopo cambio container iOS); 2) altrimenti scarica dal cloud
+          const localUri = await resolveSavedFileUri(doc.fileUri);
+          const canPreviewInApp = Platform.OS === "ios" && Boolean(SafeWebView);
+
+          if (!localUri && !doc.cloudChunks) {
+            if (doc.url) {
+              await handleOpenDocumentUrl(doc.url);
+            } else {
+              Alert.alert(
+                doc.title,
+                "Il file non è disponibile su questo dispositivo né sul cloud. Aprilo sul dispositivo in cui è stato aggiunto per sincronizzarlo.",
+              );
+            }
+            return;
+          }
+
+          if (canPreviewInApp) {
+            // Anteprima nativa subito: se serve, il download dal cloud avviene con lo spinner già visibile
+            setViewerDoc({ ...doc, resolvedUri: localUri });
+          }
+          let finalUri = localUri;
+          if (!finalUri) {
+            finalUri = await downloadCloudFileForDoc(doc);
+            if (!finalUri) {
+              setViewerDoc(null);
+              Alert.alert(
+                "Download non riuscito",
+                "Impossibile scaricare il file dal cloud. Controlla la connessione e riprova.",
+              );
+              return;
+            }
+            if (canPreviewInApp) {
+              setViewerDoc({ ...doc, resolvedUri: finalUri });
+            }
+          }
+          if (!canPreviewInApp) {
+            if (await Sharing.isAvailableAsync()) {
+              await Sharing.shareAsync(finalUri, {
                 mimeType: doc.mimeType,
                 dialogTitle: doc.title,
               });
             } else {
-              await Linking.openURL(doc.fileUri);
+              await Linking.openURL(finalUri);
             }
-          } else if (doc.url) {
-            await handleOpenDocumentUrl(doc.url);
-          } else {
-            Alert.alert(doc.title, "Nessun percorso file associato.");
           }
         } else if (doc.type === "note") {
           Alert.alert(doc.title, doc.note || "(Nessun testo)", [
@@ -579,7 +690,7 @@ export default function ProfiloScreen() {
       if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
         Alert.alert(
           "Selezione file non disponibile",
-          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android).\n\nNel frattempo puoi incollare il link web/cloud al file (es. Google Drive, OneDrive o URL diretto del PDF) nel campo sottostante.",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
           [{ text: "OK" }],
         );
         return;
@@ -591,6 +702,12 @@ export default function ProfiloScreen() {
       });
       if (res.canceled || !res.assets || res.assets.length === 0) return;
       const file = res.assets[0];
+      if (file.size && file.size > MAX_CLOUD_FILE_BYTES) {
+        Alert.alert(
+          "File molto grande",
+          "Il file supera i 10 MB: resterà solo su questo dispositivo e non sarà sincronizzato sugli altri. Per condividerlo su più dispositivi usa un link (es. Drive).",
+        );
+      }
       const permanentUri = await persistPickedFile(file.uri, file.name);
 
       setBatchDrafts((prev) =>
@@ -618,7 +735,7 @@ export default function ProfiloScreen() {
     const validDrafts = batchDrafts.filter((d) => {
       if (d.type === "link") return d.url.trim().length > 0 || d.title.trim().length > 0;
       if (d.type === "file")
-        return !!d.fileUri || d.url.trim().length > 0 || d.title.trim().length > 0;
+        return !!d.fileUri || d.title.trim().length > 0;
       if (d.type === "note") return d.note.trim().length > 0 || d.title.trim().length > 0;
       return false;
     });
@@ -644,7 +761,7 @@ export default function ProfiloScreen() {
       return {
         type: d.type,
         title: fallbackTitle,
-        url: d.url ? d.url.trim() : undefined,
+        url: d.type === "link" ? (d.url ? d.url.trim() : undefined) : undefined,
         fileName: d.type === "file" ? d.fileName : undefined,
         fileUri: d.type === "file" ? d.fileUri : undefined,
         fileSize: d.type === "file" ? d.fileSize : undefined,
@@ -689,7 +806,7 @@ export default function ProfiloScreen() {
       if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
         Alert.alert(
           "Selezione file non disponibile",
-          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android).\n\nNel frattempo puoi incollare il link web/cloud al file (es. Google Drive, OneDrive o URL diretto del PDF) nel campo sottostante.",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
           [{ text: "OK" }],
         );
         return;
@@ -701,6 +818,12 @@ export default function ProfiloScreen() {
       });
       if (res.canceled || !res.assets || res.assets.length === 0) return;
       const file = res.assets[0];
+      if (file.size && file.size > MAX_CLOUD_FILE_BYTES) {
+        Alert.alert(
+          "File molto grande",
+          "Il file supera i 10 MB: resterà solo su questo dispositivo e non sarà sincronizzato sugli altri. Per condividerlo su più dispositivi usa un link (es. Drive).",
+        );
+      }
       const permanentUri = await persistPickedFile(file.uri, file.name);
 
       setEditDraft((prev) => ({
@@ -753,12 +876,20 @@ export default function ProfiloScreen() {
       id: editingDoc.id,
       type: editDraft.type,
       title: fallbackTitle,
-      url: editDraft.url ? editDraft.url.trim() : undefined,
+      url:
+        editDraft.type === "link"
+          ? editDraft.url
+            ? editDraft.url.trim()
+            : undefined
+          : undefined,
       fileName: editDraft.type === "file" ? editDraft.fileName : undefined,
       fileUri: editDraft.type === "file" ? editDraft.fileUri : undefined,
       fileSize: editDraft.type === "file" ? editDraft.fileSize : undefined,
       mimeType: editDraft.type === "file" ? editDraft.mimeType : undefined,
-      note: editDraft.note.trim() || undefined,
+      note:
+        editDraft.type === "note"
+          ? editDraft.note.trim() || undefined
+          : undefined,
     });
     const updated = await getSavedDocuments();
     setSavedDocs(updated);
@@ -1728,84 +1859,6 @@ export default function ProfiloScreen() {
                 );
               })() : null}
             </View>
-
-            {/* Dati Studente: Matricola ed Email se impostate escono sotto ai badge Laurea triennale ecc. */}
-            {Boolean(studentInfo.matricola || studentInfo.email) && (
-              <View style={styles.profileStudentInfoRow}>
-                {Boolean(studentInfo.matricola) && (
-                  <TouchableOpacity
-                    style={[
-                      styles.profileStudentPill,
-                      {
-                        backgroundColor: "rgba(16, 185, 129, 0.22)",
-                        borderColor: "#34d399",
-                        shadowColor: "#34d399",
-                      },
-                    ]}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      Clipboard.setStringAsync(studentInfo.matricola);
-                      Alert.alert(
-                        "Copiato",
-                        `Matricola ${studentInfo.matricola} copiata negli appunti.`,
-                      );
-                    }}
-                  >
-                    <Ionicons
-                      name="card-outline"
-                      size={11}
-                      color="#6ee7b7"
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text
-                      style={[
-                        styles.profileStudentPillText,
-                        { color: "#a7f3d0" },
-                      ]}
-                    >
-                      Matr. {studentInfo.matricola}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {Boolean(studentInfo.email) && (
-                  <TouchableOpacity
-                    style={[
-                      styles.profileStudentPill,
-                      {
-                        backgroundColor: "rgba(56, 189, 248, 0.22)",
-                        borderColor: "#38bdf8",
-                        shadowColor: "#38bdf8",
-                      },
-                    ]}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      Clipboard.setStringAsync(studentInfo.email);
-                      Alert.alert(
-                        "Copiato",
-                        `Email ${studentInfo.email} copiata negli appunti.`,
-                      );
-                    }}
-                  >
-                    <Ionicons
-                      name="mail-outline"
-                      size={11}
-                      color="#7dd3fc"
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text
-                      style={[
-                        styles.profileStudentPillText,
-                        { color: "#bae6fd" },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {studentInfo.email}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
           </View>
         </View>
 
@@ -1876,16 +1929,60 @@ export default function ProfiloScreen() {
           aule visualizzate.
         </Text>
 
-        {/* Gruppo: DATI STUDENTE (Sezione Unica) */}
-        <Text style={styles.sectionHeader}>DATI STUDENTE</Text>
+        {/* Gruppo: DATI STUDENTE (Sezione Riformulata con 2 righe native, copia rapida e toggle privacy) */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderNoMargin}>DATI STUDENTE</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            {/* Tasto occhio per nascondere/mostrare per privacy */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleToggleStudentInfoHidden}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel={
+                isStudentInfoHidden ? "Mostra dati studente" : "Nascondi dati studente"
+              }
+            >
+              <Ionicons
+                name={isStudentInfoHidden ? "eye-off-outline" : "eye-outline"}
+                size={17}
+                color="#8e8e93"
+              />
+            </TouchableOpacity>
+
+            {/* Tasto Modifica */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                setTempMatricola(studentInfo.matricola || "");
+                setTempEmail(studentInfo.email || "");
+                setStudentModalVisible(true);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={[styles.sectionHeaderAction, { color: theme.accent }]}>
+                Modifica
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <View style={styles.groupedCard}>
+          {/* Riga 1: Matricola */}
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
             onPress={() => {
-              setTempMatricola(studentInfo.matricola || "");
-              setTempEmail(studentInfo.email || "");
-              setStudentModalVisible(true);
+              if (studentInfo.matricola) {
+                Clipboard.setStringAsync(studentInfo.matricola);
+                Alert.alert(
+                  "Copiato",
+                  `Matricola ${studentInfo.matricola} copiata negli appunti.`,
+                );
+              } else {
+                setTempMatricola("");
+                setTempEmail(studentInfo.email || "");
+                setStudentModalVisible(true);
+              }
             }}
           >
             <View
@@ -1894,26 +1991,80 @@ export default function ProfiloScreen() {
                 { backgroundColor: theme.subtle, borderColor: theme.border },
               ]}
             >
-              <Ionicons name="id-card-outline" size={17} color={theme.accent} />
+              <Ionicons name="card-outline" size={17} color={theme.accent} />
             </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.rowTitle}>Dati studente</Text>
-              <Text style={styles.docRowSubtitle} numberOfLines={1}>
-                {studentInfo.matricola || studentInfo.email
-                  ? [
-                      studentInfo.matricola ? `Matr. ${studentInfo.matricola}` : null,
-                      studentInfo.email || null,
-                    ]
-                      .filter(Boolean)
-                      .join(" • ")
-                  : "Tocca per inserire matricola ed email"}
-              </Text>
+            <Text style={styles.rowTitle}>Matricola</Text>
+            <Text
+              style={[
+                styles.rowDetail,
+                !studentInfo.matricola && { color: "#71717a" },
+              ]}
+              numberOfLines={1}
+            >
+              {studentInfo.matricola
+                ? isStudentInfoHidden
+                  ? "••••••••"
+                  : studentInfo.matricola
+                : "Non impostata"}
+            </Text>
+            <Ionicons
+              name={studentInfo.matricola ? "copy-outline" : "chevron-forward"}
+              size={15}
+              color={studentInfo.matricola ? "#8e8e93" : "#48484a"}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Email Istituzionale */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (studentInfo.email) {
+                Clipboard.setStringAsync(studentInfo.email);
+                Alert.alert(
+                  "Copiato",
+                  `Email ${studentInfo.email} copiata negli appunti.`,
+                );
+              } else {
+                setTempMatricola(studentInfo.matricola || "");
+                setTempEmail("");
+                setStudentModalVisible(true);
+              }
+            }}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="mail-outline" size={17} color={theme.accent} />
             </View>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+            <Text style={styles.rowTitle}>Email istituzionale</Text>
+            <Text
+              style={[
+                styles.rowDetail,
+                !studentInfo.email && { color: "#71717a" },
+              ]}
+              numberOfLines={1}
+            >
+              {studentInfo.email
+                ? isStudentInfoHidden
+                  ? "••••••••••••••••"
+                  : studentInfo.email
+                : "Non impostata"}
+            </Text>
+            <Ionicons
+              name={studentInfo.email ? "copy-outline" : "chevron-forward"}
+              size={15}
+              color={studentInfo.email ? "#8e8e93" : "#48484a"}
+            />
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          La matricola e l&apos;email istituzionale vengono visualizzate nell&apos;intestazione del profilo e sincronizzate su tutti i tuoi dispositivi collegati.
+          Tocca un dato per copiarlo negli appunti o premi Modifica per aggiornarlo. La preferenza di privacy viene memorizzata.
         </Text>
 
         {/* Gruppo: DOCUMENTI E LINK (Modale dedicato) */}
@@ -3606,7 +3757,7 @@ export default function ProfiloScreen() {
         rightActions={[
           {
             label: "Altro",
-            sfSymbol: "plus.circle",
+            sfSymbol: "plus",
             tintColor: theme.primary,
             onPress: handleAddBatchSlot,
             accessibilityLabel: "Aggiungi un altro elemento",
@@ -3751,67 +3902,11 @@ export default function ProfiloScreen() {
                 )}
 
                 {draft.type === "file" && (
-                  <>
-                    <View style={styles.separator} />
-                    <TouchableOpacity
-                      style={styles.batchFilePickerRow}
-                      activeOpacity={0.7}
-                      onPress={() => handlePickFileForDraft(draft.tempId)}
-                    >
-                      <View style={styles.modalInputIconBox}>
-                        <Ionicons
-                          name={
-                            draft.fileName ? "document-attach" : "cloud-upload-outline"
-                          }
-                          size={19}
-                          color={theme.accent}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        {draft.fileName ? (
-                          <>
-                            <Text style={styles.batchPickedFileName} numberOfLines={1}>
-                              {draft.fileName}
-                            </Text>
-                            <Text style={styles.batchPickedFileSize}>
-                              {formatDocFileSize(draft.fileSize)} • Tocca per sostituire
-                            </Text>
-                          </>
-                        ) : (
-                          <Text style={styles.batchFilePlaceholder}>
-                            Tocca per selezionare PDF o file dal dispositivo
-                          </Text>
-                        )}
-                      </View>
-                      <Ionicons name="folder-open-outline" size={18} color="#8e8e93" />
-                    </TouchableOpacity>
-
-                    <View style={styles.separator} />
-                    <View style={styles.modalInputRow}>
-                      <View style={styles.modalInputIconBox}>
-                        <Ionicons name="link-outline" size={17} color={theme.accent} />
-                      </View>
-                      <TextInput
-                        style={styles.modalTextInput}
-                        placeholder="Oppure inserisci URL del file (es. https://.../file.pdf)"
-                        placeholderTextColor="#71717a"
-                        value={draft.url}
-                        onChangeText={(text) =>
-                          handleUpdateDraft(draft.tempId, "url", text)
-                        }
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        keyboardType="url"
-                      />
-                      {draft.url.length > 0 && (
-                        <TouchableOpacity
-                          onPress={() => handleUpdateDraft(draft.tempId, "url", "")}
-                        >
-                          <Ionicons name="close-circle" size={16} color="#71717a" />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  </>
+                  <FileSourceSection
+                    item={draft}
+                    accent={theme.accent}
+                    onPick={() => handlePickFileForDraft(draft.tempId)}
+                  />
                 )}
 
                 {draft.type === "note" ? (
@@ -3820,16 +3915,16 @@ export default function ProfiloScreen() {
                     <View
                       style={[
                         styles.modalInputRow,
-                        { alignItems: "flex-start", minHeight: 84 },
+                        { alignItems: "flex-start" },
                       ]}
                     >
-                      <View style={[styles.modalInputIconBox, { marginTop: 2 }]}>
+                      <View style={[styles.modalInputIconBox, { marginTop: 1 }]}>
                         <Ionicons name="create-outline" size={17} color={theme.accent} />
                       </View>
                       <TextInput
                         style={[
                           styles.modalTextInput,
-                          { minHeight: 74, textAlignVertical: "top" },
+                          { minHeight: 56, textAlignVertical: "top" },
                         ]}
                         placeholder="Scrivi qui il testo della nota..."
                         placeholderTextColor="#71717a"
@@ -3868,6 +3963,67 @@ export default function ProfiloScreen() {
             Per aggiungere altri elementi tocca &quot;+&quot; in alto a destra. Quando hai terminato, premi la spunta per salvare tutto.
           </Text>
         </ScrollView>
+      </NativeSheetModal>
+
+      {/* Visualizzatore nativo in-app per PDF / file salvati (nessun nuovo download) */}
+      <NativeSheetModal
+        visible={Boolean(viewerDoc)}
+        onClose={() => setViewerDoc(null)}
+        title={viewerDoc?.title || "Documento"}
+        backgroundColor="#000000"
+        sheetAllowedDetents={[1]}
+        rightActions={[
+          {
+            label: "Condividi",
+            sfSymbol: "square.and.arrow.up",
+            tintColor: theme.primary,
+            onPress: async () => {
+              if (!viewerDoc?.resolvedUri) return;
+              try {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(viewerDoc.resolvedUri, {
+                    mimeType: viewerDoc.mimeType,
+                    dialogTitle: viewerDoc.title,
+                  });
+                }
+              } catch {}
+            },
+            accessibilityLabel: "Condividi o apri con un'altra app",
+          },
+        ]}
+      >
+        {(() => {
+          if (!viewerDoc || !SafeWebView) return null;
+          if (!viewerDoc.resolvedUri) {
+            return (
+              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }}>
+                <ActivityIndicator color={theme.accent} />
+                <Text style={{ color: "#8e8e93", fontSize: 13 }}>
+                  Download dal cloud in corso...
+                </Text>
+              </View>
+            );
+          }
+          const docDir = viewerDoc.resolvedUri.slice(
+            0,
+            viewerDoc.resolvedUri.lastIndexOf("/") + 1,
+          );
+          return (
+            <SafeWebView
+              style={{ flex: 1, backgroundColor: "#000000" }}
+              source={{ uri: viewerDoc.resolvedUri }}
+              originWhitelist={["*"]}
+              allowFileAccess
+              allowingReadAccessToURL={docDir}
+              startInLoadingState
+              renderLoading={() => (
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                  <ActivityIndicator color={theme.accent} />
+                </View>
+              )}
+            />
+          );
+        })()}
       </NativeSheetModal>
 
       {/* Modal 3: Dettaglio / Modifica Singolo Elemento con cestino in alto a destra e Segmented UI */}
@@ -4022,71 +4178,11 @@ export default function ProfiloScreen() {
               )}
 
               {editDraft.type === "file" && (
-                <>
-                  <View style={styles.separator} />
-                  <TouchableOpacity
-                    style={styles.batchFilePickerRow}
-                    activeOpacity={0.7}
-                    onPress={handlePickFileForEditDraft}
-                  >
-                    <View style={styles.modalInputIconBox}>
-                      <Ionicons
-                        name={
-                          editDraft.fileName
-                            ? "document-attach"
-                            : "cloud-upload-outline"
-                        }
-                        size={19}
-                        color={theme.accent}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      {editDraft.fileName ? (
-                        <>
-                          <Text style={styles.batchPickedFileName} numberOfLines={1}>
-                            {editDraft.fileName}
-                          </Text>
-                          <Text style={styles.batchPickedFileSize}>
-                            {formatDocFileSize(editDraft.fileSize)} • Tocca per sostituire
-                          </Text>
-                        </>
-                      ) : (
-                        <Text style={styles.batchFilePlaceholder}>
-                          Tocca per selezionare PDF o file dal dispositivo
-                        </Text>
-                      )}
-                    </View>
-                    <Ionicons name="folder-open-outline" size={18} color="#8e8e93" />
-                  </TouchableOpacity>
-
-                  <View style={styles.separator} />
-                  <View style={styles.modalInputRow}>
-                    <View style={styles.modalInputIconBox}>
-                      <Ionicons name="link-outline" size={17} color={theme.accent} />
-                    </View>
-                    <TextInput
-                      style={styles.modalTextInput}
-                      placeholder="Oppure inserisci URL del file (es. https://.../file.pdf)"
-                      placeholderTextColor="#71717a"
-                      value={editDraft.url}
-                      onChangeText={(text) =>
-                        setEditDraft((prev) => ({ ...prev, url: text }))
-                      }
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="url"
-                    />
-                    {editDraft.url.length > 0 && (
-                      <TouchableOpacity
-                        onPress={() =>
-                          setEditDraft((prev) => ({ ...prev, url: "" }))
-                        }
-                      >
-                        <Ionicons name="close-circle" size={16} color="#71717a" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </>
+                <FileSourceSection
+                  item={editDraft}
+                  accent={theme.accent}
+                  onPick={handlePickFileForEditDraft}
+                />
               )}
 
               {editDraft.type === "note" ? (
@@ -4095,16 +4191,16 @@ export default function ProfiloScreen() {
                   <View
                     style={[
                       styles.modalInputRow,
-                      { alignItems: "flex-start", minHeight: 84 },
+                      { alignItems: "flex-start" },
                     ]}
                   >
-                    <View style={[styles.modalInputIconBox, { marginTop: 2 }]}>
+                    <View style={[styles.modalInputIconBox, { marginTop: 1 }]}>
                       <Ionicons name="create-outline" size={17} color={theme.accent} />
                     </View>
                     <TextInput
                       style={[
                         styles.modalTextInput,
-                        { minHeight: 74, textAlignVertical: "top" },
+                        { minHeight: 56, textAlignVertical: "top" },
                       ]}
                       placeholder="Scrivi qui il testo della nota..."
                       placeholderTextColor="#71717a"
@@ -4270,6 +4366,67 @@ const styles = StyleSheet.create({
   profileStudentPillText: {
     fontSize: 11,
     fontWeight: "700",
+    letterSpacing: 0.1,
+  },
+  studentCredentialsCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  studentCredentialsLeft: {
+    flex: 1,
+    marginRight: 8,
+  },
+  studentInfoBadgesContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  studentInfoHiddenRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 2,
+  },
+  studentInfoHiddenText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8e8e93",
+    letterSpacing: 0.1,
+  },
+  studentInfoEyeBtn: {
+    padding: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profileStudentPillGrey: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "rgba(255, 255, 255, 0.28)",
+    shadowColor: "#d4d4d8",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 5,
+    elevation: 3,
+    maxWidth: "100%",
+  },
+  profileStudentPillTextGrey: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#f4f4f5",
     letterSpacing: 0.1,
   },
   profileBadge: {
