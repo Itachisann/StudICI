@@ -47,12 +47,18 @@ Docs: https://docs.expo.dev/eas/index.md
   - Aggiungere sempre in fondo a `CHANGELOG_INTERNAL.md` il riepilogo tecnico dettagliato delle modifiche apportate (inclusi sviluppi progressivi, iterazioni e bug fix intermedi).
   - **NON fare MAI `git commit` o `git push`** finché l'utente non lo richiede esplicitamente. Tutte le modifiche rimangono locali.
 
-- **Al comando esplicito di commit/rilascio dell'utente**:
+- **Al comando di Dev Build dell'utente** (es. "commit per la dev build", "aggiorna dev", "genera dev"):
+  - Lavorare, eseguire lo staging, il commit e il push **esclusivamente sul branch `dev`** (mai su `main`).
+  - **NON toccare MAI `main`**, né i file ufficiali di release (`CHANGELOG.md`, `apps.json`). Non incrementare la versione ufficiale dell'app.
+  - Gli appunti tecnici restano salvati localmente in `CHANGELOG_INTERNAL.md` (senza committarlo o pusharlo se l'utente richiede di non includerlo).
+  - Non si avvia il workflow di produzione (`build-ipa.yml`). Si avvia unicamente `build-dev-client.yml` che genera l'IPA Dev Client privato negli Artifacts di GitHub Actions.
+
+- **Al comando esplicito di Release Ufficiale dell'utente** (es. "rilascia", "fai la release", "crea la release"):
   - Incrementare la versione dell'app in `package.json`, `app.json` e `apps.json`.
   - Elaborare e trasferire il resoconto da `CHANGELOG_INTERNAL.md` al changelog ufficiale `CHANGELOG.md` rispettando rigorosamente queste direttive:
     1. **Zero stile AI e zero fronzoli superflui**: vietato qualsiasi tono enfatico o tipico delle intelligenze artificiali, così come descrizioni fittizie, ridondanti o dettagli estetici banali privi di valore informativo (es. *"realizzato in Liquid Glass"*, *"aggiornato il Callstack"*, *"Sentence case"* o dettagli architetturali gonfiati).
     2. **Citazione esatta di file, moduli e componenti quando informativa**: è consentito e incoraggiato citare i nomi esatti dei moduli, dei componenti o dei file interessati (es. `trenitaliaApi.ts`, `commuterOptimizer.ts`, `PastAttendanceModal.tsx`, `manualEvents.ts`) quando ciò apporta reale chiarezza tecnica — in particolare se un modulo specifico presentava un problema ed è stato corretto o se è stato introdotto un nuovo modulo/componente rilevante.
     3. **Sintesi diretta del risultato finale (nessun passaggio intermedio)**: mentre `CHANGELOG_INTERNAL.md` conserva l'intero storico cronologico (creazione di una funzione e successive correzioni di bug o ritocchi sulla stessa), in `CHANGELOG.md` **non va mai riportata la sequenza "aggiunta funzione → risolto bug della funzione"**. Tutto va fuso e presentato direttamente nel suo risultato finale pulito e definitivo. Vanno citati come bug fix solo i problemi che esistevano già nelle versioni precedentemente rilasciate.
   - Resettare `CHANGELOG_INTERNAL.md` con la testata pulita per il ciclo successivo.
-  - Eseguire lo staging, il commit descrittivo e il push su entrambi i branch (`main` e `dev`).
+  - Effettuare il merge/staging su `main`, il commit descrittivo e il push su `main` (avviando il workflow di produzione `build-ipa.yml`), e riallineare `dev`.
 

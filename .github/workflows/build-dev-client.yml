@@ -14,7 +14,7 @@ on:
       publish_release:
         description: 'Pubblica come Pre-Release su GitHub Releases (tag: dev-client-latest)'
         required: false
-        default: true
+        default: false
         type: boolean
   push:
     branches:
@@ -135,7 +135,7 @@ jobs:
           retention-days: 14
 
       - name: Publish to GitHub Releases (Dev Client / Testing)
-        if: ${{ github.event_name == 'push' || inputs.publish_release != false }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
