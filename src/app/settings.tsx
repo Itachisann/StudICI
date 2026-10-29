@@ -35,6 +35,7 @@ import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { PastAttendanceModal } from "../components/PastAttendanceModal";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
@@ -236,11 +237,20 @@ export default function ProfiloScreen() {
   const [tempMatricola, setTempMatricola] = useState("");
   const [tempEmail, setTempEmail] = useState("");
 
-  // Stati Documenti e Link da conservare (supporto batch multi-item)
+  // Stati Documenti e Link da conservare (Lista modale, Batch aggiunta, Dettaglio modifica)
   const [savedDocs, setSavedDocs] = useState<SavedDocument[]>([]);
-  const [editingDoc, setEditingDoc] = useState<SavedDocument | null>(null);
+  const [docsListModalVisible, setDocsListModalVisible] = useState(false);
   const [batchDrafts, setBatchDrafts] = useState<BatchDraftItem[]>([]);
-  const [batchModalVisible, setBatchModalVisible] = useState(false);
+  const [batchAddModalVisible, setBatchAddModalVisible] = useState(false);
+  const [editingDoc, setEditingDoc] = useState<SavedDocument | null>(null);
+  const [editDraft, setEditDraft] = useState<BatchDraftItem>({
+    tempId: "",
+    type: "link",
+    title: "",
+    url: "",
+    note: "",
+  });
+  const [editModalVisible, setEditModalVisible] = useState(false);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => setAppUpdate(info));
@@ -508,8 +518,23 @@ export default function ProfiloScreen() {
     [handleOpenDocumentUrl],
   );
 
-  const handleOpenBatchModal = useCallback(() => {
-    setEditingDoc(null);
+  const handleDeleteDocDirectly = useCallback(
+    async (docId: string, title?: string) => {
+      try {
+        await deleteSavedDocument(docId);
+        const updated = await getSavedDocuments();
+        setSavedDocs(updated);
+      } catch (err: any) {
+        Alert.alert(
+          "Errore eliminazione",
+          err?.message || "Impossibile eliminare l'elemento.",
+        );
+      }
+    },
+    [],
+  );
+
+  const handleOpenAddBatchModal = useCallback(() => {
     setBatchDrafts([
       {
         tempId: `draft_${Date.now()}_0`,
@@ -519,25 +544,7 @@ export default function ProfiloScreen() {
         note: "",
       },
     ]);
-    setBatchModalVisible(true);
-  }, []);
-
-  const handleOpenEditModal = useCallback((doc: SavedDocument) => {
-    setEditingDoc(doc);
-    setBatchDrafts([
-      {
-        tempId: doc.id,
-        type: doc.type,
-        title: doc.title,
-        url: doc.url || "",
-        fileName: doc.fileName,
-        fileUri: doc.fileUri,
-        fileSize: doc.fileSize,
-        mimeType: doc.mimeType,
-        note: doc.note || "",
-      },
-    ]);
-    setBatchModalVisible(true);
+    setBatchAddModalVisible(true);
   }, []);
 
   const handleAddBatchSlot = useCallback(() => {
@@ -608,34 +615,6 @@ export default function ProfiloScreen() {
   }, []);
 
   const handleSaveBatchDrafts = useCallback(async () => {
-    if (editingDoc) {
-      const draft = batchDrafts[0];
-      if (!draft) return;
-      const fallbackTitle =
-        draft.title.trim() ||
-        draft.fileName ||
-        (draft.url ? draft.url.replace(/^https?:\/\//i, "").split("/")[0] : "") ||
-        editingDoc.title;
-
-      await saveSavedDocument({
-        id: editingDoc.id,
-        type: draft.type,
-        title: fallbackTitle,
-        url: draft.url ? draft.url.trim() : undefined,
-        fileName: draft.type === "file" ? draft.fileName : undefined,
-        fileUri: draft.type === "file" ? draft.fileUri : undefined,
-        fileSize: draft.type === "file" ? draft.fileSize : undefined,
-        mimeType: draft.type === "file" ? draft.mimeType : undefined,
-        note: draft.note.trim() || undefined,
-      });
-      const updated = await getSavedDocuments();
-      setSavedDocs(updated);
-      setBatchModalVisible(false);
-      setEditingDoc(null);
-      setBatchDrafts([]);
-      return;
-    }
-
     const validDrafts = batchDrafts.filter((d) => {
       if (d.type === "link") return d.url.trim().length > 0 || d.title.trim().length > 0;
       if (d.type === "file")
@@ -678,7 +657,7 @@ export default function ProfiloScreen() {
       await saveSavedDocumentsBatch(itemsToSave);
       const updated = await getSavedDocuments();
       setSavedDocs(updated);
-      setBatchModalVisible(false);
+      setBatchAddModalVisible(false);
       setBatchDrafts([]);
     } catch (err: any) {
       Alert.alert(
@@ -686,7 +665,106 @@ export default function ProfiloScreen() {
         err?.message || "Impossibile salvare gli elementi.",
       );
     }
-  }, [batchDrafts, editingDoc]);
+  }, [batchDrafts]);
+
+  const handleOpenEditModal = useCallback((doc: SavedDocument) => {
+    setEditingDoc(doc);
+    setEditDraft({
+      tempId: doc.id,
+      type: doc.type,
+      title: doc.title,
+      url: doc.url || "",
+      fileName: doc.fileName,
+      fileUri: doc.fileUri,
+      fileSize: doc.fileSize,
+      mimeType: doc.mimeType,
+      note: doc.note || "",
+    });
+    setEditModalVisible(true);
+  }, []);
+
+  const handlePickFileForEditDraft = useCallback(async () => {
+    try {
+      const DocumentPicker = getSafeDocumentPicker();
+      if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
+        Alert.alert(
+          "Selezione file non disponibile",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android).\n\nNel frattempo puoi incollare il link web/cloud al file (es. Google Drive, OneDrive o URL diretto del PDF) nel campo sottostante.",
+          [{ text: "OK" }],
+        );
+        return;
+      }
+
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+      const file = res.assets[0];
+      const permanentUri = await persistPickedFile(file.uri, file.name);
+
+      setEditDraft((prev) => ({
+        ...prev,
+        fileName: file.name,
+        fileUri: permanentUri,
+        fileSize: file.size,
+        mimeType: file.mimeType || undefined,
+        title: prev.title.trim() ? prev.title : file.name.replace(/\.[^/.]+$/, ""),
+      }));
+    } catch (err: any) {
+      Alert.alert(
+        "Errore selezione file",
+        err?.message || "Impossibile caricare il file dal dispositivo.",
+      );
+    }
+  }, []);
+
+  const handleDeleteEditingDoc = useCallback(() => {
+    if (!editingDoc) return;
+    Alert.alert(
+      "Elimina elemento",
+      `Vuoi davvero eliminare "${editingDoc.title}"?`,
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Elimina",
+          style: "destructive",
+          onPress: async () => {
+            await deleteSavedDocument(editingDoc.id);
+            const fresh = await getSavedDocuments();
+            setSavedDocs(fresh);
+            setEditModalVisible(false);
+            setEditingDoc(null);
+          },
+        },
+      ],
+    );
+  }, [editingDoc]);
+
+  const handleSaveEditDoc = useCallback(async () => {
+    if (!editingDoc) return;
+    const fallbackTitle =
+      editDraft.title.trim() ||
+      editDraft.fileName ||
+      (editDraft.url ? editDraft.url.replace(/^https?:\/\//i, "").split("/")[0] : "") ||
+      editingDoc.title;
+
+    await saveSavedDocument({
+      id: editingDoc.id,
+      type: editDraft.type,
+      title: fallbackTitle,
+      url: editDraft.url ? editDraft.url.trim() : undefined,
+      fileName: editDraft.type === "file" ? editDraft.fileName : undefined,
+      fileUri: editDraft.type === "file" ? editDraft.fileUri : undefined,
+      fileSize: editDraft.type === "file" ? editDraft.fileSize : undefined,
+      mimeType: editDraft.type === "file" ? editDraft.mimeType : undefined,
+      note: editDraft.note.trim() || undefined,
+    });
+    const updated = await getSavedDocuments();
+    setSavedDocs(updated);
+    setEditModalVisible(false);
+    setEditingDoc(null);
+  }, [editingDoc, editDraft]);
 
   const handleDocumentOptions = useCallback(
     (doc: SavedDocument) => {
@@ -1656,7 +1734,14 @@ export default function ProfiloScreen() {
               <View style={styles.profileStudentInfoRow}>
                 {Boolean(studentInfo.matricola) && (
                   <TouchableOpacity
-                    style={styles.profileStudentPill}
+                    style={[
+                      styles.profileStudentPill,
+                      {
+                        backgroundColor: "rgba(16, 185, 129, 0.22)",
+                        borderColor: "#34d399",
+                        shadowColor: "#34d399",
+                      },
+                    ]}
                     activeOpacity={0.7}
                     onPress={() => {
                       Clipboard.setStringAsync(studentInfo.matricola);
@@ -1669,10 +1754,15 @@ export default function ProfiloScreen() {
                     <Ionicons
                       name="card-outline"
                       size={11}
-                      color={theme.accent}
+                      color="#6ee7b7"
                       style={{ marginRight: 4 }}
                     />
-                    <Text style={styles.profileStudentPillText}>
+                    <Text
+                      style={[
+                        styles.profileStudentPillText,
+                        { color: "#a7f3d0" },
+                      ]}
+                    >
                       Matr. {studentInfo.matricola}
                     </Text>
                   </TouchableOpacity>
@@ -1680,7 +1770,14 @@ export default function ProfiloScreen() {
 
                 {Boolean(studentInfo.email) && (
                   <TouchableOpacity
-                    style={styles.profileStudentPill}
+                    style={[
+                      styles.profileStudentPill,
+                      {
+                        backgroundColor: "rgba(56, 189, 248, 0.22)",
+                        borderColor: "#38bdf8",
+                        shadowColor: "#38bdf8",
+                      },
+                    ]}
                     activeOpacity={0.7}
                     onPress={() => {
                       Clipboard.setStringAsync(studentInfo.email);
@@ -1693,11 +1790,14 @@ export default function ProfiloScreen() {
                     <Ionicons
                       name="mail-outline"
                       size={11}
-                      color={theme.accent}
+                      color="#7dd3fc"
                       style={{ marginRight: 4 }}
                     />
                     <Text
-                      style={styles.profileStudentPillText}
+                      style={[
+                        styles.profileStudentPillText,
+                        { color: "#bae6fd" },
+                      ]}
                       numberOfLines={1}
                     >
                       {studentInfo.email}
@@ -1816,127 +1916,35 @@ export default function ProfiloScreen() {
           La matricola e l&apos;email istituzionale vengono visualizzate nell&apos;intestazione del profilo e sincronizzate su tutti i tuoi dispositivi collegati.
         </Text>
 
-        {/* Gruppo: DOCUMENTI E LINK */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeaderNoMargin}>DOCUMENTI E LINK</Text>
+        {/* Gruppo: DOCUMENTI E LINK (Modale dedicato) */}
+        <Text style={styles.sectionHeader}>DOCUMENTI E LINK</Text>
+        <View style={styles.groupedCard}>
           <TouchableOpacity
-            onPress={handleOpenBatchModal}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setDocsListModalVisible(true)}
           >
-            <Text style={[styles.sectionHeaderAction, { color: theme.accent }]}>
-              + Aggiungi
-            </Text>
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="folder-outline" size={17} color={theme.accent} />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Documenti e link salvati</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {savedDocs.length === 0
+                  ? "Nessun elemento conservato"
+                  : `${savedDocs.length} ${savedDocs.length === 1 ? "elemento salvato" : "elementi salvati"} (file, link, note)`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
           </TouchableOpacity>
         </View>
-
-        <View style={styles.groupedCard}>
-          {savedDocs.length === 0 ? (
-            <TouchableOpacity
-              style={styles.tableRow}
-              activeOpacity={0.7}
-              onPress={handleOpenBatchModal}
-            >
-              <View
-                style={[
-                  styles.iconBox,
-                  { backgroundColor: theme.subtle, borderColor: theme.border },
-                ]}
-              >
-                <Ionicons name="add" size={18} color={theme.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowTitle}>Aggiungi link, file o note</Text>
-                <Text style={styles.docRowSubtitle}>
-                  PDF, dispense, link Google Drive, appunti...
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={15} color="#48484a" />
-            </TouchableOpacity>
-          ) : (
-            <>
-              {savedDocs.map((doc, idx) => {
-                let iconName: any = "link-outline";
-                if (doc.type === "file") {
-                  iconName = "document-text-outline";
-                } else if (doc.type === "note") {
-                  iconName = "reader-outline";
-                } else if (doc.url?.includes("drive.google") || doc.url?.includes("docs.google")) {
-                  iconName = "cloud-outline";
-                }
-
-                let subtitle = "";
-                if (doc.type === "link") {
-                  subtitle = doc.url ? doc.url.replace(/^https?:\/\//i, "").split("/")[0] : "Link web";
-                  if (doc.note) subtitle += ` • ${doc.note}`;
-                } else if (doc.type === "file") {
-                  subtitle = [doc.fileName || "File", formatDocFileSize(doc.fileSize), doc.note]
-                    .filter(Boolean)
-                    .join(" • ");
-                } else if (doc.type === "note") {
-                  subtitle = doc.note || "Nota personale";
-                }
-
-                return (
-                  <View key={doc.id}>
-                    {idx > 0 && <View style={styles.separator} />}
-                    <TouchableOpacity
-                      style={styles.tableRow}
-                      activeOpacity={0.7}
-                      onPress={() => handleOpenItem(doc)}
-                      onLongPress={() => handleDocumentOptions(doc)}
-                    >
-                      <View
-                        style={[
-                          styles.iconBox,
-                          { backgroundColor: theme.subtle, borderColor: theme.border },
-                        ]}
-                      >
-                        <Ionicons name={iconName} size={17} color={theme.accent} />
-                      </View>
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text style={styles.rowTitle} numberOfLines={1}>
-                          {doc.title}
-                        </Text>
-                        <Text style={styles.docRowSubtitle} numberOfLines={1}>
-                          {subtitle}
-                        </Text>
-                      </View>
-
-                      <TouchableOpacity
-                        style={styles.docEditIconBtn}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        onPress={() => handleDocumentOptions(doc)}
-                      >
-                        <Ionicons name="ellipsis-horizontal" size={17} color="#8e8e93" />
-                      </TouchableOpacity>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-              <View style={styles.separator} />
-              <TouchableOpacity
-                style={styles.tableRow}
-                activeOpacity={0.7}
-                onPress={handleOpenBatchModal}
-              >
-                <View
-                  style={[
-                    styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
-                  ]}
-                >
-                  <Ionicons name="add" size={18} color={theme.accent} />
-                </View>
-                <Text style={[styles.rowTitle, { color: theme.accent }]}>
-                  Aggiungi altri documenti o link
-                </Text>
-                <Ionicons name="chevron-forward" size={15} color="#48484a" />
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
         <Text style={styles.sectionFooter}>
-          Conserva documenti didattici, dispense e link utili (Google Drive, Teams, PDF) sincronizzati tra tutti i tuoi dispositivi.
+          Accedi a dispense, PDF, note e link didattici sincronizzati in tempo reale tra tutti i tuoi dispositivi.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -3454,23 +3462,162 @@ export default function ProfiloScreen() {
         </ScrollView>
       </NativeSheetModal>
 
-      {/* Modal Aggiunta Multipla Batch & Modifica Documenti / Link / Note */}
+      {/* Modal 1: Lista Documenti e Link Salvati con Swipe-to-Delete */}
       <NativeSheetModal
-        visible={batchModalVisible}
-        onClose={() => {
-          setBatchModalVisible(false);
-          setEditingDoc(null);
-          setBatchDrafts([]);
-        }}
-        title={editingDoc ? "Modifica Elemento" : "Aggiungi Documenti e Link"}
+        visible={docsListModalVisible}
+        onClose={() => setDocsListModalVisible(false)}
+        title="Documenti e Link"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
+          {
+            label: "Aggiungi",
+            sfSymbol: "plus",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleOpenAddBatchModal,
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {savedDocs.length === 0 ? (
+            <View style={styles.modalEmptyStateContainer}>
+              <View
+                style={[
+                  styles.modalEmptyStateIconCircle,
+                  { backgroundColor: theme.subtle },
+                ]}
+              >
+                <Ionicons
+                  name="folder-open-outline"
+                  size={36}
+                  color={theme.accent}
+                />
+              </View>
+              <Text style={styles.modalEmptyStateTitle}>
+                Nessun documento salvato
+              </Text>
+              <Text style={styles.modalEmptyStateSub}>
+                Tocca il pulsante &quot;+&quot; in alto a destra per aggiungere link, file o note.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {savedDocs.map((doc) => {
+                let iconName: any = "link-outline";
+                if (doc.type === "file") iconName = "document-text-outline";
+                else if (doc.type === "note") iconName = "reader-outline";
+                else if (
+                  doc.url?.includes("drive.google") ||
+                  doc.url?.includes("docs.google")
+                ) {
+                  iconName = "cloud-outline";
+                }
+
+                let subtitle = "";
+                if (doc.type === "link") {
+                  subtitle = doc.url
+                    ? doc.url.replace(/^https?:\/\//i, "").split("/")[0]
+                    : "Link web";
+                  if (doc.note) subtitle += ` • ${doc.note}`;
+                } else if (doc.type === "file") {
+                  subtitle = [
+                    doc.fileName || "File",
+                    formatDocFileSize(doc.fileSize),
+                    doc.note,
+                  ]
+                    .filter(Boolean)
+                    .join(" • ");
+                } else if (doc.type === "note") {
+                  subtitle = doc.note || "Nota personale";
+                }
+
+                return (
+                  <SwipeToDeleteRow
+                    key={doc.id}
+                    marginBottom={10}
+                    borderRadius={14}
+                    onDelete={() => handleDeleteDocDirectly(doc.id, doc.title)}
+                  >
+                    <TouchableOpacity
+                      style={styles.docItemCard}
+                      activeOpacity={0.7}
+                      onPress={() => handleOpenItem(doc)}
+                      onLongPress={() => handleDocumentOptions(doc)}
+                    >
+                      <View
+                        style={[
+                          styles.iconBox,
+                          {
+                            backgroundColor: theme.subtle,
+                            borderColor: theme.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={iconName}
+                          size={18}
+                          color={theme.accent}
+                        />
+                      </View>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={styles.docItemCardTitle} numberOfLines={1}>
+                          {doc.title}
+                        </Text>
+                        <Text style={styles.docItemCardSub} numberOfLines={1}>
+                          {subtitle}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.docEditIconBtn}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        onPress={() => handleOpenEditModal(doc)}
+                      >
+                        <Ionicons
+                          name="pencil-outline"
+                          size={17}
+                          color="#8e8e93"
+                        />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  </SwipeToDeleteRow>
+                );
+              })}
+              <Text style={styles.modalCardHelperText}>
+                Scorri verso sinistra per eliminare un elemento, oppure tocca l&apos;icona matita per modificarlo.
+              </Text>
+            </>
+          )}
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Modal 2: Aggiungi Elementi (Multi-item con tasto '+' e tick separati in alto a destra) */}
+      <NativeSheetModal
+        visible={batchAddModalVisible}
+        onClose={() => {
+          setBatchAddModalVisible(false);
+          setBatchDrafts([]);
+        }}
+        title="Nuovi Elementi"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Altro",
+            sfSymbol: "plus.circle",
+            tintColor: theme.primary,
+            onPress: handleAddBatchSlot,
+            accessibilityLabel: "Aggiungi un altro elemento",
+          },
           {
             label: "Salva",
             sfSymbol: "checkmark",
             prominent: true,
             tintColor: theme.primary,
             onPress: handleSaveBatchDrafts,
+            accessibilityLabel: "Salva elementi",
           },
         ]}
       >
@@ -3481,12 +3628,9 @@ export default function ProfiloScreen() {
         >
           {batchDrafts.map((draft, idx) => (
             <View key={draft.tempId} style={styles.batchCardContainer}>
-              {/* Intestazione elemento e tasto elimina slot se più di 1 */}
               <View style={styles.batchCardHeader}>
-                <Text style={styles.batchCardTitle}>
-                  {editingDoc ? "Elemento" : `Elemento ${idx + 1}`}
-                </Text>
-                {!editingDoc && batchDrafts.length > 1 && (
+                <Text style={styles.batchCardTitle}>Elemento {idx + 1}</Text>
+                {batchDrafts.length > 1 && (
                   <TouchableOpacity
                     onPress={() => handleRemoveBatchSlot(draft.tempId)}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -3496,90 +3640,57 @@ export default function ProfiloScreen() {
                 )}
               </View>
 
-              {/* Selettore tipo elemento: Link | File / PDF | Nota */}
-              <View style={styles.batchTypeSelector}>
-                <TouchableOpacity
-                  style={[
-                    styles.batchTypeBtn,
-                    draft.type === "link" && [
-                      styles.batchTypeBtnActive,
-                      { backgroundColor: theme.primary },
-                    ],
-                  ]}
-                  onPress={() => handleUpdateDraft(draft.tempId, "type", "link")}
-                >
-                  <Ionicons
-                    name="link-outline"
-                    size={14}
-                    color={draft.type === "link" ? "#ffffff" : "#a1a1aa"}
-                    style={{ marginRight: 4 }}
+              {/* Selettore Segmented UI: Link | File | Nota */}
+              <View style={styles.modalSegmentedContainer}>
+                {isNativeComponentAvailable ? (
+                  <SegmentedControl
+                    values={["Link", "File", "Nota"]}
+                    selectedIndex={
+                      draft.type === "link" ? 0 : draft.type === "file" ? 1 : 2
+                    }
+                    onChange={(event) => {
+                      const selected = event.nativeEvent.selectedSegmentIndex;
+                      const nextType: SavedItemType =
+                        selected === 0 ? "link" : selected === 1 ? "file" : "note";
+                      handleUpdateDraft(draft.tempId, "type", nextType);
+                    }}
+                    style={styles.modalSegmentedControl}
                   />
-                  <Text
-                    style={[
-                      styles.batchTypeBtnText,
-                      draft.type === "link" && styles.batchTypeBtnTextActive,
-                    ]}
-                  >
-                    Link
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.batchTypeBtn,
-                    draft.type === "file" && [
-                      styles.batchTypeBtnActive,
-                      { backgroundColor: theme.primary },
-                    ],
-                  ]}
-                  onPress={() => handleUpdateDraft(draft.tempId, "type", "file")}
-                >
-                  <Ionicons
-                    name="document-text-outline"
-                    size={14}
-                    color={draft.type === "file" ? "#ffffff" : "#a1a1aa"}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text
-                    style={[
-                      styles.batchTypeBtnText,
-                      draft.type === "file" && styles.batchTypeBtnTextActive,
-                    ]}
-                  >
-                    File / PDF
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.batchTypeBtn,
-                    draft.type === "note" && [
-                      styles.batchTypeBtnActive,
-                      { backgroundColor: theme.primary },
-                    ],
-                  ]}
-                  onPress={() => handleUpdateDraft(draft.tempId, "type", "note")}
-                >
-                  <Ionicons
-                    name="reader-outline"
-                    size={14}
-                    color={draft.type === "note" ? "#ffffff" : "#a1a1aa"}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text
-                    style={[
-                      styles.batchTypeBtnText,
-                      draft.type === "note" && styles.batchTypeBtnTextActive,
-                    ]}
-                  >
-                    Nota
-                  </Text>
-                </TouchableOpacity>
+                ) : (
+                  <View style={styles.batchTypeSelector}>
+                    {(["link", "file", "note"] as SavedItemType[]).map((tKey, i) => {
+                      const labels = ["Link", "File", "Nota"];
+                      const active = draft.type === tKey;
+                      return (
+                        <TouchableOpacity
+                          key={tKey}
+                          style={[
+                            styles.batchTypeBtn,
+                            active && [
+                              styles.batchTypeBtnActive,
+                              { backgroundColor: theme.primary },
+                            ],
+                          ]}
+                          onPress={() =>
+                            handleUpdateDraft(draft.tempId, "type", tKey)
+                          }
+                        >
+                          <Text
+                            style={[
+                              styles.batchTypeBtnText,
+                              active && styles.batchTypeBtnTextActive,
+                            ]}
+                          >
+                            {labels[i]}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
               </View>
 
-              {/* Gruppo input per l'elemento */}
               <View style={styles.modalCardGroup}>
-                {/* Campo Titolo */}
                 <View style={styles.modalInputRow}>
                   <View style={styles.modalInputIconBox}>
                     <Ionicons name="text-outline" size={17} color={theme.accent} />
@@ -3753,64 +3864,279 @@ export default function ProfiloScreen() {
             </View>
           ))}
 
-          {/* Bottone Aggiungi un altro elemento (+ slot) */}
-          {!editingDoc && (
-            <TouchableOpacity
-              style={styles.batchAddAnotherBtn}
-              activeOpacity={0.7}
-              onPress={handleAddBatchSlot}
-            >
-              <Ionicons
-                name="add-circle-outline"
-                size={19}
-                color={theme.accent}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.batchAddAnotherText, { color: theme.accent }]}>
-                Aggiungi un altro elemento
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {editingDoc && (
-            <TouchableOpacity
-              style={styles.modalDeleteButton}
-              activeOpacity={0.7}
-              onPress={() => {
-                Alert.alert(
-                  "Elimina elemento",
-                  `Vuoi davvero eliminare "${editingDoc.title}"?`,
-                  [
-                    { text: "Annulla", style: "cancel" },
-                    {
-                      text: "Elimina",
-                      style: "destructive",
-                      onPress: async () => {
-                        await deleteSavedDocument(editingDoc.id);
-                        const fresh = await getSavedDocuments();
-                        setSavedDocs(fresh);
-                        setBatchModalVisible(false);
-                        setEditingDoc(null);
-                        setBatchDrafts([]);
-                      },
-                    },
-                  ],
-                );
-              }}
-            >
-              <Ionicons
-                name="trash-outline"
-                size={16}
-                color="#ef4444"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.modalDeleteButtonText}>Elimina elemento</Text>
-            </TouchableOpacity>
-          )}
-
           <Text style={styles.modalCardHelperText}>
-            Puoi aggiungere più elementi contemporaneamente premendo &quot;Aggiungi un altro elemento&quot;. Quando hai finito, tocca la spunta in alto a destra per salvare. Tutti i link, note e file sono conservati e sincronizzati in tempo reale.
+            Per aggiungere altri elementi tocca &quot;+&quot; in alto a destra. Quando hai terminato, premi la spunta per salvare tutto.
           </Text>
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Modal 3: Dettaglio / Modifica Singolo Elemento con cestino in alto a destra e Segmented UI */}
+      <NativeSheetModal
+        visible={editModalVisible}
+        onClose={() => {
+          setEditModalVisible(false);
+          setEditingDoc(null);
+        }}
+        title="Dettaglio Elemento"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Elimina",
+            sfSymbol: "trash",
+            tintColor: "#ef4444",
+            onPress: handleDeleteEditingDoc,
+            accessibilityLabel: "Elimina elemento",
+          },
+          {
+            label: "Salva",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleSaveEditDoc,
+            accessibilityLabel: "Salva modifiche",
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.batchCardContainer}>
+            {/* Selettore Segmented UI: Link | File | Nota */}
+            <View style={styles.modalSegmentedContainer}>
+              {isNativeComponentAvailable ? (
+                <SegmentedControl
+                  values={["Link", "File", "Nota"]}
+                  selectedIndex={
+                    editDraft.type === "link"
+                      ? 0
+                      : editDraft.type === "file"
+                      ? 1
+                      : 2
+                  }
+                  onChange={(event) => {
+                    const selected = event.nativeEvent.selectedSegmentIndex;
+                    const nextType: SavedItemType =
+                      selected === 0 ? "link" : selected === 1 ? "file" : "note";
+                    setEditDraft((prev) => ({ ...prev, type: nextType }));
+                  }}
+                  style={styles.modalSegmentedControl}
+                />
+              ) : (
+                <View style={styles.batchTypeSelector}>
+                  {(["link", "file", "note"] as SavedItemType[]).map((tKey, i) => {
+                    const labels = ["Link", "File", "Nota"];
+                    const active = editDraft.type === tKey;
+                    return (
+                      <TouchableOpacity
+                        key={tKey}
+                        style={[
+                          styles.batchTypeBtn,
+                          active && [
+                            styles.batchTypeBtnActive,
+                            { backgroundColor: theme.primary },
+                          ],
+                        ]}
+                        onPress={() =>
+                          setEditDraft((prev) => ({ ...prev, type: tKey }))
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.batchTypeBtnText,
+                            active && styles.batchTypeBtnTextActive,
+                          ]}
+                        >
+                          {labels[i]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
+            <View style={styles.modalCardGroup}>
+              <View style={styles.modalInputRow}>
+                <View style={styles.modalInputIconBox}>
+                  <Ionicons name="text-outline" size={17} color={theme.accent} />
+                </View>
+                <TextInput
+                  style={styles.modalTextInput}
+                  placeholder={
+                    editDraft.type === "link"
+                      ? "Titolo link (es. Drive, Teams, Portale)"
+                      : editDraft.type === "file"
+                      ? "Titolo file (es. Dispensa, Regolamento)"
+                      : "Titolo nota (es. Appunti, Credenziali)"
+                  }
+                  placeholderTextColor="#71717a"
+                  value={editDraft.title}
+                  onChangeText={(text) =>
+                    setEditDraft((prev) => ({ ...prev, title: text }))
+                  }
+                  returnKeyType="next"
+                />
+                {editDraft.title.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      setEditDraft((prev) => ({ ...prev, title: "" }))
+                    }
+                  >
+                    <Ionicons name="close-circle" size={16} color="#71717a" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {editDraft.type === "link" && (
+                <>
+                  <View style={styles.separator} />
+                  <View style={styles.modalInputRow}>
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons name="globe-outline" size={17} color={theme.accent} />
+                    </View>
+                    <TextInput
+                      style={styles.modalTextInput}
+                      placeholder="Link / URL (es. drive.google.com/...)"
+                      placeholderTextColor="#71717a"
+                      value={editDraft.url}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, url: text }))
+                      }
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                    />
+                    {editDraft.url.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          setEditDraft((prev) => ({ ...prev, url: "" }))
+                        }
+                      >
+                        <Ionicons name="close-circle" size={16} color="#71717a" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              )}
+
+              {editDraft.type === "file" && (
+                <>
+                  <View style={styles.separator} />
+                  <TouchableOpacity
+                    style={styles.batchFilePickerRow}
+                    activeOpacity={0.7}
+                    onPress={handlePickFileForEditDraft}
+                  >
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons
+                        name={
+                          editDraft.fileName
+                            ? "document-attach"
+                            : "cloud-upload-outline"
+                        }
+                        size={19}
+                        color={theme.accent}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      {editDraft.fileName ? (
+                        <>
+                          <Text style={styles.batchPickedFileName} numberOfLines={1}>
+                            {editDraft.fileName}
+                          </Text>
+                          <Text style={styles.batchPickedFileSize}>
+                            {formatDocFileSize(editDraft.fileSize)} • Tocca per sostituire
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={styles.batchFilePlaceholder}>
+                          Tocca per selezionare PDF o file dal dispositivo
+                        </Text>
+                      )}
+                    </View>
+                    <Ionicons name="folder-open-outline" size={18} color="#8e8e93" />
+                  </TouchableOpacity>
+
+                  <View style={styles.separator} />
+                  <View style={styles.modalInputRow}>
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons name="link-outline" size={17} color={theme.accent} />
+                    </View>
+                    <TextInput
+                      style={styles.modalTextInput}
+                      placeholder="Oppure inserisci URL del file (es. https://.../file.pdf)"
+                      placeholderTextColor="#71717a"
+                      value={editDraft.url}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, url: text }))
+                      }
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                    />
+                    {editDraft.url.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          setEditDraft((prev) => ({ ...prev, url: "" }))
+                        }
+                      >
+                        <Ionicons name="close-circle" size={16} color="#71717a" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              )}
+
+              {editDraft.type === "note" ? (
+                <>
+                  <View style={styles.separator} />
+                  <View
+                    style={[
+                      styles.modalInputRow,
+                      { alignItems: "flex-start", minHeight: 84 },
+                    ]}
+                  >
+                    <View style={[styles.modalInputIconBox, { marginTop: 2 }]}>
+                      <Ionicons name="create-outline" size={17} color={theme.accent} />
+                    </View>
+                    <TextInput
+                      style={[
+                        styles.modalTextInput,
+                        { minHeight: 74, textAlignVertical: "top" },
+                      ]}
+                      placeholder="Scrivi qui il testo della nota..."
+                      placeholderTextColor="#71717a"
+                      value={editDraft.note}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, note: text }))
+                      }
+                      multiline
+                    />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.separator} />
+                  <View style={styles.modalInputRow}>
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons name="pencil-outline" size={17} color={theme.accent} />
+                    </View>
+                    <TextInput
+                      style={styles.modalTextInput}
+                      placeholder="Nota o descrizione facoltativa"
+                      placeholderTextColor="#71717a"
+                      value={editDraft.note}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, note: text }))
+                      }
+                    />
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
         </ScrollView>
       </NativeSheetModal>
       <Modal
@@ -3931,18 +4257,19 @@ const styles = StyleSheet.create({
   profileStudentPill: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
-    paddingHorizontal: 8,
-    paddingVertical: 3.5,
-    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.12)",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
     maxWidth: "100%",
   },
   profileStudentPillText: {
     fontSize: 11,
-    fontWeight: "600",
-    color: "#e2e8f0",
+    fontWeight: "700",
     letterSpacing: 0.1,
   },
   profileBadge: {
@@ -4083,6 +4410,61 @@ const styles = StyleSheet.create({
   batchAddAnotherText: {
     fontSize: 15,
     fontWeight: "600",
+  },
+  docItemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  docItemCardTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
+  docItemCardSub: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  modalEmptyStateContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+  },
+  modalEmptyStateIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  modalEmptyStateTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  modalEmptyStateSub: {
+    fontSize: 13,
+    color: "#8e8e93",
+    textAlign: "center",
+    lineHeight: 18,
+    maxWidth: 280,
+  },
+  modalSegmentedContainer: {
+    marginBottom: 12,
+  },
+  modalSegmentedControl: {
+    height: 36,
+    width: "100%",
   },
   modalCardGroup: {
     backgroundColor: "#1c1c1e",
