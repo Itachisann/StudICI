@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -134,49 +136,59 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish to GitHub Releases (Dev Client / Testing)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
+      - name: Publish to GitHub Pre-Release & Update SideStore Dev Source
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_CONFIG: ${{ inputs.build_configuration || 'Debug' }}
         run: |
           VERSION=$(node -p "require('./app.json').expo.version")
           TAG_NAME="dev-client-latest"
+          RUN_ID="${{ github.run_id }}"
+          TODAY=$(date +%Y-%m-%d)
+          FILE_SIZE=$(wc -c < "${IPA_NAME}" | tr -d ' ')
+          
+          # Aggiorna apps-dev.json con la versione progressiva, data e dimensione
+          node -e "
+            const fs = require('fs');
+            if (fs.existsSync('apps-dev.json')) {
+              const data = JSON.parse(fs.readFileSync('apps-dev.json', 'utf8'));
+              if (data.apps && data.apps[0]) {
+                data.apps[0].size = Number('${FILE_SIZE}') || 31000000;
+                data.apps[0].versionDate = '${TODAY}';
+                data.apps[0].version = '${VERSION}-dev.' + '${RUN_ID}';
+              }
+              fs.writeFileSync('apps-dev.json', JSON.stringify(data, null, 2) + '\\n');
+            }
+          "
+          
+          # Se il file apps-dev.json è stato modificato, committalo sul branch dev con [skip ci]
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain apps-dev.json)" ]; then
+            git add apps-dev.json
+            git commit -m "chore(dev): update apps-dev.json metadata [skip ci]" || true
+            git push origin HEAD || true
+          fi
           
           cat << EOF > release_notes.md
           ## 🧪 StudICI Dev Client (Testing Build)
           
-          - **Versione**: v${VERSION}
+          - **Versione**: v${VERSION}-dev.${RUN_ID}
           - **Configurazione**: ${BUILD_CONFIG}
           - **File scaricabile**: \`${IPA_NAME}\`
           - **Bundle ID**: \`com.vitor.studici.dev\` (non sovrascrive la versione principale)
+          - **Fonte SideStore**: \`https://raw.githubusercontent.com/Itachisann/StudICI/dev/apps-dev.json\`
           
           ---
           
-          ### 🚀 Come utilizzare questa versione per testare librerie native (Callstack, ecc.):
-          
-          1. **Installa l'IPA sul tuo iPhone**:
-             Scarica \`${IPA_NAME}\` e firmalo/installalo con **SideStore**, **AltStore** o **LiveContainer**.
-          
-          2. **Avvia Metro Bundler sul tuo PC**:
-             Nel terminale del progetto sul tuo PC, esegui:
-             \`\`\`bash
-             npm run start:tunnel
-             # oppure: npx expo start --tunnel
-             \`\`\`
-          
-          3. **Connetti l'app**:
-             Apri l'app **StudICI (Dev)** sul tuo iPhone. Vedrai la schermata di **expo-dev-client**.
-             Tocca il server visualizzato oppure scansiona il QR code o inserisci l'URL \`exp://...\`.
-          
-          4. **Sviluppa in tempo reale**:
-             L'app caricherà il tuo codice in tempo reale con **Fast Refresh** e tutte le librerie native compilate (incluso **Callstack Liquid Glass** su iOS 26)!
+          ### 📲 Come installare o aggiornare via SideStore:
+          Aggiungi la fonte \`https://raw.githubusercontent.com/Itachisann/StudICI/dev/apps-dev.json\` nelle impostazioni **Sources** di SideStore.
           EOF
           
           # Se il tag esiste già, eliminalo per aggiornare la release
           gh release delete "$TAG_NAME" --cleanup-tag -y || true
           
           gh release create "$TAG_NAME" "${IPA_NAME}" \
-            --title "StudICI Dev Client v${VERSION} (Testing)" \
+            --title "StudICI Dev Client v${VERSION}-dev.${RUN_ID}" \
             --notes-file release_notes.md \
             --prerelease

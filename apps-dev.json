@@ -1,0 +1,27 @@
+{
+  "name": "StudICI Dev Source",
+  "identifier": "com.vitor.studici.dev.source",
+  "subtitle": "Repository privato Dev Client per StudICI",
+  "description": "Sorgente dedicata per l'installazione e gli aggiornamenti automatici delle build Dev di StudICI tramite SideStore.",
+  "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+  "headerURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+  "website": "https://github.com/Itachisann/StudICI",
+  "sourceURL": "https://raw.githubusercontent.com/Itachisann/StudICI/dev/apps-dev.json",
+  "apps": [
+    {
+      "name": "StudICI (Dev)",
+      "bundleIdentifier": "com.vitor.studici.dev",
+      "developerName": "Vitor",
+      "version": "1.9.1-dev.1",
+      "versionDate": "2026-10-30",
+      "versionDescription": "Build Dev Client con anteprima PDF nativa in-app, Segmented UI e sincronizzazione cloud.",
+      "downloadURL": "https://github.com/Itachisann/StudICI/releases/download/dev-client-latest/StudICI-DevClient.ipa",
+      "localizedDescription": "Versione Development Client di StudICI per testare nuove funzionalità e librerie native senza sovrascrivere l'app di produzione.",
+      "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
+      "tintColor": "822433",
+      "size": 30775377,
+      "screenshotURLs": []
+    }
+  ],
+  "news": []
+}
