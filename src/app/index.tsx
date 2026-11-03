@@ -10,9 +10,9 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  LayoutAnimation,
   LayoutChangeEvent,
   Linking,
-  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
@@ -30,6 +30,7 @@ import {
 } from "react-native-safe-area-context";
 import { ClassroomModal } from "../components/ClassroomModal";
 import { ManualEventModal } from "../components/ManualEventModal";
+import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
@@ -63,12 +64,14 @@ import {
   formatSapienzaAddress,
   resolveClassroom,
   ResolvedClassroom,
+  SAPIENZA_BUILDINGS,
 } from "../utils/classroomLocations";
 import {
   getICloudAutoSyncEnabled,
   syncWithICloudStorage,
   subscribeToLiveSync,
 } from "../utils/cloudSync";
+import { triggerCalendarAutoSyncIfNeeded } from "../utils/appleCalendar";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -81,6 +84,13 @@ import {
   GITHUB_LATEST_RELEASE_URL,
   AppUpdateInfo,
 } from "../utils/updateChecker";
+import { DisruptionEvent } from "../types/disruptions";
+import {
+  getDisruptions,
+  getDisruptionsImpactingLecture,
+} from "../utils/disruptionsService";
+import { getCommuterConfig } from "../utils/commuterStorage";
+import { DisruptionsRegistryModal } from "../components/DisruptionsRegistryModal";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -108,6 +118,17 @@ const DAYS_FULL = [
   "SABATO",
   "DOMENICA",
 ];
+
+const formatDisplayDateShort = (dateStr: string): string => {
+  try {
+    const [, m, d] = (dateStr || "").split("-").map(Number);
+    if (!m || !d) return dateStr;
+    const months = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
+    return `${d} ${months[m - 1]}`;
+  } catch {
+    return dateStr;
+  }
+};
 const WEEKDAYS_ORARI: {
   label: string;
   fullLabel: string;
@@ -123,21 +144,6 @@ const WEEKDAYS_ORARI: {
   { label: "DOM", fullLabel: "Domenica", dayIdx: 6, isWeekend: true },
 ];
 export { ACCENT_COLORS, getSubjectColor };
-
-function formatReleaseDate(isoString?: string): string {
-  if (!isoString) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
-  try {
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return new Date().toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
-    return d.toLocaleDateString("it-IT", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-  } catch {
-    return "Recente";
-  }
-}
 
 function AttendanceCheckmark() {
   const [scale] = useState(() => new Animated.Value(0));
@@ -253,33 +259,10 @@ export default function ScheduleScreen() {
 
   const handleDayChange = useCallback(
     (newDay: number) => {
+      if (activeDayRef.current === newDay) return;
       activeDayRef.current = newDay;
       setSelectedDay(newDay);
-      const target = segmentLayouts.current[newDay];
-      if (target) {
-        Animated.parallel([
-          Animated.spring(sliderPillAnim, {
-            toValue: target.x,
-            useNativeDriver: false,
-            bounciness: 0,
-          }),
-          Animated.spring(sliderWidthAnim, {
-            toValue: target.width,
-            useNativeDriver: false,
-            bounciness: 0,
-          }),
-          Animated.timing(weekendPillAnim, {
-            toValue: newDay >= 5 ? 1 : 0,
-            duration: 200,
-            useNativeDriver: false,
-          }),
-          Animated.spring(pagerScrollAnim, {
-            toValue: newDay * screenWidth,
-            useNativeDriver: false,
-            bounciness: 0,
-          }),
-        ]).start();
-      }
+
       if (screenWidth > 0) {
         horizontalPagerRef.current?.scrollTo({
           x: newDay * screenWidth,
@@ -287,7 +270,7 @@ export default function ScheduleScreen() {
         });
       }
     },
-    [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
+    [screenWidth],
   );
 
   const handleMomentumScrollEnd = useCallback(
@@ -310,6 +293,19 @@ export default function ScheduleScreen() {
     },
     [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim],
   );
+
+  const handleScrollAnimationEnd = useCallback(() => {
+    const currentDay = activeDayRef.current;
+    if (currentDay >= 0 && currentDay < 7) {
+      pagerScrollAnim.setValue(currentDay * screenWidth);
+      weekendPillAnim.setValue(currentDay >= 5 ? 1 : 0);
+      const target = segmentLayouts.current[currentDay];
+      if (target) {
+        sliderPillAnim.setValue(target.x);
+        sliderWidthAnim.setValue(target.width);
+      }
+    }
+  }, [screenWidth, sliderPillAnim, sliderWidthAnim, weekendPillAnim, pagerScrollAnim]);
 
   useEffect(() => {
     if (!initialPagerPositioned.current && screenWidth > 0) {
@@ -347,9 +343,26 @@ export default function ScheduleScreen() {
     checkForAppUpdate().then((info) => {
       if (info.hasUpdate) {
         setAppUpdate(info);
-        // Per gli aggiornamenti minori/patch mostra il prompt opzionale.
-        // Per gli aggiornamenti bloccanti (major), la schermata/modal a tutto schermo subentra senza popup.
-        if (!info.isMajor) {
+        if (info.isMajor) {
+          const showBlocking = () => {
+            Alert.alert(
+              "Aggiornamento Disponibile",
+              `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
+              [
+                {
+                  text: "Aggiorna",
+                  style: "default",
+                  onPress: () => {
+                    Linking.openURL(info.ipaUrl || info.htmlUrl || GITHUB_LATEST_RELEASE_URL);
+                    setTimeout(showBlocking, 1000);
+                  },
+                },
+              ],
+              { cancelable: false }
+            );
+          };
+          showBlocking();
+        } else {
           Alert.alert(
             "Aggiornamento Disponibile",
             `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nVuoi aggiornare ora con le ultime correzioni e miglioramenti?`,
@@ -367,6 +380,33 @@ export default function ScheduleScreen() {
         }
       }
     });
+  }, []);
+
+  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
+  const [disruptionsModalVisible, setDisruptionsModalVisible] = useState(false);
+  const [disruptionsInitialFilter, setDisruptionsInitialFilter] = useState<'all' | 'train' | 'walk' | 'transit'>('all');
+  const [selectedDisruptionId, setSelectedDisruptionId] = useState<string | null>(null);
+  const [commuterStationName, setCommuterStationName] = useState<string>('Roma Tiburtina');
+
+  useEffect(() => {
+    getCommuterConfig()
+      .then((cfg) => {
+        if (cfg?.arrivalStation) {
+          const stName = typeof cfg.arrivalStation === 'string'
+            ? cfg.arrivalStation
+            : cfg.arrivalStation.name || cfg.arrivalStation.shortName || 'Roma Tiburtina';
+          setCommuterStationName(stName);
+        }
+      })
+      .catch(() => {});
+
+    getDisruptions()
+      .then((res) => {
+        if (res && res.length > 0) {
+          setDisruptions(res);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const insets = useSafeAreaInsets();
@@ -469,6 +509,16 @@ export default function ScheduleScreen() {
           setSelectedTab(target);
           if (fetchedSchedules[target.url]) {
             setSchedule(fetchedSchedules[target.url]);
+            AsyncStorage.getItem("selectedDegreeName")
+              .then((degName) => {
+                triggerCalendarAutoSyncIfNeeded(
+                  fetchedSchedules[target.url],
+                  degName || "Corso di Laurea",
+                  target.name,
+                  theme.primary,
+                ).catch(() => {});
+              })
+              .catch(() => {});
           }
         }
         setLoading(false);
@@ -477,7 +527,7 @@ export default function ScheduleScreen() {
         setLoading(false);
       }
     },
-    [loadManualEvents, loadAttendance],
+    [loadManualEvents, loadAttendance, theme.primary],
   );
 
   useFocusEffect(
@@ -633,6 +683,16 @@ export default function ScheduleScreen() {
       getICloudAutoSyncEnabled().then((enabled) => {
         if (enabled) syncWithICloudStorage().catch(() => {});
       }).catch(() => {});
+      if (schedule) {
+        AsyncStorage.getItem("selectedDegreeName").then((degName) => {
+          triggerCalendarAutoSyncIfNeeded(
+            schedule,
+            degName || "Corso di Laurea",
+            selectedTab?.name,
+            theme.primary,
+          ).catch(() => {});
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error("Errore salvataggio lezione manuale:", err);
     }
@@ -640,11 +700,22 @@ export default function ScheduleScreen() {
 
   const handleDeleteManualEvent = async (id: string) => {
     try {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setManualEvents((prev) => prev.filter((e) => e.id !== id));
       await deleteManualEvent(id, degreeUrl || undefined);
       getICloudAutoSyncEnabled().then((enabled) => {
         if (enabled) syncWithICloudStorage().catch(() => {});
       }).catch(() => {});
+      if (schedule) {
+        AsyncStorage.getItem("selectedDegreeName").then((degName) => {
+          triggerCalendarAutoSyncIfNeeded(
+            schedule,
+            degName || "Corso di Laurea",
+            selectedTab?.name,
+            theme.primary,
+          ).catch(() => {});
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error("Errore eliminazione lezione manuale:", err);
     }
@@ -664,12 +735,16 @@ export default function ScheduleScreen() {
       return;
     }
     if (cls.building && cls.address) {
-      const bCode = cls.building.replace(/^Edificio\s+/i, "");
+      const bCode = cls.building.match(/RM\d{3}/i)?.[0]?.toUpperCase() || cls.building.replace(/^Edificio\s+/i, "");
+      const bInfo = bCode ? SAPIENZA_BUILDINGS[bCode] : undefined;
       setSelectedRoomModal({
         displayName: cls.room,
         buildingName: cls.building,
         buildingCode: bCode,
         address: formatSapienzaAddress(cls.address, bCode),
+        campus: bInfo?.campus,
+        latitude: bInfo?.latitude,
+        longitude: bInfo?.longitude,
       });
       setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
       return;
@@ -679,7 +754,7 @@ export default function ScheduleScreen() {
       schedule?.info.course,
       schedule?.info.semester,
       ...(schedule?.alerts || []),
-    ].join(" ");
+    ].join("\n");
     const res = resolveClassroom(cls.room, contextHeader);
     setSelectedRoomModal(res);
     setSelectedRoomSubjects(cls.subject ? [cls.subject.toUpperCase()] : []);
@@ -745,6 +820,14 @@ export default function ScheduleScreen() {
       : getSubjectColor(cls.subject);
     const isLive = isCurrentClass(cls, dayIdx);
     const isAttended = checkIsAttended(cls, dayIdx);
+    const { dateStr } = getDateForDayIndex(dayIdx);
+    const disruptionAlert = getDisruptionsImpactingLecture(
+      dateStr,
+      cls.startTime,
+      cls.endTime,
+      disruptions,
+      commuterStationName
+    );
 
     const cardView = (
       <View
@@ -853,7 +936,7 @@ export default function ScheduleScreen() {
               onPress={() => handleRoomClick(cls)}
               activeOpacity={0.7}
             >
-              <Ionicons name="location" size={12} color={theme.accent} />
+              <Ionicons name="navigate" size={11.5} color={theme.accent} />
               <Text
                 style={[styles.roomBadgeText, { color: theme.accent }]}
                 numberOfLines={1}
@@ -866,6 +949,62 @@ export default function ScheduleScreen() {
                 color={theme.accent}
                 style={{ marginLeft: 2, opacity: 0.8 }}
               />
+            </TouchableOpacity>
+          ) : null}
+
+          {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
+          {disruptionAlert ? (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={[
+                styles.classDisruptionBanner,
+                disruptionAlert.type === 'train'
+                  ? styles.classDisruptionBannerTrain
+                  : styles.classDisruptionBannerUrban,
+              ]}
+              onPress={() => {
+                setDisruptionsInitialFilter(
+                  disruptionAlert.type === 'train' ? 'train' : 'walk'
+                );
+                setSelectedDisruptionId(disruptionAlert.id);
+                setDisruptionsModalVisible(true);
+              }}
+            >
+              <View style={styles.classDisruptionHeaderRow}>
+                <Ionicons
+                  name={
+                    disruptionAlert.type === 'train'
+                      ? 'alert-circle'
+                      : 'warning'
+                  }
+                  size={11.5}
+                  color={
+                    disruptionAlert.type === 'train' ? '#ef4444' : '#f59e0b'
+                  }
+                  style={{ marginRight: 4 }}
+                />
+                <Text
+                  style={[
+                    styles.classDisruptionBadgeText,
+                    disruptionAlert.type === 'train'
+                      ? styles.classDisruptionBadgeTextTrain
+                      : styles.classDisruptionBadgeTextUrban,
+                  ]}
+                >
+                  {disruptionAlert.badgeLabel}
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.classDisruptionDescText,
+                  disruptionAlert.type === 'train'
+                    ? styles.classDisruptionDescTextTrain
+                    : styles.classDisruptionDescTextUrban,
+                ]}
+                numberOfLines={2}
+              >
+                {disruptionAlert.shortDesc}
+              </Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -1139,25 +1278,19 @@ export default function ScheduleScreen() {
                       {w.label}
                     </Animated.Text>
 
-                    {/* Pallino indicatore (Oggi / Presenza registrata) */}
+                    {/* Pallino indicatore (Oggi bianco / Presenza registrata colore tema costante) */}
                     {isItemToday ? (
                       <View
                         style={[
                           styles.daySegmentDot,
-                          isSelected
-                            ? styles.daySegmentDotActive
-                            : hasAttendance
-                            ? { backgroundColor: theme.primary }
-                            : { backgroundColor: "#ffffff" },
+                          { backgroundColor: "#ffffff" },
                         ]}
                       />
                     ) : hasAttendance ? (
                       <View
                         style={[
                           styles.daySegmentDot,
-                          isSelected
-                            ? styles.daySegmentDotActive
-                            : { backgroundColor: theme.primary },
+                          { backgroundColor: theme.primary },
                         ]}
                       />
                     ) : null}
@@ -1186,12 +1319,23 @@ export default function ScheduleScreen() {
           contentOffset={{ x: todayIdx * screenWidth, y: 0 }}
           onScroll={handlePagerScroll}
           onMomentumScrollEnd={handleMomentumScrollEnd}
+          onScrollAnimationEnd={handleScrollAnimationEnd}
           scrollEventThrottle={16}
           style={styles.horizontalPager}
           contentContainerStyle={{ flexGrow: 1 }}
         >
           {WEEKDAYS_ORARI.map((w) => {
             const dayClasses = classesByDay[w.dayIdx] || [];
+            const currentWeekDate = getDateForDayIndex(w.dayIdx).dateStr;
+            const futureEventsForDay = manualEvents
+              .filter(
+                (e) =>
+                  e.dayIndex === w.dayIdx &&
+                  e.repetitionType === 'single' &&
+                  (!e.tabUrl || e.tabUrl === selectedTab?.url) &&
+                  e.startDate > currentWeekDate
+              )
+              .sort((a, b) => a.startDate.localeCompare(b.startDate));
             return (
               <View key={w.dayIdx} style={[styles.pagerPage, { width: screenWidth }]}>
                 <ScrollView
@@ -1210,9 +1354,43 @@ export default function ScheduleScreen() {
                   {/* Day label con indicatore */}
                   <View style={styles.dayLabelRow}>
                     <View style={styles.dayLabelLeft}>
-                      <Text style={styles.dayLabel}>
-                        {DAYS_FULL[w.dayIdx]} · {dayClasses.length} LEZIONI
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                        <Text style={styles.dayLabel}>
+                          {DAYS_FULL[w.dayIdx]} · {dayClasses.length} LEZIONI
+                        </Text>
+                        {futureEventsForDay.length > 0 && (
+                          <CardContextMenu
+                            title={
+                              futureEventsForDay.length === 1
+                                ? `${futureEventsForDay[0].subject} (${formatDisplayDateShort(futureEventsForDay[0].startDate)})`
+                                : `${futureEventsForDay.length} Lezioni Programmate`
+                            }
+                            isManual={true}
+                            isNativeAvailable={isNativeComponentAvailable}
+                            onEditManual={() => {
+                              setEditingManualEvent(futureEventsForDay[0]);
+                              setManualModalVisible(true);
+                            }}
+                            onDeleteManual={() => {
+                              handleDeleteManualEvent(futureEventsForDay[0].id);
+                            }}
+                          >
+                            <View
+                              style={[
+                                styles.futureDayBadge,
+                                { backgroundColor: theme.cardTint, borderColor: theme.border },
+                              ]}
+                            >
+                              <Ionicons name="calendar-outline" size={10} color={theme.accent} style={{ marginRight: 3 }} />
+                              <Text style={[styles.futureDayBadgeText, { color: theme.accent }]} numberOfLines={1}>
+                                {futureEventsForDay.length === 1
+                                  ? `1 programmata (${formatDisplayDateShort(futureEventsForDay[0].startDate)})`
+                                  : `${futureEventsForDay.length} future (${formatDisplayDateShort(futureEventsForDay[0].startDate)})`}
+                              </Text>
+                            </View>
+                          </CardContextMenu>
+                        )}
+                      </View>
                       <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
                     </View>
                     <TouchableOpacity
@@ -1229,16 +1407,56 @@ export default function ScheduleScreen() {
 
                   {/* Class cards */}
                   {dayClasses.length === 0 ? (
-                    <View style={styles.emptyDay}>
-                      <Ionicons
-                        name={w.dayIdx === todayIdx ? "sunny-outline" : "calendar-outline"}
-                        size={48}
-                        color="#3a3a3c"
-                      />
-                      <Text style={styles.emptyDayText}>
-                        {w.dayIdx === todayIdx ? "Nessuna lezione oggi" : "Nessuna lezione prevista"}
-                      </Text>
-                    </View>
+                    w.isWeekend ? (
+                      <View style={styles.weekendEmptyContainer}>
+                        <View style={styles.weekendCard}>
+                          <View
+                            style={[
+                              styles.weekendIconCircle,
+                              { backgroundColor: "rgba(245, 158, 11, 0.12)" },
+                            ]}
+                          >
+                            <Ionicons
+                              name="sunny"
+                              size={32}
+                              color="#f59e0b"
+                            />
+                          </View>
+                          <Text style={styles.weekendTitle}>
+                            Fine settimana libero
+                          </Text>
+                          <Text style={styles.weekendSub}>
+                            Nessuna lezione universitaria in programma per {w.fullLabel.toLowerCase()}.
+                          </Text>
+                          <NativeActionButton
+                            label="Vedi lezioni di Lunedì"
+                            onPress={() => handleDayChange(0)}
+                            accentColor={theme.primary}
+                            glow={true}
+                            icon={
+                              <Ionicons
+                                name="calendar-outline"
+                                size={17}
+                                color="#ffffff"
+                                style={{ marginRight: 7 }}
+                              />
+                            }
+                            style={{ alignSelf: "center", minWidth: 210, height: 46 }}
+                          />
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={styles.emptyDay}>
+                        <Ionicons
+                          name={w.dayIdx === todayIdx ? "sunny-outline" : "calendar-outline"}
+                          size={48}
+                          color="#3a3a3c"
+                        />
+                        <Text style={styles.emptyDayText}>
+                          {w.dayIdx === todayIdx ? "Nessuna lezione oggi" : "Nessuna lezione prevista"}
+                        </Text>
+                      </View>
+                    )
                   ) : (
                     <View style={styles.classList}>
                       {dayClasses.map((cls, i) => renderClassCard(cls, i, w.dayIdx))}
@@ -1313,6 +1531,7 @@ export default function ScheduleScreen() {
         semesterText={schedule?.info?.semester}
         tabUrl={selectedTab?.url}
         channelName={selectedTab?.name}
+        existingEvents={manualEvents}
         onClose={() => {
           setManualModalVisible(false);
           setEditingManualEvent(null);
@@ -1321,125 +1540,26 @@ export default function ScheduleScreen() {
         onDelete={handleDeleteManualEvent}
       />
 
-      {/* ── Modal iOS Bloccante per Major Update Obbligatorio ── */}
-      <Modal
-        visible={Boolean(appUpdate?.hasUpdate && appUpdate?.isMajor)}
-        transparent={false}
-        animationType="fade"
-        statusBarTranslucent
-      >
-        <View style={styles.blockingModalContainer}>
-          <BlurView tint="dark" intensity={100} style={StyleSheet.absoluteFill} />
-
-          <View
-            style={[
-              styles.blockingModalContent,
-              {
-                paddingTop: Math.max(insets.top, Platform.OS === "ios" ? 64 : 36) + 42,
-                paddingBottom: Math.max(insets.bottom, Platform.OS === "ios" ? 34 : 20) + 14,
-              },
-            ]}
-          >
-            <View style={styles.blockingModalTop}>
-              <View
-                style={[
-                  styles.blockingModalIconSquircle,
-                  { backgroundColor: theme.primary, shadowColor: theme.primary },
-                ]}
-              >
-                <Ionicons name="arrow-up-circle" size={44} color="#ffffff" />
-              </View>
-
-              <View
-                style={[
-                  styles.blockingPill,
-                  {
-                    backgroundColor: theme.bg,
-                    borderColor: theme.primary,
-                    shadowColor: theme.primary,
-                  },
-                ]}
-              >
-                <Text style={[styles.blockingPillText, { color: "#ffffff" }]}>
-                  AGGIORNAMENTO RICHIESTO
-                </Text>
-              </View>
-
-              <Text style={styles.blockingModalTitle}>
-                Nuova Versione v{appUpdate?.latestVersion}
-              </Text>
-
-              <Text style={styles.blockingModalSub}>
-                È richiesta la nuova versione di StudICI per continuare a utilizzare l&apos;applicazione.
-              </Text>
-            </View>
-
-            <View
-              style={[
-                styles.blockingCard,
-                { backgroundColor: theme.cardTint, borderColor: theme.border },
-              ]}
-            >
-              <View style={styles.blockingCardRow}>
-                <Text style={styles.blockingCardLabel}>Versione installata</Text>
-                <Text style={styles.blockingCardValOld}>v{appUpdate?.currentVersion}</Text>
-              </View>
-              <View style={styles.blockingCardDivider} />
-              <View style={styles.blockingCardRow}>
-                <Text style={styles.blockingCardLabel}>Versione richiesta</Text>
-                <Text style={[styles.blockingCardValNew, { color: theme.accent }]}>
-                  v{appUpdate?.latestVersion}
-                </Text>
-              </View>
-              <View style={styles.blockingCardDivider} />
-              <View style={styles.blockingCardRow}>
-                <Text style={styles.blockingCardLabel}>Data di rilascio</Text>
-                <Text style={styles.blockingCardValDate}>
-                  {formatReleaseDate(appUpdate?.publishedAt)}
-                </Text>
-              </View>
-              <View style={styles.blockingCardDivider} />
-              <View style={styles.blockingCardRow}>
-                <Text style={styles.blockingCardLabel}>Commit di rilascio</Text>
-                <Text style={styles.blockingCardValCommit} numberOfLines={2}>
-                  {appUpdate?.commitName || appUpdate?.releaseTitle || appUpdate?.targetCommitish || `v${appUpdate?.latestVersion}`}
-                </Text>
-              </View>
-              <View style={styles.blockingCardDivider} />
-              <TouchableOpacity
-                style={[styles.changelogBtn, { borderColor: theme.border }]}
-                activeOpacity={0.7}
-                onPress={() => {
-                  Linking.openURL(appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-                }}
-              >
-                <Ionicons name="git-pull-request-outline" size={15} color={theme.accent} style={{ marginRight: 6 }} />
-                <Text style={[styles.changelogBtnText, { color: theme.accent }]}>Consulta il Changelog su GitHub</Text>
-                <Ionicons name="open-outline" size={13} color="#94a3b8" style={{ marginLeft: "auto" }} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.blockingModalBottom}>
-              <TouchableOpacity
-                style={[
-                  styles.blockingPrimaryBtn,
-                  { backgroundColor: theme.primary, shadowColor: theme.primary },
-                ]}
-                activeOpacity={0.8}
-                onPress={() => {
-                  Linking.openURL(appUpdate?.ipaUrl || appUpdate?.htmlUrl || GITHUB_LATEST_RELEASE_URL);
-                }}
-              >
-                <Ionicons name="cloud-download-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-                <Text style={styles.blockingPrimaryBtnText}>Aggiorna</Text>
-              </TouchableOpacity>
-              <Text style={styles.blockingFooterText}>
-                Gli aggiornamenti principali includono modifiche strutturali necessarie alle API Trenitalia e ai server Sapienza.
-              </Text>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Modal Registro Manifestazioni e Scioperi */}
+      <DisruptionsRegistryModal
+        visible={disruptionsModalVisible}
+        onClose={() => {
+          setDisruptionsModalVisible(false);
+          setSelectedDisruptionId(null);
+        }}
+        disruptions={disruptions}
+        theme={theme}
+        initialFilter={disruptionsInitialFilter}
+        activeStationName={commuterStationName}
+        highlightEventId={selectedDisruptionId}
+        onRefresh={() => {
+          getDisruptions(true)
+            .then((res) => {
+              if (res) setDisruptions(res);
+            })
+            .catch(() => {});
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1752,6 +1872,18 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginTop: 2,
   },
+  futureDayBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  futureDayBadgeText: {
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
   addManualButton: {
     width: 28,
     height: 28,
@@ -1798,6 +1930,50 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   emptyDayText: { color: "#3a3a3c", fontSize: 16, marginTop: 12 },
+  weekendEmptyContainer: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    paddingHorizontal: 16,
+    marginTop: 20,
+  },
+  weekendCard: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  weekendIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  weekendTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  weekendSub: {
+    fontSize: 14,
+    color: "#8e8e93",
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 24,
+    maxWidth: 290,
+  },
 
   /* Class cards (Formato Calendario ad Alto Impatto con Orari Evidenti) */
   classList: {
@@ -1956,16 +2132,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(239, 68, 68, 0.12)",
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 10,
-    marginTop: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 4.5,
+    borderRadius: 999,
+    borderCurve: "continuous",
+    marginTop: 3,
   },
   roomBadgeText: {
     color: "#ef4444",
     fontSize: 12,
     fontWeight: "600",
-    marginLeft: 4,
+    marginLeft: 4.5,
+    marginRight: 2,
   },
 
   /* Modal Fluttuante iOS */
@@ -2134,153 +2312,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
   },
-
-  /* Modal iOS Bloccante per Major Update */
-  blockingModalContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  blockingModalSafeArea: {
-    flex: 1,
-  },
-  blockingModalContent: {
-    flex: 1,
-    paddingHorizontal: 24,
-    justifyContent: "space-between",
-  },
-  blockingModalTop: {
-    alignItems: "center",
-    marginTop: 20,
-  },
-  blockingModalIconSquircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 24,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 18,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  blockingPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1.5,
-    marginBottom: 14,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  blockingPillText: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-  },
-  blockingModalTitle: {
-    fontSize: 26,
-    fontWeight: "800",
-    color: "#ffffff",
-    textAlign: "center",
-    marginBottom: 10,
-    letterSpacing: -0.3,
-  },
-  blockingModalSub: {
-    fontSize: 15,
-    color: "#94a3b8",
-    textAlign: "center",
-    lineHeight: 21,
-    paddingHorizontal: 10,
-  },
-  blockingCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 16,
-    marginVertical: 14,
-  },
-  blockingCardRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 6,
-  },
-  blockingCardLabel: {
-    fontSize: 14,
-    color: "#94a3b8",
-    fontWeight: "500",
-  },
-  blockingCardValOld: {
-    fontSize: 15,
-    color: "#a1a1aa",
-    fontWeight: "600",
-  },
-  blockingCardValNew: {
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  blockingCardDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(255, 255, 255, 0.12)",
-    marginVertical: 10,
-  },
-  blockingCardValDate: {
-    fontSize: 15,
-    color: "#f8fafc",
-    fontWeight: "600",
-  },
-  blockingCardValCommit: {
-    fontSize: 13,
-    color: "#e2e8f0",
-    fontWeight: "600",
-    flex: 1,
-    textAlign: "right",
-    marginLeft: 12,
-  },
-  changelogBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.05)",
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 2,
-  },
-  changelogBtnText: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  blockingModalBottom: {
-    alignItems: "center",
-  },
-  blockingPrimaryBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "100%",
-    paddingVertical: 16,
-    borderRadius: 16,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 6,
-    marginBottom: 12,
-  },
-  blockingPrimaryBtnText: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#ffffff",
-  },
-  blockingFooterText: {
-    fontSize: 12,
-    color: "#64748b",
-    textAlign: "center",
-    lineHeight: 16,
-    paddingHorizontal: 16,
-  },
   swipeDeleteContainer: {
     backgroundColor: "#ff3b30",
     flex: 1,
@@ -2299,5 +2330,47 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     marginTop: 4,
+  },
+  /* Banner Avviso Interruzioni / Scioperi nella card lezione */
+  classDisruptionBanner: {
+    marginTop: 6,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  classDisruptionBannerTrain: {
+    backgroundColor: "rgba(239, 68, 68, 0.10)",
+    borderColor: "rgba(239, 68, 68, 0.28)",
+  },
+  classDisruptionBannerUrban: {
+    backgroundColor: "rgba(245, 158, 11, 0.10)",
+    borderColor: "rgba(245, 158, 11, 0.28)",
+  },
+  classDisruptionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  classDisruptionBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  classDisruptionBadgeTextTrain: {
+    color: "#ef4444",
+  },
+  classDisruptionBadgeTextUrban: {
+    color: "#f59e0b",
+  },
+  classDisruptionDescText: {
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  classDisruptionDescTextTrain: {
+    color: "#fca5a5",
+  },
+  classDisruptionDescTextUrban: {
+    color: "#fde68a",
   },
 });

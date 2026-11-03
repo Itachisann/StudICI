@@ -270,7 +270,7 @@ export function SwipeToDeleteRow({
       <GestureDetector gesture={panGesture}>
         <Animated.View
           onLayout={handleCardLayout}
-          style={foregroundAnimatedStyle}
+          style={[foregroundAnimatedStyle, { width: '100%' }]}
         >
           {children}
         </Animated.View>
@@ -281,6 +281,7 @@ export function SwipeToDeleteRow({
 
 const styles = StyleSheet.create({
   outerContainer: {
+    width: '100%',
     overflow: 'hidden',
     position: 'relative',
   },

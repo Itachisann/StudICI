@@ -46,7 +46,7 @@ function releaseGeminiSlot(): void {
  * limitando il burst simultaneo per azzerare gli errori 429 e facendo failover immediato (~80ms)
  * sul modello secondario in caso di 429/503/timeout.
  */
-async function callGeminiJson(prompt: string, timeoutMs = 5500, preferredIdx?: number): Promise<string> {
+export async function callGeminiJson(prompt: string, timeoutMs = 5500, preferredIdx?: number): Promise<string> {
   await acquireGeminiSlot();
   try {
     const startIdx = preferredIdx !== undefined ? preferredIdx : (rrModelIndex++ % 2);
@@ -818,7 +818,7 @@ function enrichHeaderResultWithRooms(
     if (!canon || canon === 'aula') return;
     if (!enrichedRooms[clean] && !enrichedRooms[canon]) {
       const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
-      const bCode = (resolved.buildingCode || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+      const bCode = (resolved.buildingCode || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
       const addr = formatSapienzaAddress(resolved.address, bCode);
       const item: MappedClassroom = {
         key: canon,
@@ -997,7 +997,7 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
         const canon = getCanonicalRoomKey(item.displayName || item.key);
         const dispName = normalizeDisplayName(item.displayName || item.key);
         if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
-        const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        const bCode = (item.building || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
         const addr = formatSapienzaAddress(item.address, bCode);
         const normalizedItem: MappedClassroom = {
           key: canon,
@@ -1018,10 +1018,27 @@ Rispondi SOLO con il JSON valido { "semester": "...", "alerts": [...], "classroo
             if (!rawKey || rawKey.toLowerCase() === 'aula') return;
             const canon = getCanonicalRoomKey(rawKey);
             if (!canon || canon === 'aula') return;
+            const bCode = (item.building || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
+            const addr = formatSapienzaAddress(item.address, bCode);
+
+            // Se Gemini ha restituito aule accorpate tipo "15 e 16", separale in due voci distinte
+            const multiMatch = canon.match(/^(\d+)\s+e\s+(\d+)$/i);
+            if (multiMatch) {
+              [multiMatch[1], multiMatch[2]].forEach(r => {
+                const subItem: MappedClassroom = {
+                  key: r,
+                  displayName: `Aula ${r}`,
+                  building: item.building || mappedRooms[r]?.building || 'Edificio Sapienza',
+                  address: addr || mappedRooms[r]?.address || '',
+                };
+                mappedRooms[r] = subItem;
+                mappedRooms[`aula ${r}`] = subItem;
+              });
+              return;
+            }
+
             const dispName = normalizeDisplayName(item.displayName || item.key);
             if (dispName.toLowerCase() === 'aula') return;
-            const bCode = (item.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
-            const addr = formatSapienzaAddress(item.address, bCode);
             const normalizedItem: MappedClassroom = {
               key: canon,
               displayName: dispName,

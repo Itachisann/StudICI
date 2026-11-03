@@ -79,38 +79,12 @@ export function ClassroomModal({
       ]}
     >
       <View collapsable={false} style={styles.sheetContent}>
-        {/* Header Sottotitolo Edificio e Campus Badge */}
-        {Boolean(classroom.buildingName || classroom.campus) && (
+        {/* Header Sottotitolo Edificio */}
+        {Boolean(classroom.buildingName) && (
           <View style={styles.headerInfoRow}>
-            {Boolean(classroom.buildingName) && (
-              <Text style={styles.buildingSubtitle} numberOfLines={1}>
-                {classroom.buildingName}
-              </Text>
-            )}
-            {classroom.campus ? (
-              <View
-                style={[
-                  styles.campusBadge,
-                  {
-                    backgroundColor: theme.cardTint,
-                    borderColor: theme.border,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name="business"
-                  size={11}
-                  color={theme.accent}
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[styles.campusBadgeText, { color: theme.accent }]}
-                  numberOfLines={1}
-                >
-                  {classroom.campus}
-                </Text>
-              </View>
-            ) : null}
+            <Text style={styles.buildingSubtitle} numberOfLines={1}>
+              {classroom.buildingName}
+            </Text>
           </View>
         )}
 
@@ -402,9 +376,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#27272a",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6.5,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.06)",
   },

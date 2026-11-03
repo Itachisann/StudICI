@@ -87,11 +87,39 @@ export function getCanonicalRoomKey(name: string): string {
  * Ariosto -> 00185
  */
 export function formatSapienzaAddress(rawAddress: string = '', buildingCode?: string): string {
-  const code = (buildingCode || '').toUpperCase().match(/RM\d{3}/)?.[1];
+  const code = (buildingCode || '').toUpperCase().match(/RM\d{3}/)?.[0];
+  let addr = (rawAddress || '').trim();
+
+  // Se abbiamo sia un indirizzo esplicito sia il codice edificio, verifichiamo se sono coerenti
+  // (es. RM006 con "Scarpa 16" mantiene il civico 16; ma se addr è vuoto o appartiene a un altro plesso, usa l'indirizzo ufficiale dell'edificio)
+  if (addr) {
+    if (/tiburtina/i.test(addr) && (!code || code === 'RM025' || code === 'RM158')) {
+      return 'Via Tiburtina 205, 00185 Roma';
+    }
+    if (/eudossiana/i.test(addr) && (!code || /^RM03[1-9]$/.test(code))) {
+      return 'Via Eudossiana 18, 00184 Roma';
+    }
+    if (/sette sale/i.test(addr) && (!code || code === 'RM041')) {
+      return 'Via delle Sette Sale 29, 00184 Roma';
+    }
+    if (/salaria/i.test(addr) && (!code || code === 'RM076')) {
+      return 'Via Salaria 851, 00138 Roma';
+    }
+    if (/ariosto/i.test(addr) && (!code || code === 'RM102')) {
+      return 'Via Ariosto 25, 00185 Roma';
+    }
+    if (/scarpa/i.test(addr) && (!code || code === 'RM002' || code === 'RM004' || code === 'RM006' || code === 'RM014')) {
+      return addr.includes('16') ? 'Via Antonio Scarpa 16, 00161 Roma' : 'Via Antonio Scarpa 14, 00161 Roma';
+    }
+    if (/castro laurenziano/i.test(addr) && (!code || code === 'RM018')) {
+      return 'Via del Castro Laurenziano 7a, 00161 Roma';
+    }
+  }
+
   if (code && SAPIENZA_BUILDINGS[code]) {
     return SAPIENZA_BUILDINGS[code].address;
   }
-  let addr = (rawAddress || '').trim();
+
   if (/tiburtina/i.test(addr)) {
     return 'Via Tiburtina 205, 00185 Roma';
   }
@@ -139,7 +167,17 @@ export function resolveClassroom(roomText: string, contextText: string = ''): Re
     const canonRoom = getCanonicalRoomKey(cleanRoom);
     const escaped = canonRoom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const normContext = contextText.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const aulaRegex = new RegExp(`(?:AULA\\s+)?(?:${escaped}\\b|\\b${escaped}\\s+e\\s+\\d+|\\d+\\s+e\\s+${escaped}\\b)[^\\n|]*?[|\\s]+(RM\\d{3})`, 'i');
+    const hasDayInQuery = /\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/i.test(canonRoom);
+    // Se cerchiamo un'aula standard (es. "15"), non deve fare match con una riga specifica di un solo giorno (es. "15 (lunedi)")
+    const dayNegativeLookahead = hasDayInQuery
+      ? ''
+      : '(?!\\s*\\([^)]*(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica))';
+    const monthNegativeLookahead = '(?!\\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\b)';
+
+    const aulaRegex = new RegExp(
+      `(?:AULA\\s+)?(?:\\b${escaped}\\b${dayNegativeLookahead}${monthNegativeLookahead}|\\b${escaped}\\s+e\\s+\\d+|\\d+\\s+e\\s+${escaped}\\b)[^\\n|]{0,45}?[|\\s]+(RM\\d{3})`,
+      'i'
+    );
     const match = normContext.match(aulaRegex);
     if (match) {
       buildingCode = match[1].toUpperCase();

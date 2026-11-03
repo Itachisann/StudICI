@@ -1,17 +1,27 @@
+import { UNIFORM_MODAL_BG, UNIFORM_SCREEN_BG } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { MenuView } from "@expo/ui/community/menu";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { router, useFocusEffect } from "expo-router";
+import * as Sharing from "expo-sharing";
 import * as WebBrowser from "expo-web-browser";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActionSheetIOS,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  KeyboardAvoidingView,
   LayoutAnimation,
   Linking,
   Modal,
@@ -26,49 +36,40 @@ import {
   View,
 } from "react-native";
 import Reanimated, { FadeOut, LinearTransition } from "react-native-reanimated";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { AlarmsConfigModal } from "../components/AlarmsConfigModal";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
+import { DocumentContextMenu } from "../components/DocumentContextMenu";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { PastAttendanceModal } from "../components/PastAttendanceModal";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
-import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
-import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
 import {
+  AlarmSettings,
+  DEFAULT_ALARM_SETTINGS,
+  ENABLE_COMMUTER_ALARMS,
+  getAlarmSettings,
+  refreshCommuterAlarmsInBackground,
+  subscribeToAlarmChanges,
+} from "../utils/alarmSync";
+import {
+  DEFAULT_CALENDAR_TITLE,
+  deleteStudICICalendar,
+  getCalendarAutoSync,
+  getCalendarTitle,
   getLastCalendarSync,
+  setCalendarAutoSync,
+  setCalendarTitle,
   syncScheduleToAppleCalendar,
+  updateAppleCalendarColor,
 } from "../utils/appleCalendar";
-import {
-  ManualClassEvent,
-  getManualEvents,
-} from "../utils/manualEvents";
-import * as Sharing from "expo-sharing";
-import { MAX_CLOUD_FILE_BYTES } from "../utils/cloudFiles";
-import {
-  StudentInfo,
-  getStudentInfo,
-  saveStudentInfo,
-  subscribeToStudentInfoChanges,
-} from "../utils/studentInfo";
-import {
-  SavedDocument,
-  SavedItemType,
-  getSavedDocuments,
-  saveSavedDocument,
-  saveSavedDocumentsBatch,
-  deleteSavedDocument,
-  persistPickedFile,
-  resolveSavedFileUri,
-  downloadCloudFileForDoc,
-  uploadPendingFiles,
-  subscribeToSavedDocumentsChanges,
-} from "../utils/savedDocuments";
 import {
   AttendanceRecord,
   AttendanceStats,
@@ -78,6 +79,7 @@ import {
   getAttendanceStats,
   subscribeToAttendanceChanges,
 } from "../utils/attendance";
+import { MAX_CLOUD_FILE_BYTES } from "../utils/cloudFiles";
 import {
   copyCloudSyncCodeToClipboard,
   dissociateDevice,
@@ -89,6 +91,7 @@ import {
   isCloudConfigured,
   isValidSyncCode,
   linkDeviceWithCode,
+  notifyAppReset,
   PairedDevicesStatus,
   resetAppCloudAndStorage,
   restoreFromCloudBackup,
@@ -101,27 +104,40 @@ import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
-import {
-  AlarmSettings,
-  DEFAULT_ALARM_SETTINGS,
-  ENABLE_COMMUTER_ALARMS,
-  getAlarmSettings,
-  refreshCommuterAlarmsInBackground,
-  subscribeToAlarmChanges,
-} from "../utils/alarmSync";
+import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
+import { getManualEvents, ManualClassEvent } from "../utils/manualEvents";
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
-import { getSubjectColor, getManualSubjectColor } from "../utils/subjectColors";
 import {
-  Degree,
-  ScheduleData,
+  deleteSavedDocument,
+  downloadCloudFileForDoc,
+  getSavedDocuments,
+  persistPickedFile,
+  resolveSavedFileUri,
+  SavedDocument,
+  SavedItemType,
+  saveSavedDocument,
+  saveSavedDocumentsBatch,
+  subscribeToSavedDocumentsChanges,
+  uploadPendingFiles,
+} from "../utils/savedDocuments";
+import {
   checkCourseUpdates,
+  Degree,
   fetchAllCourseData,
   fetchDegrees,
   fetchScheduleData,
   fetchTabs,
   getCachedTabs,
+  ScheduleData,
   Tab,
 } from "../utils/scraper";
+import {
+  getStudentInfo,
+  saveStudentInfo,
+  StudentInfo,
+  subscribeToStudentInfoChanges,
+} from "../utils/studentInfo";
+import { getManualSubjectColor, getSubjectColor } from "../utils/subjectColors";
 import {
   AppUpdateInfo,
   checkForAppUpdate,
@@ -155,7 +171,9 @@ function getSafeDocumentPicker(): typeof import("expo-document-picker") | null {
   }
 }
 
-function getSafeWebView(): typeof import("react-native-webview").WebView | null {
+function getSafeWebView():
+  | typeof import("react-native-webview").WebView
+  | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("react-native-webview");
@@ -223,7 +241,7 @@ function FileSourceSection({
             </>
           ) : (
             <Text style={styles.batchFilePlaceholder}>
-              Tocca per caricare un PDF o un file
+              Tocca per caricare un file PDF
             </Text>
           )}
         </View>
@@ -247,10 +265,16 @@ export default function ProfiloScreen() {
   const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
     useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
-  const [pastAttendanceModalVisible, setPastAttendanceModalVisible] = useState(false);
-  const [pastAttendanceSchedule, setPastAttendanceSchedule] = useState<ScheduleData | null>(null);
-  const [pastAttendanceManualEvents, setPastAttendanceManualEvents] = useState<ManualClassEvent[]>([]);
-  const [pastAttendanceTabUrl, setPastAttendanceTabUrl] = useState<string | null>(null);
+  const [pastAttendanceModalVisible, setPastAttendanceModalVisible] =
+    useState(false);
+  const [pastAttendanceSchedule, setPastAttendanceSchedule] =
+    useState<ScheduleData | null>(null);
+  const [pastAttendanceManualEvents, setPastAttendanceManualEvents] = useState<
+    ManualClassEvent[]
+  >([]);
+  const [pastAttendanceTabUrl, setPastAttendanceTabUrl] = useState<
+    string | null
+  >(null);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
     null,
@@ -271,6 +295,27 @@ export default function ProfiloScreen() {
   const [lastCalendarSyncTime, setLastCalendarSyncTime] = useState<
     number | null
   >(null);
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false);
+  const [calendarTitle, setCalendarTitleState] = useState(
+    DEFAULT_CALENDAR_TITLE,
+  );
+  const [calendarTitleInput, setCalendarTitleInput] = useState(
+    DEFAULT_CALENDAR_TITLE,
+  );
+  const calendarScrollRef = useRef<ScrollView>(null);
+  const calendarModalVisibleRef = useRef(false);
+  useEffect(() => {
+    calendarModalVisibleRef.current = calendarModalVisible;
+  }, [calendarModalVisible]);
+
+  useEffect(() => {
+    if (theme.primary) {
+      updateAppleCalendarColor(theme.primary).catch(() => {});
+    }
+  }, [theme.primary]);
+  const [calendarAutoSync, setCalendarAutoSyncState] = useState(false);
+  const [isSavingCalendarTitle, setIsSavingCalendarTitle] = useState(false);
+  const [isDeletingCalendar, setIsDeletingCalendar] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -304,7 +349,9 @@ export default function ProfiloScreen() {
   const handleToggleStudentInfoHidden = useCallback(() => {
     setIsStudentInfoHidden((prev) => {
       const next = !prev;
-      AsyncStorage.setItem("@studici_student_info_hidden", String(next)).catch(() => {});
+      AsyncStorage.setItem("@studici_student_info_hidden", String(next)).catch(
+        () => {},
+      );
       return next;
     });
   }, []);
@@ -364,6 +411,10 @@ export default function ProfiloScreen() {
   const themeCardWidth =
     measuredCardWidth > 0 ? measuredCardWidth : Math.max(windowWidth - 32, 280);
 
+  const [docContainerWidth, setDocContainerWidth] = useState<number>(0);
+  const docCardWidth =
+    docContainerWidth > 0 ? docContainerWidth : Math.max(windowWidth - 32, 280);
+
   const themeMenuActions = useMemo(
     () =>
       availableThemes.map((t) => ({
@@ -415,6 +466,8 @@ export default function ProfiloScreen() {
         cloudId,
         lastCloud,
         lastCal,
+        calTitle,
+        calAuto,
         icloudEnabled,
         commConfig,
         alarmCfg,
@@ -425,6 +478,8 @@ export default function ProfiloScreen() {
         getCloudSyncId(),
         getLastCloudSync(),
         getLastCalendarSync(),
+        getCalendarTitle(),
+        getCalendarAutoSync(),
         getICloudAutoSyncEnabled(),
         getCommuterConfig(),
         getAlarmSettings(),
@@ -436,6 +491,11 @@ export default function ProfiloScreen() {
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
+      setCalendarTitleState(calTitle);
+      if (!calendarModalVisibleRef.current) {
+        setCalendarTitleInput(calTitle);
+      }
+      setCalendarAutoSyncState(calAuto);
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
       setAlarmSettings(alarmCfg);
@@ -553,7 +613,10 @@ export default function ProfiloScreen() {
         Alert.alert("Link non valido", `Impossibile aprire l'URL: ${clean}`);
       }
     } catch (e: any) {
-      Alert.alert("Errore apertura", e?.message || "Impossibile aprire il link.");
+      Alert.alert(
+        "Errore apertura",
+        e?.message || "Impossibile aprire il link.",
+      );
     }
   }, []);
 
@@ -616,14 +679,20 @@ export default function ProfiloScreen() {
               onPress: async () => {
                 if (doc.note) {
                   await Clipboard.setStringAsync(doc.note);
-                  Alert.alert("Copiato", "Testo della nota copiato negli appunti.");
+                  Alert.alert(
+                    "Copiato",
+                    "Testo della nota copiato negli appunti.",
+                  );
                 }
               },
             },
           ]);
         }
       } catch (err: any) {
-        Alert.alert("Errore apertura", err?.message || "Impossibile aprire l'elemento.");
+        Alert.alert(
+          "Errore apertura",
+          err?.message || "Impossibile aprire l'elemento.",
+        );
       }
     },
     [handleOpenDocumentUrl],
@@ -687,7 +756,10 @@ export default function ProfiloScreen() {
   const handlePickFileForDraft = useCallback(async (tempId: string) => {
     try {
       const DocumentPicker = getSafeDocumentPicker();
-      if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
+      if (
+        !DocumentPicker ||
+        typeof DocumentPicker.getDocumentAsync !== "function"
+      ) {
         Alert.alert(
           "Selezione file non disponibile",
           "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
@@ -719,7 +791,9 @@ export default function ProfiloScreen() {
             fileUri: permanentUri,
             fileSize: file.size,
             mimeType: file.mimeType || undefined,
-            title: d.title.trim() ? d.title : file.name.replace(/\.[^/.]+$/, ""),
+            title: d.title.trim()
+              ? d.title
+              : file.name.replace(/\.[^/.]+$/, ""),
           };
         }),
       );
@@ -733,10 +807,11 @@ export default function ProfiloScreen() {
 
   const handleSaveBatchDrafts = useCallback(async () => {
     const validDrafts = batchDrafts.filter((d) => {
-      if (d.type === "link") return d.url.trim().length > 0 || d.title.trim().length > 0;
-      if (d.type === "file")
-        return !!d.fileUri || d.title.trim().length > 0;
-      if (d.type === "note") return d.note.trim().length > 0 || d.title.trim().length > 0;
+      if (d.type === "link")
+        return d.url.trim().length > 0 || d.title.trim().length > 0;
+      if (d.type === "file") return !!d.fileUri || d.title.trim().length > 0;
+      if (d.type === "note")
+        return d.note.trim().length > 0 || d.title.trim().length > 0;
       return false;
     });
 
@@ -753,8 +828,10 @@ export default function ProfiloScreen() {
       if (!fallbackTitle) {
         if (d.type === "file" && d.fileName) fallbackTitle = d.fileName;
         else if (d.type === "link" && d.url)
-          fallbackTitle = d.url.replace(/^https?:\/\//i, "").split("/")[0] || "Link";
-        else if (d.type === "note") fallbackTitle = d.note.slice(0, 30) || "Nota";
+          fallbackTitle =
+            d.url.replace(/^https?:\/\//i, "").split("/")[0] || "Link";
+        else if (d.type === "note")
+          fallbackTitle = d.note.slice(0, 30) || "Nota";
         else fallbackTitle = "Elemento";
       }
 
@@ -803,7 +880,10 @@ export default function ProfiloScreen() {
   const handlePickFileForEditDraft = useCallback(async () => {
     try {
       const DocumentPicker = getSafeDocumentPicker();
-      if (!DocumentPicker || typeof DocumentPicker.getDocumentAsync !== "function") {
+      if (
+        !DocumentPicker ||
+        typeof DocumentPicker.getDocumentAsync !== "function"
+      ) {
         Alert.alert(
           "Selezione file non disponibile",
           "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
@@ -832,7 +912,9 @@ export default function ProfiloScreen() {
         fileUri: permanentUri,
         fileSize: file.size,
         mimeType: file.mimeType || undefined,
-        title: prev.title.trim() ? prev.title : file.name.replace(/\.[^/.]+$/, ""),
+        title: prev.title.trim()
+          ? prev.title
+          : file.name.replace(/\.[^/.]+$/, ""),
       }));
     } catch (err: any) {
       Alert.alert(
@@ -869,7 +951,9 @@ export default function ProfiloScreen() {
     const fallbackTitle =
       editDraft.title.trim() ||
       editDraft.fileName ||
-      (editDraft.url ? editDraft.url.replace(/^https?:\/\//i, "").split("/")[0] : "") ||
+      (editDraft.url
+        ? editDraft.url.replace(/^https?:\/\//i, "").split("/")[0]
+        : "") ||
       editingDoc.title;
 
     await saveSavedDocument({
@@ -897,83 +981,11 @@ export default function ProfiloScreen() {
     setEditingDoc(null);
   }, [editingDoc, editDraft]);
 
-  const handleDocumentOptions = useCallback(
-    (doc: SavedDocument) => {
-      const isLink = doc.type === "link";
-      const isFile = doc.type === "file";
-      const openLabel = isLink ? "Apri link" : isFile ? "Apri / Condividi file" : "Visualizza nota";
-      const copyLabel = isLink ? "Copia link" : isFile ? "Copia nome file" : "Copia testo nota";
-      const messageText = isLink
-        ? doc.url
-        : isFile
-        ? doc.fileName || doc.fileUri
-        : doc.note;
-
-      if (Platform.OS === "ios") {
-        ActionSheetIOS.showActionSheetWithOptions(
-          {
-            title: doc.title,
-            message: messageText,
-            options: [
-              "Annulla",
-              openLabel,
-              copyLabel,
-              "Modifica",
-              "Elimina",
-            ],
-            destructiveButtonIndex: 4,
-            cancelButtonIndex: 0,
-          },
-          async (buttonIndex: number) => {
-            if (buttonIndex === 1) {
-              handleOpenItem(doc);
-            } else if (buttonIndex === 2) {
-              const textToCopy = isLink ? doc.url || "" : isFile ? doc.fileName || "" : doc.note || "";
-              if (textToCopy) {
-                await Clipboard.setStringAsync(textToCopy);
-                Alert.alert("Copiato", "Copiato negli appunti.");
-              }
-            } else if (buttonIndex === 3) {
-              handleOpenEditModal(doc);
-            } else if (buttonIndex === 4) {
-              Alert.alert(
-                "Elimina elemento",
-                `Vuoi davvero eliminare "${doc.title}"?`,
-                [
-                  { text: "Annulla", style: "cancel" },
-                  {
-                    text: "Elimina",
-                    style: "destructive",
-                    onPress: async () => {
-                      await deleteSavedDocument(doc.id);
-                      const updated = await getSavedDocuments();
-                      setSavedDocs(updated);
-                    },
-                  },
-                ],
-              );
-            }
-          },
-        );
-      } else {
-        Alert.alert(doc.title, messageText, [
-          { text: "Annulla", style: "cancel" },
-          { text: openLabel, onPress: () => handleOpenItem(doc) },
-          { text: "Modifica", onPress: () => handleOpenEditModal(doc) },
-          {
-            text: "Elimina",
-            style: "destructive",
-            onPress: async () => {
-              await deleteSavedDocument(doc.id);
-              const updated = await getSavedDocuments();
-              setSavedDocs(updated);
-            },
-          },
-        ]);
-      }
-    },
-    [handleOpenItem, handleOpenEditModal],
-  );
+  const handleCopyDocLink = useCallback(async (doc: SavedDocument) => {
+    if (!doc.url) return;
+    await Clipboard.setStringAsync(doc.url);
+    Alert.alert("Link copiato", "Il link è stato copiato negli appunti.");
+  }, []);
 
   const selectDegree = async (degree: Degree) => {
     setCourseModalVisible(false);
@@ -984,18 +996,28 @@ export default function ProfiloScreen() {
       const cachedRaw = await AsyncStorage.getItem(cacheKey);
 
       if (cachedRaw) {
-        let cachedData: { tabs?: Tab[]; schedules?: Record<string, any> } | null = null;
+        let cachedData: {
+          tabs?: Tab[];
+          schedules?: Record<string, any>;
+        } | null = null;
         try {
           cachedData = JSON.parse(cachedRaw);
         } catch {}
 
-        if (cachedData && Array.isArray(cachedData.tabs) && cachedData.tabs.length > 0) {
+        if (
+          cachedData &&
+          Array.isArray(cachedData.tabs) &&
+          cachedData.tabs.length > 0
+        ) {
           const tabs = cachedData.tabs;
           // Recupera il canale precedentemente scelto per questo specifico corso
-          const savedTabForDegree = await AsyncStorage.getItem(`defaultTabUrl_${degree.url}`);
-          const activeTab = (savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree))
-            ? savedTabForDegree
-            : (tabs[0]?.url || null);
+          const savedTabForDegree = await AsyncStorage.getItem(
+            `defaultTabUrl_${degree.url}`,
+          );
+          const activeTab =
+            savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree)
+              ? savedTabForDegree
+              : tabs[0]?.url || null;
 
           // Salva istantaneamente i parametri del corso selezionato
           const pairs: [string, string][] = [
@@ -1020,12 +1042,17 @@ export default function ProfiloScreen() {
           loadProfileData();
 
           // Esegui la verifica orari ordinaria in background (senza attese o blocchi UI)
-          checkCourseUpdates(degree.url).then(async (checkRes) => {
-            if (checkRes.hasChanges) {
-              console.log("Verifica ordinaria: rilevate variazioni per il corso", degree.name);
-              fetchAllCourseData(degree.url, true).catch(() => {});
-            }
-          }).catch(() => {});
+          checkCourseUpdates(degree.url)
+            .then(async (checkRes) => {
+              if (checkRes.hasChanges) {
+                console.log(
+                  "Verifica ordinaria: rilevate variazioni per il corso",
+                  degree.name,
+                );
+                fetchAllCourseData(degree.url, true).catch(() => {});
+              }
+            })
+            .catch(() => {});
 
           router.replace("/");
           return;
@@ -1036,9 +1063,13 @@ export default function ProfiloScreen() {
       setDownloadingCourse(degree);
       setDownloadProgressText("Preparazione e analisi canali...");
 
-      const { tabs } = await fetchAllCourseData(degree.url, false, (stepMsg) => {
-        setDownloadProgressText(stepMsg);
-      });
+      const { tabs } = await fetchAllCourseData(
+        degree.url,
+        false,
+        (stepMsg) => {
+          setDownloadProgressText(stepMsg);
+        },
+      );
 
       await AsyncStorage.setItem("selectedDegreeUrl", degree.url);
       await AsyncStorage.setItem("selectedDegreeName", degree.name);
@@ -1143,8 +1174,12 @@ export default function ProfiloScreen() {
           text: "Ripristina",
           style: "destructive",
           onPress: async () => {
-            await resetAppCloudAndStorage();
-            router.replace("/");
+            try {
+              await resetAppCloudAndStorage();
+            } finally {
+              notifyAppReset();
+              router.replace("/");
+            }
           },
         },
       ],
@@ -1153,7 +1188,8 @@ export default function ProfiloScreen() {
 
   const handleOpenAttendanceModal = async () => {
     try {
-      const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+      const currentUrl =
+        degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
       const attList = await getAttendanceRecords(currentUrl || undefined);
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
@@ -1171,7 +1207,8 @@ export default function ProfiloScreen() {
 
     (async () => {
       try {
-        const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+        const currentUrl =
+          degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
         if (currentUrl) {
           const [manuals, allCourseData, currentTabUrl] = await Promise.all([
             getManualEvents(currentUrl),
@@ -1179,8 +1216,8 @@ export default function ProfiloScreen() {
             selectedTabForSpecifiche?.url
               ? Promise.resolve(selectedTabForSpecifiche.url)
               : defaultTabUrl
-              ? Promise.resolve(defaultTabUrl)
-              : AsyncStorage.getItem(`defaultTabUrl_${currentUrl}`),
+                ? Promise.resolve(defaultTabUrl)
+                : AsyncStorage.getItem(`defaultTabUrl_${currentUrl}`),
           ]);
           setPastAttendanceManualEvents(manuals);
           const activeTab = currentTabUrl || allCourseData.tabs[0]?.url;
@@ -1319,16 +1356,222 @@ export default function ProfiloScreen() {
               <Ionicons
                 name="location-outline"
                 size={12}
-                color={subjectColor}
+                color={theme.accent}
                 style={{ marginRight: 3 }}
               />
-              <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+              <Text
+                style={[styles.attendanceHistoryRoom, { color: theme.accent }]}
+                numberOfLines={1}
+              >
                 {item.room}
               </Text>
             </View>
           ) : null}
         </View>
       </>
+    );
+  };
+
+  /** Trasforma il nome della materia in Title Case compatto ed elegante per la legenda */
+  const formatLegendSubject = (name: string): string => {
+    if (!name) return "";
+    const lowerWords = new Set([
+      "di",
+      "a",
+      "da",
+      "in",
+      "con",
+      "su",
+      "per",
+      "tra",
+      "fra",
+      "e",
+      "ed",
+      "del",
+      "della",
+      "dello",
+      "degli",
+      "delle",
+      "dei",
+    ]);
+    return name
+      .toLowerCase()
+      .split(/\s+/)
+      .map((word, idx) => {
+        if (idx > 0 && lowerWords.has(word)) {
+          return word;
+        }
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
+      .join(" ");
+  };
+
+  /** Dashboard KPI presenze in stile moderno iOS (3 tile + barra Screen Time materie) */
+  const renderAttendanceDashboard = (options?: { isModal?: boolean }) => {
+    const isModal = Boolean(options?.isModal);
+    const totalHours = attendanceStats?.totalHours || 0;
+    const totalLessons = attendanceStats?.totalLessons || 0;
+    const subjectsCount = attendanceStats?.subjectsCount || 0;
+    const subjects = attendanceStats?.subjectStats || [];
+    const hasRecords = attendanceRecords.length > 0;
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.attendanceDashboardCard,
+          isModal && { marginBottom: 16 },
+        ]}
+        activeOpacity={isModal ? 1 : 0.75}
+        onPress={isModal ? undefined : handleOpenAttendanceModal}
+        disabled={isModal}
+      >
+        {!isModal && (
+          <View style={styles.attendanceCardHeader}>
+            <View
+              style={[
+                styles.attendanceCardHeaderIcon,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <Ionicons
+                name="calendar-outline"
+                size={17}
+                color={theme.accent}
+              />
+            </View>
+            <Text style={styles.attendanceCardTitle}>Registro presenze</Text>
+            <View style={{ flex: 1 }} />
+            {hasRecords && (
+              <View
+                style={[
+                  styles.attendanceCardBadgePill,
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                    borderWidth: StyleSheet.hairlineWidth,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.attendanceCardBadgeText,
+                    { color: theme.accent },
+                  ]}
+                >
+                  {attendanceRecords.length}{" "}
+                  {attendanceRecords.length === 1 ? "lezione" : "lezioni"}
+                </Text>
+              </View>
+            )}
+            <Ionicons name="chevron-forward" size={14} color="#8e8e93" />
+          </View>
+        )}
+
+        {/* 3 Metric Tiles iOS (Tutti grigi con micro-bordo uniforme) */}
+        <View style={styles.kpiTilesRow}>
+          {/* Tile 1: Frequenza */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="time-outline" size={12} color="#10b981" />
+              <Text style={[styles.kpiTileLabel, { color: "#10b981" }]}>
+                Frequenza
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>
+              {totalHours}
+              <Text style={styles.kpiTileUnit}> h</Text>
+            </Text>
+            <Text style={styles.kpiTileSub}>ore totali</Text>
+          </View>
+
+          {/* Tile 2: Lezioni */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="checkmark-done" size={12} color="#0a84ff" />
+              <Text style={[styles.kpiTileLabel, { color: "#0a84ff" }]}>
+                Lezioni
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>{totalLessons}</Text>
+            <Text style={styles.kpiTileSub}>frequentate</Text>
+          </View>
+
+          {/* Tile 3: Materie */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="book" size={12} color="#bf5af2" />
+              <Text style={[styles.kpiTileLabel, { color: "#bf5af2" }]}>
+                Materie
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>{subjectsCount}</Text>
+            <Text style={styles.kpiTileSub}>distinte</Text>
+          </View>
+        </View>
+
+        {/* Barra di distribuzione Screen Time per materia con lista dettagliata */}
+        {hasRecords && totalHours > 0 && subjects.length > 0 && (
+          <View style={styles.attendanceBreakdownContainer}>
+            <View style={styles.breakdownBar}>
+              {subjects.map((s, idx) => {
+                const color = getSubjectColor(s.subject);
+                return (
+                  <View
+                    key={s.subject}
+                    style={{
+                      flex: Math.max(1, s.hours),
+                      backgroundColor: color,
+                      marginRight: idx < subjects.length - 1 ? 2 : 0,
+                      borderRadius: 1.5,
+                    }}
+                  />
+                );
+              })}
+            </View>
+
+            {/* Lista elegante Screen Time delle materie senza troncature */}
+            <View style={styles.legendListContainer}>
+              {subjects.slice(0, 3).map((s, idx) => {
+                const color = getSubjectColor(s.subject);
+                return (
+                  <View key={s.subject}>
+                    <View style={styles.legendRowItem}>
+                      <View
+                        style={[styles.legendDot, { backgroundColor: color }]}
+                      />
+                      <Text style={styles.legendSubjectTitle} numberOfLines={1}>
+                        {formatLegendSubject(s.subject)}
+                      </Text>
+                      <Text style={styles.legendHoursValue}>
+                        {s.hours}
+                        <Text style={styles.legendHoursUnit}>h</Text>
+                      </Text>
+                    </View>
+                    {idx < Math.min(subjects.length, 3) - 1 && (
+                      <View style={styles.legendDivider} />
+                    )}
+                  </View>
+                );
+              })}
+
+              {subjects.length > 3 && (
+                <View style={styles.legendMoreRow}>
+                  <Text style={styles.legendMoreText}>
+                    +{subjects.length - 3}{" "}
+                    {subjects.length - 3 === 1
+                      ? "altra materia"
+                      : "altre materie"}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+      </TouchableOpacity>
     );
   };
 
@@ -1383,36 +1626,105 @@ export default function ProfiloScreen() {
       return;
     }
 
+    setIsSyncingCalendar(true);
+    try {
+      const schedule = await fetchScheduleData(tabUrl);
+      const res = await syncScheduleToAppleCalendar(
+        schedule,
+        courseMetadata.cleanCourseTitle,
+        defaultTabLabel,
+        calendarTitle,
+        theme.primary,
+      );
+      if (res.success) {
+        setLastCalendarSyncTime(await getLastCalendarSync());
+        Alert.alert("Calendario Sincronizzato", res.message);
+      } else {
+        Alert.alert("Errore Calendario", res.message);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Errore durante la sincronizzazione con il calendario.",
+      );
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  };
+
+  const handleToggleCalendarAutoSync = async (val: boolean) => {
+    setCalendarAutoSyncState(val);
+    await setCalendarAutoSync(val);
+  };
+
+  const handleSaveCalendarTitle = async () => {
+    const trimmed = calendarTitleInput.trim();
+    if (!trimmed) {
+      Alert.alert(
+        "Nome non valido",
+        "Inserisci un nome valido per il calendario.",
+      );
+      return;
+    }
+    setIsSavingCalendarTitle(true);
+    try {
+      const res = await setCalendarTitle(trimmed);
+      setCalendarTitleState(trimmed);
+      setCalendarTitleInput(trimmed);
+      Alert.alert("Nome salvato", res.message);
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
+    } finally {
+      setIsSavingCalendarTitle(false);
+    }
+  };
+
+  const handleResetCalendarTitle = async () => {
+    setIsSavingCalendarTitle(true);
+    try {
+      await setCalendarTitle(DEFAULT_CALENDAR_TITLE);
+      setCalendarTitleState(DEFAULT_CALENDAR_TITLE);
+      setCalendarTitleInput(DEFAULT_CALENDAR_TITLE);
+      Alert.alert(
+        "Ripristinato",
+        "Nome del calendario ripristinato a quello predefinito.",
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Impossibile ripristinare il nome.",
+      );
+    } finally {
+      setIsSavingCalendarTitle(false);
+    }
+  };
+
+  const handleDeleteCalendar = () => {
     Alert.alert(
-      "Calendario Apple",
-      `Vuoi sincronizzare le lezioni di "${courseMetadata.cleanCourseTitle}" nel Calendario di iOS? Verrà creato il calendario "StudICI - Lezioni Sapienza".`,
+      "Rimuovi Calendario",
+      `Vuoi rimuovere il calendario "${calendarTitle}" e tutti i suoi eventi da Apple Calendar su questo dispositivo?`,
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Sincronizza",
+          text: "Rimuovi",
+          style: "destructive",
           onPress: async () => {
-            setIsSyncingCalendar(true);
+            setIsDeletingCalendar(true);
             try {
-              const schedule = await fetchScheduleData(tabUrl);
-              const res = await syncScheduleToAppleCalendar(
-                schedule,
-                courseMetadata.cleanCourseTitle,
-                defaultTabLabel,
-              );
+              const res = await deleteStudICICalendar();
               if (res.success) {
-                setLastCalendarSyncTime(Date.now());
-                Alert.alert("Calendario Sincronizzato", res.message);
+                setLastCalendarSyncTime(null);
+                Alert.alert("Rimosso", res.message);
               } else {
-                Alert.alert("Errore Calendario", res.message);
+                Alert.alert("Errore", res.message);
               }
             } catch (err: any) {
               Alert.alert(
                 "Errore",
-                err?.message ||
-                  "Errore durante la sincronizzazione con il calendario.",
+                err?.message || "Impossibile rimuovere il calendario.",
               );
             } finally {
-              setIsSyncingCalendar(false);
+              setIsDeletingCalendar(false);
             }
           },
         },
@@ -1549,7 +1861,10 @@ export default function ProfiloScreen() {
       if (code) {
         await Clipboard.setStringAsync(code);
         setCloudSyncId(code);
-        Alert.alert("Copiato", "Codice di sincronizzazione copiato negli appunti.");
+        Alert.alert(
+          "Copiato",
+          "Codice di sincronizzazione copiato negli appunti.",
+        );
         if (isCloudConfigured()) {
           syncWithICloudStorage().catch(() => {});
         }
@@ -1696,7 +2011,10 @@ export default function ProfiloScreen() {
       (degreeName && d.name.toLowerCase() === degreeName.toLowerCase()),
   );
   const resolvedClassCode = extractClassCode(
-    degreeClassName || matchedDegree?.className || rawCourseClass || rawCourseName,
+    degreeClassName ||
+      matchedDegree?.className ||
+      rawCourseClass ||
+      rawCourseName,
   );
 
   const cleanCourseTitle =
@@ -1803,18 +2121,18 @@ export default function ProfiloScreen() {
                     backgroundColor: courseMetadata.isMagistrale
                       ? "rgba(168, 85, 247, 0.25)"
                       : courseMetadata.isCicloUnico
-                      ? "rgba(234, 179, 8, 0.25)"
-                      : "rgba(59, 130, 246, 0.25)",
+                        ? "rgba(234, 179, 8, 0.25)"
+                        : "rgba(59, 130, 246, 0.25)",
                     borderColor: courseMetadata.isMagistrale
                       ? "#c084fc"
                       : courseMetadata.isCicloUnico
-                      ? "#facc15"
-                      : "#60a5fa",
+                        ? "#facc15"
+                        : "#60a5fa",
                     shadowColor: courseMetadata.isMagistrale
                       ? "#c084fc"
                       : courseMetadata.isCicloUnico
-                      ? "#facc15"
-                      : "#60a5fa",
+                        ? "#facc15"
+                        : "#60a5fa",
                   },
                 ]}
               >
@@ -1825,8 +2143,8 @@ export default function ProfiloScreen() {
                       color: courseMetadata.isMagistrale
                         ? "#e9d5ff"
                         : courseMetadata.isCicloUnico
-                        ? "#fef08a"
-                        : "#bfdbfe",
+                          ? "#fef08a"
+                          : "#bfdbfe",
                     },
                   ]}
                 >
@@ -1834,30 +2152,34 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
 
-              {courseMetadata.resolvedClassCode ? (() => {
-                const classTheme = getDegreeClassTheme(courseMetadata.resolvedClassCode);
-                return (
-                  <View
-                    style={[
-                      styles.classBadge,
-                      {
-                        backgroundColor: classTheme.backgroundColor,
-                        borderColor: classTheme.borderColor,
-                        shadowColor: classTheme.glowColor,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.classBadgeText,
-                        { color: classTheme.textColor },
-                      ]}
-                    >
-                      {courseMetadata.resolvedClassCode}
-                    </Text>
-                  </View>
-                );
-              })() : null}
+              {courseMetadata.resolvedClassCode
+                ? (() => {
+                    const classTheme = getDegreeClassTheme(
+                      courseMetadata.resolvedClassCode,
+                    );
+                    return (
+                      <View
+                        style={[
+                          styles.classBadge,
+                          {
+                            backgroundColor: classTheme.backgroundColor,
+                            borderColor: classTheme.borderColor,
+                            shadowColor: classTheme.glowColor,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.classBadgeText,
+                            { color: classTheme.textColor },
+                          ]}
+                        >
+                          {courseMetadata.resolvedClassCode}
+                        </Text>
+                      </View>
+                    );
+                  })()
+                : null}
             </View>
           </View>
         </View>
@@ -1887,7 +2209,7 @@ export default function ProfiloScreen() {
             >
               <Ionicons name="school-outline" size={17} color={theme.accent} />
             </View>
-            <Text style={styles.rowTitle}>Corso di Laurea</Text>
+            <Text style={styles.rowTitle}>Corso di laurea</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
               {courseMetadata.cleanCourseTitle}
             </Text>
@@ -1925,8 +2247,7 @@ export default function ProfiloScreen() {
         </View>
         <Text style={styles.sectionFooter}>
           Modifica il corso di laurea e il canale/anno predefinito per
-          l&apos;app. Queste impostazioni influenzano le lezioni, gli orari e le
-          aule visualizzate.
+          l&apos;app.
         </Text>
 
         {/* Gruppo: DATI STUDENTE (Sezione Riformulata con 2 righe native, copia rapida e toggle privacy) */}
@@ -1939,7 +2260,9 @@ export default function ProfiloScreen() {
               onPress={handleToggleStudentInfoHidden}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityLabel={
-                isStudentInfoHidden ? "Mostra dati studente" : "Nascondi dati studente"
+                isStudentInfoHidden
+                  ? "Mostra dati studente"
+                  : "Nascondi dati studente"
               }
             >
               <Ionicons
@@ -1959,7 +2282,9 @@ export default function ProfiloScreen() {
               }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Text style={[styles.sectionHeaderAction, { color: theme.accent }]}>
+              <Text
+                style={[styles.sectionHeaderAction, { color: theme.accent }]}
+              >
                 Modifica
               </Text>
             </TouchableOpacity>
@@ -2042,13 +2367,23 @@ export default function ProfiloScreen() {
             >
               <Ionicons name="mail-outline" size={17} color={theme.accent} />
             </View>
-            <Text style={styles.rowTitle}>Email istituzionale</Text>
+            <Text
+              style={[
+                styles.rowTitle,
+                { flex: 0, flexShrink: 0, marginRight: 8 },
+              ]}
+            >
+              Email
+            </Text>
             <Text
               style={[
                 styles.rowDetail,
+                { flex: 1, maxWidth: undefined },
                 !studentInfo.email && { color: "#71717a" },
               ]}
               numberOfLines={1}
+              adjustsFontSizeToFit={true}
+              minimumFontScale={0.75}
             >
               {studentInfo.email
                 ? isStudentInfoHidden
@@ -2063,9 +2398,7 @@ export default function ProfiloScreen() {
             />
           </TouchableOpacity>
         </View>
-        <Text style={styles.sectionFooter}>
-          Tocca un dato per copiarlo negli appunti o premi Modifica per aggiornarlo. La preferenza di privacy viene memorizzata.
-        </Text>
+        <Text style={styles.sectionFooter}>Salva i tuoi dati.</Text>
 
         {/* Gruppo: DOCUMENTI E LINK (Modale dedicato) */}
         <Text style={styles.sectionHeader}>DOCUMENTI E LINK</Text>
@@ -2084,7 +2417,7 @@ export default function ProfiloScreen() {
               <Ionicons name="folder-outline" size={17} color={theme.accent} />
             </View>
             <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.rowTitle}>Documenti e link salvati</Text>
+              <Text style={styles.rowTitle}>Documenti salvati</Text>
               <Text style={styles.docRowSubtitle} numberOfLines={1}>
                 {savedDocs.length === 0
                   ? "Nessun elemento conservato"
@@ -2095,7 +2428,7 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Accedi a dispense, PDF, note e link didattici sincronizzati in tempo reale tra tutti i tuoi dispositivi.
+          Accedi a dispense, PDF, note e link.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -2123,7 +2456,10 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
                   <Ionicons
@@ -2157,7 +2493,10 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
                   <Ionicons
@@ -2245,86 +2584,7 @@ export default function ProfiloScreen() {
 
         {/* Gruppo: REGISTRO PRESENZE */}
         <Text style={styles.sectionHeader}>REGISTRO PRESENZE</Text>
-
-        {/* 3 KPI Health / Fitness Cards */}
-        <View style={styles.statsCardsRow}>
-          {/* Card 1: Ore Totali */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(16, 185, 129, 0.15)" },
-              ]}
-            >
-              <Ionicons name="time" size={17} color="#10b981" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.totalHours || 0}h
-            </Text>
-            <Text style={styles.statLabel}>FREQUENZA</Text>
-          </View>
-
-          {/* Card 2: Lezioni */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(59, 130, 246, 0.15)" },
-              ]}
-            >
-              <Ionicons name="checkmark-done" size={17} color="#3b82f6" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.totalLessons || 0}
-            </Text>
-            <Text style={styles.statLabel}>LEZIONI</Text>
-          </View>
-
-          {/* Card 3: Materie */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(168, 85, 247, 0.15)" },
-              ]}
-            >
-              <Ionicons name="book" size={17} color="#a855f7" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.subjectsCount || 0}
-            </Text>
-            <Text style={styles.statLabel}>MATERIE</Text>
-          </View>
-        </View>
-
-        {/* Dettaglio Registro Table Card Compatto */}
-        <View style={styles.groupedCard}>
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={handleOpenAttendanceModal}
-          >
-            <View
-              style={[
-                styles.iconBox,
-                { backgroundColor: theme.subtle, borderColor: theme.border },
-              ]}
-            >
-              <Ionicons
-                name="calendar-outline"
-                size={17}
-                color={theme.accent}
-              />
-            </View>
-            <Text style={styles.rowTitle}>Registro presenze</Text>
-            <Text style={styles.rowDetail}>
-              {attendanceRecords.length > 0
-                ? `${attendanceRecords.length} registrate`
-                : "Nessuna"}
-            </Text>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" />
-          </TouchableOpacity>
-        </View>
+        {renderAttendanceDashboard()}
         <Text style={styles.sectionFooter}>
           Tieni premuta una lezione nell&apos;orario per registrarne la
           frequenza.
@@ -2348,19 +2608,15 @@ export default function ProfiloScreen() {
               {isSyncingCloud ? (
                 <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons
-                  name="cloud-outline"
-                  size={17}
-                  color={theme.accent}
-                />
+                <Ionicons name="cloud-outline" size={17} color={theme.accent} />
               )}
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Sincronizzazione</Text>
               <Text style={styles.rowSubTitle}>
-                {pairedDevices?.isPaired && pairedDevices.otherDevice
-                  ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
-                  : "Non attiva"}
+                {lastCloudSyncTime
+                  ? `${iCloudAutoSync ? "Auto • " : ""}${formatSyncDate(lastCloudSyncTime)}`
+                  : "Non ancora sincronizzato"}
               </Text>
             </View>
             <NativeActionButton
@@ -2400,8 +2656,11 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={handleSyncCalendar}
-            disabled={isSyncingCalendar}
+            onPress={() => {
+              setCalendarTitleInput(calendarTitle);
+              calendarModalVisibleRef.current = true;
+              setCalendarModalVisible(true);
+            }}
           >
             <View
               style={[
@@ -2422,7 +2681,9 @@ export default function ProfiloScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Calendario Apple</Text>
               <Text style={styles.rowSubTitle}>
-                {formatSyncDate(lastCalendarSyncTime)}
+                {lastCalendarSyncTime
+                  ? `${calendarAutoSync ? "Auto • " : ""}${formatSyncDate(lastCalendarSyncTime)}`
+                  : "Non ancora sincronizzato"}
               </Text>
             </View>
             <NativeActionButton
@@ -2447,6 +2708,12 @@ export default function ProfiloScreen() {
                 paddingHorizontal: 13,
               }}
               textStyle={styles.inlineActionBtnText}
+            />
+            <Ionicons
+              name="chevron-forward"
+              size={15}
+              color="#48484a"
+              style={{ marginLeft: 6 }}
             />
           </TouchableOpacity>
         </View>
@@ -2503,10 +2770,17 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
-                  <Ionicons name="alarm-outline" size={17} color={theme.accent} />
+                  <Ionicons
+                    name="alarm-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle}>Sveglie automatiche</Text>
@@ -2634,11 +2908,7 @@ export default function ProfiloScreen() {
                 { backgroundColor: theme.subtle, borderColor: theme.border },
               ]}
             >
-              <Ionicons
-                name="refresh-outline"
-                size={17}
-                color={theme.accent}
-              />
+              <Ionicons name="refresh-outline" size={17} color={theme.accent} />
             </View>
             <Text style={styles.rowTitle}>Riscarica orari</Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
@@ -2741,7 +3011,7 @@ export default function ProfiloScreen() {
           setCourseModalVisible(false);
           setSearchCourse("");
         }}
-        title="Corso di Laurea"
+        title="Corso di laurea"
         backgroundColor={UNIFORM_MODAL_BG}
         searchBarOptions={{
           placeholder: "Cerca corso o classe (es. Meccanica, L-9)...",
@@ -2847,30 +3117,35 @@ export default function ProfiloScreen() {
                             {isMagistrale ? "Magistrale" : "Triennale"}
                           </Text>
                         </View>
-                        {deg.className ? (() => {
-                          const classTheme = getDegreeClassTheme(deg.className);
-                          return (
-                            <View
-                              style={[
-                                styles.classBadge,
-                                {
-                                  backgroundColor: classTheme.backgroundColor,
-                                  borderColor: classTheme.borderColor,
-                                  shadowColor: classTheme.glowColor,
-                                },
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.classBadgeText,
-                                  { color: classTheme.textColor },
-                                ]}
-                              >
-                                {deg.className}
-                              </Text>
-                            </View>
-                          );
-                        })() : null}
+                        {deg.className
+                          ? (() => {
+                              const classTheme = getDegreeClassTheme(
+                                deg.className,
+                              );
+                              return (
+                                <View
+                                  style={[
+                                    styles.classBadge,
+                                    {
+                                      backgroundColor:
+                                        classTheme.backgroundColor,
+                                      borderColor: classTheme.borderColor,
+                                      shadowColor: classTheme.glowColor,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.classBadgeText,
+                                      { color: classTheme.textColor },
+                                    ]}
+                                  >
+                                    {deg.className}
+                                  </Text>
+                                </View>
+                              );
+                            })()
+                          : null}
                       </View>
                     </View>
                     {isSelected && (
@@ -2982,55 +3257,59 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
             ) : (
-              groupedAttendance.map((group) => (
-                <Reanimated.View
-                  key={group.date}
-                  style={styles.dayGroupContainer}
-                  layout={LinearTransition.duration(200)}
-                  exiting={FadeOut.duration(150)}
-                >
-                  {/* Intestazione del Giorno */}
-                  <View style={styles.dayGroupHeader}>
-                    <Ionicons
-                      name="calendar"
-                      size={13}
-                      color="#10b981"
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={styles.dayGroupTitle}>
-                      {group.dayName.toUpperCase()} ·{" "}
-                      {group.displayDate.toUpperCase()}
-                    </Text>
-                    <View style={styles.dayGroupBadge}>
-                      <Text style={styles.dayGroupBadgeText}>
-                        {group.records.length}{" "}
-                        {group.records.length === 1 ? "lezione" : "lezioni"}
-                      </Text>
-                    </View>
-                  </View>
+              <>
+                {renderAttendanceDashboard({ isModal: true })}
 
-                  {/* Lista Lezioni con SwipeToDeleteRow fluido su UI thread */}
-                  {group.records.map((item) => (
-                    <SwipeToDeleteRow
-                      key={item.id}
-                      marginBottom={10}
-                      borderRadius={16}
-                      onDelete={() => handleDeleteAttendanceDirect(item)}
-                    >
-                      <TouchableOpacity
-                        style={[
-                          styles.attendanceHistoryItem,
-                          { marginBottom: 0 },
-                        ]}
-                        activeOpacity={0.9}
-                        onLongPress={() => handleDeleteAttendance(item)}
+                {groupedAttendance.map((group) => (
+                  <Reanimated.View
+                    key={group.date}
+                    style={styles.dayGroupContainer}
+                    layout={LinearTransition.duration(200)}
+                    exiting={FadeOut.duration(150)}
+                  >
+                    {/* Intestazione del Giorno */}
+                    <View style={styles.dayGroupHeader}>
+                      <Ionicons
+                        name="calendar"
+                        size={13}
+                        color={theme.accent}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={styles.dayGroupTitle}>
+                        {group.dayName.toUpperCase()} ·{" "}
+                        {group.displayDate.toUpperCase()}
+                      </Text>
+                      <View style={styles.dayGroupBadge}>
+                        <Text style={styles.dayGroupBadgeText}>
+                          {group.records.length}{" "}
+                          {group.records.length === 1 ? "lezione" : "lezioni"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Lista Lezioni con SwipeToDeleteRow fluido su UI thread */}
+                    {group.records.map((item) => (
+                      <SwipeToDeleteRow
+                        key={item.id}
+                        marginBottom={10}
+                        borderRadius={16}
+                        onDelete={() => handleDeleteAttendanceDirect(item)}
                       >
-                        {renderAttendanceCardContent(item)}
-                      </TouchableOpacity>
-                    </SwipeToDeleteRow>
-                  ))}
-                </Reanimated.View>
-              ))
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceHistoryItem,
+                            { marginBottom: 0 },
+                          ]}
+                          activeOpacity={0.9}
+                          onLongPress={() => handleDeleteAttendance(item)}
+                        >
+                          {renderAttendanceCardContent(item)}
+                        </TouchableOpacity>
+                      </SwipeToDeleteRow>
+                    ))}
+                  </Reanimated.View>
+                ))}
+              </>
             )}
 
             {attendanceRecords.length > 0 && (
@@ -3042,11 +3321,7 @@ export default function ProfiloScreen() {
                 glowColor="rgba(239, 68, 68, 0.45)"
                 accentColor="#ef4444"
                 icon={
-                  <Ionicons
-                    name="trash-outline"
-                    size={16}
-                    color="#ffffff"
-                  />
+                  <Ionicons name="trash-outline" size={16} color="#ffffff" />
                 }
                 style={{
                   marginTop: 18,
@@ -3087,7 +3362,12 @@ export default function ProfiloScreen() {
         manualEvents={pastAttendanceManualEvents}
         attendanceRecords={attendanceRecords}
         degreeUrl={degreeUrl}
-        tabUrl={pastAttendanceTabUrl || selectedTabForSpecifiche?.url || defaultTabUrl || undefined}
+        tabUrl={
+          pastAttendanceTabUrl ||
+          selectedTabForSpecifiche?.url ||
+          defaultTabUrl ||
+          undefined
+        }
       />
 
       {/* Modal Gestione Sincronizzazione */}
@@ -3255,7 +3535,9 @@ export default function ProfiloScreen() {
 
             {/* Footnote sotto il box principale */}
             <Text style={styles.cloudBoxFootnote}>
-              La sincronizzazione automatica mantiene allineati orari, corsi, registro presenze e impostazioni di viaggio su tutti i dispositivi associati.
+              La sincronizzazione automatica mantiene allineati orari, corsi,
+              registro presenze e impostazioni di viaggio su tutti i dispositivi
+              associati.
             </Text>
 
             {/* Box 2: I MIEI DISPOSITIVI */}
@@ -3347,7 +3629,8 @@ export default function ProfiloScreen() {
                           </View>
                         </View>
                         <Text style={styles.deviceMetaText}>
-                          {dev.platform} • Sinc: {formatSyncDate(dev.lastActive)}
+                          {dev.platform} • Sinc:{" "}
+                          {formatSyncDate(dev.lastActive)}
                         </Text>
                       </View>
                       <TouchableOpacity
@@ -3417,7 +3700,9 @@ export default function ProfiloScreen() {
                       Dispositivo associato a un gruppo
                     </Text>
                     <Text style={styles.cloudSlaveNoticeSub}>
-                      Questo dispositivo è attualmente collegato come slave a un master. Non puoi collegarti ad altri dispositivi finché non ti dissoci dal master attuale nell&apos;elenco sopra.
+                      Questo dispositivo è attualmente collegato come slave a un
+                      master. Non puoi collegarti ad altri dispositivi finché
+                      non ti dissoci dal master attuale nell&apos;elenco sopra.
                     </Text>
                   </View>
                 </View>
@@ -3444,7 +3729,9 @@ export default function ProfiloScreen() {
                         Collega un altro dispositivo
                       </Text>
                       <Text style={styles.cloudRestoreSub}>
-                        Inserisci il codice di un altro dispositivo per sincronizzare corso, canale, presenze e impostazioni di viaggio.
+                        Inserisci il codice di un altro dispositivo per
+                        sincronizzare corso, canale, presenze e impostazioni di
+                        viaggio.
                       </Text>
                     </View>
                   </View>
@@ -3532,11 +3819,334 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Dati Studente (Matricola & Email) */}
+      {/* Modal Gestione Calendario Apple */}
+      <NativeSheetModal
+        visible={calendarModalVisible}
+        onClose={() => {
+          Keyboard.dismiss();
+          calendarModalVisibleRef.current = false;
+          setCalendarModalVisible(false);
+        }}
+        title="Calendario Apple"
+        backgroundColor={UNIFORM_MODAL_BG}
+      >
+        <View collapsable={false} style={styles.modalContainer}>
+          <KeyboardAvoidingView
+            collapsable={false}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 14 : 0}
+            style={{ flex: 1 }}
+          >
+            <ScrollView
+              ref={calendarScrollRef}
+              style={styles.modalScroll}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              automaticallyAdjustKeyboardInsets={true}
+              contentContainerStyle={{ paddingBottom: 140 }}
+            >
+              {/* Box 1: Hero Card Calendario Apple */}
+              <View style={styles.cloudHeroCard}>
+                <View style={styles.cloudHeroTop}>
+                  <View
+                    style={[
+                      styles.cloudHeroIconBadge,
+                      {
+                        backgroundColor: theme.primary,
+                        shadowColor: theme.primary,
+                        shadowOpacity: 0.4,
+                        shadowRadius: 8,
+                        shadowOffset: { width: 0, height: 2 },
+                        elevation: 4,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="calendar" size={26} color="#ffffff" />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 14 }}>
+                    <Text style={styles.cloudHeroTitle}>Calendario Apple</Text>
+                    <Text style={styles.cloudHeroSub}>
+                      {lastCalendarSyncTime
+                        ? `Ultimo salvataggio: ${formatSyncDate(lastCalendarSyncTime)}`
+                        : "Nessun salvataggio recente"}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Separatore */}
+                <View style={styles.separator} />
+
+                {/* Riga Switch Sincronizzazione Automatica */}
+                <View style={styles.cloudAutoSyncRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.cloudAutoSyncTitle}>
+                      Sincronizzazione automatica
+                    </Text>
+                    <Text style={styles.cloudAutoSyncSub}>
+                      {
+                        "Aggiorna le lezioni su Apple Calendar ad ogni avvio se l'orario o le aule sono cambiate."
+                      }
+                    </Text>
+                  </View>
+                  <Switch
+                    value={calendarAutoSync}
+                    onValueChange={handleToggleCalendarAutoSync}
+                    trackColor={{ false: "#39393d", true: "#34c759" }}
+                    ios_backgroundColor="#39393d"
+                  />
+                </View>
+
+                {/* Separatore */}
+                <View style={styles.separator} />
+
+                {/* Azioni Principali: Tasto Sincronizza */}
+                <View style={styles.cloudHeroActionRow}>
+                  <NativeActionButton
+                    label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
+                    onPress={handleSyncCalendar}
+                    disabled={isSyncingCalendar}
+                    variant="filled"
+                    glow={true}
+                    glowColor={theme.accent}
+                    accentColor={theme.primary}
+                    icon={
+                      <Ionicons
+                        name={isSyncingCalendar ? "refresh" : "sync-outline"}
+                        size={16}
+                        color="#ffffff"
+                      />
+                    }
+                    style={{
+                      flex: 1,
+                      width: "100%",
+                      height: 44,
+                      borderRadius: 22,
+                      shadowColor: theme.accent,
+                      shadowOpacity: 0.45,
+                      shadowRadius: 8,
+                    }}
+                    pillStyle={{
+                      height: 44,
+                      borderRadius: 22,
+                      paddingHorizontal: 14,
+                    }}
+                    textStyle={styles.cloudPrimaryBtnPillText}
+                  />
+                </View>
+              </View>
+
+              {/* Box 2: Nome Calendario Personalizzato */}
+              <Text style={styles.sectionHeader}>NOME CALENDARIO SU IOS</Text>
+              <View style={styles.groupedCard}>
+                <View style={{ padding: 16 }}>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      color: "#8e8e93",
+                      lineHeight: 18,
+                      marginBottom: 12,
+                    }}
+                  >
+                    Personalizza il nome del calendario.
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
+                    <View
+                      style={{
+                        flex: 1,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        backgroundColor: "#151516",
+                        borderRadius: 12,
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: "rgba(255, 255, 255, 0.15)",
+                        paddingHorizontal: 12,
+                        height: 44,
+                      }}
+                    >
+                      <Ionicons
+                        name="pencil-outline"
+                        size={15}
+                        color="#71717a"
+                        style={{ marginRight: 8 }}
+                      />
+                      <TextInput
+                        style={{
+                          flex: 1,
+                          height: 44,
+                          color: "#ffffff",
+                          fontSize: 14,
+                          paddingVertical: 0,
+                        }}
+                        value={calendarTitleInput}
+                        onChangeText={setCalendarTitleInput}
+                        placeholder="Es. StudICI - Lezioni Sapienza"
+                        placeholderTextColor="#636366"
+                        autoCapitalize="sentences"
+                        autoCorrect={false}
+                        returnKeyType="done"
+                        onSubmitEditing={handleSaveCalendarTitle}
+                        onFocus={() => {
+                          setTimeout(() => {
+                            calendarScrollRef.current?.scrollTo({
+                              y: 200,
+                              animated: true,
+                            });
+                          }, 120);
+                        }}
+                      />
+                      {calendarTitleInput.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setCalendarTitleInput("")}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons
+                            name="close-circle"
+                            size={16}
+                            color="#71717a"
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <NativeActionButton
+                      label={isSavingCalendarTitle ? "..." : "Salva"}
+                      onPress={handleSaveCalendarTitle}
+                      disabled={
+                        !calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                      }
+                      variant={
+                        !calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                          ? "glass"
+                          : "filled"
+                      }
+                      glow={Boolean(
+                        calendarTitleInput.trim() &&
+                        calendarTitleInput.trim() !== calendarTitle &&
+                        !isSavingCalendarTitle,
+                      )}
+                      glowColor={theme.accent}
+                      accentColor={theme.primary}
+                      style={{
+                        height: 44,
+                        borderRadius: 22,
+                        minWidth: 104,
+                        flexShrink: 0,
+                        ...(calendarTitleInput.trim() &&
+                        calendarTitleInput.trim() !== calendarTitle &&
+                        !isSavingCalendarTitle
+                          ? {
+                              shadowColor: theme.accent,
+                              shadowOpacity: 0.45,
+                              shadowRadius: 8,
+                            }
+                          : {}),
+                      }}
+                      pillStyle={{
+                        height: 44,
+                        borderRadius: 22,
+                        paddingHorizontal: 16,
+                        ...(!calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                          ? {
+                              backgroundColor: "#2c2c2e",
+                              borderColor: "rgba(255, 255, 255, 0.12)",
+                            }
+                          : {}),
+                      }}
+                      textStyle={{
+                        color: "#ffffff",
+                        fontSize: 14,
+                        fontWeight: "600",
+                        letterSpacing: -0.2,
+                      }}
+                    />
+                  </View>
+                  {calendarTitle !== DEFAULT_CALENDAR_TITLE && (
+                    <TouchableOpacity
+                      style={{ marginTop: 12, alignSelf: "flex-start" }}
+                      activeOpacity={0.7}
+                      onPress={handleResetCalendarTitle}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12.5,
+                          color: theme.accent,
+                          fontWeight: "500",
+                        }}
+                      >
+                        Ripristina nome predefinito
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              {/* Box 3: Gestione & Rimozione */}
+              <Text style={styles.sectionHeader}>GESTIONE</Text>
+              <View style={[styles.groupedCard, { marginBottom: 8 }]}>
+                <TouchableOpacity
+                  style={styles.tableRow}
+                  activeOpacity={0.7}
+                  onPress={handleDeleteCalendar}
+                  disabled={isDeletingCalendar}
+                >
+                  <View
+                    style={[
+                      styles.iconBox,
+                      {
+                        backgroundColor: "rgba(255, 69, 58, 0.12)",
+                        borderColor: "rgba(255, 69, 58, 0.25)",
+                      },
+                    ]}
+                  >
+                    {isDeletingCalendar ? (
+                      <ActivityIndicator size="small" color="#ff453a" />
+                    ) : (
+                      <Ionicons
+                        name="trash-outline"
+                        size={17}
+                        color="#ff453a"
+                      />
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowTitle, { color: "#ff453a" }]}>
+                      Rimuovi calendario da iOS
+                    </Text>
+                    <Text style={styles.rowSubTitle}>
+                      Elimina il calendario dedicato e tutti gli eventi dal
+                      dispositivo
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={15}
+                    color="#48484a"
+                    style={{ marginLeft: 6 }}
+                  />
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </NativeSheetModal>
       <NativeSheetModal
         visible={studentModalVisible}
         onClose={() => setStudentModalVisible(false)}
-        title="Dati Studente"
+        title="Dati studente"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
@@ -3572,8 +4182,7 @@ export default function ProfiloScreen() {
                 placeholderTextColor="#71717a"
                 value={tempMatricola}
                 onChangeText={setTempMatricola}
-                keyboardType="numeric"
-                returnKeyType="next"
+                keyboardType="number-pad"
               />
               {tempMatricola.length > 0 && (
                 <TouchableOpacity onPress={() => setTempMatricola("")}>
@@ -3608,16 +4217,18 @@ export default function ProfiloScreen() {
           </View>
 
           <Text style={styles.modalCardHelperText}>
-            La matricola e l&apos;email istituzionale sono salvate sul dispositivo e sincronizzate in cloud su tutti i tuoi dispositivi collegati. Appaiono sotto i badge della scheda del tuo profilo.
+            La matricola e l&apos;email istituzionale sono salvate sul
+            dispositivo e sincronizzate in cloud su tutti i tuoi dispositivi
+            collegati. Appaiono sotto i badge della scheda del tuo profilo.
           </Text>
         </ScrollView>
       </NativeSheetModal>
 
-      {/* Modal 1: Lista Documenti e Link Salvati con Swipe-to-Delete */}
+      {/* Modal 1: Lista Documenti e link salvati con Context Menu e Swipe-to-Delete */}
       <NativeSheetModal
         visible={docsListModalVisible}
         onClose={() => setDocsListModalVisible(false)}
-        title="Documenti e Link"
+        title="Documenti e link"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
@@ -3633,6 +4244,12 @@ export default function ProfiloScreen() {
           style={{ flex: 1 }}
           contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
           keyboardShouldPersistTaps="handled"
+          onLayout={(e) => {
+            const w = e.nativeEvent.layout.width - 32;
+            if (w > 0 && Math.abs(w - docContainerWidth) > 1) {
+              setDocContainerWidth(w);
+            }
+          }}
         >
           {savedDocs.length === 0 ? (
             <View style={styles.modalEmptyStateContainer}>
@@ -3652,7 +4269,8 @@ export default function ProfiloScreen() {
                 Nessun documento salvato
               </Text>
               <Text style={styles.modalEmptyStateSub}>
-                Tocca il pulsante &quot;+&quot; in alto a destra per aggiungere link, file o note.
+                Tocca il pulsante &quot;+&quot; in alto a destra per aggiungere
+                link, file o note.
               </Text>
             </View>
           ) : (
@@ -3691,55 +4309,66 @@ export default function ProfiloScreen() {
                     key={doc.id}
                     marginBottom={10}
                     borderRadius={14}
+                    style={{ width: docCardWidth }}
                     onDelete={() => handleDeleteDocDirectly(doc.id, doc.title)}
                   >
-                    <TouchableOpacity
-                      style={styles.docItemCard}
-                      activeOpacity={0.7}
-                      onPress={() => handleOpenItem(doc)}
-                      onLongPress={() => handleDocumentOptions(doc)}
+                    <DocumentContextMenu
+                      doc={doc}
+                      isNativeAvailable={isNativeComponentAvailable}
+                      onOpen={() => handleOpenItem(doc)}
+                      onCopyLink={
+                        doc.type === "link" || Boolean(doc.url)
+                          ? () => handleCopyDocLink(doc)
+                          : undefined
+                      }
+                      onEdit={() => handleOpenEditModal(doc)}
+                      onDelete={() =>
+                        handleDeleteDocDirectly(doc.id, doc.title)
+                      }
+                      style={{ width: docCardWidth, borderRadius: 14 }}
                     >
-                      <View
-                        style={[
-                          styles.iconBox,
-                          {
-                            backgroundColor: theme.subtle,
-                            borderColor: theme.border,
-                          },
-                        ]}
-                      >
-                        <Ionicons
-                          name={iconName}
-                          size={18}
-                          color={theme.accent}
-                        />
-                      </View>
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text style={styles.docItemCardTitle} numberOfLines={1}>
-                          {doc.title}
-                        </Text>
-                        <Text style={styles.docItemCardSub} numberOfLines={1}>
-                          {subtitle}
-                        </Text>
-                      </View>
                       <TouchableOpacity
-                        style={styles.docEditIconBtn}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        onPress={() => handleOpenEditModal(doc)}
+                        style={[styles.docItemCard, { width: docCardWidth }]}
+                        activeOpacity={0.7}
+                        onPress={() => handleOpenItem(doc)}
                       >
+                        <View
+                          style={[
+                            styles.iconBox,
+                            {
+                              backgroundColor: theme.subtle,
+                              borderColor: theme.border,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={iconName}
+                            size={18}
+                            color={theme.accent}
+                          />
+                        </View>
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <Text
+                            style={styles.docItemCardTitle}
+                            numberOfLines={1}
+                          >
+                            {doc.title}
+                          </Text>
+                          <Text style={styles.docItemCardSub} numberOfLines={1}>
+                            {subtitle}
+                          </Text>
+                        </View>
                         <Ionicons
-                          name="pencil-outline"
-                          size={17}
-                          color="#8e8e93"
+                          name="chevron-forward"
+                          size={15}
+                          color="#48484a"
+                          style={{ marginLeft: 6 }}
                         />
                       </TouchableOpacity>
-                    </TouchableOpacity>
+                    </DocumentContextMenu>
                   </SwipeToDeleteRow>
                 );
               })}
-              <Text style={styles.modalCardHelperText}>
-                Scorri verso sinistra per eliminare un elemento, oppure tocca l&apos;icona matita per modificarlo.
-              </Text>
             </>
           )}
         </ScrollView>
@@ -3752,7 +4381,7 @@ export default function ProfiloScreen() {
           setBatchAddModalVisible(false);
           setBatchDrafts([]);
         }}
-        title="Nuovi Elementi"
+        title="Nuovi elementi"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
@@ -3802,41 +4431,47 @@ export default function ProfiloScreen() {
                     onChange={(event) => {
                       const selected = event.nativeEvent.selectedSegmentIndex;
                       const nextType: SavedItemType =
-                        selected === 0 ? "link" : selected === 1 ? "file" : "note";
+                        selected === 0
+                          ? "link"
+                          : selected === 1
+                            ? "file"
+                            : "note";
                       handleUpdateDraft(draft.tempId, "type", nextType);
                     }}
                     style={styles.modalSegmentedControl}
                   />
                 ) : (
                   <View style={styles.batchTypeSelector}>
-                    {(["link", "file", "note"] as SavedItemType[]).map((tKey, i) => {
-                      const labels = ["Link", "File", "Nota"];
-                      const active = draft.type === tKey;
-                      return (
-                        <TouchableOpacity
-                          key={tKey}
-                          style={[
-                            styles.batchTypeBtn,
-                            active && [
-                              styles.batchTypeBtnActive,
-                              { backgroundColor: theme.primary },
-                            ],
-                          ]}
-                          onPress={() =>
-                            handleUpdateDraft(draft.tempId, "type", tKey)
-                          }
-                        >
-                          <Text
+                    {(["link", "file", "note"] as SavedItemType[]).map(
+                      (tKey, i) => {
+                        const labels = ["Link", "File", "Nota"];
+                        const active = draft.type === tKey;
+                        return (
+                          <TouchableOpacity
+                            key={tKey}
                             style={[
-                              styles.batchTypeBtnText,
-                              active && styles.batchTypeBtnTextActive,
+                              styles.batchTypeBtn,
+                              active && [
+                                styles.batchTypeBtnActive,
+                                { backgroundColor: theme.primary },
+                              ],
                             ]}
+                            onPress={() =>
+                              handleUpdateDraft(draft.tempId, "type", tKey)
+                            }
                           >
-                            {labels[i]}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                            <Text
+                              style={[
+                                styles.batchTypeBtnText,
+                                active && styles.batchTypeBtnTextActive,
+                              ]}
+                            >
+                              {labels[i]}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      },
+                    )}
                   </View>
                 )}
               </View>
@@ -3844,17 +4479,15 @@ export default function ProfiloScreen() {
               <View style={styles.modalCardGroup}>
                 <View style={styles.modalInputRow}>
                   <View style={styles.modalInputIconBox}>
-                    <Ionicons name="text-outline" size={17} color={theme.accent} />
+                    <Ionicons
+                      name="text-outline"
+                      size={17}
+                      color={theme.accent}
+                    />
                   </View>
                   <TextInput
                     style={styles.modalTextInput}
-                    placeholder={
-                      draft.type === "link"
-                        ? "Titolo link (es. Drive, Teams, Portale)"
-                        : draft.type === "file"
-                        ? "Titolo file (es. Dispensa, Regolamento)"
-                        : "Titolo nota (es. Appunti, Credenziali)"
-                    }
+                    placeholder="Titolo"
                     placeholderTextColor="#71717a"
                     value={draft.title}
                     onChangeText={(text) =>
@@ -3864,7 +4497,9 @@ export default function ProfiloScreen() {
                   />
                   {draft.title.length > 0 && (
                     <TouchableOpacity
-                      onPress={() => handleUpdateDraft(draft.tempId, "title", "")}
+                      onPress={() =>
+                        handleUpdateDraft(draft.tempId, "title", "")
+                      }
                     >
                       <Ionicons name="close-circle" size={16} color="#71717a" />
                     </TouchableOpacity>
@@ -3876,11 +4511,15 @@ export default function ProfiloScreen() {
                     <View style={styles.separator} />
                     <View style={styles.modalInputRow}>
                       <View style={styles.modalInputIconBox}>
-                        <Ionicons name="globe-outline" size={17} color={theme.accent} />
+                        <Ionicons
+                          name="globe-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
                       </View>
                       <TextInput
                         style={styles.modalTextInput}
-                        placeholder="Link / URL (es. drive.google.com/...)"
+                        placeholder="Link o URL"
                         placeholderTextColor="#71717a"
                         value={draft.url}
                         onChangeText={(text) =>
@@ -3892,9 +4531,15 @@ export default function ProfiloScreen() {
                       />
                       {draft.url.length > 0 && (
                         <TouchableOpacity
-                          onPress={() => handleUpdateDraft(draft.tempId, "url", "")}
+                          onPress={() =>
+                            handleUpdateDraft(draft.tempId, "url", "")
+                          }
                         >
-                          <Ionicons name="close-circle" size={16} color="#71717a" />
+                          <Ionicons
+                            name="close-circle"
+                            size={16}
+                            color="#71717a"
+                          />
                         </TouchableOpacity>
                       )}
                     </View>
@@ -3918,15 +4563,21 @@ export default function ProfiloScreen() {
                         { alignItems: "flex-start" },
                       ]}
                     >
-                      <View style={[styles.modalInputIconBox, { marginTop: 1 }]}>
-                        <Ionicons name="create-outline" size={17} color={theme.accent} />
+                      <View
+                        style={[styles.modalInputIconBox, { marginTop: 1 }]}
+                      >
+                        <Ionicons
+                          name="create-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
                       </View>
                       <TextInput
                         style={[
                           styles.modalTextInput,
                           { minHeight: 56, textAlignVertical: "top" },
                         ]}
-                        placeholder="Scrivi qui il testo della nota..."
+                        placeholder="Contenuto della nota..."
                         placeholderTextColor="#71717a"
                         value={draft.note}
                         onChangeText={(text) =>
@@ -3941,7 +4592,11 @@ export default function ProfiloScreen() {
                     <View style={styles.separator} />
                     <View style={styles.modalInputRow}>
                       <View style={styles.modalInputIconBox}>
-                        <Ionicons name="pencil-outline" size={17} color={theme.accent} />
+                        <Ionicons
+                          name="pencil-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
                       </View>
                       <TextInput
                         style={styles.modalTextInput}
@@ -3960,7 +4615,8 @@ export default function ProfiloScreen() {
           ))}
 
           <Text style={styles.modalCardHelperText}>
-            Per aggiungere altri elementi tocca &quot;+&quot; in alto a destra. Quando hai terminato, premi la spunta per salvare tutto.
+            Per aggiungere altri elementi tocca &quot;+&quot; in alto a destra.
+            Quando hai terminato, premi la spunta per salvare tutto.
           </Text>
         </ScrollView>
       </NativeSheetModal>
@@ -3996,7 +4652,14 @@ export default function ProfiloScreen() {
           if (!viewerDoc || !SafeWebView) return null;
           if (!viewerDoc.resolvedUri) {
             return (
-              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }}>
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                }}
+              >
                 <ActivityIndicator color={theme.accent} />
                 <Text style={{ color: "#8e8e93", fontSize: 13 }}>
                   Download dal cloud in corso...
@@ -4017,7 +4680,13 @@ export default function ProfiloScreen() {
               allowingReadAccessToURL={docDir}
               startInLoadingState
               renderLoading={() => (
-                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                <View
+                  style={{
+                    flex: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
                   <ActivityIndicator color={theme.accent} />
                 </View>
               )}
@@ -4026,23 +4695,27 @@ export default function ProfiloScreen() {
         })()}
       </NativeSheetModal>
 
-      {/* Modal 3: Dettaglio / Modifica Singolo Elemento con cestino in alto a destra e Segmented UI */}
+      {/* Modal 3: Dettaglio / Modifica Singolo Elemento con Segmented UI */}
       <NativeSheetModal
         visible={editModalVisible}
         onClose={() => {
           setEditModalVisible(false);
           setEditingDoc(null);
         }}
-        title="Dettaglio Elemento"
+        title="Dettagli"
         backgroundColor={UNIFORM_MODAL_BG}
-        rightActions={[
+        leftActions={[
           {
-            label: "Elimina",
-            sfSymbol: "trash",
-            tintColor: "#ef4444",
-            onPress: handleDeleteEditingDoc,
-            accessibilityLabel: "Elimina elemento",
+            label: "Annulla",
+            sfSymbol: "xmark",
+            onPress: () => {
+              setEditModalVisible(false);
+              setEditingDoc(null);
+            },
+            accessibilityLabel: "Annulla modifiche",
           },
+        ]}
+        rightActions={[
           {
             label: "Salva",
             sfSymbol: "checkmark",
@@ -4068,47 +4741,53 @@ export default function ProfiloScreen() {
                     editDraft.type === "link"
                       ? 0
                       : editDraft.type === "file"
-                      ? 1
-                      : 2
+                        ? 1
+                        : 2
                   }
                   onChange={(event) => {
                     const selected = event.nativeEvent.selectedSegmentIndex;
                     const nextType: SavedItemType =
-                      selected === 0 ? "link" : selected === 1 ? "file" : "note";
+                      selected === 0
+                        ? "link"
+                        : selected === 1
+                          ? "file"
+                          : "note";
                     setEditDraft((prev) => ({ ...prev, type: nextType }));
                   }}
                   style={styles.modalSegmentedControl}
                 />
               ) : (
                 <View style={styles.batchTypeSelector}>
-                  {(["link", "file", "note"] as SavedItemType[]).map((tKey, i) => {
-                    const labels = ["Link", "File", "Nota"];
-                    const active = editDraft.type === tKey;
-                    return (
-                      <TouchableOpacity
-                        key={tKey}
-                        style={[
-                          styles.batchTypeBtn,
-                          active && [
-                            styles.batchTypeBtnActive,
-                            { backgroundColor: theme.primary },
-                          ],
-                        ]}
-                        onPress={() =>
-                          setEditDraft((prev) => ({ ...prev, type: tKey }))
-                        }
-                      >
-                        <Text
+                  {(["link", "file", "note"] as SavedItemType[]).map(
+                    (tKey, i) => {
+                      const labels = ["Link", "File", "Nota"];
+                      const active = editDraft.type === tKey;
+                      return (
+                        <TouchableOpacity
+                          key={tKey}
                           style={[
-                            styles.batchTypeBtnText,
-                            active && styles.batchTypeBtnTextActive,
+                            styles.batchTypeBtn,
+                            active && [
+                              styles.batchTypeBtnActive,
+                              { backgroundColor: theme.primary },
+                            ],
                           ]}
+                          onPress={() =>
+                            setEditDraft((prev) => ({ ...prev, type: tKey }))
+                          }
                         >
-                          {labels[i]}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                          <Text
+                            style={[
+                              styles.batchTypeBtnText,
+                              active && styles.batchTypeBtnTextActive,
+                            ]}
+                          >
+                            {labels[i]}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    },
+                  )}
                 </View>
               )}
             </View>
@@ -4116,17 +4795,15 @@ export default function ProfiloScreen() {
             <View style={styles.modalCardGroup}>
               <View style={styles.modalInputRow}>
                 <View style={styles.modalInputIconBox}>
-                  <Ionicons name="text-outline" size={17} color={theme.accent} />
+                  <Ionicons
+                    name="text-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
                 </View>
                 <TextInput
                   style={styles.modalTextInput}
-                  placeholder={
-                    editDraft.type === "link"
-                      ? "Titolo link (es. Drive, Teams, Portale)"
-                      : editDraft.type === "file"
-                      ? "Titolo file (es. Dispensa, Regolamento)"
-                      : "Titolo nota (es. Appunti, Credenziali)"
-                  }
+                  placeholder="Titolo"
                   placeholderTextColor="#71717a"
                   value={editDraft.title}
                   onChangeText={(text) =>
@@ -4150,11 +4827,15 @@ export default function ProfiloScreen() {
                   <View style={styles.separator} />
                   <View style={styles.modalInputRow}>
                     <View style={styles.modalInputIconBox}>
-                      <Ionicons name="globe-outline" size={17} color={theme.accent} />
+                      <Ionicons
+                        name="globe-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
                     </View>
                     <TextInput
                       style={styles.modalTextInput}
-                      placeholder="Link / URL (es. drive.google.com/...)"
+                      placeholder="Link o URL"
                       placeholderTextColor="#71717a"
                       value={editDraft.url}
                       onChangeText={(text) =>
@@ -4170,7 +4851,11 @@ export default function ProfiloScreen() {
                           setEditDraft((prev) => ({ ...prev, url: "" }))
                         }
                       >
-                        <Ionicons name="close-circle" size={16} color="#71717a" />
+                        <Ionicons
+                          name="close-circle"
+                          size={16}
+                          color="#71717a"
+                        />
                       </TouchableOpacity>
                     )}
                   </View>
@@ -4189,20 +4874,21 @@ export default function ProfiloScreen() {
                 <>
                   <View style={styles.separator} />
                   <View
-                    style={[
-                      styles.modalInputRow,
-                      { alignItems: "flex-start" },
-                    ]}
+                    style={[styles.modalInputRow, { alignItems: "flex-start" }]}
                   >
                     <View style={[styles.modalInputIconBox, { marginTop: 1 }]}>
-                      <Ionicons name="create-outline" size={17} color={theme.accent} />
+                      <Ionicons
+                        name="create-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
                     </View>
                     <TextInput
                       style={[
                         styles.modalTextInput,
                         { minHeight: 56, textAlignVertical: "top" },
                       ]}
-                      placeholder="Scrivi qui il testo della nota..."
+                      placeholder="Contenuto della nota..."
                       placeholderTextColor="#71717a"
                       value={editDraft.note}
                       onChangeText={(text) =>
@@ -4217,7 +4903,11 @@ export default function ProfiloScreen() {
                   <View style={styles.separator} />
                   <View style={styles.modalInputRow}>
                     <View style={styles.modalInputIconBox}>
-                      <Ionicons name="pencil-outline" size={17} color={theme.accent} />
+                      <Ionicons
+                        name="pencil-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
                     </View>
                     <TextInput
                       style={styles.modalTextInput}
@@ -4231,6 +4921,34 @@ export default function ProfiloScreen() {
                   </View>
                 </>
               )}
+            </View>
+
+            {/* Azione di eliminazione a fondo scheda in stile iOS */}
+            <View style={[styles.modalCardGroup, { marginTop: 14 }]}>
+              <TouchableOpacity
+                style={[
+                  styles.modalInputRow,
+                  { justifyContent: "center", minHeight: 46 },
+                ]}
+                onPress={handleDeleteEditingDoc}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color="#ef4444"
+                  style={{ marginRight: 8 }}
+                />
+                <Text
+                  style={{
+                    color: "#ef4444",
+                    fontSize: 16,
+                    fontWeight: "600",
+                  }}
+                >
+                  Elimina elemento
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         </ScrollView>
@@ -4569,6 +5287,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   docItemCard: {
+    width: "100%",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
@@ -4884,42 +5603,148 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-  /* ── Registro presenze Styles ── */
-  statsCardsRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 12,
-  },
-  statCard: {
-    flex: 1,
+  /* ── Registro presenze Styles (iOS Dashboard Card & Metric Tiles) ── */
+  attendanceDashboardCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
-    alignItems: "center",
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
   },
-  statIconSquircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+  attendanceCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  attendanceCardHeaderIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginRight: 10,
   },
-  statValue: {
+  attendanceCardTitle: {
+    fontSize: 16,
+    fontWeight: "600",
     color: "#ffffff",
-    fontSize: 18,
-    fontWeight: "800",
     letterSpacing: -0.2,
   },
-  statLabel: {
-    color: "#71717a",
-    fontSize: 9,
+  attendanceCardBadgePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginRight: 6,
+  },
+  attendanceCardBadgeText: {
+    fontSize: 12,
+    color: "#8e8e93",
+    fontWeight: "500",
+  },
+  kpiTilesRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  kpiTile: {
+    flex: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 13,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+  },
+  kpiTileHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+    gap: 4,
+  },
+  kpiTileLabel: {
+    fontSize: 10,
     fontWeight: "700",
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  kpiTileValue: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#ffffff",
+    letterSpacing: -0.4,
+  },
+  kpiTileUnit: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#8e8e93",
+  },
+  kpiTileSub: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#8e8e93",
     marginTop: 2,
+  },
+  attendanceBreakdownContainer: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255, 255, 255, 0.08)",
+  },
+  breakdownBar: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    flexDirection: "row",
+    overflow: "hidden",
+  },
+  legendListContainer: {
+    marginTop: 10,
+  },
+  legendRowItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 5,
+  },
+  legendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginRight: 8,
+  },
+  legendSubjectTitle: {
+    fontSize: 12.5,
+    fontWeight: "500",
+    color: "#e4e4e7",
+    flex: 1,
+    marginRight: 10,
+    letterSpacing: -0.1,
+  },
+  legendHoursValue: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    color: "#a1a1aa",
+    letterSpacing: -0.1,
+  },
+  legendHoursUnit: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#71717a",
+  },
+  legendDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    marginLeft: 15,
+  },
+  legendMoreRow: {
+    paddingTop: 6,
+    alignItems: "center",
+  },
+  legendMoreText: {
+    fontSize: 11,
+    color: "#71717a",
+    fontWeight: "500",
   },
   attendanceEmptyBox: {
     padding: 24,

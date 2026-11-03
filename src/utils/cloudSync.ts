@@ -5,7 +5,15 @@ import * as FileSystem from "expo-file-system/legacy";
 import { AppState, AppStateStatus, Platform } from "react-native";
 import { SYNC_DB_URL } from "../config/syncConfig";
 import { CommuterConfig } from "../types/commuter";
-import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
+import {
+  getCalendarAutoSync,
+  getCalendarConfigUpdatedAt,
+  getCalendarTitle,
+  refreshAppleCalendarIfConfigured,
+  setCalendarAutoSync,
+  setCalendarTitle,
+  subscribeToCalendarConfigChanges,
+} from "./appleCalendar";
 import {
   refreshCommuterAlarmsInBackground,
   cancelAllNativeAlarms,
@@ -107,6 +115,11 @@ export interface PreAssociationBackup {
   studentInfo?: StudentInfo;
   savedDocuments?: SavedDocument[];
   savedDocumentsTombstones?: Record<string, number>;
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
   timestamp: number;
 }
 
@@ -128,6 +141,11 @@ export interface CloudBackupPayload {
   commuter?: CommuterConfig;
   studentInfo?: StudentInfo;
   savedDocuments?: SavedDocument[];
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
 }
 
 export interface CourseData {
@@ -159,6 +177,11 @@ interface RemoteDoc {
   savedDocuments?: SavedDocument[];
   savedDocumentsTombstones?: Record<string, number>;
   savedDocumentsModified?: number;
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
   devices?: Record<string, SyncDeviceInfo>;
   dissociatedDevices?: Record<string, number>;
 }
@@ -472,6 +495,8 @@ export async function performCloudSync(): Promise<{
     allManual,
     studentInfo,
     savedDocs,
+    calendarTitle,
+    calendarAutoSync,
   ] = await Promise.all([
     AsyncStorage.getItem("selectedDegreeUrl"),
     AsyncStorage.getItem("selectedDegreeName"),
@@ -484,6 +509,8 @@ export async function performCloudSync(): Promise<{
     getAllManualEventsAcrossCourses(),
     getStudentInfo(),
     getSavedDocuments(),
+    getCalendarTitle(),
+    getCalendarAutoSync(),
   ]);
 
   const payload: CloudBackupPayload = {
@@ -504,6 +531,11 @@ export async function performCloudSync(): Promise<{
     commuter,
     studentInfo,
     savedDocuments: savedDocs,
+    calendarConfig: {
+      customTitle: calendarTitle,
+      autoSync: calendarAutoSync,
+      updatedAt: timestamp,
+    },
   };
 
   const jsonStr = JSON.stringify(payload);
@@ -621,6 +653,15 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
         data.timestamp,
         true
       );
+    }
+
+    if (data.calendarConfig) {
+      if (data.calendarConfig.customTitle) {
+        await setCalendarTitle(data.calendarConfig.customTitle);
+      }
+      if (data.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(data.calendarConfig.autoSync);
+      }
     }
 
     const timestamp = Date.now();
@@ -1329,6 +1370,11 @@ async function runSync(): Promise<CloudSyncResult> {
         savedDocuments: await getSavedDocuments(),
         savedDocumentsTombstones: await getSavedDocumentsTombstones(),
         savedDocumentsModified: Date.now(),
+        calendarConfig: {
+          customTitle: await getCalendarTitle(),
+          autoSync: await getCalendarAutoSync(),
+          updatedAt: Date.now(),
+        },
         devices: devicesMap,
         dissociatedDevices: remote?.dissociatedDevices || {},
       });
@@ -1584,6 +1630,19 @@ async function runSync(): Promise<CloudSyncResult> {
       }
     }
 
+    // Configurazione Calendario (risoluzione con timestamp per non sovrascrivere personalizzazioni locali)
+    const localCalMod = await getCalendarConfigUpdatedAt();
+    const remoteCalMod = remote?.calendarConfig?.updatedAt || 0;
+
+    if (remote?.calendarConfig && remoteCalMod > localCalMod) {
+      if (remote.calendarConfig.customTitle) {
+        await setCalendarTitle(remote.calendarConfig.customTitle, remoteCalMod);
+      }
+      if (remote.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(remote.calendarConfig.autoSync, remoteCalMod);
+      }
+    }
+
     // Pubblica al gruppo attivo
     await pushRemote(activeSyncId, {
       updatedAt: now,
@@ -1607,6 +1666,11 @@ async function runSync(): Promise<CloudSyncResult> {
       savedDocuments: mergedDocs,
       savedDocumentsTombstones: docTombstones,
       savedDocumentsModified: now,
+      calendarConfig: {
+        customTitle: await getCalendarTitle(),
+        autoSync: await getCalendarAutoSync(),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod, now),
+      },
       devices: devicesMap,
       dissociatedDevices: remote?.dissociatedDevices || {},
     });
@@ -1908,6 +1972,19 @@ export async function linkDeviceWithCode(
 
     await setAllSavedDocuments(mergedDocs, docTombstones, Date.now(), true);
 
+    // Configurazione Calendario (risoluzione con timestamp)
+    const localCalModRoot = await getCalendarConfigUpdatedAt();
+    const remoteCalModRoot = rootRemote?.calendarConfig?.updatedAt || 0;
+
+    if (rootRemote?.calendarConfig && remoteCalModRoot > localCalModRoot) {
+      if (rootRemote.calendarConfig.customTitle) {
+        await setCalendarTitle(rootRemote.calendarConfig.customTitle, remoteCalModRoot);
+      }
+      if (rootRemote.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(rootRemote.calendarConfig.autoSync, remoteCalModRoot);
+      }
+    }
+
     // Salva nel gruppo master
     await pushRemote(rootMasterCode, {
       updatedAt: Date.now(),
@@ -1929,6 +2006,11 @@ export async function linkDeviceWithCode(
       savedDocuments: mergedDocs,
       savedDocumentsTombstones: docTombstones,
       savedDocumentsModified: Date.now(),
+      calendarConfig: {
+        customTitle: await getCalendarTitle(),
+        autoSync: await getCalendarAutoSync(),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalModRoot, Date.now()),
+      },
       devices: updatedDevices,
       dissociatedDevices: updatedDissociated,
     });
@@ -1999,6 +2081,7 @@ setCommuterChangeListener(scheduleAutoPush);
 setManualEventsChangeListener(scheduleAutoPush);
 subscribeToStudentInfoChanges(scheduleAutoPush);
 subscribeToSavedDocumentsChanges(scheduleAutoPush);
+subscribeToCalendarConfigChanges(scheduleAutoPush);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale
@@ -2220,6 +2303,7 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     notifyAttendanceChanged();
     notifyManualEventsChanged();
     await notifyLiveSyncListeners(true);
+    notifyAppReset();
 
     return newCode;
   } catch (err) {
@@ -2229,6 +2313,25 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, fallbackCode);
     notifyAttendanceChanged();
     notifyManualEventsChanged();
+    notifyAppReset();
     return fallbackCode;
   }
+}
+
+type AppResetListener = () => void;
+const appResetListeners = new Set<AppResetListener>();
+
+export function subscribeToAppReset(listener: AppResetListener): () => void {
+  appResetListeners.add(listener);
+  return () => {
+    appResetListeners.delete(listener);
+  };
+}
+
+export function notifyAppReset(): void {
+  appResetListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
 }

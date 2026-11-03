@@ -5,7 +5,43 @@ import { formatSapienzaAddress, resolveClassroom } from "./classroomLocations";
 import { ScheduleData, fetchScheduleData } from "./scraper";
 import { getManualEvents } from "./manualEvents";
 
-const LAST_CALENDAR_SYNC_KEY = "studici_last_calendar_sync";
+export const DEFAULT_CALENDAR_TITLE = "StudICI - Lezioni Sapienza";
+export const CALENDAR_NAME_KEY = "studici_calendar_custom_title";
+export const CALENDAR_ID_KEY = "@studici_calendar_id";
+export const CALENDAR_AUTO_SYNC_KEY = "studici_calendar_auto_sync_enabled";
+export const CALENDAR_CONFIG_UPDATED_AT_KEY = "@studici_calendar_config_updated_at";
+export const CALENDAR_SCHEDULE_HASH_KEY = "studici_calendar_schedule_hash";
+export const CALENDAR_COLOR_KEY = "@studici_calendar_theme_color";
+export const LAST_CALENDAR_SYNC_KEY = "studici_last_calendar_sync";
+
+type CalendarConfigListener = () => void;
+const calendarConfigListeners = new Set<CalendarConfigListener>();
+
+export function subscribeToCalendarConfigChanges(cb: CalendarConfigListener): () => void {
+  calendarConfigListeners.add(cb);
+  return () => {
+    calendarConfigListeners.delete(cb);
+  };
+}
+
+export function notifyCalendarConfigChanged(): void {
+  calendarConfigListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch (e) {
+      console.warn("Errore listener calendar config:", e);
+    }
+  });
+}
+
+export async function getCalendarConfigUpdatedAt(): Promise<number> {
+  try {
+    const val = await AsyncStorage.getItem(CALENDAR_CONFIG_UPDATED_AT_KEY);
+    return val ? parseInt(val, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export interface CalendarSyncResult {
   success: boolean;
@@ -24,13 +60,257 @@ export async function getLastCalendarSync(): Promise<number | null> {
 }
 
 /**
+ * Restituisce il nome personalizzato del calendario (o quello di default).
+ */
+export async function getCalendarTitle(): Promise<string> {
+  try {
+    const val = await AsyncStorage.getItem(CALENDAR_NAME_KEY);
+    return val && val.trim() ? val.trim() : DEFAULT_CALENDAR_TITLE;
+  } catch {
+    return DEFAULT_CALENDAR_TITLE;
+  }
+}
+
+/**
+ * Modifica il nome del calendario. Se il calendario è già presente su iOS/Android,
+ * ne aggiorna il titolo direttamente nel servizio nativo di sistema senza duplicarlo.
+ */
+export async function setCalendarTitle(
+  newTitle: string,
+  updatedAt?: number,
+): Promise<{ success: boolean; message: string }> {
+  const trimmed = newTitle.trim();
+  const titleToSave = trimmed || DEFAULT_CALENDAR_TITLE;
+  const previousTitle = await getCalendarTitle();
+  await AsyncStorage.setItem(CALENDAR_NAME_KEY, titleToSave);
+  const ts = updatedAt || Date.now();
+  await AsyncStorage.setItem(CALENDAR_CONFIG_UPDATED_AT_KEY, ts.toString());
+  notifyCalendarConfigChanged();
+
+  try {
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (isAvailable) {
+      const { status } = await Calendar.getCalendarPermissionsAsync();
+      if (status === "granted") {
+        const calendars = await Calendar.getCalendarsAsync(
+          Calendar.EntityTypes.EVENT,
+        );
+        const storedId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
+        let targetCal = storedId
+          ? calendars.find((c) => c.id === storedId && c.allowsModifications)
+          : null;
+
+        if (!targetCal) {
+          targetCal =
+            calendars.find(
+              (c) =>
+                (c.name === "studici_lessons" ||
+                  c.title === previousTitle ||
+                  c.title === titleToSave ||
+                  c.title === DEFAULT_CALENDAR_TITLE) &&
+                c.allowsModifications,
+            ) || null;
+        }
+
+        if (targetCal) {
+          await AsyncStorage.setItem(CALENDAR_ID_KEY, targetCal.id);
+          const needsUpdate: Partial<Calendar.Calendar> = {};
+          if (targetCal.title !== titleToSave) {
+            needsUpdate.title = titleToSave;
+          }
+          const themeColor = await AsyncStorage.getItem(CALENDAR_COLOR_KEY);
+          if (
+            themeColor &&
+            targetCal.color?.toLowerCase() !== themeColor.toLowerCase()
+          ) {
+            needsUpdate.color = themeColor;
+          }
+          if (Object.keys(needsUpdate).length > 0) {
+            await Calendar.updateCalendarAsync(targetCal.id, needsUpdate);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Errore aggiornamento titolo calendario su dispositivo:", err);
+  }
+
+  return {
+    success: true,
+    message: `Nome calendario aggiornato in "${titleToSave}".`,
+  };
+}
+
+/**
+ * Restituisce lo stato dell'aggiornamento automatico del calendario all'avvio.
+ */
+export async function getCalendarAutoSync(): Promise<boolean> {
+  try {
+    const val = await AsyncStorage.getItem(CALENDAR_AUTO_SYNC_KEY);
+    return val === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Imposta l'aggiornamento automatico del calendario.
+ */
+export async function setCalendarAutoSync(
+  enabled: boolean,
+  updatedAt?: number,
+): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      CALENDAR_AUTO_SYNC_KEY,
+      enabled ? "true" : "false",
+    );
+    const ts = updatedAt || Date.now();
+    await AsyncStorage.setItem(CALENDAR_CONFIG_UPDATED_AT_KEY, ts.toString());
+    notifyCalendarConfigChanged();
+  } catch {}
+}
+
+/**
+ * Aggiorna il colore del calendario Apple per farlo combaciare sempre con il tema attivo dell'app.
+ */
+export async function updateAppleCalendarColor(color: string): Promise<void> {
+  try {
+    if (!color) return;
+    await AsyncStorage.setItem(CALENDAR_COLOR_KEY, color);
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (!isAvailable) return;
+    const { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== "granted") return;
+
+    const storedId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
+    const customTitle = await getCalendarTitle();
+    const calendars = await Calendar.getCalendarsAsync(
+      Calendar.EntityTypes.EVENT,
+    );
+    const targetCal = storedId
+      ? calendars.find((c) => c.id === storedId && c.allowsModifications)
+      : calendars.find(
+          (c) =>
+            (c.title === customTitle ||
+              c.name === "studici_lessons" ||
+              c.title === DEFAULT_CALENDAR_TITLE) &&
+            c.allowsModifications,
+        );
+
+    if (
+      targetCal &&
+      targetCal.color?.toLowerCase() !== color.toLowerCase()
+    ) {
+      await Calendar.updateCalendarAsync(targetCal.id, { color });
+    }
+  } catch (err) {
+    console.warn("Impossibile aggiornare colore calendario al tema:", err);
+  }
+}
+
+/**
+ * Rimuove completamente il calendario StudICI e tutti i suoi eventi dal dispositivo.
+ */
+export async function deleteStudICICalendar(): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  try {
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (!isAvailable) {
+      return { success: false, message: "Calendario non disponibile." };
+    }
+    const { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== "granted") {
+      return { success: false, message: "Permessi calendario non concessi." };
+    }
+
+    const customTitle = await getCalendarTitle();
+    const storedId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
+    const calendars = await Calendar.getCalendarsAsync(
+      Calendar.EntityTypes.EVENT,
+    );
+    const matching = calendars.filter(
+      (c) =>
+        (c.id === storedId ||
+          c.name === "studici_lessons" ||
+          c.title === customTitle ||
+          c.title === DEFAULT_CALENDAR_TITLE) &&
+        c.allowsModifications,
+    );
+
+    if (matching.length === 0) {
+      await AsyncStorage.removeItem(LAST_CALENDAR_SYNC_KEY);
+      await AsyncStorage.removeItem(CALENDAR_SCHEDULE_HASH_KEY);
+      await AsyncStorage.removeItem(CALENDAR_ID_KEY);
+      return {
+        success: true,
+        message: "Nessun calendario StudICI trovato sul dispositivo.",
+      };
+    }
+
+    for (const cal of matching) {
+      try {
+        await Calendar.deleteCalendarAsync(cal.id);
+      } catch (delErr) {
+        console.warn("Errore eliminazione calendario:", delErr);
+      }
+    }
+
+    await AsyncStorage.removeItem(LAST_CALENDAR_SYNC_KEY);
+    await AsyncStorage.removeItem(CALENDAR_SCHEDULE_HASH_KEY);
+    await AsyncStorage.removeItem(CALENDAR_ID_KEY);
+
+    return {
+      success: true,
+      message: "Calendario StudICI rimosso con successo da Apple Calendar.",
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message:
+        err?.message || "Errore durante la rimozione del calendario nativo.",
+    };
+  }
+}
+
+/**
+ * Genera un'impronta (fingerprint) per rilevare se l'orario o le lezioni manuali
+ * sono variati rispetto all'ultima sincronizzazione.
+ */
+export function computeScheduleFingerprint(
+  schedule: ScheduleData,
+  manualEvents: any[],
+  calendarTitle: string,
+): string {
+  try {
+    const daysData = (schedule?.days || []).map((day) =>
+      (day || []).map(
+        (c) =>
+          `${c.subject || ""}|${c.room || ""}|${c.teacher || ""}|${c.startTime || ""}|${c.endTime || ""}`,
+      ),
+    );
+    const manualData = (manualEvents || []).map(
+      (m) =>
+        `${m.id || ""}|${m.subject || ""}|${m.room || ""}|${m.teacher || ""}|${m.startTime || ""}|${m.endTime || ""}|${m.dayIndex}|${m.repetitionType || ""}|${m.repeatUntilDate || ""}`,
+    );
+    return JSON.stringify({ t: calendarTitle, d: daysData, m: manualData });
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Sincronizza l'intero orario delle lezioni nel Calendario nativo di Apple / dispositivo.
- * Crea un calendario dedicato 'StudICI - Lezioni Sapienza' con lezioni settimanali ricorrenti.
+ * Crea o aggiorna il calendario dedicato evitando qualsiasi duplicazione.
  */
 export async function syncScheduleToAppleCalendar(
   schedule: ScheduleData,
   courseName: string,
   channelName?: string,
+  customTitleOverride?: string,
+  calendarColor?: string,
 ): Promise<CalendarSyncResult> {
   try {
     const isAvailable = await Calendar.isAvailableAsync();
@@ -55,25 +335,53 @@ export async function syncScheduleToAppleCalendar(
       };
     }
 
-    // 1. Cerca o riusa il calendario dedicato StudICI (evita duplicati di calendari)
+    if (calendarColor) {
+      await AsyncStorage.setItem(CALENDAR_COLOR_KEY, calendarColor);
+    }
+    const activeColor =
+      calendarColor ||
+      (await AsyncStorage.getItem(CALENDAR_COLOR_KEY)) ||
+      "#822433";
+    const activeTitle = customTitleOverride || (await getCalendarTitle());
+
+    // 1. Cerca o riusa il calendario dedicato StudICI (evita duplicati e preserva la condivisione)
+    const storedCalendarId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
     const calendars = await Calendar.getCalendarsAsync(
       Calendar.EntityTypes.EVENT,
     );
-    const matchingCalendars = calendars.filter(
-      (c) =>
-        (c.name === "studici_lessons" ||
-          c.title === "StudICI - Lezioni Sapienza") &&
-        c.allowsModifications,
-    );
-    const existingCal = matchingCalendars[0] || null;
-    if (matchingCalendars.length > 1) {
-      for (let i = 1; i < matchingCalendars.length; i++) {
-        try {
-          await Calendar.deleteCalendarAsync(matchingCalendars[i].id);
-        } catch {
-          // ignora se protetto da sistema
-        }
-      }
+
+    const isICloud = (c: Calendar.Calendar) =>
+      Boolean(
+        c.source &&
+          (c.source.name?.toLowerCase().includes("icloud") ||
+            c.source.type === Calendar.SourceType.CALDAV),
+      );
+
+    let existingCal: Calendar.Calendar | null = null;
+    if (storedCalendarId) {
+      existingCal =
+        calendars.find(
+          (c) => c.id === storedCalendarId && c.allowsModifications,
+        ) || null;
+    }
+
+    if (!existingCal) {
+      const matchingCalendars = calendars.filter(
+        (c) =>
+          (c.title === activeTitle ||
+            c.name === "studici_lessons" ||
+            c.title === DEFAULT_CALENDAR_TITLE) &&
+          c.allowsModifications,
+      );
+
+      // Privilegia i calendari su iCloud (che supportano la condivisione nativa Apple tra utenti)
+      matchingCalendars.sort((a, b) => {
+        const aICloud = isICloud(a) ? 1 : 0;
+        const bICloud = isICloud(b) ? 1 : 0;
+        return bICloud - aICloud;
+      });
+
+      existingCal = matchingCalendars[0] || null;
     }
 
     let calendarId: string | null = null;
@@ -81,11 +389,32 @@ export async function syncScheduleToAppleCalendar(
 
     if (existingCal) {
       calendarId = existingCal.id;
-      // Rimuovi tutti i vecchi eventi delle lezioni per eliminare gli orari vecchi
-      // e sostituirli con quelli aggiornati senza duplicati
+      await AsyncStorage.setItem(CALENDAR_ID_KEY, calendarId);
+
+      // Aggiorna titolo e colore tema sul calendario esistente
+      const needsUpdate: Partial<Calendar.Calendar> = {};
+      if (existingCal.title !== activeTitle) {
+        needsUpdate.title = activeTitle;
+      }
+      if (
+        activeColor &&
+        existingCal.color?.toLowerCase() !== activeColor.toLowerCase()
+      ) {
+        needsUpdate.color = activeColor;
+      }
+      if (Object.keys(needsUpdate).length > 0) {
+        try {
+          await Calendar.updateCalendarAsync(existingCal.id, needsUpdate);
+        } catch (updateErr) {
+          console.warn("Impossibile aggiornare titolo/colore calendario:", updateErr);
+        }
+      }
+
+      // Rimuovi esclusivamente i vecchi eventi delle lezioni per sostituirli
+      // con quelli aggiornati, preservando integralmente l'entità calendario e la sua condivisione
       try {
-        const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-        const futureDate = new Date(Date.now() + 240 * 24 * 60 * 60 * 1000);
+        const pastDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+        const futureDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
         const oldEvents = await Calendar.getEventsAsync(
           [existingCal.id],
           pastDate,
@@ -147,8 +476,8 @@ export async function syncScheduleToAppleCalendar(
         for (const src of candidateSources) {
           try {
             calendarId = await Calendar.createCalendarAsync({
-              title: "StudICI - Lezioni Sapienza",
-              color: "#822433",
+              title: activeTitle,
+              color: activeColor,
               entityType: Calendar.EntityTypes.EVENT,
               sourceId: src.id,
               source: src,
@@ -175,8 +504,8 @@ export async function syncScheduleToAppleCalendar(
         // Android
         try {
           calendarId = await Calendar.createCalendarAsync({
-            title: "StudICI - Lezioni Sapienza",
-            color: "#822433",
+            title: activeTitle,
+            color: activeColor,
             entityType: Calendar.EntityTypes.EVENT,
             source: { isLocalAccount: true, name: "StudICI", type: "LOCAL" },
             name: "studici_lessons",
@@ -188,6 +517,10 @@ export async function syncScheduleToAppleCalendar(
           calendarId = defaultCal.id;
           isDefaultCalendarFallback = true;
         }
+      }
+
+      if (calendarId && !isDefaultCalendarFallback) {
+        await AsyncStorage.setItem(CALENDAR_ID_KEY, calendarId);
       }
     }
 
@@ -261,9 +594,10 @@ export async function syncScheduleToAppleCalendar(
     }
 
     // 3. Sincronizzazione delle lezioni manuali dell'utente per questo corso
+    let manualList: any[] = [];
     try {
       const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-      const manualList = await getManualEvents(storedDegreeUrl || undefined);
+      manualList = await getManualEvents(storedDegreeUrl || undefined);
 
       for (const mEvent of manualList) {
         if (!mEvent.startTime || !mEvent.endTime) continue;
@@ -310,7 +644,10 @@ export async function syncScheduleToAppleCalendar(
             frequency: Calendar.Frequency.WEEKLY,
             endDate: semesterEndDate,
           };
-        } else if (mEvent.repetitionType === "custom_date" && mEvent.repeatUntilDate) {
+        } else if (
+          mEvent.repetitionType === "custom_date" &&
+          mEvent.repeatUntilDate
+        ) {
           const [eY, eM, eD] = mEvent.repeatUntilDate.split("-").map(Number);
           const untilDate = new Date(eY, eM - 1, eD, 23, 59, 59);
           recurrenceRule = {
@@ -323,7 +660,8 @@ export async function syncScheduleToAppleCalendar(
           title: eventTitle,
           startDate,
           endDate,
-          location: mEvent.address || mEvent.room || "Sapienza Università di Roma",
+          location:
+            mEvent.address || mEvent.room || "Sapienza Università di Roma",
           notes: notesParts.join("\n"),
           timeZone: "Europe/Rome",
           ...(recurrenceRule ? { recurrenceRule } : {}),
@@ -332,15 +670,26 @@ export async function syncScheduleToAppleCalendar(
         eventsCount++;
       }
     } catch (manualSyncErr) {
-      console.warn("Errore sincronizzazione lezioni manuali su Calendario:", manualSyncErr);
+      console.warn(
+        "Errore sincronizzazione lezioni manuali su Calendario:",
+        manualSyncErr,
+      );
     }
 
     const timestamp = Date.now();
     await AsyncStorage.setItem(LAST_CALENDAR_SYNC_KEY, timestamp.toString());
 
+    // Memorizza l'impronta attuale per evitare riscritture inutili
+    const fingerprint = computeScheduleFingerprint(
+      schedule,
+      manualList,
+      activeTitle,
+    );
+    await AsyncStorage.setItem(CALENDAR_SCHEDULE_HASH_KEY, fingerprint);
+
     const targetCalendarName = isDefaultCalendarFallback
       ? "tuo Calendario"
-      : "Calendario Apple ('StudICI - Lezioni Sapienza')";
+      : `Calendario Apple ('${activeTitle}')`;
 
     return {
       success: true,
@@ -361,13 +710,68 @@ export async function syncScheduleToAppleCalendar(
 }
 
 /**
- * Rinfresca il Calendario Apple in background se è già stato precedentemente sincronizzato.
- * Viene invocato in tempo reale durante le sincronizzazioni live del corso/canale.
+ * Verifica se l'aggiornamento automatico è abilitato e se l'orario o le lezioni manuali
+ * sono variati rispetto all'ultima sincronizzazione. Se variati, aggiorna silenziosamente.
  */
-export async function refreshAppleCalendarIfConfigured(): Promise<boolean> {
+export async function triggerCalendarAutoSyncIfNeeded(
+  schedule: ScheduleData,
+  courseName: string,
+  channelName?: string,
+  calendarColor?: string,
+): Promise<boolean> {
   try {
-    const lastSync = await getLastCalendarSync();
-    if (!lastSync) return false;
+    const isAutoSync = await getCalendarAutoSync();
+    if (!isAutoSync) return false;
+
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (!isAvailable) return false;
+
+    const { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== "granted") return false;
+
+    const activeTitle = await getCalendarTitle();
+    const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
+    const manualList = await getManualEvents(storedDegreeUrl || undefined);
+
+    const currentFingerprint = computeScheduleFingerprint(
+      schedule,
+      manualList,
+      activeTitle,
+    );
+    const savedFingerprint = await AsyncStorage.getItem(
+      CALENDAR_SCHEDULE_HASH_KEY,
+    );
+
+    if (savedFingerprint && savedFingerprint === currentFingerprint) {
+      // Nessun cambiamento rilevato, nessuna operazione necessaria
+      return false;
+    }
+
+    const res = await syncScheduleToAppleCalendar(
+      schedule,
+      courseName,
+      channelName,
+      activeTitle,
+      calendarColor,
+    );
+    return res.success;
+  } catch (err) {
+    console.warn("Errore durante auto-sync calendario all'avvio:", err);
+    return false;
+  }
+}
+
+/**
+ * Rinfresca il Calendario Apple in background se è configurato o se è abilitato l'auto-sync.
+ * Viene invocato durante le sincronizzazioni live o ad ogni avvio.
+ */
+export async function refreshAppleCalendarIfConfigured(
+  calendarColor?: string,
+): Promise<boolean> {
+  try {
+    const isAutoSync = await getCalendarAutoSync();
+    // Se la sincronizzazione automatica non è attiva, non deve mai sincronizzare in background!
+    if (!isAutoSync) return false;
 
     const [degreeUrl, degreeName, defaultTabUrl] = await Promise.all([
       AsyncStorage.getItem("selectedDegreeUrl"),
@@ -380,14 +784,14 @@ export async function refreshAppleCalendarIfConfigured(): Promise<boolean> {
     const schedule = await fetchScheduleData(defaultTabUrl);
     if (!schedule || !schedule.days || schedule.days.length === 0) return false;
 
-    const res = await syncScheduleToAppleCalendar(
+    return await triggerCalendarAutoSyncIfNeeded(
       schedule,
       degreeName || "Corso di Laurea",
       undefined,
+      calendarColor,
     );
-    return res.success;
   } catch (err) {
-    console.warn("Errore auto-aggiornamento calendario Apple live:", err);
+    console.warn("Errore auto-aggiornamento calendario Apple:", err);
     return false;
   }
 }

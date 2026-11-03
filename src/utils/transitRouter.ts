@@ -1,4 +1,4 @@
-import { ResolvedClassroom } from './classroomLocations';
+import { ResolvedClassroom, SAPIENZA_BUILDINGS } from './classroomLocations';
 
 export interface TransitSolution {
   mode: 'bus' | 'metro' | 'tram' | 'walk' | 'mix';
@@ -12,7 +12,7 @@ export interface TransitSolution {
   targetAddress: string;
 }
 
-type RomeStationType =
+export type RomeStationType =
   | 'tiburtina'
   | 'termini'
   | 'ostiense'
@@ -129,6 +129,115 @@ function identifyCampus(classroom?: Partial<ResolvedClassroom>): CampusType {
   return 'custom_generic';
 }
 
+export const ROME_STATION_COORDINATES: Record<RomeStationType, { lat: number; lng: number }> = {
+  tiburtina: { lat: 41.9097, lng: 12.5298 },
+  termini: { lat: 41.9014, lng: 12.5015 },
+  ostiense: { lat: 41.8722, lng: 12.4842 },
+  tuscolana: { lat: 41.8821, lng: 12.5222 },
+  trastevere: { lat: 41.8725, lng: 12.4664 },
+  san_pietro: { lat: 41.8988, lng: 12.4542 },
+  valle_aurelia: { lat: 41.9025, lng: 12.4422 },
+  prenestina: { lat: 41.8942, lng: 12.5445 },
+  nomentana: { lat: 41.9298, lng: 12.5245 },
+  generic: { lat: 41.9014, lng: 12.5015 },
+};
+
+function haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Calcola dinamicamente la stima pedonale effettiva (stile Google Maps)
+ * a partire dalle coordinate geografiche reali della stazione e della sede/aula target,
+ * applicando la curva di percorrenza urbana, la velocità standard a piedi (4.8 km/h)
+ * e i tempi di uscita dalla stazione.
+ */
+export function calculateDynamicWalkingMinutes(
+  stationType: RomeStationType,
+  classroom?: Partial<ResolvedClassroom>
+): { minutes: number; distanceKm: number } {
+  const stationCoords = ROME_STATION_COORDINATES[stationType] || ROME_STATION_COORDINATES.generic;
+  let targetLat = classroom?.latitude;
+  let targetLng = classroom?.longitude;
+
+  if ((!targetLat || !targetLng) && classroom?.buildingCode) {
+    const bInfo = SAPIENZA_BUILDINGS[classroom.buildingCode.toUpperCase()];
+    if (bInfo) {
+      targetLat = bInfo.latitude;
+      targetLng = bInfo.longitude;
+    }
+  }
+
+  if (!targetLat || !targetLng) {
+    const campus = identifyCampus(classroom);
+    switch (campus) {
+      case 'polo_tiburtina':
+        targetLat = 41.89885;
+        targetLng = 12.51735;
+        break;
+      case 'castro_laurenziano_scarpa':
+        targetLat = 41.90545;
+        targetLng = 12.51835;
+        break;
+      case 'citta_universitaria':
+        targetLat = 41.90382;
+        targetLng = 12.51685;
+        break;
+      case 'san_pietro_vincoli':
+        targetLat = 41.89315;
+        targetLng = 12.49382;
+        break;
+      case 'polo_ariosto':
+        targetLat = 41.8885;
+        targetLng = 12.5042;
+        break;
+      case 'polo_salaria':
+        targetLat = 41.9723;
+        targetLng = 12.5085;
+        break;
+      case 'polo_gianturco':
+        targetLat = 41.9142;
+        targetLng = 12.4746;
+        break;
+      case 'palazzo_baleani':
+        targetLat = 41.8974;
+        targetLng = 12.4674;
+        break;
+      default:
+        targetLat = 41.90382;
+        targetLng = 12.51685;
+        break;
+    }
+  }
+
+  const directDistanceKm = haversineDistanceKm(stationCoords.lat, stationCoords.lng, targetLat, targetLng);
+
+  // Per percorsi molto brevi (es. Stazione Tiburtina verso Polo Tiburtina via cavalcavia pedonale sud):
+  // la distanza pedonale reale è circa 650-700m (8 min).
+  // Per distanze ordinarie a Roma, il fattore di percorso pedonale medio su marciapiedi e incroci è circa 1.30
+  const detourFactor = directDistanceKm < 1.0 ? 1.20 : 1.32;
+  const walkingDistanceKm = directDistanceKm * detourFactor;
+
+  // Velocità pedonale standard Google Maps: 4.8 km/h (80 metri/minuto)
+  // + 1.5 min per attraversamento tornelli/uscita atrio stazione
+  const walkMinutes = Math.max(3, Math.round((walkingDistanceKm / 4.8) * 60 + 1.5));
+
+  return {
+    minutes: walkMinutes,
+    distanceKm: Math.round(walkingDistanceKm * 10) / 10,
+  };
+}
+
 /**
  * Calcola la migliore soluzione di trasporto pubblico urbano (Metro / Pullman / Tram ATAC)
  * per collegare QUALUNQUE stazione ferroviaria di Roma con QUALUNQUE sede di lezione Sapienza o indirizzo.
@@ -139,12 +248,33 @@ export function getOptimalRomeTransit(options: {
   fromStationName?: string;
   classroom?: Partial<ResolvedClassroom>;
   direction?: 'to_campus' | 'to_station';
+  preferredMode?: 'auto' | 'bus' | 'metro' | 'tram' | 'walk' | 'mix';
 }): TransitSolution {
-  const { fromStationName = '', classroom, direction = 'to_campus' } = options;
+  const { fromStationName = '', classroom, direction = 'to_campus', preferredMode = 'auto' } = options;
   const stationType = identifyRomeStation(fromStationName);
   const campusType = identifyCampus(classroom);
   const targetAddr = classroom?.address || 'Roma';
   const cName = classroom?.displayName || 'Aula';
+
+  // Se l'utente ha scelto esplicitamente di andare a piedi dopo il treno
+  if (preferredMode === 'walk') {
+    const { minutes: walkMins } = calculateDynamicWalkingMinutes(stationType, classroom);
+    const destName = classroom?.buildingName ? `${classroom.buildingName} (${cName})` : cName;
+    return {
+      mode: 'walk',
+      durationMinutes: walkMins,
+      inVehicleMinutes: 0,
+      walkingMinutes: walkMins,
+      transfersCount: 0,
+      lineName: `A piedi (${walkMins} min)`,
+      routeDescription:
+        direction === 'to_campus'
+          ? `Partenza: ${fromStationName || 'Stazione'} • Tragitto pedonale a piedi verso ${destName} • Tempo stimato: ~${walkMins} min.`
+          : `Partenza: ${destName} • Tragitto pedonale a piedi verso ${fromStationName || 'Stazione'} • Tempo stimato: ~${walkMins} min.`,
+      stationOriginName: fromStationName,
+      targetAddress: targetAddr,
+    };
+  }
 
   // =========================================================================
   // 1. STAZIONE ROMA TIBURTINA

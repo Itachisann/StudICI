@@ -31,13 +31,35 @@ import {
 import { useTheme } from "@/context/ThemeContext";
 import { UNIFORM_SCREEN_BG, MAX_CONTENT_WIDTH } from "@/constants/theme";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
+import { DisruptionsRegistryModal } from "../components/DisruptionsRegistryModal";
 import { NativeActionButton } from "../components/NativeActionButton";
+import { TrainRouteProgress } from "../components/TrainRouteProgress";
+import { TransitBoardCard } from "../components/TransitBoardCard";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
-import { computeCommuterItinerary } from "../utils/commuterOptimizer";
+import { DisruptionEvent } from "../types/disruptions";
+import {
+  computeCommuterItinerary,
+  getRomeStationName,
+} from "../utils/commuterOptimizer";
+import {
+  getDisruptions,
+  getDisruptionsForWeekday,
+  getCommuterRelevantTrainStrikes,
+  getCommuterRelevantWalkDisruptions,
+  parseDisruptionTime,
+} from "../utils/disruptionsService";
 import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
+import {
+  getManualEvents,
+  ManualClassEvent,
+  manualEventToClassEvent,
+  isManualEventActiveOnDate,
+  subscribeToManualEventsChanges,
+} from "../utils/manualEvents";
+import { getDateForDayIndex } from "../utils/attendance";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -48,7 +70,6 @@ import {
   cleanPlatform,
   clearTrenitaliaCache,
   evaluateTrainStatus,
-  formatStationName,
   minutesToTime,
   parseTimeToMinutes,
   TrainStatusResult,
@@ -165,6 +186,8 @@ export default function ViaggioScreen() {
   const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() => {
     return new Date().getDay();
   });
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
+  const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
   const activeDayIdxRef = useRef<number>(new Date().getDay());
   const loadRequestIdRef = useRef<number>(0);
 
@@ -180,6 +203,22 @@ export default function ViaggioScreen() {
   );
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
+
+  // Registro Manifestazioni, Scioperi e Interruzioni Viabilità
+  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
+  const [disruptionsLoading, setDisruptionsLoading] = useState<boolean>(false);
+  const [disruptionsModalVisible, setDisruptionsModalVisible] = useState<boolean>(false);
+  const [disruptionsInitialFilter, setDisruptionsInitialFilter] = useState<'all' | 'train' | 'walk' | 'transit'>('all');
+  const [selectedDisruptionEventId, setSelectedDisruptionEventId] = useState<string | null>(null);
+
+  const handleOpenDisruptionsModal = useCallback(
+    (filter: 'all' | 'train' | 'walk' | 'transit' = 'all', eventId?: string | null) => {
+      setDisruptionsInitialFilter(filter);
+      setSelectedDisruptionEventId(eventId || null);
+      setDisruptionsModalVisible(true);
+    },
+    []
+  );
 
   const todayDayIdx = useMemo(() => new Date().getDay(), []);
 
@@ -339,15 +378,43 @@ export default function ViaggioScreen() {
 
   // Stato live, programmato, avvisi e capienza Trenitalia del treno
   const liveTrain = itinerary?.liveTrain;
-  const commuterStationName =
-    direction === "outbound"
-      ? config?.departureStation.shortName || config?.departureStation.name
-      : config?.arrivalStation.shortName || config?.arrivalStation.name;
+  const commuterStationName = useMemo(() => {
+    if (!config) return "";
+    return direction === "outbound"
+      ? config.departureStation.shortName || config.departureStation.name
+      : getRomeStationName(config, liveTrain, "return");
+  }, [config, direction, liveTrain]);
 
   const isWeekend = selectedDayIdx === 0 || selectedDayIdx === 6;
   const isSelectedDayToday = useMemo(() => {
     return new Date().getDay() === selectedDayIdx;
   }, [selectedDayIdx]);
+
+  // Caricamento asincrono degli eventi da MIT (scioperi) e Luceverde (manifestazioni/cortei a Roma)
+  const loadDisruptionsData = useCallback(async (force = false) => {
+    setDisruptionsLoading(true);
+    try {
+      const list = await getDisruptions(force);
+      setDisruptions(list);
+    } catch {
+      // silenzioso
+    } finally {
+      setDisruptionsLoading(false);
+    }
+  }, []);
+
+  // Eventi e scioperi previsti per il giorno della settimana attualmente selezionato
+  const currentDayDisruptions = useMemo(() => {
+    return getDisruptionsForWeekday(selectedDayIdx, disruptions);
+  }, [selectedDayIdx, disruptions]);
+
+  const currentTrainDisruptions = useMemo(() => {
+    return getCommuterRelevantTrainStrikes(currentDayDisruptions);
+  }, [currentDayDisruptions]);
+
+  const currentWalkDisruptions = useMemo(() => {
+    return getCommuterRelevantWalkDisruptions(currentDayDisruptions, commuterStationName);
+  }, [currentDayDisruptions, commuterStationName]);
 
   const trainStatus = useMemo<TrainStatusResult | null>(() => {
     if (!liveTrain) return null;
@@ -374,17 +441,45 @@ export default function ViaggioScreen() {
     return res;
   }, [liveTrain, isSelectedDayToday, commuterStationName]);
 
-  // Lezioni del giorno selezionato (non presenti nel weekend)
+  // Helper per combinare lezioni ufficiali e lezioni manuali (solo feriali e con aula specificata)
+  const getDayClasses = useCallback(
+    (
+      jsDayIdx: number,
+      sched: ScheduleData | null,
+      manuals: ManualClassEvent[],
+      tabUrl?: string | null,
+    ) => {
+      // Nel fine settimana non ci sono lezioni in Viaggio
+      const isWeekendDay = jsDayIdx === 0 || jsDayIdx === 6;
+      if (isWeekendDay) return [];
+
+      const schedDayIdx = jsDayIdx - 1; // 1=LUN -> 0, ..., 5=VEN -> 4
+      const scraped =
+        sched?.days && sched.days[schedDayIdx] ? [...sched.days[schedDayIdx]] : [];
+      const { dateStr } = getDateForDayIndex(schedDayIdx);
+      const manualForDay = (manuals || [])
+        .filter(
+          (e) =>
+            e.dayIndex === schedDayIdx &&
+            Boolean(e.room && e.room.trim().length > 0) &&
+            (!e.tabUrl || !tabUrl || e.tabUrl === tabUrl) &&
+            isManualEventActiveOnDate(e, dateStr),
+        )
+        .map(manualEventToClassEvent);
+
+      return [...scraped, ...manualForDay].sort(
+        (a, b) =>
+          parseTimeToMinutes(a.startTime || "08:30") -
+          parseTimeToMinutes(b.startTime || "08:30"),
+      );
+    },
+    [],
+  );
+
+  // Lezioni del giorno selezionato (ufficiali + manuali)
   const dayClasses = useMemo(() => {
-    if (isWeekend) return [];
-    const dayScheduleIndex = selectedDayIdx - 1;
-    if (!schedule?.days || !schedule.days[dayScheduleIndex]) return [];
-    return [...schedule.days[dayScheduleIndex]].sort(
-      (a, b) =>
-        parseTimeToMinutes(a.startTime || "08:30") -
-        parseTimeToMinutes(b.startTime || "08:30"),
-    );
-  }, [schedule, selectedDayIdx, isWeekend]);
+    return getDayClasses(selectedDayIdx, schedule, manualEvents, defaultTabUrl);
+  }, [selectedDayIdx, schedule, manualEvents, defaultTabUrl, getDayClasses]);
 
   // Lezione attualmente selezionata per il viaggio
   const activeSelectedClass = useMemo(() => {
@@ -495,11 +590,22 @@ export default function ViaggioScreen() {
           return;
         }
 
+        // Carica lezioni manuali salvate
+        let currentManuals: ManualClassEvent[] = [];
+        try {
+          currentManuals = await getManualEvents();
+          setManualEvents(currentManuals);
+        } catch (err) {
+          console.warn("Errore lettura manual events:", err);
+        }
+
         // Carica i dati dell'orario reale dal corso selezionato
         let sched: ScheduleData | null = null;
+        let defaultTab: string | null = null;
         try {
           const url = await AsyncStorage.getItem("selectedDegreeUrl");
-          const defaultTab = await AsyncStorage.getItem("defaultTabUrl");
+          defaultTab = await AsyncStorage.getItem("defaultTabUrl");
+          setDefaultTabUrl(defaultTab);
           if (url) {
             const courseData = await fetchAllCourseData(url);
             const activeTab =
@@ -532,15 +638,12 @@ export default function ViaggioScreen() {
 
         // Determina la lezione target per il calcolo (nessuna lezione nel weekend)
         const isEffWeekend = effDayIdx === 0 || effDayIdx === 6;
-        const dayScheduleIndex = effDayIdx - 1;
-        const currentDayClasses =
-          !isEffWeekend && sched?.days && sched.days[dayScheduleIndex]
-            ? [...sched.days[dayScheduleIndex]].sort(
-                (a, b) =>
-                  parseTimeToMinutes(a.startTime || "08:30") -
-                  parseTimeToMinutes(b.startTime || "08:30"),
-              )
-            : [];
+        const currentDayClasses = getDayClasses(
+          effDayIdx,
+          sched,
+          currentManuals,
+          defaultTab,
+        );
 
         const now = new Date();
         const isToday = now.getDay() === effDayIdx;
@@ -601,6 +704,7 @@ export default function ViaggioScreen() {
         const itin = await computeCommuterItinerary({
           config: currentConfig,
           scheduleData: sched,
+          manualEvents: currentManuals,
           direction: effDir,
           targetDate,
           selectedClass: targetClassForCalculation,
@@ -632,18 +736,32 @@ export default function ViaggioScreen() {
       selectedClassIndex,
       selectedTrainOffset,
       selectedTrainNumber,
+      getDayClasses,
     ],
   );
+
+  useEffect(() => {
+    const unsub = subscribeToManualEventsChanges(() => {
+      getManualEvents()
+        .then((evts) => {
+          setManualEvents(evts);
+          loadData(true, true);
+        })
+        .catch(() => {});
+    });
+    return () => unsub();
+  }, [loadData]);
 
   useFocusEffect(
     useCallback(() => {
       loadData();
-      // Aggiornamento automatico silenzioso di treni, ritardi e stato ogni 60 secondi
+      loadDisruptionsData();
+      // Aggiornamento automatico silenzioso di treni, ritardi e stato ogni 25 secondi
       const id = setInterval(() => {
         loadData(true, true);
-      }, 60000);
+      }, 25000);
       return () => clearInterval(id);
-    }, [loadData]),
+    }, [loadData, loadDisruptionsData]),
   );
 
   const handleDayChange = useCallback(
@@ -723,7 +841,6 @@ export default function ViaggioScreen() {
     setDirection(newDir);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
-    setItinerary(null);
     itinerariesCacheRef.current = {};
     setItinerariesByDay({});
     loadData(false, false, {
@@ -805,6 +922,22 @@ export default function ViaggioScreen() {
     loadData();
   };
 
+  const handleToggleTransitMode = async (mode: "auto" | "walk") => {
+    if (!config) return;
+    const newConfig: CommuterConfig = {
+      ...config,
+      transitLeg: {
+        ...config.transitLeg,
+        preferredMode: mode,
+      },
+    };
+    itinerariesCacheRef.current = {};
+    setItinerariesByDay({});
+    await saveCommuterConfig(newConfig);
+    setConfig(newConfig);
+    loadData(false, true);
+  };
+
   const openGoogleMapsRoute = (
     originQuery?: string,
     destQuery?: string,
@@ -847,7 +980,7 @@ export default function ViaggioScreen() {
       return;
     }
 
-    if (leg.type === "transit") {
+    if (leg.type === "transit" || leg.type === "walk") {
       const stationName =
         config?.arrivalStation.shortName ||
         config?.arrivalStation.name ||
@@ -859,6 +992,11 @@ export default function ViaggioScreen() {
         direction === "outbound"
           ? `Dalla Stazione di ${stationName}`
           : `Dall'Aula / Sede`;
+      const isWalk = leg.type === "walk";
+      const travelMode = isWalk ? "walking" : "transit";
+      const sheetTitle = isWalk
+        ? "Percorso a piedi su Google Maps"
+        : "Cerca mezzi su Google Maps";
 
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
@@ -869,30 +1007,30 @@ export default function ViaggioScreen() {
               originStationLabel,
             ],
             cancelButtonIndex: 0,
-            title: "Cerca mezzi su Google Maps",
+            title: sheetTitle,
             message: "Scegli il punto di partenza desiderato:",
           },
           (buttonIndex) => {
             if (buttonIndex === 1) {
-              openGoogleMapsRoute(undefined, dest, "transit");
+              openGoogleMapsRoute(undefined, dest, travelMode);
             } else if (buttonIndex === 2) {
-              openGoogleMapsRoute(presetOrigin, dest, "transit");
+              openGoogleMapsRoute(presetOrigin, dest, travelMode);
             }
           },
         );
       } else {
         Alert.alert(
-          "Cerca mezzi su Google Maps",
+          sheetTitle,
           "Scegli il punto di partenza desiderato:",
           [
             { text: "Annulla", style: "cancel" },
             {
               text: "Posizione GPS",
-              onPress: () => openGoogleMapsRoute(undefined, dest, "transit"),
+              onPress: () => openGoogleMapsRoute(undefined, dest, travelMode),
             },
             {
               text: originStationLabel,
-              onPress: () => openGoogleMapsRoute(presetOrigin, dest, "transit"),
+              onPress: () => openGoogleMapsRoute(presetOrigin, dest, travelMode),
             },
           ],
         );
@@ -1266,6 +1404,34 @@ export default function ViaggioScreen() {
                 <TouchableOpacity
                   style={[styles.headerIconBtn, { marginLeft: 8 }]}
                   activeOpacity={0.7}
+                  onPress={() => handleOpenDisruptionsModal("all", null)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Registro scioperi e manifestazioni"
+                >
+                  {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
+                    <CallstackLiquidGlass.LiquidGlassView
+                      effect="regular"
+                      colorScheme="dark"
+                      tintColor="rgba(255, 255, 255, 0.12)"
+                      style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
+                    />
+                  ) : null}
+                  <Ionicons
+                    name="megaphone-outline"
+                    size={18}
+                    color={
+                      currentTrainDisruptions.length > 0 || currentWalkDisruptions.length > 0
+                        ? "#f59e0b"
+                        : "#fff"
+                    }
+                  />
+                  {(currentTrainDisruptions.length > 0 || currentWalkDisruptions.length > 0) && (
+                    <View style={styles.headerAlertDot} />
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.headerIconBtn, { marginLeft: 8 }]}
+                  activeOpacity={0.7}
                   onPress={() => setConfigModalVisible(true)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityLabel="Impostazioni viaggio pendolare"
@@ -1290,7 +1456,7 @@ export default function ViaggioScreen() {
               <View style={styles.switcherContainer}>
                 {isNativeIos ? (
                   <SegmentedControl
-                    key={`seg-viaggio-${directionIndex}-${theme.primary}`}
+                    key={`seg-viaggio-${theme.primary}`}
                     values={directionTitles}
                     selectedIndex={directionIndex}
                     onChange={(event) => {
@@ -1466,16 +1632,16 @@ export default function ViaggioScreen() {
                               {w.label}
                             </Animated.Text>
 
-                            {isItemToday && (
+                            {/* Pallino indicatore (Giorno selezionato bianco / Oggi se non selezionato) */}
+                            {/* Mostra il pallino bianco esclusivamente per il giorno corrente (oggi) */}
+                            {isItemToday ? (
                               <View
                                 style={[
                                   styles.daySegmentDot,
-                                  isSelected
-                                    ? styles.daySegmentDotActive
-                                    : { backgroundColor: theme.primary },
+                                  styles.daySegmentDotActive,
                                 ]}
                               />
-                            )}
+                            ) : null}
                           </TouchableOpacity>
                         </Fragment>
                       );
@@ -1544,16 +1710,12 @@ export default function ViaggioScreen() {
           >
             {WEEKDAYS.map((w, pageIdx) => {
               const isCurrentDayPage = pageIdx === currentWeekdayIndex;
-              const isPageWeekend = Boolean(w.isWeekend);
-              const pageSchedIdx = w.dayIdx - 1;
-              const pageClasses =
-                !isPageWeekend && schedule?.days && schedule.days[pageSchedIdx]
-                  ? [...schedule.days[pageSchedIdx]].sort(
-                      (a, b) =>
-                        parseTimeToMinutes(a.startTime || "08:30") -
-                        parseTimeToMinutes(b.startTime || "08:30"),
-                    )
-                  : [];
+              const pageClasses = getDayClasses(
+                w.dayIdx,
+                schedule,
+                manualEvents,
+                defaultTabUrl,
+              );
 
               return (
                 <View
@@ -1951,32 +2113,6 @@ export default function ViaggioScreen() {
                         itinerary.liveTrain.durationMinutes ||
                         (arrM > depM ? arrM - depM : 0);
 
-                      const cleanCommuter = (commuterStationName || "")
-                        .trim()
-                        .toLowerCase();
-                      let rawOrigin = (
-                        itinerary.liveTrain.originStationName || ""
-                      ).trim();
-                      if (/^S\d+$/i.test(rawOrigin)) {
-                        rawOrigin = "";
-                      }
-                      const isOriginRef = Boolean(
-                        itinerary.liveTrain.isOriginStation ||
-                        (rawOrigin &&
-                          cleanCommuter &&
-                          rawOrigin
-                            .toLowerCase()
-                            .includes(cleanCommuter)) ||
-                        (cleanCommuter &&
-                          rawOrigin &&
-                          cleanCommuter.includes(rawOrigin.toLowerCase())),
-                      );
-                      const displayOrigin = formatStationName(
-                        (isOriginRef ? commuterStationName : rawOrigin) ||
-                          commuterStationName ||
-                          "Stazione",
-                      );
-
                       const statusLabel = trainStatus?.badgeLabel || "";
                       const hasSeparateDelay = Boolean(
                         isSelectedDayToday && trainStatus?.delayBadge,
@@ -1985,144 +2121,116 @@ export default function ViaggioScreen() {
                         isSelectedDayToday && trainStatus?.dwellBadge,
                       );
 
-                      // Un badge di stato entra comodamente sulla riga 1 tra il numero del treno e la durata
-                      // solo se sintetico (es. "+4m ritardo", "In orario", "Programmato") e non ci sono badge multipli
-                      const isShortStatus = Boolean(
-                        trainStatus &&
-                          !hasSeparateDelay &&
-                          !hasDwell &&
-                          statusLabel.length <= 13 &&
-                          !statusLabel.toLowerCase().includes("(") &&
-                          !statusLabel.toLowerCase().includes("interruz"),
+                      // Se è presente un ritardo, lo posizioniamo sempre sulla riga 1 tra il numero del treno e la durata
+                      const placeDelayOnTop = hasSeparateDelay;
+
+                      // Se non c'è ritardo separato, collochiamo il badge primario sulla riga 1 solo se sintetico
+                      const placePrimaryOnTop =
+                        !hasSeparateDelay &&
+                        Boolean(
+                          trainStatus &&
+                            !hasDwell &&
+                            statusLabel.length <= 13 &&
+                            !statusLabel.toLowerCase().includes("(") &&
+                            !statusLabel.toLowerCase().includes("interruz"),
+                        );
+
+                      const showSecondRow = Boolean(
+                        (placeDelayOnTop && trainStatus?.badgeLabel) ||
+                          (!placePrimaryOnTop && trainStatus?.badgeLabel) ||
+                          hasDwell,
                       );
 
-                      const renderStatusBadges = () => (
-                        <>
-                          {/* Badge Stato (Non partito / In orario / Programmato / Cancellato / ecc.) */}
-                          {trainStatus && (
-                            <View
-                              style={[
-                                styles.trainStatusPill,
-                                {
-                                  backgroundColor: trainStatus.badgeBg,
-                                  borderColor: trainStatus.badgeBorder,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name={trainStatus.iconName as any}
-                                size={12}
-                                color={trainStatus.badgeColor}
-                                style={{ marginRight: 4 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.trainStatusPillText,
-                                  { color: trainStatus.badgeColor },
-                                ]}
-                              >
-                                {trainStatus.badgeLabel}
-                              </Text>
-                            </View>
-                          )}
-
-                          {/* Badge Dedicato al Ritardo (mostrato solo per la data odierna se presente ritardo live) */}
-                          {isSelectedDayToday && trainStatus?.delayBadge ? (
-                            <View
-                              style={[
-                                styles.trainStatusPill,
-                                {
-                                  backgroundColor: trainStatus.delayBadge.bg,
-                                  borderColor: trainStatus.delayBadge.border,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name="time-outline"
-                                size={12}
-                                color={trainStatus.delayBadge.color}
-                                style={{ marginRight: 4 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.trainStatusPillText,
-                                  { color: trainStatus.delayBadge.color },
-                                ]}
-                              >
-                                {trainStatus.delayBadge.label}
-                              </Text>
-                            </View>
-                          ) : null}
-
-                          {/* Badge Distinto per Tempo di Sosta Fisica in Banchina (grigio neutro anti-confusione) */}
-                          {isSelectedDayToday && trainStatus?.dwellBadge ? (
-                            <View
-                              style={[
-                                styles.trainStatusPill,
-                                {
-                                  backgroundColor: trainStatus.dwellBadge.bg,
-                                  borderColor: trainStatus.dwellBadge.border,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name="hourglass-outline"
-                                size={11}
-                                color={trainStatus.dwellBadge.color}
-                                style={{ marginRight: 4 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.trainStatusPillText,
-                                  { color: trainStatus.dwellBadge.color },
-                                ]}
-                              >
-                                {trainStatus.dwellBadge.label}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </>
-                      );
-
-                      const renderOriginPill = () => (
-                        <View
-                          style={[
-                            styles.trainOriginPill,
-                            isOriginRef
-                              ? {
-                                  backgroundColor: "rgba(14, 165, 233, 0.16)",
-                                  borderColor: "rgba(14, 165, 233, 0.35)",
-                                }
-                              : {
-                                  backgroundColor: "rgba(148, 163, 184, 0.12)",
-                                  borderColor: "rgba(148, 163, 184, 0.25)",
-                                },
-                          ]}
-                        >
-                          <Ionicons
-                            name="navigate-outline"
-                            size={11}
-                            color={isOriginRef ? "#38bdf8" : "#94a3b8"}
-                            style={{ marginRight: 4 }}
-                          />
-                          <Text
+                      const renderDelayBadge = () =>
+                        isSelectedDayToday && trainStatus?.delayBadge ? (
+                          <View
                             style={[
-                              styles.trainOriginPillText,
+                              styles.trainStatusPill,
                               {
-                                color: isOriginRef ? "#38bdf8" : "#cbd5e1",
+                                backgroundColor: trainStatus.delayBadge.bg,
+                                borderColor: trainStatus.delayBadge.border,
                               },
                             ]}
                           >
-                            {`Origine corsa • ${displayOrigin}`}
-                          </Text>
-                        </View>
-                      );
+                            <Ionicons
+                              name={
+                                (trainStatus.delayBadge.iconName as any) ||
+                                "warning-outline"
+                              }
+                              size={12}
+                              color={trainStatus.delayBadge.color}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.trainStatusPillText,
+                                { color: trainStatus.delayBadge.color },
+                              ]}
+                            >
+                              {trainStatus.delayBadge.label}
+                            </Text>
+                          </View>
+                        ) : null;
 
-                      const showSecondRow = !isShortStatus || Boolean(displayOrigin);
+                      const renderPrimaryBadge = () =>
+                        trainStatus && trainStatus.badgeLabel ? (
+                          <View
+                            style={[
+                              styles.trainStatusPill,
+                              {
+                                backgroundColor: trainStatus.badgeBg,
+                                borderColor: trainStatus.badgeBorder,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name={trainStatus.iconName as any}
+                              size={12}
+                              color={trainStatus.badgeColor}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.trainStatusPillText,
+                                { color: trainStatus.badgeColor },
+                              ]}
+                            >
+                              {trainStatus.badgeLabel}
+                            </Text>
+                          </View>
+                        ) : null;
+
+                      const renderDwellBadge = () =>
+                        isSelectedDayToday && trainStatus?.dwellBadge ? (
+                          <View
+                            style={[
+                              styles.trainStatusPill,
+                              {
+                                backgroundColor: trainStatus.dwellBadge.bg,
+                                borderColor: trainStatus.dwellBadge.border,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name="hourglass-outline"
+                              size={11}
+                              color={trainStatus.dwellBadge.color}
+                              style={{ marginRight: 4 }}
+                            />
+                            <Text
+                              style={[
+                                styles.trainStatusPillText,
+                                { color: trainStatus.dwellBadge.color },
+                              ]}
+                            >
+                              {trainStatus.dwellBadge.label}
+                            </Text>
+                          </View>
+                        ) : null;
 
                       return (
                         <View style={styles.trainHighlightHeader}>
-                          {/* Riga superiore: Numero treno + eventuale badge sintetico a sinistra, Durata viaggio fissa a destra */}
+                          {/* Riga superiore: Numero treno + eventuale badge ritardo/sintetico a sinistra, Durata viaggio fissa a destra */}
                           <View style={styles.trainHighlightTopRow}>
                             <View style={styles.trainHighlightTopLeft}>
                               <View
@@ -2142,7 +2250,8 @@ export default function ViaggioScreen() {
                                 </Text>
                               </View>
 
-                              {isShortStatus && renderStatusBadges()}
+                              {placeDelayOnTop && renderDelayBadge()}
+                              {placePrimaryOnTop && renderPrimaryBadge()}
                             </View>
 
                             {/* Durata del Viaggio ancorata fissa in alto a destra */}
@@ -2161,16 +2270,49 @@ export default function ViaggioScreen() {
                             )}
                           </View>
 
-                          {/* Riga inferiore compatta: Stato esteso (es. Non partito (+34m)) affiancato ad Origine corsa */}
+                          {/* Riga inferiore compatta: eventuale stato primario / banchina se presente ritardo sopra o non entra */}
                           {showSecondRow && (
                             <View style={styles.trainHighlightPillsRow}>
-                              {!isShortStatus && renderStatusBadges()}
-                              {renderOriginPill()}
+                              {!placePrimaryOnTop && renderPrimaryBadge()}
+                              {renderDwellBadge()}
                             </View>
                           )}
                         </View>
                       );
                 })()}
+
+                    {/* Eventuale Sciopero Treni programmato per il giorno selezionato */}
+                    {currentTrainDisruptions.length > 0 && (
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          handleOpenDisruptionsModal("train", currentTrainDisruptions[0]?.id);
+                        }}
+                        style={styles.trainStrikeBanner}
+                      >
+                        <View style={styles.trainStrikeBadge}>
+                          <Ionicons
+                            name="warning"
+                            size={12}
+                            color="#ef4444"
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={styles.trainStrikeBadgeText}>SCIOPERO TRENI</Text>
+                        </View>
+                        <Text style={styles.trainStrikeBannerText} numberOfLines={2}>
+                          {currentTrainDisruptions[0].title}
+                          {currentTrainDisruptions[0].timeWindow
+                            ? ` (${currentTrainDisruptions[0].timeWindow})`
+                            : ""}
+                        </Text>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={13}
+                          color="#fca5a5"
+                          style={{ marginLeft: 6 }}
+                        />
+                      </TouchableOpacity>
+                    )}
 
                     {/* Eventuale Avviso / Variazione / Interruzione Trenitalia (solo se oggi) */}
                     {isSelectedDayToday && trainStatus?.alertMessage ? (
@@ -2223,8 +2365,9 @@ export default function ViaggioScreen() {
                           {direction === "outbound"
                             ? config?.departureStation.shortName ||
                               config?.departureStation.name
-                            : config?.arrivalStation.shortName ||
-                              config?.arrivalStation.name}
+                            : config
+                            ? getRomeStationName(config, itinerary.liveTrain, "return")
+                            : ""}
                         </Text>
                         {(() => {
                           const depPlanTime =
@@ -2241,40 +2384,92 @@ export default function ViaggioScreen() {
                           const currentNowM =
                             new Date().getHours() * 60 +
                             new Date().getMinutes();
-                          const isNotDepartedPastTime = Boolean(
-                            !itinerary.liveTrain.isDepartedFromStation &&
+                          const isDepartedFromStation = Boolean(
+                            itinerary.liveTrain.isDepartedFromStation,
+                          );
+
+                          let depActM: number;
+                          let isDepDelayed = false;
+
+                          if (isDepartedFromStation) {
+                            // Il treno è già passato/partito dalla stazione di partenza del pendolare:
+                            // l'orario di partenza è un evento storico già avvenuto e definitivo.
+                            // Il ritardo da considerare alla partenza è unicamente quello registrato a questa stazione (departureDelayAtStation).
+                            // Eventuali ritardi accumulati successivamente lungo la tratta (es. tra Orte e Roma)
+                            // impattano unicamente l'orario di arrivo a destinazione, non l'orario di partenza!
+                            const stationDepDelay = Math.max(
+                              0,
+                              itinerary.liveTrain.departureDelayAtStation || 0,
+                            );
+                            const actualDepTimeStr =
+                              itinerary.liveTrain.departureTimeActual;
+                            const actualDepM = actualDepTimeStr
+                              ? parseTimeToMinutes(actualDepTimeStr)
+                              : depPlanM + stationDepDelay;
+
+                            depActM = actualDepM;
+                            isDepDelayed =
+                              stationDepDelay > 0 || actualDepM > depPlanM;
+                          } else {
+                            // Il treno NON è ancora partito dalla stazione di partenza del pendolare
+                            const myDepStationName =
+                              direction === "outbound"
+                                ? config?.departureStation.shortName ||
+                                  config?.departureStation.name ||
+                                  ""
+                                : config
+                                ? getRomeStationName(
+                                    config,
+                                    itinerary.liveTrain,
+                                    "return",
+                                  )
+                                : "";
+                            const isStoppedAtMyStation = Boolean(
+                              itinerary.liveTrain.isStoppedInStation &&
+                                (!itinerary.liveTrain.stoppedStationName ||
+                                  itinerary.liveTrain.stoppedStationName
+                                    .toLowerCase()
+                                    .includes(myDepStationName.toLowerCase()) ||
+                                  myDepStationName
+                                    .toLowerCase()
+                                    .includes(
+                                      itinerary.liveTrain.stoppedStationName.toLowerCase(),
+                                    )),
+                            );
+                            const isNotDepartedPastTime = Boolean(
                               (itinerary.liveTrain.isDeparted === false ||
-                                itinerary.liveTrain.isStoppedInStation) &&
-                              currentNowM >= depPlanM,
-                          );
-                          const lateM = isNotDepartedPastTime
-                            ? Math.max(
-                                itinerary.liveTrain.delayMinutes || 0,
-                                currentNowM - depPlanM,
-                              )
-                            : itinerary.liveTrain.delayMinutes || 0;
+                                isStoppedAtMyStation) &&
+                                currentNowM >= depPlanM,
+                            );
 
-                          const rawDepActM = parseTimeToMinutes(
-                            itinerary.liveTrain.departureTimeActual ||
-                              depPlanTime,
-                          );
-                          const depActM = Math.max(rawDepActM, depPlanM + lateM);
-                          const displayDepTime =
-                            depActM > depPlanM
-                              ? minutesToTime(depActM)
-                              : itinerary.liveTrain.departureTimeActual ||
-                                depPlanTime;
+                            // Se è fermo in stazione (es. arrivato in orario o in anticipo come 09:31 a fronte di 09:38):
+                            // l'orario di partenza previsto si basa sulla fermata o sul ritardo specifico di partenza
+                            const stationDepDelay = isStoppedAtMyStation
+                              ? (itinerary.liveTrain.departureDelayAtStation || 0)
+                              : (itinerary.liveTrain.departureDelayAtStation !== undefined
+                                  ? itinerary.liveTrain.departureDelayAtStation
+                                  : (itinerary.liveTrain.delayMinutes || 0));
 
-                          const isDepDelayed = Boolean(
-                            (depPlanM > 0 && depActM > depPlanM) ||
-                              isNotDepartedPastTime,
-                          );
-                          const showStrike = Boolean(
+                            const lateM = isNotDepartedPastTime
+                              ? Math.max(stationDepDelay, currentNowM - depPlanM)
+                              : stationDepDelay;
+
+                            const rawDepActM = parseTimeToMinutes(
+                              itinerary.liveTrain.departureTimeActual || depPlanTime,
+                            );
+                            depActM = Math.max(rawDepActM, depPlanM + Math.max(0, lateM));
+                            isDepDelayed = depActM > depPlanM || isNotDepartedPastTime;
+                          }
+
+                          const displayDepTime = isDepDelayed
+                            ? minutesToTime(depActM)
+                            : (itinerary.liveTrain.departureTimeActual || depPlanTime);
+
+                          const showStrike =
                             isDepDelayed &&
-                              depPlanTime &&
-                              displayDepTime &&
-                              depPlanTime !== displayDepTime,
-                          );
+                            depPlanTime &&
+                            displayDepTime &&
+                            depPlanTime !== displayDepTime;
 
                           return (
                             <>
@@ -2333,8 +2528,9 @@ export default function ViaggioScreen() {
                         <Text style={styles.trainStationLabel}>Arrivo</Text>
                         <Text style={styles.trainStationName}>
                           {direction === "outbound"
-                            ? config?.arrivalStation.shortName ||
-                              config?.arrivalStation.name
+                            ? config
+                              ? getRomeStationName(config, itinerary.liveTrain, "outbound")
+                              : ""
                             : config?.departureStation.shortName ||
                               config?.departureStation.name}
                         </Text>
@@ -2356,10 +2552,34 @@ export default function ViaggioScreen() {
                           const currentNowM =
                             new Date().getHours() * 60 +
                             new Date().getMinutes();
+                          const myDepStationName =
+                            direction === "outbound"
+                              ? config?.departureStation.shortName ||
+                                config?.departureStation.name ||
+                                ""
+                              : config
+                              ? getRomeStationName(
+                                  config,
+                                  itinerary.liveTrain,
+                                  "return",
+                                )
+                              : "";
+                          const isStoppedAtMyStation = Boolean(
+                            itinerary.liveTrain.isStoppedInStation &&
+                              (!itinerary.liveTrain.stoppedStationName ||
+                                itinerary.liveTrain.stoppedStationName
+                                  .toLowerCase()
+                                  .includes(myDepStationName.toLowerCase()) ||
+                                myDepStationName
+                                  .toLowerCase()
+                                  .includes(
+                                    itinerary.liveTrain.stoppedStationName.toLowerCase(),
+                                  )),
+                          );
                           const isNotDepartedPastTime = Boolean(
                             !itinerary.liveTrain.isDepartedFromStation &&
                               (itinerary.liveTrain.isDeparted === false ||
-                                itinerary.liveTrain.isStoppedInStation) &&
+                                isStoppedAtMyStation) &&
                               currentNowM >= depPlanM,
                           );
                           const lateM = isNotDepartedPastTime
@@ -2418,6 +2638,41 @@ export default function ViaggioScreen() {
                         })()}
                       </View>
                     </View>
+
+                    {/* Visualizzatore Animato del Percorso e Posizione Convoglio */}
+                    <TrainRouteProgress
+                      liveTrain={itinerary.liveTrain}
+                      commuterDepartureStation={
+                        direction === "outbound"
+                          ? config?.departureStation.shortName ||
+                            config?.departureStation.name ||
+                            ""
+                          : config
+                          ? getRomeStationName(config, itinerary.liveTrain, "return")
+                          : ""
+                      }
+                      commuterArrivalStation={
+                        direction === "outbound"
+                          ? config
+                            ? getRomeStationName(config, itinerary.liveTrain, "outbound")
+                            : ""
+                          : config?.departureStation.shortName ||
+                            config?.departureStation.name ||
+                            ""
+                      }
+                      commuterDepartureStationCode={
+                        direction === "outbound"
+                          ? config?.departureStation.code
+                          : config?.arrivalStation.code
+                      }
+                      commuterArrivalStationCode={
+                        direction === "outbound"
+                          ? config?.arrivalStation.code
+                          : config?.departureStation.code
+                      }
+                      isToday={isSelectedDayToday}
+                      theme={theme}
+                    />
 
                     {/* Selettore Alternative Treni (Treno prima / dopo & chips) */}
                     <View style={styles.trainAlternativesDivider} />
@@ -2524,21 +2779,31 @@ export default function ViaggioScreen() {
                                   at.departureTimeActual !== at.departureTimePlanned
                                 ? parseTimeToMinutes(at.departureTimeActual)
                                 : 0;
-                            const effectiveDepM =
-                              atEstDepM > 0 ? atEstDepM : atPlannedDepM;
                             const currentNowM =
                               new Date().getHours() * 60 +
                               new Date().getMinutes();
 
-                            // Nello slider, (Fermo) deve uscire sempre dal momento in cui si supera
-                            // la partenza stimata o programmata (se non c'è la stimata): solo chi è fermo
-                            // oltre il tempo previsto risulta fermo, non chi è fermo al binario in orario.
+                            // Nello slider:
+                            // Colora l'elemento di azzurro se il treno è fermo regolarmente (senza ritardo, in orario)
+                            // Cambia il colore in giallo se il treno ha accumulato ritardo (arrivato o fermo con ritardo) o supera l'orario programmato
+                            const hasDelay = Boolean(
+                              (at.delayMinutes && at.delayMinutes > 0) ||
+                                (atPlannedDepM > 0 && currentNowM > atPlannedDepM) ||
+                                (atEstDepM > 0 && atEstDepM > atPlannedDepM),
+                            );
+
                             const isStoppedLate = Boolean(
                               isSelectedDayToday &&
                                 !isDeparted &&
                                 at.isStoppedInStation &&
-                                effectiveDepM > 0 &&
-                                currentNowM >= effectiveDepM,
+                                hasDelay,
+                            );
+
+                            const isStoppedRegular = Boolean(
+                              isSelectedDayToday &&
+                                !isDeparted &&
+                                at.isStoppedInStation &&
+                                !hasDelay,
                             );
 
                             return (
@@ -2554,9 +2819,13 @@ export default function ViaggioScreen() {
                                     },
                                   ],
                                   isDeparted && !isCurrent && { opacity: 0.65 },
+                                  isStoppedRegular &&
+                                    !isCurrent && {
+                                      borderColor: "rgba(56, 189, 248, 0.45)",
+                                    },
                                   isStoppedLate &&
                                     !isCurrent && {
-                                      borderColor: "rgba(245, 158, 11, 0.4)",
+                                      borderColor: "rgba(245, 158, 11, 0.45)",
                                     },
                                 ]}
                                 activeOpacity={0.7}
@@ -2575,11 +2844,13 @@ export default function ViaggioScreen() {
                               >
                                 <Ionicons
                                   name={
-                                    isStoppedLate
+                                    isStoppedLate || isStoppedRegular
                                       ? "pause-circle-outline"
-                                      : at.isFast
-                                        ? "flash"
-                                        : "train-outline"
+                                      : at.category === "IC" || at.trainNumber.startsWith("IC")
+                                        ? "speedometer-outline"
+                                        : at.isFast
+                                          ? "flash"
+                                          : "train-outline"
                                   }
                                   size={12}
                                   color={
@@ -2587,9 +2858,11 @@ export default function ViaggioScreen() {
                                       ? theme.accent
                                       : isStoppedLate
                                         ? "#f59e0b"
-                                        : isDeparted
-                                          ? "#64748b"
-                                          : "#94a3b8"
+                                        : isStoppedRegular
+                                          ? "#38bdf8"
+                                          : isDeparted
+                                            ? "#64748b"
+                                            : "#94a3b8"
                                   }
                                   style={{ marginRight: 4 }}
                                 />
@@ -2599,6 +2872,8 @@ export default function ViaggioScreen() {
                                     isCurrent && styles.trainChipTextCurrent,
                                     isDeparted &&
                                       !isCurrent && { color: "#64748b" },
+                                    isStoppedRegular &&
+                                      !isCurrent && { color: "#38bdf8" },
                                     isStoppedLate &&
                                       !isCurrent && { color: "#f59e0b" },
                                   ]}
@@ -2608,11 +2883,6 @@ export default function ViaggioScreen() {
                                     ? at.departureTimeActual ||
                                       at.departureTimePlanned
                                     : at.departureTimePlanned}
-                                  {isDeparted
-                                    ? " (Passato)"
-                                    : isStoppedLate
-                                      ? " (Fermo)"
-                                      : ""}
                                 </Text>
                               </TouchableOpacity>
                             );
@@ -2648,6 +2918,10 @@ export default function ViaggioScreen() {
                       iconName = "bus";
                       iconColor = "#a855f7";
                       circleBg = "rgba(168, 85, 247, 0.15)";
+                    } else if (leg.type === "walk") {
+                      iconName = "walk";
+                      iconColor = "#38bdf8";
+                      circleBg = "rgba(56, 189, 248, 0.15)";
                     } else if (leg.type === "destination") {
                       iconName = direction === "outbound" ? "flag" : "home";
                       iconColor = theme.primary;
@@ -2691,39 +2965,210 @@ export default function ViaggioScreen() {
                         </View>
 
                         {/* Contenuto Tappa */}
-                        <TouchableOpacity
-                          activeOpacity={isInteractive ? 0.85 : 1}
-                          disabled={!isInteractive}
-                          onPress={() => {
-                            if (leg.details?.mapQuery) {
-                              handleOpenMaps(leg);
-                            }
-                          }}
-                          style={[
-                            styles.stepContentCard,
-                            isFirst && { marginTop: 0 },
-                            {
-                              borderColor: "rgba(255, 255, 255, 0.08)",
-                              backgroundColor: "#1c1c1e",
-                            },
-                          ]}
-                        >
-                          <View style={styles.stepTitleRow}>
-                            <Text style={styles.stepTitleText}>
-                              {leg.title}
-                            </Text>
-                            <View style={styles.durationBadgeContainer}>
-                              <Text style={styles.stepDurationText}>
-                                {formatDuration(leg.durationMinutes)}
-                              </Text>
-                            </View>
-                          </View>
+                        {(() => {
+                          const isTransitOrWalk = leg.type === "transit" || leg.type === "walk";
+                          return (
+                            <View
+                              style={[
+                                styles.stepContentCard,
+                                isFirst && { marginTop: 0 },
+                                {
+                                  borderColor: "rgba(255, 255, 255, 0.08)",
+                                  backgroundColor: "#1c1c1e",
+                                },
+                              ]}
+                            >
+                              {/* Intestazione Titolo / Sottotitolo (toccabile per aprire Maps se disponibile) */}
+                              <TouchableOpacity
+                                activeOpacity={isInteractive && leg.details?.mapQuery ? 0.85 : 1}
+                                disabled={!isInteractive || !leg.details?.mapQuery}
+                                onPress={() => {
+                                  if (leg.details?.mapQuery) {
+                                    handleOpenMaps(leg);
+                                  }
+                                }}
+                              >
+                                <View style={styles.stepTitleRow}>
+                                  <Text style={styles.stepTitleText}>
+                                    {leg.type === "walk" ? "A piedi" : leg.title}
+                                  </Text>
+                                  <View style={styles.durationBadgeContainer}>
+                                    <Text style={styles.stepDurationText}>
+                                      {formatDuration(leg.durationMinutes)}
+                                    </Text>
+                                  </View>
+                                </View>
 
-                          <Text style={styles.stepSubtitleText}>
-                            {leg.subtitle}
-                          </Text>
+                                <Text style={styles.stepSubtitleText}>
+                                  {leg.subtitle}
+                                </Text>
+                              </TouchableOpacity>
 
-                          {leg.details?.badgeText && (
+                              {/* Segnalazione manifestazioni o blocchi viabilità che impattano il percorso (a piedi o con mezzi) */}
+                              {isTransitOrWalk && currentWalkDisruptions.length > 0 && (() => {
+                                const activeDisruption = currentWalkDisruptions[0];
+                                const timeInfo = parseDisruptionTime(activeDisruption);
+
+                                // Rimuove suffissi di data ridondanti per una lettura immediata a colpo d'occhio
+                                const cleanTitle = activeDisruption.title
+                                  .replace(/,\s*(?:lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica)\s+\d+.*$/i, "")
+                                  .trim();
+
+                                let disruptionDesc = cleanTitle;
+                                if (timeInfo.hasTimeWindow) {
+                                  const hoursStr =
+                                    timeInfo.endHour !== undefined
+                                      ? `${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")} - ${timeInfo.endHour.toString().padStart(2, "0")}:${timeInfo.endMinute!.toString().padStart(2, "0")}`
+                                      : `dalle ${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")}`;
+                                  disruptionDesc = `${cleanTitle} (${hoursStr})`;
+                                } else if (activeDisruption.timeWindow) {
+                                  disruptionDesc = `${cleanTitle} (${activeDisruption.timeWindow})`;
+                                }
+
+                                const bannerColor = "#f59e0b";
+                                const bannerBg = "rgba(245, 158, 11, 0.10)";
+                                const bannerBorder = "rgba(245, 158, 11, 0.28)";
+
+                                return (
+                                  <TouchableOpacity
+                                    activeOpacity={0.85}
+                                    onPress={() => {
+                                      handleOpenDisruptionsModal(
+                                        leg.type === "transit" ? "transit" : "walk",
+                                        activeDisruption.id
+                                      );
+                                    }}
+                                    style={[styles.walkDisruptionAlertBanner, { backgroundColor: bannerBg, borderColor: bannerBorder }]}
+                                  >
+                                    <View style={styles.walkDisruptionAlertHeader}>
+                                      <Ionicons
+                                        name="warning"
+                                        size={13}
+                                        color={bannerColor}
+                                        style={{ marginRight: 5 }}
+                                      />
+                                      <Text style={[styles.walkDisruptionAlertTitle, { color: bannerColor }]}>
+                                        Attenzione sul tuo tragitto
+                                      </Text>
+                                    </View>
+                                    <Text style={styles.walkDisruptionAlertDesc} numberOfLines={3}>
+                                      {disruptionDesc}
+                                    </Text>
+                                  </TouchableOpacity>
+                                );
+                              })()}
+
+                              {/* Selettore rapido Mezzi / A piedi direttamente sulla tappa urbana (isolato da Maps) */}
+                              {isTransitOrWalk && (
+                            isNativeIos ? (
+                              <View style={styles.inlineSegmentedWrapper}>
+                                <SegmentedControl
+                                  key={`seg-leg-mode-${theme.primary}`}
+                                  values={["Con i mezzi", "A piedi"]}
+                                  selectedIndex={leg.type === "walk" ? 1 : 0}
+                                  onChange={(e) => {
+                                    const idx = e.nativeEvent.selectedSegmentIndex;
+                                    handleToggleTransitMode(idx === 1 ? "walk" : "auto");
+                                  }}
+                                  appearance="dark"
+                                  tintColor={theme.primary}
+                                  style={styles.inlineSegmentedControl}
+                                  fontStyle={{
+                                    fontSize: 11,
+                                    fontWeight: "600",
+                                    color: "#a1a1aa",
+                                  }}
+                                  activeFontStyle={{
+                                    fontSize: 11,
+                                    fontWeight: "700",
+                                    color: "#ffffff",
+                                  }}
+                                />
+                              </View>
+                            ) : (
+                              <View style={styles.inlineTransitSelectorRow}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.inlineTransitBtn,
+                                    leg.type === "transit" && styles.inlineTransitBtnActiveTransit,
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() => handleToggleTransitMode("auto")}
+                                >
+                                  <Ionicons
+                                    name="bus-outline"
+                                    size={11}
+                                    color={leg.type === "transit" ? "#ffffff" : "#94a3b8"}
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.inlineTransitBtnText,
+                                      leg.type === "transit" && styles.inlineTransitBtnTextActive,
+                                    ]}
+                                  >
+                                    Con i mezzi
+                                  </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                  style={[
+                                    styles.inlineTransitBtn,
+                                    leg.type === "walk" && styles.inlineTransitBtnActiveWalk,
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() => handleToggleTransitMode("walk")}
+                                >
+                                  <Ionicons
+                                    name="walk-outline"
+                                    size={11}
+                                    color={leg.type === "walk" ? "#ffffff" : "#94a3b8"}
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.inlineTransitBtnText,
+                                      leg.type === "walk" && styles.inlineTransitBtnTextActive,
+                                    ]}
+                                  >
+                                    A piedi
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            )
+                          )}
+
+                          {/* Tabellone Partenze & Linee Urbane (attivo con Mezzi Pubblici) */}
+                          {leg.type === "transit" && (
+                            <TransitBoardCard
+                              stationName={
+                                config
+                                  ? getRomeStationName(config, itinerary.liveTrain, direction)
+                                  : "Roma Tiburtina"
+                              }
+                              targetName={
+                                itinerary.targetLecture
+                                  ? (itinerary.targetLecture.buildingName
+                                      ? `${itinerary.targetLecture.buildingName} (${itinerary.targetLecture.room})`
+                                      : itinerary.targetLecture.room)
+                                  : config?.customDestinationName || "Sapienza"
+                              }
+                              targetCoords={
+                                itinerary.targetLecture?.latitude && itinerary.targetLecture?.longitude
+                                  ? {
+                                      lat: itinerary.targetLecture.latitude,
+                                      lng: itinerary.targetLecture.longitude,
+                                    }
+                                  : undefined
+                              }
+                              targetDate={itinerary.targetDate}
+                              targetTime={leg.startTime}
+                              direction={direction === "return" ? "to_station" : "to_campus"}
+                              theme={theme}
+                            />
+                          )}
+
+                          {leg.details?.badgeText && leg.type !== "walk" && (
                             <View
                               style={[
                                 styles.legCustomBadge,
@@ -2885,9 +3330,10 @@ export default function ViaggioScreen() {
                               </View>
                             )}
 
-                          {/* Note della tratta (omesse per treno, arrivo destinazione e mezzi pubblici) */}
+                          {/* Note della tratta (omesse per treno, arrivo destinazione, mezzi pubblici e camminata) */}
                           {leg.details?.notes &&
                             leg.type !== "transit" &&
+                            leg.type !== "walk" &&
                             leg.type !== "train" &&
                             leg.type !== "destination" &&
                             leg.details.notes !==
@@ -2901,7 +3347,10 @@ export default function ViaggioScreen() {
                           {leg.details?.mapQuery &&
                             leg.type !== "train" &&
                             leg.type !== "destination" && (
-                              <View
+                              <TouchableOpacity
+                                activeOpacity={0.8}
+                                disabled={!isInteractive}
+                                onPress={() => handleOpenMaps(leg)}
                                 style={[
                                   styles.mapsBanner,
                                   {
@@ -2963,9 +3412,11 @@ export default function ViaggioScreen() {
                                     style={{ marginLeft: 3 }}
                                   />
                                 </View>
-                              </View>
+                              </TouchableOpacity>
                             )}
-                        </TouchableOpacity>
+                            </View>
+                          );
+                        })()}
                       </View>
                     );
                   })}
@@ -2992,6 +3443,22 @@ export default function ViaggioScreen() {
             onSave={handleSaveConfig}
           />
         )}
+
+        {/* Modal Registro Manifestazioni e Scioperi */}
+        <DisruptionsRegistryModal
+          visible={disruptionsModalVisible}
+          onClose={() => {
+            setDisruptionsModalVisible(false);
+            setSelectedDisruptionEventId(null);
+          }}
+          disruptions={disruptions}
+          loading={disruptionsLoading}
+          onRefresh={() => loadDisruptionsData(true)}
+          theme={theme}
+          initialFilter={disruptionsInitialFilter}
+          activeStationName={commuterStationName}
+          highlightEventId={selectedDisruptionEventId}
+        />
       </SafeAreaView>
     </View>
   );
@@ -3827,6 +4294,54 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     marginBottom: 4,
   },
+  inlineTransitSelectorRow: {
+    flexDirection: "row",
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderRadius: 8,
+    padding: 2.5,
+    gap: 3,
+    marginTop: 6,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  inlineSegmentedWrapper: {
+    alignSelf: "flex-start",
+    marginTop: 6,
+    marginBottom: 4,
+    width: 210,
+  },
+  inlineSegmentedControl: {
+    height: 30,
+  },
+  inlineTransitBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 4.5,
+    borderRadius: 6,
+    backgroundColor: "transparent",
+  },
+  inlineTransitBtnActiveTransit: {
+    backgroundColor: "rgba(168, 85, 247, 0.25)",
+    borderColor: "rgba(168, 85, 247, 0.5)",
+    borderWidth: 1,
+  },
+  inlineTransitBtnActiveWalk: {
+    backgroundColor: "rgba(56, 189, 248, 0.25)",
+    borderColor: "rgba(56, 189, 248, 0.5)",
+    borderWidth: 1,
+  },
+  inlineTransitBtnText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#94a3b8",
+  },
+  inlineTransitBtnTextActive: {
+    fontWeight: "700",
+    color: "#ffffff",
+  },
   legCustomBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -4063,5 +4578,73 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#ffffff",
+  },
+  headerAlertDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: "#f59e0b",
+  },
+  trainStrikeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.35)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  trainStrikeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(239, 68, 68, 0.22)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+  trainStrikeBadgeText: {
+    color: "#ef4444",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  trainStrikeBannerText: {
+    color: "#fca5a5",
+    fontSize: 12,
+    fontWeight: "600",
+    flex: 1,
+  },
+  walkDisruptionAlertBanner: {
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.35)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  walkDisruptionAlertHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  walkDisruptionAlertTitle: {
+    color: "#f59e0b",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  walkDisruptionAlertDesc: {
+    color: "#fde68a",
+    fontSize: 12,
+    lineHeight: 16,
   },
 });

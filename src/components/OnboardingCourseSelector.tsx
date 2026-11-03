@@ -17,12 +17,14 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from "react-native";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import {
@@ -612,6 +614,10 @@ function PostDownloadScreen() {
     selectStationFromSearch,
     bufferMinutes,
     setBufferMinutes,
+    includeIntercity,
+    setIncludeIntercity,
+    urbanMode,
+    setUrbanMode,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -1477,9 +1483,129 @@ function PostDownloadScreen() {
                       )}
                     </View>
                   )}
+
+                {/* ── TOGGLE TRENI INTERCITY ── */}
+                <View style={styles.intercityCard}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={styles.intercityTitle}>
+                      Includi treni Intercity
+                    </Text>
+                    <Text style={styles.intercityDesc}>
+                      Mostra anche i treni Intercity (IC)
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(includeIntercity)}
+                    onValueChange={setIncludeIntercity}
+                    trackColor={{ false: theme.border, true: theme.primary }}
+                    thumbColor={
+                      Platform.OS === "android"
+                        ? includeIntercity
+                          ? theme.primary
+                          : "#94a3b8"
+                        : undefined
+                    }
+                    ios_backgroundColor={theme.border}
+                  />
+                </View>
               </View>
 
-              {/* ── 4. ANTICIPO DI SICUREZZA IN AULA ── */}
+              {/* ── 4. TRAGITTO URBANO A ROMA ── */}
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
+                  TRAGITTO URBANO A ROMA
+                </Text>
+                <View style={{ marginBottom: 4 }}>
+                  {isNativeIos ? (
+                    <SegmentedControl
+                      key={`seg-onboarding-urban-${theme.primary}`}
+                      values={["Con i mezzi", "A piedi"]}
+                      selectedIndex={urbanMode === "walk" ? 1 : 0}
+                      onChange={(event) => {
+                        const idx = event.nativeEvent.selectedSegmentIndex;
+                        setUrbanMode(idx === 1 ? "walk" : "auto");
+                      }}
+                      appearance="dark"
+                      tintColor={theme.primary}
+                      fontStyle={{
+                        fontSize: 13,
+                        fontWeight: "600",
+                        color: "#a1a1aa",
+                      }}
+                      activeFontStyle={{
+                        fontSize: 13,
+                        fontWeight: "700",
+                        color: "#ffffff",
+                      }}
+                      style={{ height: 36, width: "100%" }}
+                    />
+                  ) : (
+                    <View style={styles.urbanSelectorContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          urbanMode !== "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setUrbanMode("auto")}
+                      >
+                        <Ionicons
+                          name="bus-outline"
+                          size={14}
+                          color={urbanMode !== "walk" ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorBtnText,
+                            urbanMode !== "walk" && { color: "#ffffff", fontWeight: "700" },
+                          ]}
+                        >
+                          Con i mezzi
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          urbanMode === "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setUrbanMode("walk")}
+                      >
+                        <Ionicons
+                          name="walk-outline"
+                          size={14}
+                          color={urbanMode === "walk" ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorBtnText,
+                            urbanMode === "walk" && { color: "#ffffff", fontWeight: "700" },
+                          ]}
+                        >
+                          A piedi
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              {/* ── 5. ANTICIPO DI SICUREZZA IN AULA ── */}
               <View style={styles.pillSection}>
                 <Text style={styles.pillSectionLabel}>
                   ANTICIPO IN AULA
@@ -1671,10 +1797,17 @@ function PostDownloadScreen() {
               <NativeActionButton
                 label="Configura più tardi"
                 onPress={() => finalizeOnboarding(false)}
-                variant="glass"
+                variant="filled"
+                accentColor="#2c2c2e"
                 glow={false}
                 style={{ flex: 1, height: 48, borderRadius: 24 }}
-                pillStyle={{ height: 48, borderRadius: 24, paddingHorizontal: 12 }}
+                pillStyle={{
+                  height: 48,
+                  borderRadius: 24,
+                  paddingHorizontal: 12,
+                  backgroundColor: "#2c2c2e",
+                  borderColor: "rgba(255, 255, 255, 0.15)",
+                }}
                 textStyle={{ color: "#ffffff", fontSize: 13.5, fontWeight: "600" }}
               />
 
@@ -1850,6 +1983,8 @@ export function OnboardingCourseSelector({
     null,
   );
   const [bufferMinutes, setBufferMinutes] = useState<number | null>(null);
+  const [includeIntercity, setIncludeIntercity] = useState<boolean>(false);
+  const [urbanMode, setUrbanMode] = useState<"auto" | "walk">("auto");
 
   const [stationPickerType, setStationPickerType] = useState<
     "departure" | "arrival" | null
@@ -2163,6 +2298,11 @@ export function OnboardingCourseSelector({
           },
           departureStation,
           arrivalStation,
+          includeIntercity,
+          transitLeg: {
+            ...DEFAULT_COMMUTER_CONFIG.transitLeg,
+            preferredMode: urbanMode,
+          },
           bufferMinutes: bufferMinutes ?? 15,
         });
       }
@@ -2365,6 +2505,10 @@ export function OnboardingCourseSelector({
     selectStationFromSearch,
     bufferMinutes,
     setBufferMinutes,
+    includeIntercity,
+    setIncludeIntercity,
+    urbanMode,
+    setUrbanMode,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -3333,5 +3477,61 @@ const styles = StyleSheet.create({
     flex: 1,
     color: "#ffffff",
     fontSize: 15,
+  },
+
+  /* ── Intercity Toggle Card ── */
+  intercityCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#16171d",
+    borderRadius: 14,
+    borderCurve: "continuous",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 14,
+  },
+  intercityTitle: {
+    fontSize: 13.5,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 2,
+  },
+  intercityDesc: {
+    fontSize: 11.5,
+    color: "#8e8e93",
+    fontWeight: "500",
+  },
+
+  /* ── Urban Leg Selector (Fallback if non-iOS) ── */
+  urbanSelectorContainer: {
+    flexDirection: "row",
+    backgroundColor: "#121214",
+    borderRadius: 12,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+  },
+  urbanSelectorBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 9,
+    borderRadius: 9,
+  },
+  urbanSelectorBtnActive: {
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  urbanSelectorBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#8e8e93",
   },
 });

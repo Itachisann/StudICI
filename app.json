@@ -22,6 +22,7 @@
         "NSAlarmKitUsageDescription": "StudICI utilizza le sveglie di sistema per svegliarti automaticamente in base all'orario del treno ideale per la tua prima lezione.",
         "NSRemindersUsageDescription": "StudICI utilizza i promemoria e gli avvisi nativi per le sveglie automatiche delle lezioni.",
         "NSRemindersFullAccessUsageDescription": "StudICI utilizza i promemoria e gli avvisi nativi per le sveglie automatiche delle lezioni.",
+        "NSLocationWhenInUseUsageDescription": "StudICI utilizza la tua posizione per mostrarti le fermate, i pullman e i mezzi pubblici più vicini in tempo reale.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
           "NSExceptionDomains": {
@@ -53,7 +54,9 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.READ_CALENDAR",
-        "android.permission.WRITE_CALENDAR"
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "package": "com.vitor.studici"
     },
