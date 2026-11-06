@@ -66,7 +66,9 @@ export interface LiveTrainInfo {
   isOriginStation?: boolean; // true se il treno ha origine da questa stazione (senza fermate precedenti)
   isDeparted?: boolean; // true se il treno è già effettivamente partito dall'origine
   isDepartedFromStation?: boolean; // true se il treno è già partito dalla stazione di riferimento del pendolare
-  departureDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
+  departureDelayAtStation?: number;
+  isArrivedAtDestination?: boolean;
+  arrivalDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
   isStoppedInStation?: boolean; // true se il treno è attualmente fermo in una stazione (arrivato ma non ancora partito)
   stoppedStationName?: string; // nome della stazione in cui il treno è fermo
   stoppedStationEstimatedDep?: string; // orario di partenza stimato (HH:MM) dalla stazione in cui è fermo
@@ -79,7 +81,7 @@ export interface LiveTrainInfo {
   originDepartureTimeActual?: string; // orario effettivo di partenza dall'origine
   hasEarlierTrain?: boolean;
   hasLaterTrain?: boolean;
-  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
+  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'arrived' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
   statusBadgeLabel?: string;
   alertMessage?: string;
   capacityWarning?: string;

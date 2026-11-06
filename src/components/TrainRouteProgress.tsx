@@ -175,6 +175,14 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       return false;
     }
 
+    if (
+      liveTrain.isArrivedAtDestination ||
+      liveTrain.trainStatusType === "arrived" ||
+      liveTrain.statusDescription?.toLowerCase().includes("arrivato")
+    ) {
+      return true;
+    }
+
     // Se l'API dichiara esplicitamente che il convoglio non è ancora partito
     if (liveTrain.isDeparted === false) {
       return false;
@@ -193,15 +201,15 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       return false;
     }
 
-    // Se la prima fermata di origine non ha registrato partenza reale
+    // ViaggiaTreno non sempre registra la partenza reale delle primissime fermate:
+    // il convoglio è partito se QUALSIASI fermata ha un passaggio reale registrato.
     const stops: LiveTrainStop[] = liveTrain.stops || [];
-    if (stops.length > 0 && stops[0].isPassed === false && !stops[0].actualTime) {
-      return false;
-    }
-
-    // Se la prima fermata di origine ha registrato la partenza effettiva (partenzaReale)
-    if (stops.length > 0 && stops[0].isPassed) {
+    const anyStopReal = stops.some((s) => s.isPassed || s.isCurrent || !!s.actualTime);
+    if (anyStopReal) {
       return true;
+    }
+    if (stops.length > 0 && !liveTrain.isDepartedFromStation && !liveTrain.isDeparted) {
+      return false;
     }
 
     // Se è già partito o passato dalla stazione del pendolare
@@ -213,6 +221,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     if (
       statusLower.includes("già passato") ||
       statusLower.includes("in viaggio") ||
+      statusLower.includes("in viaggio") ||
       statusLower.includes("fermo a ")
     ) {
       return true;
@@ -223,6 +232,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     isToday,
     liveTrain.isDeparted,
     liveTrain.isDepartedFromStation,
+    liveTrain.isArrivedAtDestination,
     liveTrain.trainStatusType,
     liveTrain.statusDescription,
     liveTrain.stops,
@@ -237,6 +247,14 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       liveTrain.statusDescription?.toLowerCase().includes("soppress")
     ) {
       return 0.0;
+    }
+
+    if (
+      liveTrain.isArrivedAtDestination ||
+      liveTrain.trainStatusType === "arrived" ||
+      liveTrain.statusDescription?.toLowerCase().includes("arrivato")
+    ) {
+      return 1.0;
     }
 
     if (liveTrain.isStoppedInStation && liveTrain.stoppedStationName) {
@@ -274,22 +292,29 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       nowDate.getMinutes() +
       nowDate.getSeconds() / 60;
 
-    const delay = Math.max(0, liveTrain.delayMinutes || 0);
+    // Ritardo più recente realmente rilevato lungo la linea (ultima fermata con passaggio reale)
+    const realStops = (liveTrain.stops || []).filter((s) => s.isPassed || s.isCurrent);
+    const lastRealDelay = realStops.length > 0 ? realStops[realStops.length - 1].delayMinutes : undefined;
+    const delay = Math.max(0, lastRealDelay ?? liveTrain.delayMinutes ?? 0);
     const tOrigEff = tOrigM + delay;
     const tArrEff = tArrM + delay;
 
-    if (nowMins < tOrigEff) {
-      return 0.0;
-    }
-    if (nowMins >= tArrEff) {
-      return 1.0;
-    }
-
+    let progress: number;
     const durEff = timeDifferenceMinutes(tOrigEff, tArrEff);
-    if (durEff <= 0) return 0.0;
+    if (nowMins < tOrigEff) {
+      progress = 0.0;
+    } else if (nowMins >= tArrEff || durEff <= 0) {
+      progress = 1.0;
+    } else {
+      progress = Math.max(0.0, Math.min(1.0, timeDifferenceMinutes(tOrigEff, nowMins) / durEff));
+    }
 
-    const elapsed = timeDifferenceMinutes(tOrigEff, nowMins);
-    return Math.max(0.0, Math.min(1.0, elapsed / durEff));
+    // Il convoglio ha già lasciato la stazione di salita: la barra non può stare prima di essa.
+    if (!isOriginCommuter && liveTrain.isDepartedFromStation) {
+      progress = Math.max(progress, pDep);
+    }
+    // Finché non risulta arrivato a destinazione non si completa la barra (ritardi non ancora noti)
+    return Math.min(progress, 0.97);
   }, [
     isToday,
     isTrainDeparted,

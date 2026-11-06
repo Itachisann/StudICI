@@ -17,6 +17,7 @@ interface CardContextMenuProps {
   onTogglePresence?: () => void;
   onEditManual?: () => void;
   onDeleteManual?: () => void;
+  onAddOrViewNote?: () => void;
   children: React.ReactNode;
   style?: any;
 }
@@ -29,6 +30,7 @@ export function CardContextMenu({
   onTogglePresence,
   onEditManual,
   onDeleteManual,
+  onAddOrViewNote,
   children,
   style,
 }: CardContextMenuProps) {
@@ -52,6 +54,20 @@ export function CardContextMenu({
                   role={isAttended ? 'destructive' : undefined}
                   modifiers={[tintModifier(isAttended ? '#ff453a' : '#34d399')]}
                   onPress={onTogglePresence}
+                />
+              ) : null}
+
+              {/* Note e Promemoria per questa lezione */}
+              {onAddOrViewNote ? (
+                <Button
+                  label="Note & Promemoria"
+                  systemImage="note.text"
+                  modifiers={[tintModifier('#60a5fa')]}
+                  onPress={() => {
+                    setTimeout(() => {
+                      onAddOrViewNote?.();
+                    }, 180);
+                  }}
                 />
               ) : null}
 
@@ -97,32 +113,34 @@ export function CardContextMenu({
       activeOpacity={0.85}
       delayLongPress={400}
       onLongPress={() => {
-        if (isManual) {
-          const buttons: any[] = [];
-          if (onTogglePresence) {
-            buttons.push({
-              text: isAttended ? 'Rimuovi Presenza' : 'Segna Presenza',
-              onPress: onTogglePresence,
-            });
-          }
-          if (onEditManual) {
-            buttons.push({
-              text: 'Modifica Lezione',
-              onPress: onEditManual,
-            });
-          }
-          if (onDeleteManual) {
-            buttons.push({
-              text: 'Elimina Lezione',
-              style: 'destructive' as const,
-              onPress: onDeleteManual,
-            });
-          }
-          buttons.push({ text: 'Annulla', style: 'cancel' as const });
-          Alert.alert(title, 'Gestisci lezione', buttons);
-        } else if (onTogglePresence) {
-          onTogglePresence();
+        const buttons: any[] = [];
+        if (onTogglePresence) {
+          buttons.push({
+            text: isAttended ? 'Rimuovi Presenza' : 'Segna Presenza',
+            onPress: onTogglePresence,
+          });
         }
+        if (onAddOrViewNote) {
+          buttons.push({
+            text: 'Note & Promemoria',
+            onPress: onAddOrViewNote,
+          });
+        }
+        if (isManual && onEditManual) {
+          buttons.push({
+            text: 'Modifica Lezione',
+            onPress: onEditManual,
+          });
+        }
+        if (isManual && onDeleteManual) {
+          buttons.push({
+            text: 'Elimina Lezione',
+            style: 'destructive' as const,
+            onPress: onDeleteManual,
+          });
+        }
+        buttons.push({ text: 'Annulla', style: 'cancel' as const });
+        Alert.alert(title, 'Gestisci lezione', buttons);
       }}
     >
       {children}

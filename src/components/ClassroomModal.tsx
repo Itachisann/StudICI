@@ -34,8 +34,8 @@ export function ClassroomModal({
 
   if (!classroom) return null;
 
-  const lat = classroom.latitude || 41.90382;
-  const lng = classroom.longitude || 12.51685;
+  const lat = classroom.latitude || 41.90561;
+  const lng = classroom.longitude || 12.51786;
   const isWeb = Platform.OS === "web";
 
   const handleShare = async () => {
@@ -92,8 +92,16 @@ export function ClassroomModal({
         <View style={styles.mapCard}>
           {!isWeb ? (
             <MapView
+              key={`classroom-map-${classroom.buildingCode || "b"}-${lat.toFixed(5)}-${lng.toFixed(5)}`}
               style={styles.mapView}
-              initialRegion={{
+              region={{
+                latitude: lat,
+                longitude: lng,
+                latitudeDelta: 0.0035,
+                longitudeDelta: 0.0035,
+              }}
+              initialRegion={
+{
                 latitude: lat,
                 longitude: lng,
                 latitudeDelta: 0.0035,

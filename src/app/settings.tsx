@@ -47,10 +47,12 @@ import { DefaultTabPicker } from "../components/DefaultTabPicker";
 import { DocumentContextMenu } from "../components/DocumentContextMenu";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
+import { NotesRegistryModal } from "../components/NotesRegistryModal";
 import { PastAttendanceModal } from "../components/PastAttendanceModal";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
+import { getNotes, subscribeToNotesChanges } from "../utils/notesStorage";
 import {
   AlarmSettings,
   DEFAULT_ALARM_SETTINGS,
@@ -373,6 +375,25 @@ export default function ProfiloScreen() {
   const [viewerDoc, setViewerDoc] = useState<
     (SavedDocument & { resolvedUri: string | null }) | null
   >(null);
+
+  // Note e Promemoria
+  const [notesRegistryModalVisible, setNotesRegistryModalVisible] = useState(false);
+  const [notesSummary, setNotesSummary] = useState({ total: 0, reminders: 0 });
+
+  useEffect(() => {
+    const updateSummary = async () => {
+      const list = await getNotes();
+      setNotesSummary({
+        total: list.length,
+        reminders: list.filter((n) => n.reminderEnabled).length,
+      });
+    };
+    updateSummary();
+    const unsub = subscribeToNotesChanges(() => {
+      updateSummary();
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => setAppUpdate(info));
@@ -2429,6 +2450,37 @@ export default function ProfiloScreen() {
         </View>
         <Text style={styles.sectionFooter}>
           Accedi a dispense, PDF, note e link.
+        </Text>
+
+        {/* Gruppo: REGISTRO NOTE & PROMEMORIA (Modale dedicato) */}
+        <Text style={styles.sectionHeader}>NOTE E PROMEMORIA</Text>
+        <View style={styles.groupedCard}>
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setNotesRegistryModalVisible(true)}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: 'rgba(245, 158, 11, 0.15)', borderColor: 'rgba(245, 158, 11, 0.3)' },
+              ]}
+            >
+              <Ionicons name="document-text-outline" size={17} color="#f59e0b" />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Registro note e promemoria</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {notesSummary.total === 0
+                  ? "Nessuna nota registrata"
+                  : `${notesSummary.total} ${notesSummary.total === 1 ? "nota salvata" : "note salvate"}${notesSummary.reminders > 0 ? ` • ${notesSummary.reminders} con promemoria` : ""}`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Gestisci appunti, cose da ricordare e promemoria per lezioni e giorni.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -4991,6 +5043,13 @@ export default function ProfiloScreen() {
           }}
         />
       )}
+
+      {/* Modal Registro Note & Promemoria */}
+      <NotesRegistryModal
+        visible={notesRegistryModalVisible}
+        onClose={() => setNotesRegistryModalVisible(false)}
+        theme={theme}
+      />
     </SafeAreaView>
   );
 }

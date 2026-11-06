@@ -159,6 +159,15 @@ function extractRoomEntries(
           if (bCode && !existing.resolved.buildingCode) {
             existing.resolved.buildingCode = bCode;
           }
+          if (bInfo) {
+            if (!existing.resolved.latitude || !existing.resolved.longitude) {
+              existing.resolved.latitude = bInfo.latitude;
+              existing.resolved.longitude = bInfo.longitude;
+            }
+            if (!existing.resolved.address) {
+              existing.resolved.address = bInfo.address;
+            }
+          }
           // Aggiorna l'indirizzo solo se mancante oppure se appartiene allo stesso edificio (es. rifinitura civico Scarpa 14 -> 16)
           if (finalAddress && (!existing.resolved.address || (sameBuilding && existing.resolved.address.includes('Scarpa 14') && finalAddress.includes('Scarpa 16')))) {
             existing.resolved.address = formatSapienzaAddress(finalAddress, existing.resolved.buildingCode);
@@ -180,15 +189,16 @@ function extractRoomEntries(
       if (!canon || canon === 'aula' || dispName.toLowerCase() === 'aula') return;
       const fallbackRes = resolveClassroom(evt.room, contextHeader);
       const bCode = (fallbackRes.buildingCode || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
+      const bInfo = bCode ? SAPIENZA_BUILDINGS[bCode] : undefined;
       const finalAddress = formatSapienzaAddress(fallbackRes.address, bCode);
       const res: ResolvedClassroom = {
         displayName: dispName,
         buildingName: fallbackRes.buildingName,
         buildingCode: bCode || fallbackRes.buildingCode,
         address: finalAddress,
-        campus: fallbackRes.campus,
-        latitude: fallbackRes.latitude,
-        longitude: fallbackRes.longitude,
+        campus: bInfo?.campus || fallbackRes.campus,
+        latitude: bInfo?.latitude || fallbackRes.latitude,
+        longitude: bInfo?.longitude || fallbackRes.longitude,
       };
       if (!roomMap.has(canon)) {
         roomMap.set(canon, { resolved: res, subjects: new Set() });

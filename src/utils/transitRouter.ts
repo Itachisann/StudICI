@@ -182,40 +182,40 @@ export function calculateDynamicWalkingMinutes(
     const campus = identifyCampus(classroom);
     switch (campus) {
       case 'polo_tiburtina':
-        targetLat = 41.89885;
-        targetLng = 12.51735;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'castro_laurenziano_scarpa':
-        targetLat = 41.90545;
-        targetLng = 12.51835;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'citta_universitaria':
-        targetLat = 41.90382;
-        targetLng = 12.51685;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'san_pietro_vincoli':
-        targetLat = 41.89315;
-        targetLng = 12.49382;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'polo_ariosto':
-        targetLat = 41.8885;
-        targetLng = 12.5042;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'polo_salaria':
-        targetLat = 41.9723;
-        targetLng = 12.5085;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'polo_gianturco':
-        targetLat = 41.9142;
-        targetLng = 12.4746;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       case 'palazzo_baleani':
-        targetLat = 41.8974;
-        targetLng = 12.4674;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
       default:
-        targetLat = 41.90382;
-        targetLng = 12.51685;
+        targetLat = 41.90561;
+        targetLng = 12.51786;
         break;
     }
   }
@@ -288,7 +288,7 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 4,
           walkingMinutes: 3,
           transfersCount: 0,
-          lineName: 'Pullman 448 / 492 / 71 / 163 (o a piedi 8 min)',
+          lineName: 'Linee 448 / 492 / 71 / 163',
           routeDescription:
             direction === 'to_campus'
               ? 'Partenza: Stazione Roma Tiburtina FS (corsia bus) • Pullman 448, 492, 71 o 163 (direzione Verano / Portonaccio) • Fermata di discesa: Tiburtina/Marrucini (~4 min a bordo) + 2 min a piedi (150m) fino a Via Tiburtina 205 (oppure 8 min a piedi dritto dalla stazione).'
@@ -304,7 +304,7 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 7,
           walkingMinutes: 4,
           transfersCount: 0,
-          lineName: 'Pullman 448 / 492 / 71 / 163 (o Metro B)',
+          lineName: 'Linee 545 / 649 / 448 / 492 / 71',
           routeDescription:
             direction === 'to_campus'
               ? 'Partenza: Stazione Roma Tiburtina FS (piazzale bus) • Pullman 448, 492, 71 o 163 (direzione Verano / Castro Laurenziano) • Fermata di discesa: Tiburtina/Castro Laurenziano (~7 min a bordo) + 4 min a piedi (300m) fino all\'aula. In alternativa: Metro B (direzione Laurentina) fino a Policlinico (~4 min) + 7 min a piedi.'
@@ -320,7 +320,7 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 9,
           walkingMinutes: 3,
           transfersCount: 0,
-          lineName: 'Pullman 448 / 492 / 71 / 163 (o Tram 3 / 19)',
+          lineName: 'Linee 492 / 71 / 163',
           routeDescription:
             direction === 'to_campus'
               ? 'Partenza: Stazione Roma Tiburtina FS • Pullman 448, 492, 71 o 163 (direzione Verano / Piazzale Aldo Moro) • Fermata di discesa: Verano o De Lollis/Tirso (~8 min a bordo) + 3 min a piedi per l\'ingresso di Città Universitaria. In alternativa: Tram 3 o 19 da Scalo San Lorenzo.'
@@ -416,7 +416,7 @@ export function getOptimalRomeTransit(options: {
           inVehicleMinutes: 10,
           walkingMinutes: 4,
           transfersCount: 0,
-          lineName: 'Pullman 448 / 492 / 71 (o Metro B)',
+          lineName: 'Linee 545 / 649 / 448 / 492 / 71',
           routeDescription:
             direction === 'to_campus'
               ? `Pullman 448, 492 o 71 da Stazione Tiburtina verso le sedi universitarie Sapienza (${cName}), oppure Metro B`

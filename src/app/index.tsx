@@ -32,6 +32,7 @@ import { ClassroomModal } from "../components/ClassroomModal";
 import { ManualEventModal } from "../components/ManualEventModal";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
+import { NoteEditModal } from "../components/NoteEditModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
 import {
@@ -91,6 +92,13 @@ import {
 } from "../utils/disruptionsService";
 import { getCommuterConfig } from "../utils/commuterStorage";
 import { DisruptionsRegistryModal } from "../components/DisruptionsRegistryModal";
+import {
+  AppNote,
+  filterNotesForDay,
+  filterNotesForLesson,
+  getNotes,
+  subscribeToNotesChanges,
+} from "../utils/notesStorage";
 
 const SAPIENZA_RED = "#822433";
 const isExpoGo =
@@ -338,6 +346,40 @@ export default function ScheduleScreen() {
   const [editingManualEvent, setEditingManualEvent] = useState<ManualClassEvent | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
+
+  // Gestione Note e Promemoria
+  const [allNotes, setAllNotes] = useState<AppNote[]>([]);
+  const [noteModalVisible, setNoteModalVisible] = useState(false);
+  const [editingNote, setEditingNote] = useState<AppNote | null>(null);
+  const [initialNoteLesson, setInitialNoteLesson] = useState<{
+    subject: string;
+    room?: string;
+    time?: string;
+    teacher?: string;
+    dayIndex?: number;
+    dateStr?: string;
+  } | null>(null);
+  const [initialNoteDay, setInitialNoteDay] = useState<{
+    dayIndex: number;
+    dateStr: string;
+    dayName?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    getNotes().then((list) => {
+      if (isMounted) setAllNotes(list);
+    });
+    const unsub = subscribeToNotesChanges(() => {
+      getNotes().then((list) => {
+        if (isMounted) setAllNotes(list);
+      });
+    });
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, []);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => {
@@ -821,6 +863,7 @@ export default function ScheduleScreen() {
     const isLive = isCurrentClass(cls, dayIdx);
     const isAttended = checkIsAttended(cls, dayIdx);
     const { dateStr } = getDateForDayIndex(dayIdx);
+    const lectureNotes = filterNotesForLesson(allNotes, cls.subject, cls.startTime, dateStr, dayIdx);
     const disruptionAlert = getDisruptionsImpactingLecture(
       dateStr,
       cls.startTime,
@@ -922,35 +965,96 @@ export default function ScheduleScreen() {
             </View>
           ) : null}
 
-          {/* Badge Aula */}
-          {cls.room ? (
-            <TouchableOpacity
-              style={[
-                styles.roomBadge,
-                {
-                  backgroundColor: theme.cardTint,
-                  borderColor: theme.border,
-                  borderWidth: 1,
-                },
-              ]}
-              onPress={() => handleRoomClick(cls)}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="navigate" size={11.5} color={theme.accent} />
-              <Text
-                style={[styles.roomBadgeText, { color: theme.accent }]}
-                numberOfLines={1}
+          {/* Badge Aula e Tasto Rapido Nota */}
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 3 }}>
+            {cls.room ? (
+              <TouchableOpacity
+                style={[
+                  styles.roomBadge,
+                  {
+                    backgroundColor: theme.cardTint,
+                    borderColor: theme.border,
+                    borderWidth: 1,
+                    marginTop: 0,
+                  },
+                ]}
+                onPress={() => handleRoomClick(cls)}
+                activeOpacity={0.7}
               >
-                {cls.room}
-              </Text>
+                <Ionicons name="navigate" size={11.5} color={theme.accent} />
+                <Text
+                  style={[styles.roomBadgeText, { color: theme.accent }]}
+                  numberOfLines={1}
+                >
+                  {cls.room}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={11}
+                  color={theme.accent}
+                  style={{ marginLeft: 2, opacity: 0.8 }}
+                />
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Pulsante rapido aggiungi nota se non ce ne sono ancora */}
+            {lectureNotes.length === 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.roomBadge,
+                  {
+                    backgroundColor: "rgba(255, 255, 255, 0.04)",
+                    borderColor: "rgba(255, 255, 255, 0.08)",
+                    borderWidth: 1,
+                    marginTop: 0,
+                  },
+                ]}
+                onPress={() => {
+                  setEditingNote(null);
+                  setInitialNoteLesson({
+                    subject: cls.subject,
+                    room: cls.room,
+                    time: `${cls.startTime} - ${cls.endTime}`,
+                    teacher: cls.teacher,
+                    dayIndex: dayIdx,
+                    dateStr,
+                  });
+                  setInitialNoteDay(null);
+                  setNoteModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="create-outline" size={11.5} color="#94a3b8" />
+                <Text style={[styles.roomBadgeText, { color: "#94a3b8" }]}>+ Nota</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Badge Note Esistenti sulla lezione */}
+          {lectureNotes.length > 0 && (
+            <TouchableOpacity
+              style={styles.lectureNotePill}
+              activeOpacity={0.7}
+              onPress={() => {
+                setEditingNote(lectureNotes[0]);
+                setInitialNoteLesson(null);
+                setInitialNoteDay(null);
+                setNoteModalVisible(true);
+              }}
+            >
               <Ionicons
-                name="chevron-forward"
-                size={11}
-                color={theme.accent}
-                style={{ marginLeft: 2, opacity: 0.8 }}
+                name={lectureNotes.some((n) => n.reminderEnabled) ? "notifications" : "document-text"}
+                size={11.5}
+                color={lectureNotes.some((n) => n.reminderEnabled) ? "#10b981" : "#60a5fa"}
+                style={{ marginRight: 4 }}
               />
+              <Text style={styles.lectureNotePillText} numberOfLines={1}>
+                {lectureNotes.length === 1
+                  ? (lectureNotes[0].title || lectureNotes[0].content)
+                  : `${lectureNotes.length} note salvate`}
+              </Text>
             </TouchableOpacity>
-          ) : null}
+          )}
 
           {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
           {disruptionAlert ? (
@@ -1026,6 +1130,24 @@ export default function ScheduleScreen() {
           isManualRow && { marginBottom: 0 },
         ]}
         onTogglePresence={() => handleClassLongPress(cls, dayIdx)}
+        onAddOrViewNote={() => {
+          if (lectureNotes.length > 0) {
+            setEditingNote(lectureNotes[0]);
+            setInitialNoteLesson(null);
+          } else {
+            setEditingNote(null);
+            setInitialNoteLesson({
+              subject: cls.subject,
+              room: cls.room,
+              time: `${cls.startTime} - ${cls.endTime}`,
+              teacher: cls.teacher,
+              dayIndex: dayIdx,
+              dateStr,
+            });
+          }
+          setInitialNoteDay(null);
+          setNoteModalVisible(true);
+        }}
         onEditManual={() => {
           if (cls.manualId) {
             const found = manualEvents.find((e) => e.id === cls.manualId);
@@ -1327,6 +1449,7 @@ export default function ScheduleScreen() {
           {WEEKDAYS_ORARI.map((w) => {
             const dayClasses = classesByDay[w.dayIdx] || [];
             const currentWeekDate = getDateForDayIndex(w.dayIdx).dateStr;
+            const dayNotes = filterNotesForDay(allNotes, w.dayIdx, currentWeekDate);
             const futureEventsForDay = manualEvents
               .filter(
                 (e) =>
@@ -1358,6 +1481,34 @@ export default function ScheduleScreen() {
                         <Text style={styles.dayLabel}>
                           {DAYS_FULL[w.dayIdx]} · {dayClasses.length} LEZIONI
                         </Text>
+                        {/* Badge note del giorno */}
+                        {dayNotes.length > 0 &&
+                          dayNotes.map((dn) => (
+                            <TouchableOpacity
+                              key={dn.id}
+                              style={[
+                                styles.dayNoteBadge,
+                                dn.isCompleted && { opacity: 0.6 },
+                              ]}
+                              onPress={() => {
+                                setEditingNote(dn);
+                                setInitialNoteLesson(null);
+                                setInitialNoteDay(null);
+                                setNoteModalVisible(true);
+                              }}
+                              activeOpacity={0.75}
+                            >
+                              <Ionicons
+                                name={dn.reminderEnabled ? "notifications" : "document-text"}
+                                size={10.5}
+                                color={dn.reminderEnabled ? "#10b981" : "#f59e0b"}
+                                style={{ marginRight: 3.5 }}
+                              />
+                              <Text style={styles.dayNoteBadgeText} numberOfLines={1}>
+                                {dn.title || dn.content}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
                         {futureEventsForDay.length > 0 && (
                           <CardContextMenu
                             title={
@@ -1393,16 +1544,40 @@ export default function ScheduleScreen() {
                       </View>
                       <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
                     </View>
-                    <TouchableOpacity
-                      style={styles.addManualButton}
-                      onPress={() => {
-                        setEditingManualEvent(null);
-                        setManualModalVisible(true);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="add" size={17} color="#ffffff" />
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      {/* Tasto rapido aggiungi nota al giorno */}
+                      <TouchableOpacity
+                        style={[
+                          styles.addManualButton,
+                          { backgroundColor: "#181f2e", borderColor: "#2e3a52" },
+                        ]}
+                        onPress={() => {
+                          setEditingNote(null);
+                          setInitialNoteLesson(null);
+                          setInitialNoteDay({
+                            dayIndex: w.dayIdx,
+                            dateStr: currentWeekDate,
+                            dayName: DAYS_FULL[w.dayIdx],
+                          });
+                          setNoteModalVisible(true);
+                        }}
+                        activeOpacity={0.7}
+                        accessibilityLabel="Aggiungi nota al giorno"
+                      >
+                        <Ionicons name="document-text-outline" size={14} color="#94a3b8" />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.addManualButton}
+                        onPress={() => {
+                          setEditingManualEvent(null);
+                          setManualModalVisible(true);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="add" size={17} color="#ffffff" />
+                      </TouchableOpacity>
+                    </View>
                   </View>
 
                   {/* Class cards */}
@@ -1559,6 +1734,21 @@ export default function ScheduleScreen() {
             })
             .catch(() => {});
         }}
+      />
+
+      {/* Modal Note e Promemoria */}
+      <NoteEditModal
+        visible={noteModalVisible}
+        onClose={() => {
+          setNoteModalVisible(false);
+          setEditingNote(null);
+          setInitialNoteLesson(null);
+          setInitialNoteDay(null);
+        }}
+        noteToEdit={editingNote}
+        initialLesson={initialNoteLesson}
+        initialDay={initialNoteDay}
+        theme={theme}
       />
     </SafeAreaView>
   );
@@ -2372,5 +2562,39 @@ const styles = StyleSheet.create({
   },
   classDisruptionDescTextUrban: {
     color: "#fde68a",
+  },
+  dayNoteBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+    maxWidth: 200,
+  },
+  dayNoteBadgeText: {
+    color: "#f59e0b",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  lectureNotePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(96, 165, 250, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: "rgba(96, 165, 250, 0.28)",
+    marginTop: 4,
+    alignSelf: "flex-start",
+    maxWidth: "90%",
+  },
+  lectureNotePillText: {
+    color: "#93c5fd",
+    fontSize: 11,
+    fontWeight: "600",
   },
 });
