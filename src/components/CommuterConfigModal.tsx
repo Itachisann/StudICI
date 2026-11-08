@@ -15,6 +15,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import {
   DarkTheme,
@@ -33,6 +35,10 @@ import {
   searchPlaces,
 } from "../utils/drivingRouter";
 import { ALL_STATIONS, searchStations } from "../utils/trenitaliaApi";
+
+const isNativeIos =
+  Platform.OS === "ios" &&
+  Constants.executionEnvironment !== ExecutionEnvironment.StoreClient;
 
 interface Props {
   visible: boolean;
@@ -69,6 +75,10 @@ interface CommuterModalContextType {
   setInitArrivalStation: React.Dispatch<React.SetStateAction<StationInfo | null>>;
   initBufferMinutes: number | null;
   setInitBufferMinutes: React.Dispatch<React.SetStateAction<number | null>>;
+  initIncludeIntercity: boolean;
+  setInitIncludeIntercity: React.Dispatch<React.SetStateAction<boolean>>;
+  initUrbanMode: "auto" | "walk";
+  setInitUrbanMode: React.Dispatch<React.SetStateAction<"auto" | "walk">>;
   initDrivingEstimate: DrivingEstimate | null;
   initCalculatingDriving: boolean;
   localConfig: CommuterConfig;
@@ -268,6 +278,8 @@ export function CommuterConfigModal({
   const [initBufferMinutes, setInitBufferMinutes] = useState<number | null>(
     null,
   );
+  const [initIncludeIntercity, setInitIncludeIntercity] = useState<boolean>(false);
+  const [initUrbanMode, setInitUrbanMode] = useState<"auto" | "walk">("auto");
   const [initDrivingEstimate, setInitDrivingEstimate] =
     useState<DrivingEstimate | null>(null);
   const [initCalculatingDriving, setInitCalculatingDriving] = useState(false);
@@ -289,6 +301,8 @@ export function CommuterConfigModal({
       setInitDepartureStation(null);
       setInitArrivalStation(null);
       setInitBufferMinutes(null);
+      setInitIncludeIntercity(false);
+      setInitUrbanMode("auto");
       setInitDrivingEstimate(null);
       setPlaceSearchActive(false);
       setPlaceSuggestions([]);
@@ -579,6 +593,11 @@ export function CommuterConfigModal({
       },
       departureStation: initDepartureStation,
       arrivalStation: initArrivalStation,
+      includeIntercity: initIncludeIntercity,
+      transitLeg: {
+        ...config?.transitLeg,
+        preferredMode: initUrbanMode,
+      },
       bufferMinutes: initBufferMinutes ?? 10,
     };
     onSave(newConfig);
@@ -594,6 +613,8 @@ export function CommuterConfigModal({
     initCarMode,
     initParkingBufferMinutes,
     initBufferMinutes,
+    initIncludeIntercity,
+    initUrbanMode,
     onSave,
     onClose,
   ]);
@@ -666,6 +687,10 @@ export function CommuterConfigModal({
       setInitArrivalStation,
       initBufferMinutes,
       setInitBufferMinutes,
+      initIncludeIntercity,
+      setInitIncludeIntercity,
+      initUrbanMode,
+      setInitUrbanMode,
       initDrivingEstimate,
       initCalculatingDriving,
       localConfig,
@@ -707,6 +732,8 @@ export function CommuterConfigModal({
       initDepartureStation,
       initArrivalStation,
       initBufferMinutes,
+      initIncludeIntercity,
+      initUrbanMode,
       initDrivingEstimate,
       initCalculatingDriving,
       localConfig,
@@ -817,6 +844,10 @@ function MainFormScreen() {
     setInitArrivalStation,
     initBufferMinutes,
     setInitBufferMinutes,
+    initIncludeIntercity,
+    setInitIncludeIntercity,
+    initUrbanMode,
+    setInitUrbanMode,
     initDrivingEstimate,
     initCalculatingDriving,
     localConfig,
@@ -1463,9 +1494,173 @@ function MainFormScreen() {
                         )}
                       </View>
                     )}
+
+                  {/* Opzione Treni Intercity */}
+                  <View style={[styles.cardDivider, { marginVertical: 14 }]} />
+                  <View style={styles.switchRow}>
+                    <View style={{ flex: 1, paddingRight: 12 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: "700",
+                          color: "#ffffff",
+                          marginBottom: 2,
+                        }}
+                      >
+                        Includi treni Intercity
+                      </Text>
+                      <Text style={styles.switchDesc}>
+                        Mostra anche i treni Intercity (IC)
+                      </Text>
+                    </View>
+                    <Switch
+                      value={Boolean(initIncludeIntercity)}
+                      onValueChange={setInitIncludeIntercity}
+                      trackColor={{ false: theme.border, true: theme.primary }}
+                      thumbColor={
+                        Platform.OS === "android"
+                          ? initIncludeIntercity
+                            ? theme.primary
+                            : "#94a3b8"
+                          : undefined
+                      }
+                      ios_backgroundColor={theme.border}
+                    />
+                  </View>
                 </View>
 
-                {/* 4. ANTICIPO IN AULA */}
+                {/* 4. TRAGITTO URBANO A ROMA */}
+                <View style={styles.pillSection}>
+                  <Text style={styles.pillSectionLabel}>TRAGITTO URBANO A ROMA</Text>
+                  <View style={{ marginBottom: 10 }}>
+                    {isNativeIos ? (
+                      <SegmentedControl
+                        key={`seg-init-urban-${theme.primary}`}
+                        values={["Con i mezzi", "A piedi"]}
+                        selectedIndex={initUrbanMode === "walk" ? 1 : 0}
+                        onChange={(event) => {
+                          const idx = event.nativeEvent.selectedSegmentIndex;
+                          setInitUrbanMode(idx === 1 ? "walk" : "auto");
+                        }}
+                        appearance="dark"
+                        tintColor={theme.primary}
+                        fontStyle={{
+                          fontSize: 13,
+                          fontWeight: "600",
+                          color: "#a1a1aa",
+                        }}
+                        activeFontStyle={{
+                          fontSize: 13,
+                          fontWeight: "700",
+                          color: "#ffffff",
+                        }}
+                        style={{ height: 36, width: "100%" }}
+                      />
+                    ) : (
+                      <View style={styles.urbanSelectorContainer}>
+                        <TouchableOpacity
+                          style={[
+                            styles.urbanSelectorBtn,
+                            initUrbanMode !== "walk" && [
+                              styles.urbanSelectorBtnActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                              },
+                            ],
+                          ]}
+                          activeOpacity={0.7}
+                          onPress={() => setInitUrbanMode("auto")}
+                        >
+                          <Ionicons
+                            name="bus-outline"
+                            size={16}
+                            color={initUrbanMode !== "walk" ? "#ffffff" : "#8e8e93"}
+                            style={{ marginRight: 6 }}
+                          />
+                          <Text
+                            style={[
+                              styles.urbanSelectorText,
+                              initUrbanMode !== "walk" &&
+                                styles.urbanSelectorTextActive,
+                            ]}
+                          >
+                            Con i mezzi
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.urbanSelectorBtn,
+                            initUrbanMode === "walk" && [
+                              styles.urbanSelectorBtnActive,
+                              {
+                                backgroundColor: theme.bg,
+                                borderColor: theme.primary,
+                              },
+                            ],
+                          ]}
+                          activeOpacity={0.7}
+                          onPress={() => setInitUrbanMode("walk")}
+                        >
+                          <Ionicons
+                            name="footsteps-outline"
+                            size={16}
+                            color={initUrbanMode === "walk" ? "#ffffff" : "#8e8e93"}
+                            style={{ marginRight: 6 }}
+                          />
+                          <Text
+                            style={[
+                              styles.urbanSelectorText,
+                              initUrbanMode === "walk" &&
+                                styles.urbanSelectorTextActive,
+                            ]}
+                          >
+                            A piedi
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Dettaglio modalità urbana selezionata */}
+                  {initUrbanMode !== "walk" ? (
+                    <View style={styles.urbanModesRow}>
+                      <View style={styles.urbanModePill}>
+                        <Ionicons
+                          name="subway-outline"
+                          size={13}
+                          color={theme.accent}
+                        />
+                        <Text style={styles.urbanModeText}>Metro B / A</Text>
+                      </View>
+                      <View style={styles.urbanModePill}>
+                        <Ionicons name="bus-outline" size={13} color="#fb923c" />
+                        <Text style={styles.urbanModeText}>Bus ATAC</Text>
+                      </View>
+                      <View style={styles.urbanModePill}>
+                        <Ionicons name="train-outline" size={13} color="#34c759" />
+                        <Text style={styles.urbanModeText}>Tram</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.urbanModesRow}>
+                      <View style={styles.urbanModePill}>
+                        <Ionicons
+                          name="footsteps-outline"
+                          size={13}
+                          color="#94a3b8"
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text style={styles.urbanModeText}>
+                          {" Camminata a piedi"}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+
+                {/* 5. ANTICIPO IN AULA */}
                 <View style={styles.pillSection}>
                   <Text style={styles.pillSectionLabel}>ANTICIPO IN AULA</Text>
                   <View style={styles.timeBufferContainer}>
@@ -2185,6 +2380,44 @@ function MainFormScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
+
+                {/* Opzione Treni Intercity */}
+                <View style={[styles.cardDivider, { marginVertical: 14 }]} />
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: "700",
+                        color: "#ffffff",
+                        marginBottom: 2,
+                      }}
+                    >
+                      Includi treni Intercity
+                    </Text>
+                    <Text style={styles.switchDesc}>
+                      Mostra anche i treni Intercity (IC)
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(localConfig.includeIntercity)}
+                    onValueChange={(val) =>
+                      setLocalConfig((prev) => ({
+                        ...prev,
+                        includeIntercity: val,
+                      }))
+                    }
+                    trackColor={{ false: theme.border, true: theme.primary }}
+                    thumbColor={
+                      Platform.OS === "android"
+                        ? localConfig.includeIntercity
+                          ? theme.primary
+                          : "#94a3b8"
+                        : undefined
+                    }
+                    ios_backgroundColor={theme.border}
+                  />
+                </View>
               </View>
 
               {/* 4. Tragitto Urbano a Roma (senza pappardelle) */}
@@ -2205,29 +2438,169 @@ function MainFormScreen() {
                   <Text style={styles.cardHeaderTitle}>TRAGITTO URBANO</Text>
                 </View>
 
-                {/* Mezzi Pubblici Urbani puliti */}
-                <View style={styles.urbanModesRow}>
-                  <View style={styles.urbanModePill}>
-                    <Ionicons
-                      name="subway-outline"
-                      size={13}
-                      color={theme.accent}
+                {/* Selettore Mezzi Pubblici o A Piedi dopo il treno (Segmented UI) */}
+                <View style={{ marginBottom: 10 }}>
+                  {isNativeIos ? (
+                    <SegmentedControl
+                      key={`seg-commuter-urban-${theme.primary}`}
+                      values={["Con i mezzi", "A piedi"]}
+                      selectedIndex={
+                        localConfig.transitLeg.preferredMode === "walk" ? 1 : 0
+                      }
+                      onChange={(event) => {
+                        const idx = event.nativeEvent.selectedSegmentIndex;
+                        setLocalConfig((prev) => ({
+                          ...prev,
+                          transitLeg: {
+                            ...prev.transitLeg,
+                            preferredMode: idx === 1 ? "walk" : "auto",
+                          },
+                        }));
+                      }}
+                      appearance="dark"
+                      tintColor={theme.primary}
+                      fontStyle={{
+                        fontSize: 13,
+                        fontWeight: "600",
+                        color: "#a1a1aa",
+                      }}
+                      activeFontStyle={{
+                        fontSize: 13,
+                        fontWeight: "700",
+                        color: "#ffffff",
+                      }}
+                      style={{ height: 36, width: "100%" }}
                     />
-                    <Text style={styles.urbanModeText}>Metro B / A</Text>
-                  </View>
-                  <View style={styles.urbanModePill}>
-                    <Ionicons name="bus-outline" size={13} color="#fb923c" />
-                    <Text style={styles.urbanModeText}>Bus ATAC</Text>
-                  </View>
-                  <View style={styles.urbanModePill}>
-                    <Ionicons name="train-outline" size={13} color="#34c759" />
-                    <Text style={styles.urbanModeText}>Tram</Text>
-                  </View>
-                  <View style={styles.urbanModePill}>
-                    <Ionicons name="walk-outline" size={13} color="#e2e8f0" />
-                    <Text style={styles.urbanModeText}>A piedi</Text>
-                  </View>
+                  ) : (
+                    <View style={styles.urbanSelectorContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          localConfig.transitLeg.preferredMode !== "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: `${theme.primary}25`,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() =>
+                          setLocalConfig((prev) => ({
+                            ...prev,
+                            transitLeg: {
+                              ...prev.transitLeg,
+                              preferredMode: "auto",
+                            },
+                          }))
+                        }
+                      >
+                        <Ionicons
+                          name="bus-outline"
+                          size={15}
+                          color={
+                            localConfig.transitLeg.preferredMode !== "walk"
+                              ? theme.accent
+                              : "#8e8e93"
+                          }
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorText,
+                            localConfig.transitLeg.preferredMode !== "walk" && [
+                              styles.urbanSelectorTextActive,
+                              { color: theme.accent },
+                            ],
+                          ]}
+                        >
+                          Con i mezzi
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          localConfig.transitLeg.preferredMode === "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: `${theme.primary}25`,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() =>
+                          setLocalConfig((prev) => ({
+                            ...prev,
+                            transitLeg: {
+                              ...prev.transitLeg,
+                              preferredMode: "walk",
+                            },
+                          }))
+                        }
+                      >
+                        <Ionicons
+                          name="walk-outline"
+                          size={15}
+                          color={
+                            localConfig.transitLeg.preferredMode === "walk"
+                              ? theme.accent
+                              : "#8e8e93"
+                          }
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorText,
+                            localConfig.transitLeg.preferredMode === "walk" && [
+                              styles.urbanSelectorTextActive,
+                              { color: theme.accent },
+                            ],
+                          ]}
+                        >
+                          A piedi
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
+
+                {/* Dettaglio modalità urbana selezionata */}
+                {localConfig.transitLeg.preferredMode !== "walk" ? (
+                  <View style={styles.urbanModesRow}>
+                    <View style={styles.urbanModePill}>
+                      <Ionicons
+                        name="subway-outline"
+                        size={13}
+                        color={theme.accent}
+                      />
+                      <Text style={styles.urbanModeText}>Metro B / A</Text>
+                    </View>
+                    <View style={styles.urbanModePill}>
+                      <Ionicons name="bus-outline" size={13} color="#fb923c" />
+                      <Text style={styles.urbanModeText}>Bus ATAC</Text>
+                    </View>
+                    <View style={styles.urbanModePill}>
+                      <Ionicons name="train-outline" size={13} color="#34c759" />
+                      <Text style={styles.urbanModeText}>Tram</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.urbanModesRow}>
+                    <View style={styles.urbanModePill}>
+                      <Ionicons
+                        name="footsteps-outline"
+                        size={13}
+                        color="#94a3b8"
+                        style={{ marginRight: 5 }}
+                      />
+                      <Text style={styles.urbanModeText}>
+                        {" Camminata a piedi"}
+                      </Text>
+                    </View>
+                  </View>
+                )}
 
                 {/* Anticipo di sicurezza in aula */}
                 <View style={[styles.stepperContainer, { marginTop: 14 }]}>
@@ -2825,6 +3198,39 @@ const styles = StyleSheet.create({
     color: "#71717a",
     letterSpacing: 0.7,
     marginBottom: 6,
+  },
+  urbanSelectorContainer: {
+    flexDirection: "row",
+    backgroundColor: "#121214",
+    borderRadius: 12,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  urbanSelectorBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 9,
+    borderRadius: 9,
+  },
+  urbanSelectorBtnActive: {
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  urbanSelectorText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#8e8e93",
+  },
+  urbanSelectorTextActive: {
+    fontWeight: "700",
   },
   urbanModesRow: {
     flexDirection: "row",

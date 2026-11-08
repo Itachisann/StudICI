@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 interface SwipeToDeleteRowProps {
   children: React.ReactNode;
   onDelete: () => void;
+  onPress?: () => void;
   enabled?: boolean;
   marginBottom?: number;
   borderRadius?: number;
@@ -35,6 +36,7 @@ const DELETE_VELOCITY_THRESHOLD = -500;
 export function SwipeToDeleteRow({
   children,
   onDelete,
+  onPress,
   enabled = true,
   marginBottom = 10,
   borderRadius = 16,
@@ -175,6 +177,36 @@ export function SwipeToDeleteRow({
     [enabled, isCollapsing, startX, translateX, triggerCollapseOnUI]
   );
 
+  const tapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .enabled(enabled)
+        .maxDistance(8)
+        .onEnd(() => {
+          'worklet';
+          if (isCollapsing.get()) return;
+          if (Math.abs(translateX.get()) > 4) {
+            translateX.set(
+              withSpring(0, {
+                damping: 26,
+                stiffness: 300,
+                mass: 0.7,
+              })
+            );
+            return;
+          }
+          if (onPress) {
+            runOnJS(onPress)();
+          }
+        }),
+    [enabled, isCollapsing, onPress, translateX]
+  );
+
+  const composedGesture = useMemo(() => {
+    if (!onPress) return panGesture;
+    return Gesture.Exclusive(panGesture, tapGesture);
+  }, [panGesture, tapGesture, onPress]);
+
   const outerAnimatedStyle = useAnimatedStyle(() => {
     if (!isCollapsing.get()) {
       return {
@@ -195,19 +227,15 @@ export function SwipeToDeleteRow({
 
   const redBackgroundStyle = useAnimatedStyle(() => {
     const dragAmount = Math.max(0, -translateX.get());
-    const isVisible = dragAmount > 1;
     return {
-      opacity: isVisible ? 1 : 0,
-      width: isVisible
-        ? Math.min(measuredWidth.get(), dragAmount + borderRadius * 2)
-        : 0,
+      opacity: dragAmount > 0.5 ? 1 : 0,
     };
   });
 
-  const trashZoneStyle = useAnimatedStyle(() => {
-    const dragAmount = Math.max(SNAP_OPEN_WIDTH, -translateX.get());
+  const trashContainerStyle = useAnimatedStyle(() => {
+    const dragAmount = Math.max(0, -translateX.get());
     return {
-      width: Math.min(measuredWidth.get(), dragAmount),
+      width: Math.max(SNAP_OPEN_WIDTH, dragAmount),
     };
   });
 
@@ -215,14 +243,14 @@ export function SwipeToDeleteRow({
     const dragAmount = Math.max(0, -translateX.get());
     const scale = interpolate(
       dragAmount,
-      [0, 45, DELETE_DRAG_THRESHOLD, 180],
-      [0.5, 0.95, 1.12, 1.18],
+      [0, 24, SNAP_OPEN_WIDTH, DELETE_DRAG_THRESHOLD, 180],
+      [0.3, 0.75, 1, 1.15, 1.2],
       Extrapolation.CLAMP
     );
     const opacity = interpolate(
       dragAmount,
-      [0, 18, 42],
-      [0, 0.7, 1],
+      [0, 16, 40],
+      [0, 0.5, 1],
       Extrapolation.CLAMP
     );
     return {
@@ -244,33 +272,37 @@ export function SwipeToDeleteRow({
         outerAnimatedStyle,
       ]}
     >
-      {/* Sfondo rosso dinamico che riempie tutto lo spazio slidato */}
+      {/* Sfondo rosso continuo che copre esattamente l'area della card */}
       <Animated.View
         style={[
           styles.redBackground,
-          { borderRadius },
           redBackgroundStyle,
         ]}
       >
-        <Pressable
-          style={styles.trashPressable}
-          onPress={handleTrashPress}
-          accessibilityRole="button"
-          accessibilityLabel="Elimina"
+        <Animated.View
+          style={[
+            styles.trashContainer,
+            trashContainerStyle,
+          ]}
         >
-          <Animated.View style={[styles.trashIconZone, trashZoneStyle]}>
+          <Pressable
+            style={styles.trashPressable}
+            onPress={handleTrashPress}
+            accessibilityRole="button"
+            accessibilityLabel="Elimina"
+          >
             <Animated.View style={iconAnimatedStyle}>
               <Ionicons name="trash" size={22} color="#ffffff" />
             </Animated.View>
-          </Animated.View>
-        </Pressable>
+          </Pressable>
+        </Animated.View>
       </Animated.View>
 
       {/* Contenuto della card trascinabile */}
-      <GestureDetector gesture={panGesture}>
+      <GestureDetector gesture={composedGesture}>
         <Animated.View
           onLayout={handleCardLayout}
-          style={foregroundAnimatedStyle}
+          style={[foregroundAnimatedStyle, { width: '100%' }]}
         >
           {children}
         </Animated.View>
@@ -281,6 +313,7 @@ export function SwipeToDeleteRow({
 
 const styles = StyleSheet.create({
   outerContainer: {
+    width: '100%',
     overflow: 'hidden',
     position: 'relative',
   },
@@ -288,18 +321,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     bottom: 0,
+    left: 0,
     right: 0,
     backgroundColor: '#ff3b30',
-    justifyContent: 'center',
-    alignItems: 'flex-end',
     overflow: 'hidden',
   },
-  trashPressable: {
-    height: '100%',
+  trashContainer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
     justifyContent: 'center',
-    alignItems: 'flex-end',
+    alignItems: 'center',
   },
-  trashIconZone: {
+  trashPressable: {
+    width: '100%',
     height: '100%',
     justifyContent: 'center',
     alignItems: 'center',

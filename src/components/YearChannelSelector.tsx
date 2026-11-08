@@ -4,6 +4,7 @@ import SegmentedControl from '@react-native-segmented-control/segmented-control'
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Tab } from '../utils/scraper';
 import { useTheme } from '@/context/ThemeContext';
+import { MAX_CONTENT_WIDTH } from '@/constants/theme';
 import { NativeActionButton } from './NativeActionButton';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -339,6 +340,8 @@ export function YearChannelSelector({ tabs, selectedTab, onSelectTab }: YearChan
 const styles = StyleSheet.create({
   container: {
     width: '100%',
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 10,
@@ -349,7 +352,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
-    maxWidth: 420,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: 'center',
     paddingHorizontal: 16,
     gap: 8,
@@ -369,7 +372,7 @@ const styles = StyleSheet.create({
     maxHeight: 42,
     marginBottom: 8,
     width: '100%',
-    maxWidth: 420,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: 'center',
   },
   channelScroll: {
@@ -411,7 +414,7 @@ const styles = StyleSheet.create({
   // Container Canali (Identica larghezza e allineamento degli anni)
   channelContainer: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: 'center',
     paddingHorizontal: 16,
     alignItems: 'center',
@@ -420,7 +423,7 @@ const styles = StyleSheet.create({
   },
   nativeSegmentedControl: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: MAX_CONTENT_WIDTH,
     height: 36,
   },
 

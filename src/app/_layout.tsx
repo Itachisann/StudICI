@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Linking from 'expo-linking';
-import { linkDeviceWithCode } from '@/utils/cloudSync';
+import { linkDeviceWithCode, subscribeToAppReset, subscribeToLiveSync } from '@/utils/cloudSync';
 import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
@@ -103,6 +103,32 @@ function AppLayoutContent() {
     return () => {
       isMounted = false;
       clearInterval(interval);
+    };
+  }, []);
+
+  // Ascolto immediato del ripristino app o modifiche live sync per tornare subito a Onboarding
+  useEffect(() => {
+    const unsubReset = subscribeToAppReset(() => {
+      setDegreeUrl(null);
+      setDegreeName('');
+      setStartupCheckDone(false);
+    });
+
+    const unsubSync = subscribeToLiveSync((status, updated) => {
+      if (updated) {
+        AsyncStorage.getItem('selectedDegreeUrl').then((url) => {
+          if (!url) {
+            setDegreeUrl(null);
+            setDegreeName('');
+            setStartupCheckDone(false);
+          }
+        }).catch(() => {});
+      }
+    });
+
+    return () => {
+      unsubReset();
+      unsubSync();
     };
   }, []);
 

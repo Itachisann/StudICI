@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect, Fragment } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,6 +9,10 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
+  LayoutAnimation,
+  UIManager,
+  Animated,
+  LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -19,12 +23,15 @@ import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_MODAL_BG } from '@/constants/theme';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { CardContextMenu } from './CardContextMenu';
 import {
   ManualClassEvent,
   ManualEventRepetition,
   getDefaultSemesterEndDate,
   extractSemesterEndDate,
   formatDisplayDate,
+  isManualEventActiveOnDate,
 } from '@/utils/manualEvents';
 import { getDateForDayIndex, calculateLessonDuration } from '@/utils/attendance';
 
@@ -35,12 +42,54 @@ interface ManualEventModalProps {
   semesterText?: string;
   tabUrl?: string;
   channelName?: string;
+  existingEvents?: ManualClassEvent[];
   onClose: () => void;
   onSave: (eventData: Omit<ManualClassEvent, 'id' | 'createdAt' | 'courseUrl'>, id?: string) => void;
   onDelete?: (id: string) => void;
 }
 
-const DAYS_SHORT = ['LUN', 'MAR', 'MER', 'GIO', 'VEN'];
+const DAYS_SHORT = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
+const DAYS_FULL = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
+const WEEKDAYS = [
+  { dayIdx: 0, label: 'LUN', isWeekend: false },
+  { dayIdx: 1, label: 'MAR', isWeekend: false },
+  { dayIdx: 2, label: 'MER', isWeekend: false },
+  { dayIdx: 3, label: 'GIO', isWeekend: false },
+  { dayIdx: 4, label: 'VEN', isWeekend: false },
+  { dayIdx: 5, label: 'SAB', isWeekend: true },
+  { dayIdx: 6, label: 'DOM', isWeekend: true },
+];
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const parseDateFromISO = (isoStr: string): Date => {
+  const [y, m, d] = (isoStr || '').split('-').map(Number);
+  if (!y || !m || !d) return new Date();
+  return new Date(y, m - 1, d, 12, 0, 0);
+};
+
+const formatDateToISO = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const formatDisplayDateShort = (dateStr: string): string => {
+  try {
+    const [, m, d] = (dateStr || '').split('-').map(Number);
+    if (!m || !d) return dateStr;
+    const months = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+    return `${d} ${months[m - 1]}`;
+  } catch {
+    return dateStr;
+  }
+};
+
 
 // Preset orari richiesti dall'utente
 const TIME_PRESETS = [
@@ -70,6 +119,7 @@ function ManualEventForm({
   semesterText,
   tabUrl,
   channelName,
+  existingEvents = [],
   onClose,
   onSave,
   onDelete,
@@ -81,7 +131,10 @@ function ManualEventForm({
     return extractSemesterEndDate(semesterText) || getDefaultSemesterEndDate();
   }, [semesterText]);
 
-  const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 4);
+  const safeInitialDay = Math.min(Math.max(0, initialDayIndex), 6);
+
+  const [activeEditing, setActiveEditing] = useState<ManualClassEvent | null>(editingEvent || null);
+  const scrollRef = useRef<ScrollView>(null);
 
   const [subject, setSubject] = useState(editingEvent?.subject || '');
   const [teacher, setTeacher] = useState(editingEvent?.teacher || '');
@@ -97,6 +150,103 @@ function ManualEventForm({
   const [repeatUntilDate, setRepeatUntilDate] = useState(
     editingEvent?.repeatUntilDate || dynamicSemesterEnd
   );
+
+  const [singleDate, setSingleDate] = useState<string>(
+    editingEvent?.startDate || getDateForDayIndex(safeInitialDay).dateStr
+  );
+  const singleDateObj = useMemo(() => parseDateFromISO(singleDate), [singleDate]);
+
+  // Animazione fluida a scorrimento dello slider dei giorni della settimana (Identico a Orari)
+  const segmentLayouts = useRef<{ [key: number]: { x: number; width: number } }>({});
+  const [sliderPillAnim] = useState(() => new Animated.Value(0));
+  const [sliderWidthAnim] = useState(() => new Animated.Value(44));
+  const [weekendPillAnim] = useState(() => new Animated.Value(dayIndex >= 5 ? 1 : 0));
+  const [sliderReady, setSliderReady] = useState(false);
+  const initialSliderPositioned = useRef(false);
+
+  const handleSegmentLayout = useCallback(
+    (idx: number, e: LayoutChangeEvent) => {
+      const { x, width } = e.nativeEvent.layout;
+      segmentLayouts.current[idx] = { x, width };
+
+      if (idx === dayIndex) {
+        sliderPillAnim.setValue(x);
+        sliderWidthAnim.setValue(width);
+        if (!initialSliderPositioned.current) {
+          weekendPillAnim.setValue(idx >= 5 ? 1 : 0);
+          initialSliderPositioned.current = true;
+          setSliderReady(true);
+        }
+      }
+    },
+    [dayIndex, sliderPillAnim, sliderWidthAnim, weekendPillAnim],
+  );
+
+  const handleDaySelect = useCallback(
+    (idx: number) => {
+      setDayIndex(idx);
+      if (repetitionType === 'single') {
+        const { dateStr } = getDateForDayIndex(idx);
+        setSingleDate(dateStr);
+      }
+    },
+    [repetitionType],
+  );
+
+  useEffect(() => {
+    const target = segmentLayouts.current[dayIndex];
+    if (target && sliderReady) {
+      Animated.parallel([
+        Animated.spring(sliderPillAnim, {
+          toValue: target.x,
+          useNativeDriver: false,
+          tension: 68,
+          friction: 10,
+        }),
+        Animated.spring(sliderWidthAnim, {
+          toValue: target.width,
+          useNativeDriver: false,
+          tension: 68,
+          friction: 10,
+        }),
+        Animated.timing(weekendPillAnim, {
+          toValue: dayIndex >= 5 ? 1 : 0,
+          duration: 220,
+          useNativeDriver: false,
+        }),
+      ]).start();
+    }
+  }, [dayIndex, sliderReady, sliderPillAnim, sliderWidthAnim, weekendPillAnim]);
+
+  const conflictingEvents = useMemo(() => {
+    if (repetitionType !== 'single' || !existingEvents) return [];
+    return existingEvents.filter(
+      (e) =>
+        e.id !== activeEditing?.id &&
+        (e.repetitionType === 'single' ? e.startDate === singleDate : isManualEventActiveOnDate(e, singleDate))
+    );
+  }, [repetitionType, existingEvents, activeEditing?.id, singleDate]);
+
+  const allProgrammedEvents = useMemo(() => {
+    if (!existingEvents || existingEvents.length === 0) return [];
+    return [...existingEvents].sort((a, b) => {
+      if (a.dayIndex !== b.dayIndex) {
+        return a.dayIndex - b.dayIndex;
+      }
+      return a.startTime.localeCompare(b.startTime);
+    });
+  }, [existingEvents]);
+
+  const getRepetitionText = (ev: ManualClassEvent): string => {
+    if (ev.repetitionType === 'semester') {
+      return 'Tutto il semestre';
+    }
+    if (ev.repetitionType === 'custom_date') {
+      return `Fino al ${formatDisplayDateShort(ev.repeatUntilDate || '')}`;
+    }
+    return `Solo il ${formatDisplayDateShort(ev.startDate || '')}`;
+  };
+
 
   const startTimeDate = useMemo(() => parseTimeToDate(startTime), [startTime]);
   const endTimeDate = useMemo(() => parseTimeToDate(endTime), [endTime]);
@@ -122,7 +272,7 @@ function ManualEventForm({
     }
   };
 
-  const { dateStr: currentDayDateStr, displayDate: currentDayDisplayDate } = useMemo(() => {
+  const { dateStr: currentDayDateStr } = useMemo(() => {
     return getDateForDayIndex(dayIndex);
   }, [dayIndex]);
 
@@ -141,18 +291,27 @@ function ManualEventForm({
     }
 
     const duration = calculateLessonDuration(startTime.trim(), endTime.trim());
+    let finalDayIndex = dayIndex;
+    if (repetitionType === 'single') {
+      const [y, m, d] = singleDate.split('-').map(Number);
+      if (y && m && d) {
+        const parsedDate = new Date(y, m - 1, d, 12, 0, 0);
+        const rawDay = parsedDate.getDay();
+        finalDayIndex = rawDay === 0 ? 6 : rawDay - 1;
+      }
+    }
     const payload: Omit<ManualClassEvent, 'id' | 'createdAt' | 'courseUrl'> = {
       subject: trimmedSubject,
       teacher: teacher.trim() || undefined,
       room: room.trim() || undefined,
-      dayIndex,
+      dayIndex: finalDayIndex,
       startTime: startTime.trim(),
       endTime: endTime.trim(),
       duration: duration > 0 ? duration : undefined,
-      tabUrl: editingEvent?.tabUrl || tabUrl,
-      channelName: editingEvent?.channelName || channelName,
+      tabUrl: activeEditing?.tabUrl || tabUrl,
+      channelName: activeEditing?.channelName || channelName,
       repetitionType,
-      startDate: editingEvent?.startDate || currentDayDateStr,
+      startDate: repetitionType === 'single' ? singleDate : (activeEditing?.startDate || currentDayDateStr),
       repeatUntilDate: repetitionType === 'semester'
         ? dynamicSemesterEnd
         : repetitionType === 'custom_date'
@@ -160,22 +319,24 @@ function ManualEventForm({
         : undefined,
     };
 
-    onSave(payload, editingEvent?.id);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    onSave(payload, activeEditing?.id);
     onClose();
   };
 
   const handleDelete = () => {
-    if (!editingEvent || !onDelete) return;
+    if (!activeEditing || !onDelete) return;
     Alert.alert(
-      'Elimina Lezione',
-      `Sei sicuro di voler eliminare la lezione "${editingEvent.subject}"?`,
+      'Elimina lezione',
+      'Sei sicuro di voler eliminare questa lezione manuale?',
       [
         { text: 'Annulla', style: 'cancel' },
         {
           text: 'Elimina',
           style: 'destructive',
           onPress: () => {
-            onDelete(editingEvent.id);
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            onDelete(activeEditing.id);
             onClose();
           },
         },
@@ -225,7 +386,7 @@ function ManualEventForm({
     <NativeSheetModal
       visible={true}
       onClose={onClose}
-      title={editingEvent ? 'Modifica lezione' : 'Nuova lezione'}
+      title={activeEditing ? 'Modifica lezione' : 'Nuova lezione'}
       backgroundColor={UNIFORM_MODAL_BG}
       rightActions={[
         {
@@ -245,6 +406,7 @@ function ManualEventForm({
           style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}
         >
           <ScrollView
+            ref={scrollRef}
             style={styles.container}
             contentContainerStyle={styles.contentContainer}
             showsVerticalScrollIndicator={false}
@@ -295,38 +457,62 @@ function ManualEventForm({
             </View>
           </View>
 
-          {/* Giorno della settimana (Animazioni & Effetto Glowing fedele alla schermata orari, senza pallino) */}
+          {/* Giorno della settimana (Liquid Glass Week Bar con pillola animata identica a Orari, senza pallini) */}
           <Text style={styles.sectionTitle}>GIORNO DELLA SETTIMANA</Text>
-          <View style={styles.daysRow}>
-            {DAYS_SHORT.map((name, idx) => {
-              const isActive = dayIndex === idx;
-              return (
-                <TouchableOpacity
-                  key={name}
-                  style={styles.dayItem}
-                  onPress={() => setDayIndex(idx)}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.dayCircle,
-                      isActive && [
-                        styles.dayCircleActive,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                  >
-                    <Text style={[styles.dayText, isActive && styles.dayTextActive]}>
-                      {name}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={styles.daySegmentedBar}>
+            <View style={styles.daySegmentInnerContainer}>
+              {sliderReady && (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.slidingActivePill,
+                    {
+                      left: sliderPillAnim,
+                      width: sliderWidthAnim,
+                      backgroundColor: weekendPillAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [theme.bg, 'rgba(245, 158, 11, 0.22)'],
+                      }),
+                      borderColor: weekendPillAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [theme.primary, '#f59e0b'],
+                      }),
+                      shadowColor: weekendPillAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [theme.primary, '#f59e0b'],
+                      }),
+                    },
+                  ]}
+                />
+              )}
+
+              {WEEKDAYS.map((w, idx) => {
+                const isSelected = dayIndex === w.dayIdx;
+                const isItemWeekend = Boolean(w.isWeekend);
+
+                return (
+                  <Fragment key={w.dayIdx}>
+                    {idx === 5 && <View style={styles.dayWeekendDivider} />}
+                    <TouchableOpacity
+                      onLayout={(e) => handleSegmentLayout(idx, e)}
+                      onPress={() => handleDaySelect(w.dayIdx)}
+                      activeOpacity={0.7}
+                      style={styles.daySegmentItem}
+                    >
+                      <Text
+                        style={[
+                          styles.daySegmentLabel,
+                          isItemWeekend && styles.daySegmentLabelWeekend,
+                          isSelected && styles.daySegmentLabelActive,
+                        ]}
+                      >
+                        {w.label}
+                      </Text>
+                    </TouchableOpacity>
+                  </Fragment>
+                );
+              })}
+            </View>
           </View>
 
           {/* Selezione Orari Grafica (Inizio -> Fine a due colonne con DateTimePicker nativo) */}
@@ -573,15 +759,132 @@ function ManualEventForm({
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.optionTitle}>Solo questa data</Text>
                   <Text style={styles.optionSubtitle}>
-                    Valida solo per {currentDayDisplayDate} ({currentDayDateStr})
+                    {repetitionType === 'single'
+                      ? `Valida per ${DAYS_FULL[dayIndex]} ${formatDisplayDate(singleDate)}`
+                      : 'Lezione una tantum in una data specifica'}
                   </Text>
                 </View>
               </View>
             </TouchableOpacity>
-          </View>
+
+            {repetitionType === 'single' && (
+              <View style={styles.customDateContainer}>
+                <View style={styles.datePickerRow}>
+                  <Text style={styles.datePickerLabel}>Data della lezione:</Text>
+                  <View style={styles.datePickerWrapper}>
+                    <DateTimePicker
+                      value={singleDateObj}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                      locale="it_IT"
+                      themeVariant="dark"
+                      accentColor={theme.primary}
+                      style={styles.datePickerControl}
+                      onValueChange={(_event, selectedDate) => {
+                        if (selectedDate) {
+                          const iso = formatDateToISO(selectedDate);
+                          setSingleDate(iso);
+                          const rawDay = selectedDate.getDay();
+                          const newDayIndex = rawDay === 0 ? 6 : rawDay - 1;
+                          setDayIndex(newDayIndex);
+                        }
+                      }}
+                    />
+                  </View>
+                </View>
+
+                {conflictingEvents.length > 0 && (
+                  <View style={styles.conflictWarningPill}>
+                    <Ionicons name="alert-circle" size={16} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.conflictWarningTitle}>
+                        {conflictingEvents.length === 1
+                          ? 'Attenzione: hai già una lezione per questa data'
+                          : `Attenzione: hai già ${conflictingEvents.length} lezioni per questa data`}
+                      </Text>
+                      {conflictingEvents.map((c) => (
+                        <Text key={c.id} style={styles.conflictWarningDesc} numberOfLines={1}>
+                          • {c.subject} ({c.startTime} - {c.endTime}){c.room ? ` · ${c.room}` : ''}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+          
+          {/* Sezione: Elenco tutte le lezioni programmate */}
+          {allProgrammedEvents.length > 0 && (
+            <View style={styles.futureSectionContainer}>
+              <View style={styles.futureSectionHeader}>
+                <Ionicons name="calendar-outline" size={14} color={theme.accent} style={{ marginRight: 6 }} />
+                <Text style={styles.futureSectionTitle}>
+                  LEZIONI PROGRAMMATE ({allProgrammedEvents.length})
+                </Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.futureEventsScroll}>
+                {allProgrammedEvents.map((ev) => {
+                  const isCurrentEditing = activeEditing?.id === ev.id;
+                  return (
+                    <CardContextMenu
+                      key={ev.id}
+                      title={`${ev.subject} • ${DAYS_SHORT[ev.dayIndex]}`}
+                      isManual={true}
+                      isNativeAvailable={isNativeComponentAvailable}
+                      onEditManual={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                        setActiveEditing(ev);
+                        setSubject(ev.subject);
+                        setTeacher(ev.teacher || '');
+                        setRoom(ev.room || '');
+                        setDayIndex(ev.dayIndex);
+                        setStartTime(ev.startTime);
+                        setEndTime(ev.endTime);
+                        setRepetitionType(ev.repetitionType || 'semester');
+                        setSingleDate(ev.startDate || getDateForDayIndex(ev.dayIndex).dateStr);
+                        setRepeatUntilDate(ev.repeatUntilDate || dynamicSemesterEnd);
+                        scrollRef.current?.scrollTo({ y: 0, animated: true });
+                      }}
+                      onDeleteManual={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                        if (activeEditing?.id === ev.id) {
+                          setActiveEditing(null);
+                          setSubject('');
+                          setTeacher('');
+                          setRoom('');
+                        }
+                        onDelete?.(ev.id);
+                      }}
+                    >
+                      <View
+                        style={[
+                          styles.futureEventChip,
+                          isCurrentEditing && { borderColor: theme.accent, backgroundColor: `${theme.primary}25` },
+                        ]}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                          <Text style={[styles.futureEventDate, { color: theme.accent }]}>
+                            {DAYS_SHORT[ev.dayIndex]} · {getRepetitionText(ev)}
+                          </Text>
+                        </View>
+                        <Text style={styles.futureEventSubject} numberOfLines={1}>
+                          {ev.subject}
+                        </Text>
+                        <Text style={styles.futureEventTime}>
+                          {ev.startTime} - {ev.endTime}{ev.room ? ` · ${ev.room}` : ''}
+                        </Text>
+                      </View>
+                    </CardContextMenu>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
+</View>
 
           {/* Pulsante Elimina in basso solo in modalità modifica, nel colore del tema con Callstack Liquid Glass */}
-          {editingEvent && onDelete && (
+          {activeEditing && onDelete && (
             <View style={styles.bottomActionContainer}>
               <NativeActionButton
                 label="Elimina questa lezione"
@@ -677,41 +980,65 @@ const styles = StyleSheet.create({
     marginLeft: 14,
   },
 
-  /* Selezione giorni con Glowing Effect nativo */
-  daysRow: {
+  /* Selezione giorni - Liquid Glass Week Bar (Uniforme a Orari) */
+  daySegmentedBar: {
+    width: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.09)',
+  },
+  daySegmentInnerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    gap: 8,
-  },
-  dayItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  dayCircle: {
     width: '100%',
     height: 38,
+    position: 'relative',
+  },
+  slidingActivePill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    height: 38,
     borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2c2c2e',
-    backgroundColor: '#1c1c1e',
-  },
-  dayCircleActive: {
     borderWidth: 1.5,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.7,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 1,
   },
-  dayText: {
-    color: '#8e8e93',
-    fontSize: 12.5,
-    fontWeight: '700',
+  daySegmentItem: {
+    flex: 1,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    zIndex: 2,
+    position: 'relative',
   },
-  dayTextActive: {
+  dayWeekendDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    alignSelf: 'center',
+    marginHorizontal: 1,
+  },
+  daySegmentLabel: {
+    fontSize: 12,
+    lineHeight: 14,
+    fontWeight: '800',
+    color: '#a1a1aa',
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  daySegmentLabelWeekend: {
+    color: '#d4d4d8',
+  },
+  daySegmentLabelActive: {
     color: '#ffffff',
     fontWeight: '800',
   },
@@ -896,6 +1223,73 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
   },
 
+  conflictWarningPill: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 8,
+  },
+  conflictWarningTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f59e0b',
+    marginBottom: 2,
+  },
+  conflictWarningDesc: {
+    fontSize: 11.5,
+    color: '#fbbf24',
+    marginTop: 1,
+  },
+  futureSectionContainer: {
+    marginTop: 18,
+    marginBottom: 4,
+  },
+  futureSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  futureSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8e8e93',
+    letterSpacing: 0.6,
+  },
+  futureEventsScroll: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  futureEventChip: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    minWidth: 150,
+    maxWidth: 220,
+  },
+  futureEventDate: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  futureEventSubject: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginTop: 2,
+  },
+  futureEventTime: {
+    fontSize: 11,
+    color: '#8e8e93',
+    marginTop: 2,
+  },
   bottomActionContainer: {
     marginTop: 24,
     marginBottom: 8,

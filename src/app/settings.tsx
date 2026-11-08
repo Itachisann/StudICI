@@ -1,16 +1,27 @@
+import { UNIFORM_MODAL_BG, UNIFORM_SCREEN_BG } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { MenuView } from "@expo/ui/community/menu";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { router, useFocusEffect } from "expo-router";
+import * as Sharing from "expo-sharing";
 import * as WebBrowser from "expo-web-browser";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  KeyboardAvoidingView,
   LayoutAnimation,
   Linking,
   Modal,
@@ -25,27 +36,41 @@ import {
   View,
 } from "react-native";
 import Reanimated, { FadeOut, LinearTransition } from "react-native-reanimated";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { AlarmsConfigModal } from "../components/AlarmsConfigModal";
 import { CommuterConfigModal } from "../components/CommuterConfigModal";
 import { CourseDownloadView } from "../components/CourseDownloadView";
 import { DefaultTabPicker } from "../components/DefaultTabPicker";
+import { DocumentContextMenu } from "../components/DocumentContextMenu";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
+import { NotesRegistryModal } from "../components/NotesRegistryModal";
 import { PastAttendanceModal } from "../components/PastAttendanceModal";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
-import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
-import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
 import {
+  AlarmSettings,
+  DEFAULT_ALARM_SETTINGS,
+  ENABLE_COMMUTER_ALARMS,
+  getAlarmSettings,
+  refreshCommuterAlarmsInBackground,
+  subscribeToAlarmChanges,
+} from "../utils/alarmSync";
+import {
+  DEFAULT_CALENDAR_TITLE,
+  deleteStudICICalendar,
+  getCalendarAutoSync,
+  getCalendarTitle,
   getLastCalendarSync,
+  setCalendarAutoSync,
+  setCalendarTitle,
   syncScheduleToAppleCalendar,
+  updateAppleCalendarColor,
 } from "../utils/appleCalendar";
-import {
-  ManualClassEvent,
-  getManualEvents,
-} from "../utils/manualEvents";
 import {
   AttendanceRecord,
   AttendanceStats,
@@ -55,9 +80,11 @@ import {
   getAttendanceStats,
   subscribeToAttendanceChanges,
 } from "../utils/attendance";
+import { MAX_CLOUD_FILE_BYTES } from "../utils/cloudFiles";
 import {
   copyCloudSyncCodeToClipboard,
   dissociateDevice,
+  ensureDeviceRegisteredInCloud,
   getCloudSyncId,
   getICloudAutoSyncEnabled,
   getLastCloudSync,
@@ -65,6 +92,7 @@ import {
   isCloudConfigured,
   isValidSyncCode,
   linkDeviceWithCode,
+  notifyAppReset,
   PairedDevicesStatus,
   resetAppCloudAndStorage,
   restoreFromCloudBackup,
@@ -77,27 +105,41 @@ import {
   getCommuterConfig,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
-import {
-  AlarmSettings,
-  DEFAULT_ALARM_SETTINGS,
-  ENABLE_COMMUTER_ALARMS,
-  getAlarmSettings,
-  refreshCommuterAlarmsInBackground,
-  subscribeToAlarmChanges,
-} from "../utils/alarmSync";
+import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
+import { getManualEvents, ManualClassEvent } from "../utils/manualEvents";
+import { getNotes, subscribeToNotesChanges } from "../utils/notesStorage";
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
-import { getSubjectColor, getManualSubjectColor } from "../utils/subjectColors";
 import {
-  Degree,
-  ScheduleData,
+  deleteSavedDocument,
+  downloadCloudFileForDoc,
+  getSavedDocuments,
+  persistPickedFile,
+  resolveSavedFileUri,
+  SavedDocument,
+  SavedItemType,
+  saveSavedDocument,
+  saveSavedDocumentsBatch,
+  subscribeToSavedDocumentsChanges,
+  uploadPendingFiles,
+} from "../utils/savedDocuments";
+import {
   checkCourseUpdates,
+  Degree,
   fetchAllCourseData,
   fetchDegrees,
   fetchScheduleData,
   fetchTabs,
   getCachedTabs,
+  ScheduleData,
   Tab,
 } from "../utils/scraper";
+import {
+  getStudentInfo,
+  saveStudentInfo,
+  StudentInfo,
+  subscribeToStudentInfoChanges,
+} from "../utils/studentInfo";
+import { getManualSubjectColor, getSubjectColor } from "../utils/subjectColors";
 import {
   AppUpdateInfo,
   checkForAppUpdate,
@@ -122,6 +164,95 @@ const formatSyncDate = (ts: number | null): string => {
   return `${d.toLocaleDateString("it-IT", { day: "numeric", month: "short" })} alle ${timeStr}`;
 };
 
+function getSafeDocumentPicker(): typeof import("expo-document-picker") | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("expo-document-picker");
+  } catch {
+    return null;
+  }
+}
+
+function getSafeWebView():
+  | typeof import("react-native-webview").WebView
+  | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("react-native-webview");
+    return mod?.WebView || mod?.default || null;
+  } catch {
+    return null;
+  }
+}
+
+const SafeWebView = getSafeWebView();
+
+interface BatchDraftItem {
+  tempId: string;
+  type: SavedItemType;
+  title: string;
+  url: string;
+  fileName?: string;
+  fileUri?: string;
+  fileSize?: number;
+  mimeType?: string;
+  note: string;
+}
+
+function formatDocFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Riga di selezione file (solo caricamento da dispositivo, niente link) */
+function FileSourceSection({
+  item,
+  accent,
+  onPick,
+}: {
+  item: BatchDraftItem;
+  accent: string;
+  onPick: () => void;
+}) {
+  return (
+    <>
+      <View style={styles.separator} />
+      <TouchableOpacity
+        style={styles.batchFilePickerRow}
+        activeOpacity={0.7}
+        onPress={onPick}
+      >
+        <View style={styles.modalInputIconBox}>
+          <Ionicons
+            name={item.fileName ? "document-attach" : "cloud-upload-outline"}
+            size={19}
+            color={accent}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          {item.fileName ? (
+            <>
+              <Text style={styles.batchPickedFileName} numberOfLines={1}>
+                {item.fileName}
+              </Text>
+              <Text style={styles.batchPickedFileSize}>
+                {formatDocFileSize(item.fileSize)} • Tocca per sostituire
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.batchFilePlaceholder}>
+              Tocca per caricare un file PDF
+            </Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="#48484a" />
+      </TouchableOpacity>
+    </>
+  );
+}
+
 export default function ProfiloScreen() {
   const insets = useSafeAreaInsets();
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
@@ -136,10 +267,16 @@ export default function ProfiloScreen() {
   const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
     useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
-  const [pastAttendanceModalVisible, setPastAttendanceModalVisible] = useState(false);
-  const [pastAttendanceSchedule, setPastAttendanceSchedule] = useState<ScheduleData | null>(null);
-  const [pastAttendanceManualEvents, setPastAttendanceManualEvents] = useState<ManualClassEvent[]>([]);
-  const [pastAttendanceTabUrl, setPastAttendanceTabUrl] = useState<string | null>(null);
+  const [pastAttendanceModalVisible, setPastAttendanceModalVisible] =
+    useState(false);
+  const [pastAttendanceSchedule, setPastAttendanceSchedule] =
+    useState<ScheduleData | null>(null);
+  const [pastAttendanceManualEvents, setPastAttendanceManualEvents] = useState<
+    ManualClassEvent[]
+  >([]);
+  const [pastAttendanceTabUrl, setPastAttendanceTabUrl] = useState<
+    string | null
+  >(null);
   const [searchCourse, setSearchCourse] = useState("");
   const [downloadingCourse, setDownloadingCourse] = useState<Degree | null>(
     null,
@@ -160,6 +297,27 @@ export default function ProfiloScreen() {
   const [lastCalendarSyncTime, setLastCalendarSyncTime] = useState<
     number | null
   >(null);
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false);
+  const [calendarTitle, setCalendarTitleState] = useState(
+    DEFAULT_CALENDAR_TITLE,
+  );
+  const [calendarTitleInput, setCalendarTitleInput] = useState(
+    DEFAULT_CALENDAR_TITLE,
+  );
+  const calendarScrollRef = useRef<ScrollView>(null);
+  const calendarModalVisibleRef = useRef(false);
+  useEffect(() => {
+    calendarModalVisibleRef.current = calendarModalVisible;
+  }, [calendarModalVisible]);
+
+  useEffect(() => {
+    if (theme.primary) {
+      updateAppleCalendarColor(theme.primary).catch(() => {});
+    }
+  }, [theme.primary]);
+  const [calendarAutoSync, setCalendarAutoSyncState] = useState(false);
+  const [isSavingCalendarTitle, setIsSavingCalendarTitle] = useState(false);
+  const [isDeletingCalendar, setIsDeletingCalendar] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -178,6 +336,65 @@ export default function ProfiloScreen() {
   const [themeSectionExpanded, setThemeSectionExpanded] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // Stati Dati Studente (Matricola & Email)
+  const [studentInfo, setStudentInfo] = useState<StudentInfo>({
+    matricola: "",
+    email: "",
+    updatedAt: 0,
+  });
+  const [studentModalVisible, setStudentModalVisible] = useState(false);
+  const [tempMatricola, setTempMatricola] = useState("");
+  const [tempEmail, setTempEmail] = useState("");
+  const [isStudentInfoHidden, setIsStudentInfoHidden] = useState(false);
+
+  const handleToggleStudentInfoHidden = useCallback(() => {
+    setIsStudentInfoHidden((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem("@studici_student_info_hidden", String(next)).catch(
+        () => {},
+      );
+      return next;
+    });
+  }, []);
+
+  // Stati Documenti e Link da conservare (Lista modale, Batch aggiunta, Dettaglio modifica)
+  const [savedDocs, setSavedDocs] = useState<SavedDocument[]>([]);
+  const [docsListModalVisible, setDocsListModalVisible] = useState(false);
+  const [batchDrafts, setBatchDrafts] = useState<BatchDraftItem[]>([]);
+  const [batchAddModalVisible, setBatchAddModalVisible] = useState(false);
+  const [editingDoc, setEditingDoc] = useState<SavedDocument | null>(null);
+  const [editDraft, setEditDraft] = useState<BatchDraftItem>({
+    tempId: "",
+    type: "link",
+    title: "",
+    url: "",
+    note: "",
+  });
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState<
+    (SavedDocument & { resolvedUri: string | null }) | null
+  >(null);
+
+  // Note e Promemoria
+  const [notesRegistryModalVisible, setNotesRegistryModalVisible] =
+    useState(false);
+  const [notesSummary, setNotesSummary] = useState({ total: 0, reminders: 0 });
+
+  useEffect(() => {
+    const updateSummary = async () => {
+      const list = await getNotes();
+      setNotesSummary({
+        total: list.length,
+        reminders: list.filter((n) => n.reminderEnabled).length,
+      });
+    };
+    updateSummary();
+    const unsub = subscribeToNotesChanges(() => {
+      updateSummary();
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     checkForAppUpdate().then((info) => setAppUpdate(info));
@@ -204,7 +421,7 @@ export default function ProfiloScreen() {
       );
     } else {
       Alert.alert(
-        "App Aggiornata",
+        "App aggiornata",
         `Hai già installato l'ultima versione disponibile (v${info.currentVersion}).`,
         [{ text: "OK" }],
       );
@@ -215,6 +432,10 @@ export default function ProfiloScreen() {
   const [measuredCardWidth, setMeasuredCardWidth] = useState<number>(0);
   const themeCardWidth =
     measuredCardWidth > 0 ? measuredCardWidth : Math.max(windowWidth - 32, 280);
+
+  const [docContainerWidth, setDocContainerWidth] = useState<number>(0);
+  const docCardWidth =
+    docContainerWidth > 0 ? docContainerWidth : Math.max(windowWidth - 32, 280);
 
   const themeMenuActions = useMemo(
     () =>
@@ -263,22 +484,49 @@ export default function ProfiloScreen() {
       setAttendanceStats(getAttendanceStats(attList));
 
       // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
-      const [cloudId, lastCloud, lastCal, icloudEnabled, commConfig, alarmCfg] =
-        await Promise.all([
-          getCloudSyncId(),
-          getLastCloudSync(),
-          getLastCalendarSync(),
-          getICloudAutoSyncEnabled(),
-          getCommuterConfig(),
-          getAlarmSettings(),
-        ]);
+      const [
+        cloudId,
+        lastCloud,
+        lastCal,
+        calTitle,
+        calAuto,
+        icloudEnabled,
+        commConfig,
+        alarmCfg,
+        student,
+        docs,
+        studentHiddenVal,
+      ] = await Promise.all([
+        getCloudSyncId(),
+        getLastCloudSync(),
+        getLastCalendarSync(),
+        getCalendarTitle(),
+        getCalendarAutoSync(),
+        getICloudAutoSyncEnabled(),
+        getCommuterConfig(),
+        getAlarmSettings(),
+        getStudentInfo(),
+        getSavedDocuments(),
+        AsyncStorage.getItem("@studici_student_info_hidden"),
+      ]);
 
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
       setLastCalendarSyncTime(lastCal);
+      setCalendarTitleState(calTitle);
+      if (!calendarModalVisibleRef.current) {
+        setCalendarTitleInput(calTitle);
+      }
+      setCalendarAutoSyncState(calAuto);
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
       setAlarmSettings(alarmCfg);
+      setStudentInfo(student);
+      setSavedDocs(docs);
+      uploadPendingFiles().catch(() => {});
+      if (studentHiddenVal !== null) {
+        setIsStudentInfoHidden(studentHiddenVal === "true");
+      }
 
       // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
       getPairedDevicesInfo()
@@ -286,6 +534,8 @@ export default function ProfiloScreen() {
           if (pairs) setPairedDevices(pairs);
         })
         .catch(() => {});
+
+      ensureDeviceRegisteredInCloud().catch(() => {});
 
       if (storedUrl && localTabs.length === 0) {
         fetchTabs(storedUrl)
@@ -357,9 +607,406 @@ export default function ProfiloScreen() {
     const unsubAlarms = subscribeToAlarmChanges((nextSettings) => {
       setAlarmSettings(nextSettings);
     });
+    const unsubStudent = subscribeToStudentInfoChanges(async () => {
+      const s = await getStudentInfo();
+      setStudentInfo(s);
+    });
+    const unsubDocs = subscribeToSavedDocumentsChanges(async () => {
+      const d = await getSavedDocuments();
+      setSavedDocs(d);
+    });
     return () => {
       unsubAlarms();
+      unsubStudent();
+      unsubDocs();
     };
+  }, []);
+
+  const handleOpenDocumentUrl = useCallback(async (urlStr: string) => {
+    try {
+      let clean = urlStr.trim();
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(clean)) {
+        clean = `https://${clean}`;
+      }
+      const canOpen = await Linking.canOpenURL(clean);
+      if (canOpen) {
+        await Linking.openURL(clean);
+      } else {
+        Alert.alert("Link non valido", `Impossibile aprire l'URL: ${clean}`);
+      }
+    } catch (e: any) {
+      Alert.alert(
+        "Errore apertura",
+        e?.message || "Impossibile aprire il link.",
+      );
+    }
+  }, []);
+
+  const handleOpenItem = useCallback(
+    async (doc: SavedDocument) => {
+      try {
+        if (doc.type === "link" && doc.url) {
+          await handleOpenDocumentUrl(doc.url);
+        } else if (doc.type === "file") {
+          // 1) copia locale (anche dopo cambio container iOS); 2) altrimenti scarica dal cloud
+          const localUri = await resolveSavedFileUri(doc.fileUri);
+          const canPreviewInApp = Platform.OS === "ios" && Boolean(SafeWebView);
+
+          if (!localUri && !doc.cloudChunks) {
+            if (doc.url) {
+              await handleOpenDocumentUrl(doc.url);
+            } else {
+              Alert.alert(
+                doc.title,
+                "Il file non è disponibile su questo dispositivo né sul cloud. Aprilo sul dispositivo in cui è stato aggiunto per sincronizzarlo.",
+              );
+            }
+            return;
+          }
+
+          if (canPreviewInApp) {
+            // Anteprima nativa subito: se serve, il download dal cloud avviene con lo spinner già visibile
+            setViewerDoc({ ...doc, resolvedUri: localUri });
+          }
+          let finalUri = localUri;
+          if (!finalUri) {
+            finalUri = await downloadCloudFileForDoc(doc);
+            if (!finalUri) {
+              setViewerDoc(null);
+              Alert.alert(
+                "Download non riuscito",
+                "Impossibile scaricare il file dal cloud. Controlla la connessione e riprova.",
+              );
+              return;
+            }
+            if (canPreviewInApp) {
+              setViewerDoc({ ...doc, resolvedUri: finalUri });
+            }
+          }
+          if (!canPreviewInApp) {
+            if (await Sharing.isAvailableAsync()) {
+              await Sharing.shareAsync(finalUri, {
+                mimeType: doc.mimeType,
+                dialogTitle: doc.title,
+              });
+            } else {
+              await Linking.openURL(finalUri);
+            }
+          }
+        } else if (doc.type === "note") {
+          Alert.alert(doc.title, doc.note || "(Nessun testo)", [
+            { text: "Chiudi", style: "cancel" },
+            {
+              text: "Copia testo",
+              onPress: async () => {
+                if (doc.note) {
+                  await Clipboard.setStringAsync(doc.note);
+                  Alert.alert(
+                    "Copiato",
+                    "Testo della nota copiato negli appunti.",
+                  );
+                }
+              },
+            },
+          ]);
+        }
+      } catch (err: any) {
+        Alert.alert(
+          "Errore apertura",
+          err?.message || "Impossibile aprire l'elemento.",
+        );
+      }
+    },
+    [handleOpenDocumentUrl],
+  );
+
+  const handleDeleteDocDirectly = useCallback(
+    async (docId: string, title?: string) => {
+      try {
+        await deleteSavedDocument(docId);
+        const updated = await getSavedDocuments();
+        setSavedDocs(updated);
+      } catch (err: any) {
+        Alert.alert(
+          "Errore eliminazione",
+          err?.message || "Impossibile eliminare l'elemento.",
+        );
+      }
+    },
+    [],
+  );
+
+  const handleOpenAddBatchModal = useCallback(() => {
+    setBatchDrafts([
+      {
+        tempId: `draft_${Date.now()}_0`,
+        type: "link",
+        title: "",
+        url: "",
+        note: "",
+      },
+    ]);
+    setBatchAddModalVisible(true);
+  }, []);
+
+  const handleAddBatchSlot = useCallback(() => {
+    setBatchDrafts((prev) => [
+      ...prev,
+      {
+        tempId: `draft_${Date.now()}_${prev.length}`,
+        type: "link",
+        title: "",
+        url: "",
+        note: "",
+      },
+    ]);
+  }, []);
+
+  const handleRemoveBatchSlot = useCallback((tempId: string) => {
+    setBatchDrafts((prev) => prev.filter((d) => d.tempId !== tempId));
+  }, []);
+
+  const handleUpdateDraft = useCallback(
+    (tempId: string, field: keyof BatchDraftItem, value: any) => {
+      setBatchDrafts((prev) =>
+        prev.map((d) => (d.tempId === tempId ? { ...d, [field]: value } : d)),
+      );
+    },
+    [],
+  );
+
+  const handlePickFileForDraft = useCallback(async (tempId: string) => {
+    try {
+      const DocumentPicker = getSafeDocumentPicker();
+      if (
+        !DocumentPicker ||
+        typeof DocumentPicker.getDocumentAsync !== "function"
+      ) {
+        Alert.alert(
+          "Selezione file non disponibile",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
+          [{ text: "OK" }],
+        );
+        return;
+      }
+
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+      const file = res.assets[0];
+      if (file.size && file.size > MAX_CLOUD_FILE_BYTES) {
+        Alert.alert(
+          "File molto grande",
+          "Il file supera i 10 MB: resterà solo su questo dispositivo e non sarà sincronizzato sugli altri. Per condividerlo su più dispositivi usa un link (es. Drive).",
+        );
+      }
+      const permanentUri = await persistPickedFile(file.uri, file.name);
+
+      setBatchDrafts((prev) =>
+        prev.map((d) => {
+          if (d.tempId !== tempId) return d;
+          return {
+            ...d,
+            fileName: file.name,
+            fileUri: permanentUri,
+            fileSize: file.size,
+            mimeType: file.mimeType || undefined,
+            title: d.title.trim()
+              ? d.title
+              : file.name.replace(/\.[^/.]+$/, ""),
+          };
+        }),
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore selezione file",
+        err?.message || "Impossibile caricare il file dal dispositivo.",
+      );
+    }
+  }, []);
+
+  const handleSaveBatchDrafts = useCallback(async () => {
+    const validDrafts = batchDrafts.filter((d) => {
+      if (d.type === "link")
+        return d.url.trim().length > 0 || d.title.trim().length > 0;
+      if (d.type === "file") return !!d.fileUri || d.title.trim().length > 0;
+      if (d.type === "note")
+        return d.note.trim().length > 0 || d.title.trim().length > 0;
+      return false;
+    });
+
+    if (validDrafts.length === 0) {
+      Alert.alert(
+        "Campi non compilati",
+        "Inserisci almeno un link, un file o una nota prima di procedere.",
+      );
+      return;
+    }
+
+    const itemsToSave = validDrafts.map((d) => {
+      let fallbackTitle = d.title.trim();
+      if (!fallbackTitle) {
+        if (d.type === "file" && d.fileName) fallbackTitle = d.fileName;
+        else if (d.type === "link" && d.url)
+          fallbackTitle =
+            d.url.replace(/^https?:\/\//i, "").split("/")[0] || "Link";
+        else if (d.type === "note")
+          fallbackTitle = d.note.slice(0, 30) || "Nota";
+        else fallbackTitle = "Elemento";
+      }
+
+      return {
+        type: d.type,
+        title: fallbackTitle,
+        url: d.type === "link" ? (d.url ? d.url.trim() : undefined) : undefined,
+        fileName: d.type === "file" ? d.fileName : undefined,
+        fileUri: d.type === "file" ? d.fileUri : undefined,
+        fileSize: d.type === "file" ? d.fileSize : undefined,
+        mimeType: d.type === "file" ? d.mimeType : undefined,
+        note: d.note.trim() || undefined,
+      };
+    });
+
+    try {
+      await saveSavedDocumentsBatch(itemsToSave);
+      const updated = await getSavedDocuments();
+      setSavedDocs(updated);
+      setBatchAddModalVisible(false);
+      setBatchDrafts([]);
+    } catch (err: any) {
+      Alert.alert(
+        "Errore salvataggio",
+        err?.message || "Impossibile salvare gli elementi.",
+      );
+    }
+  }, [batchDrafts]);
+
+  const handleOpenEditModal = useCallback((doc: SavedDocument) => {
+    setEditingDoc(doc);
+    setEditDraft({
+      tempId: doc.id,
+      type: doc.type,
+      title: doc.title,
+      url: doc.url || "",
+      fileName: doc.fileName,
+      fileUri: doc.fileUri,
+      fileSize: doc.fileSize,
+      mimeType: doc.mimeType,
+      note: doc.note || "",
+    });
+    setEditModalVisible(true);
+  }, []);
+
+  const handlePickFileForEditDraft = useCallback(async () => {
+    try {
+      const DocumentPicker = getSafeDocumentPicker();
+      if (
+        !DocumentPicker ||
+        typeof DocumentPicker.getDocumentAsync !== "function"
+      ) {
+        Alert.alert(
+          "Selezione file non disponibile",
+          "La selezione diretta di file dalla memoria del dispositivo richiede una nuova build di sviluppo (eas build / npx expo run:ios|android). Installa l'ultima build per abilitare il caricamento.",
+          [{ text: "OK" }],
+        );
+        return;
+      }
+
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+      const file = res.assets[0];
+      if (file.size && file.size > MAX_CLOUD_FILE_BYTES) {
+        Alert.alert(
+          "File molto grande",
+          "Il file supera i 10 MB: resterà solo su questo dispositivo e non sarà sincronizzato sugli altri. Per condividerlo su più dispositivi usa un link (es. Drive).",
+        );
+      }
+      const permanentUri = await persistPickedFile(file.uri, file.name);
+
+      setEditDraft((prev) => ({
+        ...prev,
+        fileName: file.name,
+        fileUri: permanentUri,
+        fileSize: file.size,
+        mimeType: file.mimeType || undefined,
+        title: prev.title.trim()
+          ? prev.title
+          : file.name.replace(/\.[^/.]+$/, ""),
+      }));
+    } catch (err: any) {
+      Alert.alert(
+        "Errore selezione file",
+        err?.message || "Impossibile caricare il file dal dispositivo.",
+      );
+    }
+  }, []);
+
+  const handleDeleteEditingDoc = useCallback(() => {
+    if (!editingDoc) return;
+    Alert.alert(
+      "Elimina elemento",
+      `Vuoi davvero eliminare "${editingDoc.title}"?`,
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Elimina",
+          style: "destructive",
+          onPress: async () => {
+            await deleteSavedDocument(editingDoc.id);
+            const fresh = await getSavedDocuments();
+            setSavedDocs(fresh);
+            setEditModalVisible(false);
+            setEditingDoc(null);
+          },
+        },
+      ],
+    );
+  }, [editingDoc]);
+
+  const handleSaveEditDoc = useCallback(async () => {
+    if (!editingDoc) return;
+    const fallbackTitle =
+      editDraft.title.trim() ||
+      editDraft.fileName ||
+      (editDraft.url
+        ? editDraft.url.replace(/^https?:\/\//i, "").split("/")[0]
+        : "") ||
+      editingDoc.title;
+
+    await saveSavedDocument({
+      id: editingDoc.id,
+      type: editDraft.type,
+      title: fallbackTitle,
+      url:
+        editDraft.type === "link"
+          ? editDraft.url
+            ? editDraft.url.trim()
+            : undefined
+          : undefined,
+      fileName: editDraft.type === "file" ? editDraft.fileName : undefined,
+      fileUri: editDraft.type === "file" ? editDraft.fileUri : undefined,
+      fileSize: editDraft.type === "file" ? editDraft.fileSize : undefined,
+      mimeType: editDraft.type === "file" ? editDraft.mimeType : undefined,
+      note:
+        editDraft.type === "note"
+          ? editDraft.note.trim() || undefined
+          : undefined,
+    });
+    const updated = await getSavedDocuments();
+    setSavedDocs(updated);
+    setEditModalVisible(false);
+    setEditingDoc(null);
+  }, [editingDoc, editDraft]);
+
+  const handleCopyDocLink = useCallback(async (doc: SavedDocument) => {
+    if (!doc.url) return;
+    await Clipboard.setStringAsync(doc.url);
+    Alert.alert("Link copiato", "Il link è stato copiato negli appunti.");
   }, []);
 
   const selectDegree = async (degree: Degree) => {
@@ -371,18 +1018,28 @@ export default function ProfiloScreen() {
       const cachedRaw = await AsyncStorage.getItem(cacheKey);
 
       if (cachedRaw) {
-        let cachedData: { tabs?: Tab[]; schedules?: Record<string, any> } | null = null;
+        let cachedData: {
+          tabs?: Tab[];
+          schedules?: Record<string, any>;
+        } | null = null;
         try {
           cachedData = JSON.parse(cachedRaw);
         } catch {}
 
-        if (cachedData && Array.isArray(cachedData.tabs) && cachedData.tabs.length > 0) {
+        if (
+          cachedData &&
+          Array.isArray(cachedData.tabs) &&
+          cachedData.tabs.length > 0
+        ) {
           const tabs = cachedData.tabs;
           // Recupera il canale precedentemente scelto per questo specifico corso
-          const savedTabForDegree = await AsyncStorage.getItem(`defaultTabUrl_${degree.url}`);
-          const activeTab = (savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree))
-            ? savedTabForDegree
-            : (tabs[0]?.url || null);
+          const savedTabForDegree = await AsyncStorage.getItem(
+            `defaultTabUrl_${degree.url}`,
+          );
+          const activeTab =
+            savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree)
+              ? savedTabForDegree
+              : tabs[0]?.url || null;
 
           // Salva istantaneamente i parametri del corso selezionato
           const pairs: [string, string][] = [
@@ -407,12 +1064,17 @@ export default function ProfiloScreen() {
           loadProfileData();
 
           // Esegui la verifica orari ordinaria in background (senza attese o blocchi UI)
-          checkCourseUpdates(degree.url).then(async (checkRes) => {
-            if (checkRes.hasChanges) {
-              console.log("Verifica ordinaria: rilevate variazioni per il corso", degree.name);
-              fetchAllCourseData(degree.url, true).catch(() => {});
-            }
-          }).catch(() => {});
+          checkCourseUpdates(degree.url)
+            .then(async (checkRes) => {
+              if (checkRes.hasChanges) {
+                console.log(
+                  "Verifica ordinaria: rilevate variazioni per il corso",
+                  degree.name,
+                );
+                fetchAllCourseData(degree.url, true).catch(() => {});
+              }
+            })
+            .catch(() => {});
 
           router.replace("/");
           return;
@@ -423,9 +1085,13 @@ export default function ProfiloScreen() {
       setDownloadingCourse(degree);
       setDownloadProgressText("Preparazione e analisi canali...");
 
-      const { tabs } = await fetchAllCourseData(degree.url, false, (stepMsg) => {
-        setDownloadProgressText(stepMsg);
-      });
+      const { tabs } = await fetchAllCourseData(
+        degree.url,
+        false,
+        (stepMsg) => {
+          setDownloadProgressText(stepMsg);
+        },
+      );
 
       await AsyncStorage.setItem("selectedDegreeUrl", degree.url);
       await AsyncStorage.setItem("selectedDegreeName", degree.name);
@@ -523,15 +1189,19 @@ export default function ProfiloScreen() {
   const resetApp = async () => {
     Alert.alert(
       "Ripristina applicazione",
-      "Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso, tutte le presenze, le lezioni e le impostazioni salvate. Il dispositivo verrà inoltre dissociato dalla sincronizzazione eliminando il vecchio codice cloud.",
+      "Sei sicuro di voler ripristinare l'applicazione? Perderai tutti i tuoi dati",
       [
         { text: "Annulla", style: "cancel" },
         {
           text: "Ripristina",
           style: "destructive",
           onPress: async () => {
-            await resetAppCloudAndStorage();
-            router.replace("/");
+            try {
+              await resetAppCloudAndStorage();
+            } finally {
+              notifyAppReset();
+              router.replace("/");
+            }
           },
         },
       ],
@@ -540,7 +1210,8 @@ export default function ProfiloScreen() {
 
   const handleOpenAttendanceModal = async () => {
     try {
-      const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+      const currentUrl =
+        degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
       const attList = await getAttendanceRecords(currentUrl || undefined);
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
@@ -558,7 +1229,8 @@ export default function ProfiloScreen() {
 
     (async () => {
       try {
-        const currentUrl = degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
+        const currentUrl =
+          degreeUrl || (await AsyncStorage.getItem("selectedDegreeUrl"));
         if (currentUrl) {
           const [manuals, allCourseData, currentTabUrl] = await Promise.all([
             getManualEvents(currentUrl),
@@ -566,8 +1238,8 @@ export default function ProfiloScreen() {
             selectedTabForSpecifiche?.url
               ? Promise.resolve(selectedTabForSpecifiche.url)
               : defaultTabUrl
-              ? Promise.resolve(defaultTabUrl)
-              : AsyncStorage.getItem(`defaultTabUrl_${currentUrl}`),
+                ? Promise.resolve(defaultTabUrl)
+                : AsyncStorage.getItem(`defaultTabUrl_${currentUrl}`),
           ]);
           setPastAttendanceManualEvents(manuals);
           const activeTab = currentTabUrl || allCourseData.tabs[0]?.url;
@@ -706,16 +1378,222 @@ export default function ProfiloScreen() {
               <Ionicons
                 name="location-outline"
                 size={12}
-                color={subjectColor}
+                color={theme.accent}
                 style={{ marginRight: 3 }}
               />
-              <Text style={styles.attendanceHistoryRoom} numberOfLines={1}>
+              <Text
+                style={[styles.attendanceHistoryRoom, { color: theme.accent }]}
+                numberOfLines={1}
+              >
                 {item.room}
               </Text>
             </View>
           ) : null}
         </View>
       </>
+    );
+  };
+
+  /** Trasforma il nome della materia in Title Case compatto ed elegante per la legenda */
+  const formatLegendSubject = (name: string): string => {
+    if (!name) return "";
+    const lowerWords = new Set([
+      "di",
+      "a",
+      "da",
+      "in",
+      "con",
+      "su",
+      "per",
+      "tra",
+      "fra",
+      "e",
+      "ed",
+      "del",
+      "della",
+      "dello",
+      "degli",
+      "delle",
+      "dei",
+    ]);
+    return name
+      .toLowerCase()
+      .split(/\s+/)
+      .map((word, idx) => {
+        if (idx > 0 && lowerWords.has(word)) {
+          return word;
+        }
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
+      .join(" ");
+  };
+
+  /** Dashboard KPI presenze in stile moderno iOS (3 tile + barra Screen Time materie) */
+  const renderAttendanceDashboard = (options?: { isModal?: boolean }) => {
+    const isModal = Boolean(options?.isModal);
+    const totalHours = attendanceStats?.totalHours || 0;
+    const totalLessons = attendanceStats?.totalLessons || 0;
+    const subjectsCount = attendanceStats?.subjectsCount || 0;
+    const subjects = attendanceStats?.subjectStats || [];
+    const hasRecords = attendanceRecords.length > 0;
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.attendanceDashboardCard,
+          isModal && { marginBottom: 16 },
+        ]}
+        activeOpacity={isModal ? 1 : 0.75}
+        onPress={isModal ? undefined : handleOpenAttendanceModal}
+        disabled={isModal}
+      >
+        {!isModal && (
+          <View style={styles.attendanceCardHeader}>
+            <View
+              style={[
+                styles.attendanceCardHeaderIcon,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  borderWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <Ionicons
+                name="calendar-outline"
+                size={17}
+                color={theme.accent}
+              />
+            </View>
+            <Text style={styles.attendanceCardTitle}>Registro presenze</Text>
+            <View style={{ flex: 1 }} />
+            {hasRecords && (
+              <View
+                style={[
+                  styles.attendanceCardBadgePill,
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                    borderWidth: StyleSheet.hairlineWidth,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.attendanceCardBadgeText,
+                    { color: theme.accent },
+                  ]}
+                >
+                  {attendanceRecords.length}{" "}
+                  {attendanceRecords.length === 1 ? "lezione" : "lezioni"}
+                </Text>
+              </View>
+            )}
+            <Ionicons name="chevron-forward" size={14} color="#8e8e93" />
+          </View>
+        )}
+
+        {/* 3 Metric Tiles iOS (Tutti grigi con micro-bordo uniforme) */}
+        <View style={styles.kpiTilesRow}>
+          {/* Tile 1: Frequenza */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="time-outline" size={12} color="#10b981" />
+              <Text style={[styles.kpiTileLabel, { color: "#10b981" }]}>
+                Frequenza
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>
+              {totalHours}
+              <Text style={styles.kpiTileUnit}> h</Text>
+            </Text>
+            <Text style={styles.kpiTileSub}>ore totali</Text>
+          </View>
+
+          {/* Tile 2: Lezioni */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="checkmark-done" size={12} color="#0a84ff" />
+              <Text style={[styles.kpiTileLabel, { color: "#0a84ff" }]}>
+                Lezioni
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>{totalLessons}</Text>
+            <Text style={styles.kpiTileSub}>frequentate</Text>
+          </View>
+
+          {/* Tile 3: Materie */}
+          <View style={styles.kpiTile}>
+            <View style={styles.kpiTileHeader}>
+              <Ionicons name="book" size={12} color="#bf5af2" />
+              <Text style={[styles.kpiTileLabel, { color: "#bf5af2" }]}>
+                Materie
+              </Text>
+            </View>
+            <Text style={styles.kpiTileValue}>{subjectsCount}</Text>
+            <Text style={styles.kpiTileSub}>distinte</Text>
+          </View>
+        </View>
+
+        {/* Barra di distribuzione Screen Time per materia con lista dettagliata */}
+        {hasRecords && totalHours > 0 && subjects.length > 0 && (
+          <View style={styles.attendanceBreakdownContainer}>
+            <View style={styles.breakdownBar}>
+              {subjects.map((s, idx) => {
+                const color = getSubjectColor(s.subject);
+                return (
+                  <View
+                    key={s.subject}
+                    style={{
+                      flex: Math.max(1, s.hours),
+                      backgroundColor: color,
+                      marginRight: idx < subjects.length - 1 ? 2 : 0,
+                      borderRadius: 1.5,
+                    }}
+                  />
+                );
+              })}
+            </View>
+
+            {/* Lista elegante Screen Time delle materie senza troncature */}
+            <View style={styles.legendListContainer}>
+              {subjects.slice(0, 3).map((s, idx) => {
+                const color = getSubjectColor(s.subject);
+                return (
+                  <View key={s.subject}>
+                    <View style={styles.legendRowItem}>
+                      <View
+                        style={[styles.legendDot, { backgroundColor: color }]}
+                      />
+                      <Text style={styles.legendSubjectTitle} numberOfLines={1}>
+                        {formatLegendSubject(s.subject)}
+                      </Text>
+                      <Text style={styles.legendHoursValue}>
+                        {s.hours}
+                        <Text style={styles.legendHoursUnit}>h</Text>
+                      </Text>
+                    </View>
+                    {idx < Math.min(subjects.length, 3) - 1 && (
+                      <View style={styles.legendDivider} />
+                    )}
+                  </View>
+                );
+              })}
+
+              {subjects.length > 3 && (
+                <View style={styles.legendMoreRow}>
+                  <Text style={styles.legendMoreText}>
+                    +{subjects.length - 3}{" "}
+                    {subjects.length - 3 === 1
+                      ? "altra materia"
+                      : "altre materie"}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+      </TouchableOpacity>
     );
   };
 
@@ -736,7 +1614,7 @@ export default function ProfiloScreen() {
       } else {
         if (res.notPaired) {
           Alert.alert(
-            "Nessun Dispositivo Associato",
+            "Nessun dispositivo Associato",
             "Copia il codice e inseriscilo sul secondo dispositivo per avviare la sincronizzazione.",
           );
         } else {
@@ -770,36 +1648,105 @@ export default function ProfiloScreen() {
       return;
     }
 
+    setIsSyncingCalendar(true);
+    try {
+      const schedule = await fetchScheduleData(tabUrl);
+      const res = await syncScheduleToAppleCalendar(
+        schedule,
+        courseMetadata.cleanCourseTitle,
+        defaultTabLabel,
+        calendarTitle,
+        theme.primary,
+      );
+      if (res.success) {
+        setLastCalendarSyncTime(await getLastCalendarSync());
+        Alert.alert("Calendario Sincronizzato", res.message);
+      } else {
+        Alert.alert("Errore Calendario", res.message);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Errore durante la sincronizzazione con il calendario.",
+      );
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  };
+
+  const handleToggleCalendarAutoSync = async (val: boolean) => {
+    setCalendarAutoSyncState(val);
+    await setCalendarAutoSync(val);
+  };
+
+  const handleSaveCalendarTitle = async () => {
+    const trimmed = calendarTitleInput.trim();
+    if (!trimmed) {
+      Alert.alert(
+        "Nome non valido",
+        "Inserisci un nome valido per il calendario.",
+      );
+      return;
+    }
+    setIsSavingCalendarTitle(true);
+    try {
+      const res = await setCalendarTitle(trimmed);
+      setCalendarTitleState(trimmed);
+      setCalendarTitleInput(trimmed);
+      Alert.alert("Nome salvato", res.message);
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
+    } finally {
+      setIsSavingCalendarTitle(false);
+    }
+  };
+
+  const handleResetCalendarTitle = async () => {
+    setIsSavingCalendarTitle(true);
+    try {
+      await setCalendarTitle(DEFAULT_CALENDAR_TITLE);
+      setCalendarTitleState(DEFAULT_CALENDAR_TITLE);
+      setCalendarTitleInput(DEFAULT_CALENDAR_TITLE);
+      Alert.alert(
+        "Ripristinato",
+        "Nome del calendario ripristinato a quello predefinito.",
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Impossibile ripristinare il nome.",
+      );
+    } finally {
+      setIsSavingCalendarTitle(false);
+    }
+  };
+
+  const handleDeleteCalendar = () => {
     Alert.alert(
-      "Calendario Apple",
-      `Vuoi sincronizzare le lezioni di "${courseMetadata.cleanCourseTitle}" nel Calendario di iOS? Verrà creato il calendario "StudICI - Lezioni Sapienza".`,
+      "Rimuovi Calendario",
+      `Vuoi rimuovere il calendario "${calendarTitle}" e tutti i suoi eventi da Apple Calendar su questo dispositivo?`,
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Sincronizza",
+          text: "Rimuovi",
+          style: "destructive",
           onPress: async () => {
-            setIsSyncingCalendar(true);
+            setIsDeletingCalendar(true);
             try {
-              const schedule = await fetchScheduleData(tabUrl);
-              const res = await syncScheduleToAppleCalendar(
-                schedule,
-                courseMetadata.cleanCourseTitle,
-                defaultTabLabel,
-              );
+              const res = await deleteStudICICalendar();
               if (res.success) {
-                setLastCalendarSyncTime(Date.now());
-                Alert.alert("Calendario Sincronizzato", res.message);
+                setLastCalendarSyncTime(null);
+                Alert.alert("Rimosso", res.message);
               } else {
-                Alert.alert("Errore Calendario", res.message);
+                Alert.alert("Errore", res.message);
               }
             } catch (err: any) {
               Alert.alert(
                 "Errore",
-                err?.message ||
-                  "Errore durante la sincronizzazione con il calendario.",
+                err?.message || "Impossibile rimuovere il calendario.",
               );
             } finally {
-              setIsSyncingCalendar(false);
+              setIsDeletingCalendar(false);
             }
           },
         },
@@ -936,7 +1883,10 @@ export default function ProfiloScreen() {
       if (code) {
         await Clipboard.setStringAsync(code);
         setCloudSyncId(code);
-        Alert.alert("Copiato", "Codice di sincronizzazione copiato negli appunti.");
+        Alert.alert(
+          "Copiato",
+          "Codice di sincronizzazione copiato negli appunti.",
+        );
         if (isCloudConfigured()) {
           syncWithICloudStorage().catch(() => {});
         }
@@ -983,7 +1933,7 @@ export default function ProfiloScreen() {
 
     // Codice di backup manuale (STUDICI_CLOUD:...)
     Alert.alert(
-      "Ripristina dati Cloud",
+      "Ripristina dati cloud",
       "I dati attuali sul dispositivo verranno sostituiti con quelli presenti nel backup cloud. Continuare?",
       [
         { text: "Annulla", style: "cancel" },
@@ -1083,7 +2033,10 @@ export default function ProfiloScreen() {
       (degreeName && d.name.toLowerCase() === degreeName.toLowerCase()),
   );
   const resolvedClassCode = extractClassCode(
-    degreeClassName || matchedDegree?.className || rawCourseClass || rawCourseName,
+    degreeClassName ||
+      matchedDegree?.className ||
+      rawCourseClass ||
+      rawCourseName,
   );
 
   const cleanCourseTitle =
@@ -1190,18 +2143,18 @@ export default function ProfiloScreen() {
                     backgroundColor: courseMetadata.isMagistrale
                       ? "rgba(168, 85, 247, 0.25)"
                       : courseMetadata.isCicloUnico
-                      ? "rgba(234, 179, 8, 0.25)"
-                      : "rgba(59, 130, 246, 0.25)",
+                        ? "rgba(234, 179, 8, 0.25)"
+                        : "rgba(59, 130, 246, 0.25)",
                     borderColor: courseMetadata.isMagistrale
                       ? "#c084fc"
                       : courseMetadata.isCicloUnico
-                      ? "#facc15"
-                      : "#60a5fa",
+                        ? "#facc15"
+                        : "#60a5fa",
                     shadowColor: courseMetadata.isMagistrale
                       ? "#c084fc"
                       : courseMetadata.isCicloUnico
-                      ? "#facc15"
-                      : "#60a5fa",
+                        ? "#facc15"
+                        : "#60a5fa",
                   },
                 ]}
               >
@@ -1212,8 +2165,8 @@ export default function ProfiloScreen() {
                       color: courseMetadata.isMagistrale
                         ? "#e9d5ff"
                         : courseMetadata.isCicloUnico
-                        ? "#fef08a"
-                        : "#bfdbfe",
+                          ? "#fef08a"
+                          : "#bfdbfe",
                     },
                   ]}
                 >
@@ -1221,30 +2174,34 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
 
-              {courseMetadata.resolvedClassCode ? (() => {
-                const classTheme = getDegreeClassTheme(courseMetadata.resolvedClassCode);
-                return (
-                  <View
-                    style={[
-                      styles.classBadge,
-                      {
-                        backgroundColor: classTheme.backgroundColor,
-                        borderColor: classTheme.borderColor,
-                        shadowColor: classTheme.glowColor,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.classBadgeText,
-                        { color: classTheme.textColor },
-                      ]}
-                    >
-                      {courseMetadata.resolvedClassCode}
-                    </Text>
-                  </View>
-                );
-              })() : null}
+              {courseMetadata.resolvedClassCode
+                ? (() => {
+                    const classTheme = getDegreeClassTheme(
+                      courseMetadata.resolvedClassCode,
+                    );
+                    return (
+                      <View
+                        style={[
+                          styles.classBadge,
+                          {
+                            backgroundColor: classTheme.backgroundColor,
+                            borderColor: classTheme.borderColor,
+                            shadowColor: classTheme.glowColor,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.classBadgeText,
+                            { color: classTheme.textColor },
+                          ]}
+                        >
+                          {courseMetadata.resolvedClassCode}
+                        </Text>
+                      </View>
+                    );
+                  })()
+                : null}
             </View>
           </View>
         </View>
@@ -1274,7 +2231,7 @@ export default function ProfiloScreen() {
             >
               <Ionicons name="school-outline" size={17} color={theme.accent} />
             </View>
-            <Text style={styles.rowTitle}>Corso di Laurea</Text>
+            <Text style={styles.rowTitle}>Corso di laurea</Text>
             <Text style={styles.rowDetail} numberOfLines={1}>
               {courseMetadata.cleanCourseTitle}
             </Text>
@@ -1312,8 +2269,220 @@ export default function ProfiloScreen() {
         </View>
         <Text style={styles.sectionFooter}>
           Modifica il corso di laurea e il canale/anno predefinito per
-          l&apos;app. Queste impostazioni influenzano le lezioni, gli orari e le
-          aule visualizzate.
+          l&apos;app.
+        </Text>
+
+        {/* Gruppo: DATI STUDENTE (Sezione Riformulata con 2 righe native, copia rapida e toggle privacy) */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderNoMargin}>DATI STUDENTE</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            {/* Tasto occhio per nascondere/mostrare per privacy */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleToggleStudentInfoHidden}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel={
+                isStudentInfoHidden
+                  ? "Mostra dati studente"
+                  : "Nascondi dati studente"
+              }
+            >
+              <Ionicons
+                name={isStudentInfoHidden ? "eye-off-outline" : "eye-outline"}
+                size={17}
+                color="#8e8e93"
+              />
+            </TouchableOpacity>
+
+            {/* Tasto Modifica */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                setTempMatricola(studentInfo.matricola || "");
+                setTempEmail(studentInfo.email || "");
+                setStudentModalVisible(true);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text
+                style={[styles.sectionHeaderAction, { color: theme.accent }]}
+              >
+                Modifica
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.groupedCard}>
+          {/* Riga 1: Matricola */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (studentInfo.matricola) {
+                Clipboard.setStringAsync(studentInfo.matricola);
+                Alert.alert(
+                  "Copiato",
+                  `Matricola ${studentInfo.matricola} copiata negli appunti.`,
+                );
+              } else {
+                setTempMatricola("");
+                setTempEmail(studentInfo.email || "");
+                setStudentModalVisible(true);
+              }
+            }}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="card-outline" size={17} color={theme.accent} />
+            </View>
+            <Text style={styles.rowTitle}>Matricola</Text>
+            <Text
+              style={[
+                styles.rowDetail,
+                !studentInfo.matricola && { color: "#71717a" },
+              ]}
+              numberOfLines={1}
+            >
+              {studentInfo.matricola
+                ? isStudentInfoHidden
+                  ? "••••••••"
+                  : studentInfo.matricola
+                : "Non impostata"}
+            </Text>
+            <Ionicons
+              name={studentInfo.matricola ? "copy-outline" : "chevron-forward"}
+              size={15}
+              color={studentInfo.matricola ? "#8e8e93" : "#48484a"}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Email Istituzionale */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (studentInfo.email) {
+                Clipboard.setStringAsync(studentInfo.email);
+                Alert.alert(
+                  "Copiato",
+                  `Email ${studentInfo.email} copiata negli appunti.`,
+                );
+              } else {
+                setTempMatricola(studentInfo.matricola || "");
+                setTempEmail("");
+                setStudentModalVisible(true);
+              }
+            }}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="mail-outline" size={17} color={theme.accent} />
+            </View>
+            <Text
+              style={[
+                styles.rowTitle,
+                { flex: 0, flexShrink: 0, marginRight: 8 },
+              ]}
+            >
+              Email
+            </Text>
+            <Text
+              style={[
+                styles.rowDetail,
+                { flex: 1, maxWidth: undefined },
+                !studentInfo.email && { color: "#71717a" },
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit={true}
+              minimumFontScale={0.75}
+            >
+              {studentInfo.email
+                ? isStudentInfoHidden
+                  ? "••••••••••••••••"
+                  : studentInfo.email
+                : "Non impostata"}
+            </Text>
+            <Ionicons
+              name={studentInfo.email ? "copy-outline" : "chevron-forward"}
+              size={15}
+              color={studentInfo.email ? "#8e8e93" : "#48484a"}
+            />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>Salva i tuoi dati.</Text>
+
+        {/* Gruppo Unificato: PROMEMORIA, DOCUMENTI E LINK */}
+        <Text style={styles.sectionHeader}>Documenti salvati</Text>
+        <View style={styles.groupedCard}>
+          {/* Riga 1: Promemoria e Note */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setNotesRegistryModalVisible(true)}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={17}
+                color={theme.accent}
+              />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Promemoria</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {notesSummary.total === 0
+                  ? "Nessun elemento registrato"
+                  : `${notesSummary.total} ${notesSummary.total === 1 ? "nota salvata" : "note salvate"}${notesSummary.reminders > 0 ? ` • ${notesSummary.reminders} con promemoria` : ""}`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Documenti e Link Salvati */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setDocsListModalVisible(true)}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons name="folder-outline" size={17} color={theme.accent} />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Documenti salvati</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {savedDocs.length === 0
+                  ? "Nessun elemento conservato"
+                  : `${savedDocs.length} ${savedDocs.length === 1 ? "elemento salvato" : "elementi salvati"} (file, link, note)`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Gestisci promemoria, note, dispense, PDF e link salvati.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -1341,7 +2510,10 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
                   <Ionicons
@@ -1375,7 +2547,10 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
                   <Ionicons
@@ -1463,86 +2638,7 @@ export default function ProfiloScreen() {
 
         {/* Gruppo: REGISTRO PRESENZE */}
         <Text style={styles.sectionHeader}>REGISTRO PRESENZE</Text>
-
-        {/* 3 KPI Health / Fitness Cards */}
-        <View style={styles.statsCardsRow}>
-          {/* Card 1: Ore Totali */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(16, 185, 129, 0.15)" },
-              ]}
-            >
-              <Ionicons name="time" size={17} color="#10b981" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.totalHours || 0}h
-            </Text>
-            <Text style={styles.statLabel}>FREQUENZA</Text>
-          </View>
-
-          {/* Card 2: Lezioni */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(59, 130, 246, 0.15)" },
-              ]}
-            >
-              <Ionicons name="checkmark-done" size={17} color="#3b82f6" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.totalLessons || 0}
-            </Text>
-            <Text style={styles.statLabel}>LEZIONI</Text>
-          </View>
-
-          {/* Card 3: Materie */}
-          <View style={styles.statCard}>
-            <View
-              style={[
-                styles.statIconSquircle,
-                { backgroundColor: "rgba(168, 85, 247, 0.15)" },
-              ]}
-            >
-              <Ionicons name="book" size={17} color="#a855f7" />
-            </View>
-            <Text style={styles.statValue}>
-              {attendanceStats?.subjectsCount || 0}
-            </Text>
-            <Text style={styles.statLabel}>MATERIE</Text>
-          </View>
-        </View>
-
-        {/* Dettaglio Registro Table Card Compatto */}
-        <View style={styles.groupedCard}>
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={handleOpenAttendanceModal}
-          >
-            <View
-              style={[
-                styles.iconBox,
-                { backgroundColor: theme.subtle, borderColor: theme.border },
-              ]}
-            >
-              <Ionicons
-                name="calendar-outline"
-                size={17}
-                color={theme.accent}
-              />
-            </View>
-            <Text style={styles.rowTitle}>Registro presenze</Text>
-            <Text style={styles.rowDetail}>
-              {attendanceRecords.length > 0
-                ? `${attendanceRecords.length} registrate`
-                : "Nessuna"}
-            </Text>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" />
-          </TouchableOpacity>
-        </View>
+        {renderAttendanceDashboard()}
         <Text style={styles.sectionFooter}>
           Tieni premuta una lezione nell&apos;orario per registrarne la
           frequenza.
@@ -1566,19 +2662,15 @@ export default function ProfiloScreen() {
               {isSyncingCloud ? (
                 <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Ionicons
-                  name="cloud-outline"
-                  size={17}
-                  color={theme.accent}
-                />
+                <Ionicons name="cloud-outline" size={17} color={theme.accent} />
               )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Sincronizzazione</Text>
+              <Text style={styles.rowTitle}>Cloud</Text>
               <Text style={styles.rowSubTitle}>
-                {pairedDevices?.isPaired && pairedDevices.otherDevice
-                  ? `Associato con ${pairedDevices.otherDevice.name} • ${formatSyncDate(lastCloudSyncTime)}`
-                  : "Non attiva"}
+                {lastCloudSyncTime
+                  ? `${iCloudAutoSync ? "Auto • " : ""}${formatSyncDate(lastCloudSyncTime)}`
+                  : "Non ancora sincronizzato"}
               </Text>
             </View>
             <NativeActionButton
@@ -1618,8 +2710,11 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={handleSyncCalendar}
-            disabled={isSyncingCalendar}
+            onPress={() => {
+              setCalendarTitleInput(calendarTitle);
+              calendarModalVisibleRef.current = true;
+              setCalendarModalVisible(true);
+            }}
           >
             <View
               style={[
@@ -1640,7 +2735,9 @@ export default function ProfiloScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Calendario Apple</Text>
               <Text style={styles.rowSubTitle}>
-                {formatSyncDate(lastCalendarSyncTime)}
+                {lastCalendarSyncTime
+                  ? `${calendarAutoSync ? "Auto • " : ""}${formatSyncDate(lastCalendarSyncTime)}`
+                  : "Non ancora sincronizzato"}
               </Text>
             </View>
             <NativeActionButton
@@ -1666,10 +2763,17 @@ export default function ProfiloScreen() {
               }}
               textStyle={styles.inlineActionBtnText}
             />
+            <Ionicons
+              name="chevron-forward"
+              size={15}
+              color="#48484a"
+              style={{ marginLeft: 6 }}
+            />
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Sincronizza tra dispositivi o esporta nel calendario Apple.
+          Mantieni allineati i tuoi orari, note, canali e presenze su tutti i
+          tuoi dispositivi.
         </Text>
 
         {/* Gruppo: ITINERARIO PENDOLARE */}
@@ -1721,10 +2825,17 @@ export default function ProfiloScreen() {
                 <View
                   style={[
                     styles.iconBox,
-                    { backgroundColor: theme.subtle, borderColor: theme.border },
+                    {
+                      backgroundColor: theme.subtle,
+                      borderColor: theme.border,
+                    },
                   ]}
                 >
-                  <Ionicons name="alarm-outline" size={17} color={theme.accent} />
+                  <Ionicons
+                    name="alarm-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle}>Sveglie automatiche</Text>
@@ -1852,11 +2963,7 @@ export default function ProfiloScreen() {
                 { backgroundColor: theme.subtle, borderColor: theme.border },
               ]}
             >
-              <Ionicons
-                name="refresh-outline"
-                size={17}
-                color={theme.accent}
-              />
+              <Ionicons name="refresh-outline" size={17} color={theme.accent} />
             </View>
             <Text style={styles.rowTitle}>Riscarica orari</Text>
             <Ionicons name="chevron-forward" size={15} color="#48484a" />
@@ -1959,7 +3066,7 @@ export default function ProfiloScreen() {
           setCourseModalVisible(false);
           setSearchCourse("");
         }}
-        title="Corso di Laurea"
+        title="Corso di laurea"
         backgroundColor={UNIFORM_MODAL_BG}
         searchBarOptions={{
           placeholder: "Cerca corso o classe (es. Meccanica, L-9)...",
@@ -2065,30 +3172,35 @@ export default function ProfiloScreen() {
                             {isMagistrale ? "Magistrale" : "Triennale"}
                           </Text>
                         </View>
-                        {deg.className ? (() => {
-                          const classTheme = getDegreeClassTheme(deg.className);
-                          return (
-                            <View
-                              style={[
-                                styles.classBadge,
-                                {
-                                  backgroundColor: classTheme.backgroundColor,
-                                  borderColor: classTheme.borderColor,
-                                  shadowColor: classTheme.glowColor,
-                                },
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.classBadgeText,
-                                  { color: classTheme.textColor },
-                                ]}
-                              >
-                                {deg.className}
-                              </Text>
-                            </View>
-                          );
-                        })() : null}
+                        {deg.className
+                          ? (() => {
+                              const classTheme = getDegreeClassTheme(
+                                deg.className,
+                              );
+                              return (
+                                <View
+                                  style={[
+                                    styles.classBadge,
+                                    {
+                                      backgroundColor:
+                                        classTheme.backgroundColor,
+                                      borderColor: classTheme.borderColor,
+                                      shadowColor: classTheme.glowColor,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.classBadgeText,
+                                      { color: classTheme.textColor },
+                                    ]}
+                                  >
+                                    {deg.className}
+                                  </Text>
+                                </View>
+                              );
+                            })()
+                          : null}
                       </View>
                     </View>
                     {isSelected && (
@@ -2200,55 +3312,59 @@ export default function ProfiloScreen() {
                 </Text>
               </View>
             ) : (
-              groupedAttendance.map((group) => (
-                <Reanimated.View
-                  key={group.date}
-                  style={styles.dayGroupContainer}
-                  layout={LinearTransition.duration(200)}
-                  exiting={FadeOut.duration(150)}
-                >
-                  {/* Intestazione del Giorno */}
-                  <View style={styles.dayGroupHeader}>
-                    <Ionicons
-                      name="calendar"
-                      size={13}
-                      color="#10b981"
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={styles.dayGroupTitle}>
-                      {group.dayName.toUpperCase()} ·{" "}
-                      {group.displayDate.toUpperCase()}
-                    </Text>
-                    <View style={styles.dayGroupBadge}>
-                      <Text style={styles.dayGroupBadgeText}>
-                        {group.records.length}{" "}
-                        {group.records.length === 1 ? "lezione" : "lezioni"}
-                      </Text>
-                    </View>
-                  </View>
+              <>
+                {renderAttendanceDashboard({ isModal: true })}
 
-                  {/* Lista Lezioni con SwipeToDeleteRow fluido su UI thread */}
-                  {group.records.map((item) => (
-                    <SwipeToDeleteRow
-                      key={item.id}
-                      marginBottom={10}
-                      borderRadius={16}
-                      onDelete={() => handleDeleteAttendanceDirect(item)}
-                    >
-                      <TouchableOpacity
-                        style={[
-                          styles.attendanceHistoryItem,
-                          { marginBottom: 0 },
-                        ]}
-                        activeOpacity={0.9}
-                        onLongPress={() => handleDeleteAttendance(item)}
+                {groupedAttendance.map((group) => (
+                  <Reanimated.View
+                    key={group.date}
+                    style={styles.dayGroupContainer}
+                    layout={LinearTransition.duration(200)}
+                    exiting={FadeOut.duration(150)}
+                  >
+                    {/* Intestazione del Giorno */}
+                    <View style={styles.dayGroupHeader}>
+                      <Ionicons
+                        name="calendar"
+                        size={13}
+                        color={theme.accent}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={styles.dayGroupTitle}>
+                        {group.dayName.toUpperCase()} ·{" "}
+                        {group.displayDate.toUpperCase()}
+                      </Text>
+                      <View style={styles.dayGroupBadge}>
+                        <Text style={styles.dayGroupBadgeText}>
+                          {group.records.length}{" "}
+                          {group.records.length === 1 ? "lezione" : "lezioni"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Lista Lezioni con SwipeToDeleteRow fluido su UI thread */}
+                    {group.records.map((item) => (
+                      <SwipeToDeleteRow
+                        key={item.id}
+                        marginBottom={10}
+                        borderRadius={16}
+                        onDelete={() => handleDeleteAttendanceDirect(item)}
                       >
-                        {renderAttendanceCardContent(item)}
-                      </TouchableOpacity>
-                    </SwipeToDeleteRow>
-                  ))}
-                </Reanimated.View>
-              ))
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceHistoryItem,
+                            { marginBottom: 0 },
+                          ]}
+                          activeOpacity={0.9}
+                          onLongPress={() => handleDeleteAttendance(item)}
+                        >
+                          {renderAttendanceCardContent(item)}
+                        </TouchableOpacity>
+                      </SwipeToDeleteRow>
+                    ))}
+                  </Reanimated.View>
+                ))}
+              </>
             )}
 
             {attendanceRecords.length > 0 && (
@@ -2260,11 +3376,7 @@ export default function ProfiloScreen() {
                 glowColor="rgba(239, 68, 68, 0.45)"
                 accentColor="#ef4444"
                 icon={
-                  <Ionicons
-                    name="trash-outline"
-                    size={16}
-                    color="#ffffff"
-                  />
+                  <Ionicons name="trash-outline" size={16} color="#ffffff" />
                 }
                 style={{
                   marginTop: 18,
@@ -2305,14 +3417,19 @@ export default function ProfiloScreen() {
         manualEvents={pastAttendanceManualEvents}
         attendanceRecords={attendanceRecords}
         degreeUrl={degreeUrl}
-        tabUrl={pastAttendanceTabUrl || selectedTabForSpecifiche?.url || defaultTabUrl || undefined}
+        tabUrl={
+          pastAttendanceTabUrl ||
+          selectedTabForSpecifiche?.url ||
+          defaultTabUrl ||
+          undefined
+        }
       />
 
       {/* Modal Gestione Sincronizzazione */}
       <NativeSheetModal
         visible={cloudModalVisible}
         onClose={() => setCloudModalVisible(false)}
-        title="Sincronizzazione"
+        title="Cloud"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
@@ -2350,7 +3467,9 @@ export default function ProfiloScreen() {
                   <Ionicons name="cloud" size={26} color="#ffffff" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 14 }}>
-                  <Text style={styles.cloudHeroTitle}>Cloud Sync StudICI</Text>
+                  <Text style={styles.cloudHeroTitle}>
+                    Sincronizzazione Cloud
+                  </Text>
                   <Text style={styles.cloudHeroSub}>
                     {lastCloudSyncTime
                       ? `Ultimo salvataggio: ${formatSyncDate(lastCloudSyncTime)}`
@@ -2447,7 +3566,7 @@ export default function ProfiloScreen() {
                   accentColor={theme.primary}
                   icon={
                     <Ionicons
-                      name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
+                      name={isSyncingCloud ? "refresh" : "sync-outline"}
                       size={16}
                       color="#ffffff"
                     />
@@ -2473,7 +3592,8 @@ export default function ProfiloScreen() {
 
             {/* Footnote sotto il box principale */}
             <Text style={styles.cloudBoxFootnote}>
-              La sincronizzazione automatica mantiene allineati orari, corsi, registro presenze e impostazioni di viaggio su tutti i dispositivi associati.
+              Mantieni allineati i tuoi orari, note, canali e presenze su tutti
+              i tuoi dispositivi.
             </Text>
 
             {/* Box 2: I MIEI DISPOSITIVI */}
@@ -2565,7 +3685,8 @@ export default function ProfiloScreen() {
                           </View>
                         </View>
                         <Text style={styles.deviceMetaText}>
-                          {dev.platform} • Sinc: {formatSyncDate(dev.lastActive)}
+                          {dev.platform} • Sinc:{" "}
+                          {formatSyncDate(dev.lastActive)}
                         </Text>
                       </View>
                       <TouchableOpacity
@@ -2635,7 +3756,9 @@ export default function ProfiloScreen() {
                       Dispositivo associato a un gruppo
                     </Text>
                     <Text style={styles.cloudSlaveNoticeSub}>
-                      Questo dispositivo è attualmente collegato come slave a un master. Non puoi collegarti ad altri dispositivi finché non ti dissoci dal master attuale nell&apos;elenco sopra.
+                      Questo dispositivo è attualmente collegato come slave a un
+                      master. Non puoi collegarti ad altri dispositivi finché
+                      non ti dissoci dal master attuale nell&apos;elenco sopra.
                     </Text>
                   </View>
                 </View>
@@ -2662,7 +3785,9 @@ export default function ProfiloScreen() {
                         Collega un altro dispositivo
                       </Text>
                       <Text style={styles.cloudRestoreSub}>
-                        Inserisci il codice di un altro dispositivo per sincronizzare corso, canale, presenze e impostazioni di viaggio.
+                        Inserisci il codice di un altro dispositivo per
+                        sincronizzare corso, canale, presenze e impostazioni di
+                        viaggio.
                       </Text>
                     </View>
                   </View>
@@ -2750,7 +3875,1133 @@ export default function ProfiloScreen() {
         </View>
       </NativeSheetModal>
 
-      {/* Modal Schermata Download Unificato */}
+      {/* Modal Gestione Calendario Apple */}
+      <NativeSheetModal
+        visible={calendarModalVisible}
+        onClose={() => {
+          Keyboard.dismiss();
+          calendarModalVisibleRef.current = false;
+          setCalendarModalVisible(false);
+        }}
+        title="Calendario Apple"
+        backgroundColor={UNIFORM_MODAL_BG}
+      >
+        <View collapsable={false} style={styles.modalContainer}>
+          <KeyboardAvoidingView
+            collapsable={false}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 14 : 0}
+            style={{ flex: 1 }}
+          >
+            <ScrollView
+              ref={calendarScrollRef}
+              style={styles.modalScroll}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              automaticallyAdjustKeyboardInsets={true}
+              contentContainerStyle={{ paddingBottom: 140 }}
+            >
+              {/* Box 1: Hero Card Calendario Apple */}
+              <View style={styles.cloudHeroCard}>
+                <View style={styles.cloudHeroTop}>
+                  <View
+                    style={[
+                      styles.cloudHeroIconBadge,
+                      {
+                        backgroundColor: theme.primary,
+                        shadowColor: theme.primary,
+                        shadowOpacity: 0.4,
+                        shadowRadius: 8,
+                        shadowOffset: { width: 0, height: 2 },
+                        elevation: 4,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="calendar" size={26} color="#ffffff" />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 14 }}>
+                    <Text style={styles.cloudHeroTitle}>Calendario Apple</Text>
+                    <Text style={styles.cloudHeroSub}>
+                      {lastCalendarSyncTime
+                        ? `Ultimo salvataggio: ${formatSyncDate(lastCalendarSyncTime)}`
+                        : "Nessun salvataggio recente"}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Separatore */}
+                <View style={styles.separator} />
+
+                {/* Riga Switch Sincronizzazione Automatica */}
+                <View style={styles.cloudAutoSyncRow}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={styles.cloudAutoSyncTitle}>
+                      Sincronizzazione automatica
+                    </Text>
+                    <Text style={styles.cloudAutoSyncSub}>
+                      {
+                        "Aggiorna le lezioni su Apple Calendar ad ogni avvio se l'orario o le aule sono cambiate."
+                      }
+                    </Text>
+                  </View>
+                  <Switch
+                    value={calendarAutoSync}
+                    onValueChange={handleToggleCalendarAutoSync}
+                    trackColor={{ false: "#39393d", true: "#34c759" }}
+                    ios_backgroundColor="#39393d"
+                  />
+                </View>
+
+                {/* Separatore */}
+                <View style={styles.separator} />
+
+                {/* Azioni Principali: Tasto Sincronizza */}
+                <View style={styles.cloudHeroActionRow}>
+                  <NativeActionButton
+                    label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
+                    onPress={handleSyncCalendar}
+                    disabled={isSyncingCalendar}
+                    variant="filled"
+                    glow={true}
+                    glowColor={theme.accent}
+                    accentColor={theme.primary}
+                    icon={
+                      <Ionicons
+                        name={isSyncingCalendar ? "refresh" : "sync-outline"}
+                        size={16}
+                        color="#ffffff"
+                      />
+                    }
+                    style={{
+                      flex: 1,
+                      width: "100%",
+                      height: 44,
+                      borderRadius: 22,
+                      shadowColor: theme.accent,
+                      shadowOpacity: 0.45,
+                      shadowRadius: 8,
+                    }}
+                    pillStyle={{
+                      height: 44,
+                      borderRadius: 22,
+                      paddingHorizontal: 14,
+                    }}
+                    textStyle={styles.cloudPrimaryBtnPillText}
+                  />
+                </View>
+              </View>
+
+              {/* Box 2: Nome Calendario Personalizzato */}
+              <Text style={styles.sectionHeader}>Nome calendario</Text>
+              <View style={styles.groupedCard}>
+                <View style={{ padding: 16 }}>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      color: "#8e8e93",
+                      lineHeight: 18,
+                      marginBottom: 12,
+                    }}
+                  >
+                    Personalizza il nome del calendario.
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
+                    <View
+                      style={{
+                        flex: 1,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        backgroundColor: "#151516",
+                        borderRadius: 12,
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: "rgba(255, 255, 255, 0.15)",
+                        paddingHorizontal: 12,
+                        height: 44,
+                      }}
+                    >
+                      <Ionicons
+                        name="pencil-outline"
+                        size={15}
+                        color="#71717a"
+                        style={{ marginRight: 8 }}
+                      />
+                      <TextInput
+                        style={{
+                          flex: 1,
+                          height: 44,
+                          color: "#ffffff",
+                          fontSize: 14,
+                          paddingVertical: 0,
+                        }}
+                        value={calendarTitleInput}
+                        onChangeText={setCalendarTitleInput}
+                        placeholder="Es. StudICI - Lezioni Sapienza"
+                        placeholderTextColor="#636366"
+                        autoCapitalize="sentences"
+                        autoCorrect={false}
+                        returnKeyType="done"
+                        onSubmitEditing={handleSaveCalendarTitle}
+                        onFocus={() => {
+                          setTimeout(() => {
+                            calendarScrollRef.current?.scrollTo({
+                              y: 200,
+                              animated: true,
+                            });
+                          }, 120);
+                        }}
+                      />
+                      {calendarTitleInput.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setCalendarTitleInput("")}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons
+                            name="close-circle"
+                            size={16}
+                            color="#71717a"
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <NativeActionButton
+                      label={isSavingCalendarTitle ? "..." : "Salva"}
+                      onPress={handleSaveCalendarTitle}
+                      disabled={
+                        !calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                      }
+                      variant={
+                        !calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                          ? "glass"
+                          : "filled"
+                      }
+                      glow={Boolean(
+                        calendarTitleInput.trim() &&
+                        calendarTitleInput.trim() !== calendarTitle &&
+                        !isSavingCalendarTitle,
+                      )}
+                      glowColor={theme.accent}
+                      accentColor={theme.primary}
+                      style={{
+                        height: 44,
+                        borderRadius: 22,
+                        minWidth: 104,
+                        flexShrink: 0,
+                        ...(calendarTitleInput.trim() &&
+                        calendarTitleInput.trim() !== calendarTitle &&
+                        !isSavingCalendarTitle
+                          ? {
+                              shadowColor: theme.accent,
+                              shadowOpacity: 0.45,
+                              shadowRadius: 8,
+                            }
+                          : {}),
+                      }}
+                      pillStyle={{
+                        height: 44,
+                        borderRadius: 22,
+                        paddingHorizontal: 16,
+                        ...(!calendarTitleInput.trim() ||
+                        calendarTitleInput.trim() === calendarTitle ||
+                        isSavingCalendarTitle
+                          ? {
+                              backgroundColor: "#2c2c2e",
+                              borderColor: "rgba(255, 255, 255, 0.12)",
+                            }
+                          : {}),
+                      }}
+                      textStyle={{
+                        color: "#ffffff",
+                        fontSize: 14,
+                        fontWeight: "600",
+                        letterSpacing: -0.2,
+                      }}
+                    />
+                  </View>
+                  {calendarTitle !== DEFAULT_CALENDAR_TITLE && (
+                    <TouchableOpacity
+                      style={{ marginTop: 12, alignSelf: "flex-start" }}
+                      activeOpacity={0.7}
+                      onPress={handleResetCalendarTitle}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12.5,
+                          color: theme.accent,
+                          fontWeight: "500",
+                        }}
+                      >
+                        Ripristina nome predefinito
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              {/* Box 3: Gestione & Rimozione */}
+              <Text style={styles.sectionHeader}>GESTIONE</Text>
+              <View style={[styles.groupedCard, { marginBottom: 8 }]}>
+                <TouchableOpacity
+                  style={styles.tableRow}
+                  activeOpacity={0.7}
+                  onPress={handleDeleteCalendar}
+                  disabled={isDeletingCalendar}
+                >
+                  <View
+                    style={[
+                      styles.iconBox,
+                      {
+                        backgroundColor: "rgba(255, 69, 58, 0.12)",
+                        borderColor: "rgba(255, 69, 58, 0.25)",
+                      },
+                    ]}
+                  >
+                    {isDeletingCalendar ? (
+                      <ActivityIndicator size="small" color="#ff453a" />
+                    ) : (
+                      <Ionicons
+                        name="trash-outline"
+                        size={17}
+                        color="#ff453a"
+                      />
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowTitle, { color: "#ff453a" }]}>
+                      Rimuovi calendario da iOS
+                    </Text>
+                    <Text style={styles.rowSubTitle}>
+                      Elimina calendario dedicato
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={15}
+                    color="#48484a"
+                    style={{ marginLeft: 6 }}
+                  />
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </NativeSheetModal>
+      <NativeSheetModal
+        visible={studentModalVisible}
+        onClose={() => setStudentModalVisible(false)}
+        title="Dati studenti"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Salva modifiche",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: async () => {
+              await saveStudentInfo({
+                matricola: tempMatricola,
+                email: tempEmail,
+              });
+              const fresh = await getStudentInfo();
+              setStudentInfo(fresh);
+              setStudentModalVisible(false);
+            },
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}
+          contentContainerStyle={{ padding: 16 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.modalCardGroup}>
+            <View style={styles.modalInputRow}>
+              <View style={styles.modalInputIconBox}>
+                <Ionicons name="card-outline" size={18} color={theme.accent} />
+              </View>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Matricola (es. 2012345)"
+                placeholderTextColor="#71717a"
+                value={tempMatricola}
+                onChangeText={setTempMatricola}
+                keyboardType="number-pad"
+              />
+              {tempMatricola.length > 0 && (
+                <TouchableOpacity onPress={() => setTempMatricola("")}>
+                  <Ionicons name="close-circle" size={17} color="#71717a" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.separator} />
+
+            <View style={styles.modalInputRow}>
+              <View style={styles.modalInputIconBox}>
+                <Ionicons name="mail-outline" size={18} color={theme.accent} />
+              </View>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Email (es. cognome.1234567@studenti.uniroma1.it)"
+                placeholderTextColor="#71717a"
+                value={tempEmail}
+                onChangeText={setTempEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+              />
+              {tempEmail.length > 0 && (
+                <TouchableOpacity onPress={() => setTempEmail("")}>
+                  <Ionicons name="close-circle" size={17} color="#71717a" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Modal 1: Lista Documenti e link salvati con Context Menu e Swipe-to-Delete */}
+      <NativeSheetModal
+        visible={docsListModalVisible}
+        onClose={() => setDocsListModalVisible(false)}
+        title="Documenti e link"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Aggiungi",
+            sfSymbol: "plus",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleOpenAddBatchModal,
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+          onLayout={(e) => {
+            const w = e.nativeEvent.layout.width - 32;
+            if (w > 0 && Math.abs(w - docContainerWidth) > 1) {
+              setDocContainerWidth(w);
+            }
+          }}
+        >
+          {savedDocs.length === 0 ? (
+            <View style={styles.modalEmptyStateContainer}>
+              <View
+                style={[
+                  styles.modalEmptyStateIconCircle,
+                  { backgroundColor: theme.subtle },
+                ]}
+              >
+                <Ionicons
+                  name="folder-open-outline"
+                  size={36}
+                  color={theme.accent}
+                />
+              </View>
+              <Text style={styles.modalEmptyStateTitle}>
+                Nessun documento salvato
+              </Text>
+              <Text style={styles.modalEmptyStateSub}>
+                Tocca il pulsante &quot;+&quot; in alto a destra per aggiungere
+                link, file o note.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {savedDocs.map((doc) => {
+                let iconName: any = "link-outline";
+                if (doc.type === "file") iconName = "document-text-outline";
+                else if (doc.type === "note") iconName = "reader-outline";
+                else if (
+                  doc.url?.includes("drive.google") ||
+                  doc.url?.includes("docs.google")
+                ) {
+                  iconName = "cloud-outline";
+                }
+
+                let subtitle = "";
+                if (doc.type === "link") {
+                  subtitle = doc.url
+                    ? doc.url.replace(/^https?:\/\//i, "").split("/")[0]
+                    : "Link web";
+                  if (doc.note) subtitle += ` • ${doc.note}`;
+                } else if (doc.type === "file") {
+                  subtitle = [
+                    doc.fileName || "File",
+                    formatDocFileSize(doc.fileSize),
+                    doc.note,
+                  ]
+                    .filter(Boolean)
+                    .join(" • ");
+                } else if (doc.type === "note") {
+                  subtitle = doc.note || "Nota personale";
+                }
+
+                return (
+                  <SwipeToDeleteRow
+                    key={doc.id}
+                    marginBottom={10}
+                    borderRadius={14}
+                    style={{ width: docCardWidth }}
+                    onDelete={() => handleDeleteDocDirectly(doc.id, doc.title)}
+                  >
+                    <DocumentContextMenu
+                      doc={doc}
+                      isNativeAvailable={isNativeComponentAvailable}
+                      onOpen={() => handleOpenItem(doc)}
+                      onCopyLink={
+                        doc.type === "link" || Boolean(doc.url)
+                          ? () => handleCopyDocLink(doc)
+                          : undefined
+                      }
+                      onEdit={() => handleOpenEditModal(doc)}
+                      onDelete={() =>
+                        handleDeleteDocDirectly(doc.id, doc.title)
+                      }
+                      style={{ width: docCardWidth, borderRadius: 14 }}
+                    >
+                      <TouchableOpacity
+                        style={[styles.docItemCard, { width: docCardWidth }]}
+                        activeOpacity={0.7}
+                        onPress={() => handleOpenItem(doc)}
+                      >
+                        <View
+                          style={[
+                            styles.iconBox,
+                            {
+                              backgroundColor: theme.subtle,
+                              borderColor: theme.border,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={iconName}
+                            size={18}
+                            color={theme.accent}
+                          />
+                        </View>
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <Text
+                            style={styles.docItemCardTitle}
+                            numberOfLines={1}
+                          >
+                            {doc.title}
+                          </Text>
+                          <Text style={styles.docItemCardSub} numberOfLines={1}>
+                            {subtitle}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={15}
+                          color="#48484a"
+                          style={{ marginLeft: 6 }}
+                        />
+                      </TouchableOpacity>
+                    </DocumentContextMenu>
+                  </SwipeToDeleteRow>
+                );
+              })}
+            </>
+          )}
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Modal 2: Aggiungi Elementi (Multi-item con tasto '+' e tick separati in alto a destra) */}
+      <NativeSheetModal
+        visible={batchAddModalVisible}
+        onClose={() => {
+          setBatchAddModalVisible(false);
+          setBatchDrafts([]);
+        }}
+        title="Nuovi elementi"
+        backgroundColor={UNIFORM_MODAL_BG}
+        rightActions={[
+          {
+            label: "Altro",
+            sfSymbol: "plus",
+            tintColor: theme.primary,
+            onPress: handleAddBatchSlot,
+            accessibilityLabel: "Aggiungi un altro elemento",
+          },
+          {
+            label: "Salva modifiche",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleSaveBatchDrafts,
+            accessibilityLabel: "Salva elementi",
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {batchDrafts.map((draft, idx) => (
+            <View key={draft.tempId} style={styles.batchCardContainer}>
+              <View style={styles.batchCardHeader}>
+                <Text style={styles.batchCardTitle}>Elemento {idx + 1}</Text>
+                {batchDrafts.length > 1 && (
+                  <TouchableOpacity
+                    onPress={() => handleRemoveBatchSlot(draft.tempId)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={17} color="#ef4444" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Selettore Segmented UI: Link | File | Nota */}
+              <View style={styles.modalSegmentedContainer}>
+                {isNativeComponentAvailable ? (
+                  <SegmentedControl
+                    values={["Link", "File", "Nota"]}
+                    selectedIndex={
+                      draft.type === "link" ? 0 : draft.type === "file" ? 1 : 2
+                    }
+                    onChange={(event) => {
+                      const selected = event.nativeEvent.selectedSegmentIndex;
+                      const nextType: SavedItemType =
+                        selected === 0
+                          ? "link"
+                          : selected === 1
+                            ? "file"
+                            : "note";
+                      handleUpdateDraft(draft.tempId, "type", nextType);
+                    }}
+                    style={styles.modalSegmentedControl}
+                  />
+                ) : (
+                  <View style={styles.batchTypeSelector}>
+                    {(["link", "file", "note"] as SavedItemType[]).map(
+                      (tKey, i) => {
+                        const labels = ["Link", "File", "Nota"];
+                        const active = draft.type === tKey;
+                        return (
+                          <TouchableOpacity
+                            key={tKey}
+                            style={[
+                              styles.batchTypeBtn,
+                              active && [
+                                styles.batchTypeBtnActive,
+                                { backgroundColor: theme.primary },
+                              ],
+                            ]}
+                            onPress={() =>
+                              handleUpdateDraft(draft.tempId, "type", tKey)
+                            }
+                          >
+                            <Text
+                              style={[
+                                styles.batchTypeBtnText,
+                                active && styles.batchTypeBtnTextActive,
+                              ]}
+                            >
+                              {labels[i]}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      },
+                    )}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.modalCardGroup}>
+                <View style={styles.modalInputRow}>
+                  <View style={styles.modalInputIconBox}>
+                    <Ionicons
+                      name="text-outline"
+                      size={17}
+                      color={theme.accent}
+                    />
+                  </View>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="Titolo"
+                    placeholderTextColor="#71717a"
+                    value={draft.title}
+                    onChangeText={(text) =>
+                      handleUpdateDraft(draft.tempId, "title", text)
+                    }
+                    returnKeyType="next"
+                  />
+                  {draft.title.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() =>
+                        handleUpdateDraft(draft.tempId, "title", "")
+                      }
+                    >
+                      <Ionicons name="close-circle" size={16} color="#71717a" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {draft.type === "link" && (
+                  <>
+                    <View style={styles.separator} />
+                    <View style={styles.modalInputRow}>
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons
+                          name="globe-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
+                      </View>
+                      <TextInput
+                        style={styles.modalTextInput}
+                        placeholder="Link o URL"
+                        placeholderTextColor="#71717a"
+                        value={draft.url}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "url", text)
+                        }
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                      />
+                      {draft.url.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() =>
+                            handleUpdateDraft(draft.tempId, "url", "")
+                          }
+                        >
+                          <Ionicons
+                            name="close-circle"
+                            size={16}
+                            color="#71717a"
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {draft.type === "file" && (
+                  <FileSourceSection
+                    item={draft}
+                    accent={theme.accent}
+                    onPick={() => handlePickFileForDraft(draft.tempId)}
+                  />
+                )}
+
+                {draft.type === "note" ? (
+                  <>
+                    <View style={styles.separator} />
+                    <View
+                      style={[
+                        styles.modalInputRow,
+                        { alignItems: "flex-start" },
+                      ]}
+                    >
+                      <View
+                        style={[styles.modalInputIconBox, { marginTop: 1 }]}
+                      >
+                        <Ionicons
+                          name="create-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
+                      </View>
+                      <TextInput
+                        style={[
+                          styles.modalTextInput,
+                          { minHeight: 56, textAlignVertical: "top" },
+                        ]}
+                        placeholder="Contenuto della nota..."
+                        placeholderTextColor="#71717a"
+                        value={draft.note}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "note", text)
+                        }
+                        multiline
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.separator} />
+                    <View style={styles.modalInputRow}>
+                      <View style={styles.modalInputIconBox}>
+                        <Ionicons
+                          name="pencil-outline"
+                          size={17}
+                          color={theme.accent}
+                        />
+                      </View>
+                      <TextInput
+                        style={styles.modalTextInput}
+                        placeholder="Nota o descrizione facoltativa"
+                        placeholderTextColor="#71717a"
+                        value={draft.note}
+                        onChangeText={(text) =>
+                          handleUpdateDraft(draft.tempId, "note", text)
+                        }
+                      />
+                    </View>
+                  </>
+                )}
+              </View>
+            </View>
+          ))}
+
+          <Text style={styles.modalCardHelperText}>
+            Per aggiungere altri elementi tocca &quot;+&quot; in alto a destra.
+            Quando hai terminato, premi la spunta per salvare tutto.
+          </Text>
+        </ScrollView>
+      </NativeSheetModal>
+
+      {/* Visualizzatore nativo in-app per PDF / file salvati (nessun nuovo download) */}
+      <NativeSheetModal
+        visible={Boolean(viewerDoc)}
+        onClose={() => setViewerDoc(null)}
+        title={viewerDoc?.title || "Documento"}
+        backgroundColor="#000000"
+        sheetAllowedDetents={[1]}
+        rightActions={[
+          {
+            label: "Condividi",
+            sfSymbol: "square.and.arrow.up",
+            tintColor: theme.primary,
+            onPress: async () => {
+              if (!viewerDoc?.resolvedUri) return;
+              try {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(viewerDoc.resolvedUri, {
+                    mimeType: viewerDoc.mimeType,
+                    dialogTitle: viewerDoc.title,
+                  });
+                }
+              } catch {}
+            },
+            accessibilityLabel: "Condividi o apri con un'altra app",
+          },
+        ]}
+      >
+        {(() => {
+          if (!viewerDoc || !SafeWebView) return null;
+          if (!viewerDoc.resolvedUri) {
+            return (
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                }}
+              >
+                <ActivityIndicator color={theme.accent} />
+                <Text style={{ color: "#8e8e93", fontSize: 13 }}>
+                  Download dal cloud in corso...
+                </Text>
+              </View>
+            );
+          }
+          const docDir = viewerDoc.resolvedUri.slice(
+            0,
+            viewerDoc.resolvedUri.lastIndexOf("/") + 1,
+          );
+          return (
+            <SafeWebView
+              style={{ flex: 1, backgroundColor: "#000000" }}
+              source={{ uri: viewerDoc.resolvedUri }}
+              originWhitelist={["*"]}
+              allowFileAccess
+              allowingReadAccessToURL={docDir}
+              startInLoadingState
+              renderLoading={() => (
+                <View
+                  style={{
+                    flex: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <ActivityIndicator color={theme.accent} />
+                </View>
+              )}
+            />
+          );
+        })()}
+      </NativeSheetModal>
+
+      {/* Modal 3: Dettaglio / Modifica Singolo Elemento con Segmented UI */}
+      <NativeSheetModal
+        visible={editModalVisible}
+        onClose={() => {
+          setEditModalVisible(false);
+          setEditingDoc(null);
+        }}
+        title="Dettagli"
+        backgroundColor={UNIFORM_MODAL_BG}
+        leftActions={[
+          {
+            label: "Annulla",
+            sfSymbol: "xmark",
+            onPress: () => {
+              setEditModalVisible(false);
+              setEditingDoc(null);
+            },
+            accessibilityLabel: "Annulla modifiche",
+          },
+        ]}
+        rightActions={[
+          {
+            label: "Salva modifiche",
+            sfSymbol: "checkmark",
+            prominent: true,
+            tintColor: theme.primary,
+            onPress: handleSaveEditDoc,
+            accessibilityLabel: "Salva modifiche",
+          },
+        ]}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.batchCardContainer}>
+            {/* Selettore Segmented UI: Link | File | Nota */}
+            <View style={styles.modalSegmentedContainer}>
+              {isNativeComponentAvailable ? (
+                <SegmentedControl
+                  values={["Link", "File", "Nota"]}
+                  selectedIndex={
+                    editDraft.type === "link"
+                      ? 0
+                      : editDraft.type === "file"
+                        ? 1
+                        : 2
+                  }
+                  onChange={(event) => {
+                    const selected = event.nativeEvent.selectedSegmentIndex;
+                    const nextType: SavedItemType =
+                      selected === 0
+                        ? "link"
+                        : selected === 1
+                          ? "file"
+                          : "note";
+                    setEditDraft((prev) => ({ ...prev, type: nextType }));
+                  }}
+                  style={styles.modalSegmentedControl}
+                />
+              ) : (
+                <View style={styles.batchTypeSelector}>
+                  {(["link", "file", "note"] as SavedItemType[]).map(
+                    (tKey, i) => {
+                      const labels = ["Link", "File", "Nota"];
+                      const active = editDraft.type === tKey;
+                      return (
+                        <TouchableOpacity
+                          key={tKey}
+                          style={[
+                            styles.batchTypeBtn,
+                            active && [
+                              styles.batchTypeBtnActive,
+                              { backgroundColor: theme.primary },
+                            ],
+                          ]}
+                          onPress={() =>
+                            setEditDraft((prev) => ({ ...prev, type: tKey }))
+                          }
+                        >
+                          <Text
+                            style={[
+                              styles.batchTypeBtnText,
+                              active && styles.batchTypeBtnTextActive,
+                            ]}
+                          >
+                            {labels[i]}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    },
+                  )}
+                </View>
+              )}
+            </View>
+
+            <View style={styles.modalCardGroup}>
+              <View style={styles.modalInputRow}>
+                <View style={styles.modalInputIconBox}>
+                  <Ionicons
+                    name="text-outline"
+                    size={17}
+                    color={theme.accent}
+                  />
+                </View>
+                <TextInput
+                  style={styles.modalTextInput}
+                  placeholder="Titolo"
+                  placeholderTextColor="#71717a"
+                  value={editDraft.title}
+                  onChangeText={(text) =>
+                    setEditDraft((prev) => ({ ...prev, title: text }))
+                  }
+                  returnKeyType="next"
+                />
+                {editDraft.title.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      setEditDraft((prev) => ({ ...prev, title: "" }))
+                    }
+                  >
+                    <Ionicons name="close-circle" size={16} color="#71717a" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {editDraft.type === "link" && (
+                <>
+                  <View style={styles.separator} />
+                  <View style={styles.modalInputRow}>
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons
+                        name="globe-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
+                    </View>
+                    <TextInput
+                      style={styles.modalTextInput}
+                      placeholder="Link o URL"
+                      placeholderTextColor="#71717a"
+                      value={editDraft.url}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, url: text }))
+                      }
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                    />
+                    {editDraft.url.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          setEditDraft((prev) => ({ ...prev, url: "" }))
+                        }
+                      >
+                        <Ionicons
+                          name="close-circle"
+                          size={16}
+                          color="#71717a"
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              )}
+
+              {editDraft.type === "file" && (
+                <FileSourceSection
+                  item={editDraft}
+                  accent={theme.accent}
+                  onPick={handlePickFileForEditDraft}
+                />
+              )}
+
+              {editDraft.type === "note" ? (
+                <>
+                  <View style={styles.separator} />
+                  <View
+                    style={[styles.modalInputRow, { alignItems: "flex-start" }]}
+                  >
+                    <View style={[styles.modalInputIconBox, { marginTop: 1 }]}>
+                      <Ionicons
+                        name="create-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
+                    </View>
+                    <TextInput
+                      style={[
+                        styles.modalTextInput,
+                        { minHeight: 56, textAlignVertical: "top" },
+                      ]}
+                      placeholder="Contenuto della nota..."
+                      placeholderTextColor="#71717a"
+                      value={editDraft.note}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, note: text }))
+                      }
+                      multiline
+                    />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.separator} />
+                  <View style={styles.modalInputRow}>
+                    <View style={styles.modalInputIconBox}>
+                      <Ionicons
+                        name="pencil-outline"
+                        size={17}
+                        color={theme.accent}
+                      />
+                    </View>
+                    <TextInput
+                      style={styles.modalTextInput}
+                      placeholder="Nota o descrizione facoltativa"
+                      placeholderTextColor="#71717a"
+                      value={editDraft.note}
+                      onChangeText={(text) =>
+                        setEditDraft((prev) => ({ ...prev, note: text }))
+                      }
+                    />
+                  </View>
+                </>
+              )}
+            </View>
+
+            {/* Azione di eliminazione a fondo scheda in stile iOS */}
+            <View style={[styles.modalCardGroup, { marginTop: 14 }]}>
+              <TouchableOpacity
+                style={[
+                  styles.modalInputRow,
+                  { justifyContent: "center", minHeight: 46 },
+                ]}
+                onPress={handleDeleteEditingDoc}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color="#ef4444"
+                  style={{ marginRight: 8 }}
+                />
+                <Text
+                  style={{
+                    color: "#ef4444",
+                    fontSize: 16,
+                    fontWeight: "600",
+                  }}
+                >
+                  Elimina elemento
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
+      </NativeSheetModal>
       <Modal
         visible={Boolean(downloadingCourse)}
         animationType="fade"
@@ -2789,6 +5040,13 @@ export default function ProfiloScreen() {
           }}
         />
       )}
+
+      {/* Modal Registro Note & Promemoria */}
+      <NotesRegistryModal
+        visible={notesRegistryModalVisible}
+        onClose={() => setNotesRegistryModalVisible(false)}
+        theme={theme}
+      />
     </SafeAreaView>
   );
 }
@@ -2819,7 +5077,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 8,
     borderWidth: 0.5,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -2832,6 +5090,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
+    marginTop: 2,
     shadowColor: SAPIENZA_RED,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
@@ -2858,6 +5117,92 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8,
   },
+  profileStudentInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  profileStudentPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 6,
+    elevation: 4,
+    maxWidth: "100%",
+  },
+  profileStudentPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.1,
+  },
+  studentCredentialsCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  studentCredentialsLeft: {
+    flex: 1,
+    marginRight: 8,
+  },
+  studentInfoBadgesContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  studentInfoHiddenRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 2,
+  },
+  studentInfoHiddenText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8e8e93",
+    letterSpacing: 0.1,
+  },
+  studentInfoEyeBtn: {
+    padding: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profileStudentPillGrey: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "rgba(255, 255, 255, 0.28)",
+    shadowColor: "#d4d4d8",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 5,
+    elevation: 3,
+    maxWidth: "100%",
+  },
+  profileStudentPillTextGrey: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#f4f4f5",
+    letterSpacing: 0.1,
+  },
   profileBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -2875,6 +5220,232 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.1,
+  },
+  /* Sezioni e Gruppi Inset Grouped iOS */
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingRight: 16,
+    marginTop: 22,
+    marginBottom: 6,
+  },
+  sectionHeaderNoMargin: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#8e8e93",
+    textTransform: "uppercase",
+    letterSpacing: -0.08,
+    marginLeft: 16,
+  },
+  sectionHeaderAction: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  docRowSubtitle: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  docEditIconBtn: {
+    padding: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  batchCardContainer: {
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    padding: 12,
+    marginBottom: 16,
+  },
+  batchCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  batchCardTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#e4e4e7",
+    letterSpacing: -0.2,
+  },
+  batchTypeSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#18181b",
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  batchTypeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  batchTypeBtnActive: {
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  batchTypeBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#a1a1aa",
+  },
+  batchTypeBtnTextActive: {
+    color: "#ffffff",
+    fontWeight: "700",
+  },
+  batchFilePickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  batchFilePlaceholder: {
+    fontSize: 14,
+    color: "#71717a",
+  },
+  batchPickedFileName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
+  batchPickedFileSize: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  batchAddAnotherBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  batchAddAnotherText: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  docItemCard: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  docItemCardTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
+  docItemCardSub: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  modalEmptyStateContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+  },
+  modalEmptyStateIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  modalEmptyStateTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  modalEmptyStateSub: {
+    fontSize: 13,
+    color: "#8e8e93",
+    textAlign: "center",
+    lineHeight: 18,
+    maxWidth: 280,
+  },
+  modalSegmentedContainer: {
+    marginBottom: 12,
+  },
+  modalSegmentedControl: {
+    height: 36,
+    width: "100%",
+  },
+  modalCardGroup: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    overflow: "hidden",
+    marginBottom: 10,
+  },
+  modalInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  modalInputIconBox: {
+    width: 28,
+    alignItems: "center",
+    marginRight: 10,
+  },
+  modalTextInput: {
+    flex: 1,
+    fontSize: 16,
+    color: "#ffffff",
+    paddingVertical: 0,
+  },
+  modalCardHelperText: {
+    fontSize: 13,
+    color: "#8e8e93",
+    lineHeight: 18,
+    marginHorizontal: 4,
+    marginTop: 4,
+  },
+  modalDeleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.3)",
+    paddingVertical: 12,
+    marginTop: 16,
+    marginBottom: 10,
+  },
+  modalDeleteButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#ef4444",
   },
   /* Sezioni e Gruppi Inset Grouped iOS */
   sectionHeader: {
@@ -3088,42 +5659,148 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-  /* ── Registro presenze Styles ── */
-  statsCardsRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 12,
-  },
-  statCard: {
-    flex: 1,
+  /* ── Registro presenze Styles (iOS Dashboard Card & Metric Tiles) ── */
+  attendanceDashboardCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
-    alignItems: "center",
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.1)",
   },
-  statIconSquircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+  attendanceCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  attendanceCardHeaderIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginRight: 10,
   },
-  statValue: {
+  attendanceCardTitle: {
+    fontSize: 16,
+    fontWeight: "600",
     color: "#ffffff",
-    fontSize: 18,
-    fontWeight: "800",
     letterSpacing: -0.2,
   },
-  statLabel: {
-    color: "#71717a",
-    fontSize: 9,
+  attendanceCardBadgePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginRight: 6,
+  },
+  attendanceCardBadgeText: {
+    fontSize: 12,
+    color: "#8e8e93",
+    fontWeight: "500",
+  },
+  kpiTilesRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  kpiTile: {
+    flex: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 13,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+  },
+  kpiTileHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+    gap: 4,
+  },
+  kpiTileLabel: {
+    fontSize: 10,
     fontWeight: "700",
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  kpiTileValue: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#ffffff",
+    letterSpacing: -0.4,
+  },
+  kpiTileUnit: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#8e8e93",
+  },
+  kpiTileSub: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#8e8e93",
     marginTop: 2,
+  },
+  attendanceBreakdownContainer: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255, 255, 255, 0.08)",
+  },
+  breakdownBar: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    flexDirection: "row",
+    overflow: "hidden",
+  },
+  legendListContainer: {
+    marginTop: 10,
+  },
+  legendRowItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 5,
+  },
+  legendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginRight: 8,
+  },
+  legendSubjectTitle: {
+    fontSize: 12.5,
+    fontWeight: "500",
+    color: "#e4e4e7",
+    flex: 1,
+    marginRight: 10,
+    letterSpacing: -0.1,
+  },
+  legendHoursValue: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    color: "#a1a1aa",
+    letterSpacing: -0.1,
+  },
+  legendHoursUnit: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#71717a",
+  },
+  legendDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    marginLeft: 15,
+  },
+  legendMoreRow: {
+    paddingTop: 6,
+    alignItems: "center",
+  },
+  legendMoreText: {
+    fontSize: 11,
+    color: "#71717a",
+    fontWeight: "500",
   },
   attendanceEmptyBox: {
     padding: 24,

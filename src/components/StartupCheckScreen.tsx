@@ -6,6 +6,10 @@ import {
   ActivityIndicator,
   Animated,
   Platform,
+  Alert,
+  Linking,
+  AppState,
+  TouchableOpacity,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
@@ -13,6 +17,11 @@ import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 import { refreshCommuterAlarmsInBackground } from '../utils/alarmSync';
+import {
+  checkForAppUpdate,
+  GITHUB_LATEST_RELEASE_URL,
+  AppUpdateInfo,
+} from '../utils/updateChecker';
 
 interface StartupCheckScreenProps {
   degreeUrl: string;
@@ -26,9 +35,10 @@ export function StartupCheckScreen({
   onFinish,
 }: StartupCheckScreenProps) {
   const { theme } = useTheme();
-  const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date'>('checking');
-  const [statusMessage, setStatusMessage] = useState('Verifica orario in corso...');
+  const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date' | 'blocked'>('checking');
+  const [statusMessage, setStatusMessage] = useState('Controlla aggiornamento orario');
   const [progressDetail, setProgressDetail] = useState('');
+  const [blockingUpdate, setBlockingUpdate] = useState<AppUpdateInfo | null>(null);
 
   // Entrance & status transitions
   const [fadeAnim] = useState(() => new Animated.Value(0));
@@ -94,21 +104,76 @@ export function StartupCheckScreen({
     pulseLoopRef.current = pulseLoop;
     pulseLoop.start();
 
-    // Safety timeout: max 3.5s per il controllo orari
-    const checkTimeout = setTimeout(() => {
+    // Safety timeout: max 3.5s per il controllo orari (annullato se aggiornamento bloccante)
+    let checkTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       safeFinish();
     }, 3500);
 
     async function runCheck() {
       try {
-        const result = await checkCourseUpdates(degreeUrl);
+        // Controllo simultaneo di aggiornamenti app obbligatori e orario lezioni
+        const [appUpdateRes, courseUpdateRes] = await Promise.allSettled([
+          checkForAppUpdate(),
+          checkCourseUpdates(degreeUrl),
+        ]);
 
         if (finishedRef.current) return;
 
-        if (result.hasChanges) {
-          clearTimeout(checkTimeout);
+        // 1. Se è presente un aggiornamento app obbligatorio/bloccante
+        if (
+          appUpdateRes.status === 'fulfilled' &&
+          appUpdateRes.value.hasUpdate &&
+          appUpdateRes.value.isMajor
+        ) {
+          if (checkTimeout) {
+            clearTimeout(checkTimeout);
+            checkTimeout = null;
+          }
+          const updateInfo = appUpdateRes.value;
+          setBlockingUpdate(updateInfo);
+          setStatus('blocked');
+          setStatusMessage('Aggiornamento obbligatorio');
+
+          if (pulseLoopRef.current) {
+            pulseLoopRef.current.stop();
+            pulseLoopRef.current = null;
+          }
+
+          const showBlockingAlert = () => {
+            Alert.alert(
+              'Aggiornamento disponibile',
+              `È disponibile la nuova versione v${updateInfo.latestVersion} di StudICI (installata: v${updateInfo.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
+              [
+                {
+                  text: 'Aggiorna',
+                  style: 'default',
+                  onPress: () => {
+                    Linking.openURL(
+                      updateInfo.ipaUrl ||
+                        updateInfo.htmlUrl ||
+                        GITHUB_LATEST_RELEASE_URL
+                    );
+                    setTimeout(showBlockingAlert, 1000);
+                  },
+                },
+              ],
+              { cancelable: false }
+            );
+          };
+
+          showBlockingAlert();
+          // Blocca definitivamente l'avanzamento: l'app non va oltre la verifica orario
+          return;
+        }
+
+        // 2. Se non c'è aggiornamento bloccante, procedi normalmente con l'orario
+        if (courseUpdateRes.status === 'fulfilled' && courseUpdateRes.value.hasChanges) {
+          if (checkTimeout) {
+            clearTimeout(checkTimeout);
+            checkTimeout = null;
+          }
           setStatus('updating');
-          setStatusMessage(result.reason || 'Aggiornamento lezioni in corso...');
+          setStatusMessage(courseUpdateRes.value.reason || 'Aggiornamento lezioni in corso...');
 
           await fetchAllCourseData(degreeUrl, true, (stepMsg) => {
             setProgressDetail(stepMsg);
@@ -130,7 +195,10 @@ export function StartupCheckScreen({
             safeFinish();
           }, 450);
         } else {
-          clearTimeout(checkTimeout);
+          if (checkTimeout) {
+            clearTimeout(checkTimeout);
+            checkTimeout = null;
+          }
           safeFinish();
         }
       } catch (err) {
@@ -142,7 +210,9 @@ export function StartupCheckScreen({
     runCheck();
 
     return () => {
-      clearTimeout(checkTimeout);
+      if (checkTimeout) {
+        clearTimeout(checkTimeout);
+      }
       if (pulseLoopRef.current) {
         pulseLoopRef.current.stop();
         pulseLoopRef.current = null;
@@ -153,6 +223,61 @@ export function StartupCheckScreen({
       fadeAnim.stopAnimation();
     };
   }, [degreeUrl, fadeAnim, translateYAnim, capsulePulse, checkScale, safeFinish]);
+
+  // Se l'app è bloccata e l'utente ritorna in primo piano, riproponi l'alert non ignorabile
+  useEffect(() => {
+    if (status !== 'blocked' || !blockingUpdate) return;
+
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        Alert.alert(
+          'Aggiornamento disponibile',
+          `È disponibile la nuova versione v${blockingUpdate.latestVersion} di StudICI (installata: v${blockingUpdate.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
+          [
+            {
+              text: 'Aggiorna',
+              style: 'default',
+              onPress: () => {
+                Linking.openURL(
+                  blockingUpdate.ipaUrl ||
+                    blockingUpdate.htmlUrl ||
+                    GITHUB_LATEST_RELEASE_URL
+                );
+              },
+            },
+          ],
+          { cancelable: false }
+        );
+      }
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [status, blockingUpdate]);
+
+  const handleCapsulePress = () => {
+    if (status === 'blocked' && blockingUpdate) {
+      Alert.alert(
+        'Aggiornamento disponibile',
+        `È disponibile la nuova versione v${blockingUpdate.latestVersion} di StudICI (installata: v${blockingUpdate.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
+        [
+          {
+            text: 'Aggiorna',
+            style: 'default',
+            onPress: () => {
+              Linking.openURL(
+                blockingUpdate.ipaUrl ||
+                  blockingUpdate.htmlUrl ||
+                  GITHUB_LATEST_RELEASE_URL
+              );
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -196,36 +321,49 @@ export function StartupCheckScreen({
             },
           ]}
         >
-          <View
-            style={[
-              styles.glassCapsule,
-              status === 'up_to_date' && {
-                borderColor: 'rgba(16, 185, 129, 0.35)',
-                backgroundColor: 'rgba(16, 185, 129, 0.12)',
-              },
-            ]}
+          <TouchableOpacity
+            activeOpacity={status === 'blocked' ? 0.7 : 1}
+            onPress={handleCapsulePress}
+            disabled={status !== 'blocked'}
           >
-            {status === 'up_to_date' ? (
-              <Animated.View style={{ transform: [{ scale: checkScale }], marginRight: 8 }}>
-                <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-              </Animated.View>
-            ) : (
-              <ActivityIndicator
-                size="small"
-                color={theme.primary}
-                style={{ marginRight: 8 }}
-              />
-            )}
-            <Text
+            <View
               style={[
-                styles.capsuleText,
-                status === 'up_to_date' && { color: '#10b981' },
+                styles.glassCapsule,
+                status === 'up_to_date' && {
+                  borderColor: 'rgba(16, 185, 129, 0.35)',
+                  backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                },
+                status === 'blocked' && {
+                  borderColor: 'rgba(239, 68, 68, 0.45)',
+                  backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                },
               ]}
-              numberOfLines={1}
             >
-              {statusMessage}
-            </Text>
-          </View>
+              {status === 'up_to_date' ? (
+                <Animated.View style={{ transform: [{ scale: checkScale }], marginRight: 8 }}>
+                  <Ionicons name="checkmark-circle" size={18} color="#10b981" />
+                </Animated.View>
+              ) : status === 'blocked' ? (
+                <Ionicons name="alert-circle" size={18} color="#ef4444" style={{ marginRight: 8 }} />
+              ) : (
+                <ActivityIndicator
+                  size="small"
+                  color={theme.primary}
+                  style={{ marginRight: 8 }}
+                />
+              )}
+              <Text
+                style={[
+                  styles.capsuleText,
+                  status === 'up_to_date' && { color: '#10b981' },
+                  status === 'blocked' && { color: '#ef4444' },
+                ]}
+                numberOfLines={1}
+              >
+                {statusMessage}
+              </Text>
+            </View>
+          </TouchableOpacity>
 
           {/* Dettaglio Avanzamento se in download */}
           {status === 'updating' && progressDetail ? (
@@ -240,7 +378,7 @@ export function StartupCheckScreen({
 
       {/* Footer Minimal iOS */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Sapienza Università di Roma</Text>
+        <Text style={styles.footerText}>Verifica delle ultime modifiche</Text>
       </View>
     </View>
   );

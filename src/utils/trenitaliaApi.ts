@@ -1,4 +1,4 @@
-import { StationInfo, LiveTrainInfo } from '../types/commuter';
+import { StationInfo, LiveTrainInfo, LiveTrainStop } from '../types/commuter';
 import allStationsData from '../data/allStations.json';
 
 export const ALL_STATIONS: StationInfo[] = allStationsData as StationInfo[];
@@ -42,6 +42,7 @@ const timetableCache = new Map<string, TimetableCacheEntry>();
 
 export function clearTrenitaliaCache(): void {
   timetableCache.clear();
+  andamentoMemoryCache.clear();
 }
 
 /**
@@ -403,12 +404,107 @@ export function getStationNameByCode(code?: string | null): string {
   return clean;
 }
 
+export const MULTI_STATION_CITIES = [
+  'roma',
+  'milano',
+  'torino',
+  'napoli',
+  'firenze',
+  'venezia',
+  'genova',
+  'bologna',
+  'verona',
+  'bari',
+  'palermo',
+  'catania',
+  'trieste',
+  'reggio calabria',
+  'reggio emilia',
+  'pisa',
+  'padova',
+  'salerno',
+  'ancona',
+  'viterbo',
+];
+
+export function cleanStationName(raw?: string | null): string {
+  if (!raw) return '';
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, ' ')
+    .replace(/\b(c\s*le|cle|centr|cent|cntr)\b/g, ' centrale ')
+    .replace(/\b(p\s*ta|p\s*te)\b/g, ' porta ')
+    .replace(/\b(p\s*n|p\s*nuova)\b/g, ' porta nuova ')
+    .replace(/\b(p\s*s|p\s*susa)\b/g, ' porta susa ')
+    .replace(/\b(p\s*g|p\s*garibaldi)\b/g, ' porta garibaldi ')
+    .replace(/\b(p\s*r|p\s*romana)\b/g, ' porta romana ')
+    .replace(/\b(s\s*m\s*n|smn|s\s*m\s*novella)\b/g, ' santa maria novella ')
+    .replace(/\b(s\s*l|s\s*lucia)\b/g, ' santa lucia ')
+    .replace(/\b(tib|tibur)\b/g, ' tiburtina ')
+    .replace(/\b(term)\b/g, ' termini ')
+    .replace(/\b(c\s*m|campo\s*marte)\b/g, ' campo di marte ')
+    .replace(/\b(p\s*f|p\s*fiorentina)\b/g, ' porta fiorentina ')
+    .replace(/\b(aerop|aero|apt)\b/g, ' aeroporto ')
+    .replace(/\b(s\s*pietro|san\s*pietro)\b/g, ' san pietro ')
+    .replace(/\b(s|st)\b/g, ' san ')
+    .replace(/\b(sta)\b/g, ' santa ')
+    .replace(/\b(p\s*za|pza|p\s*le|ple)\b/g, ' ')
+    .replace(/\b(fs|staz|stazione)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function isSameStation(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  const cleanA = cleanStationName(a);
+  const cleanB = cleanStationName(b);
+  if (!cleanA || !cleanB) return false;
+  if (cleanA === cleanB) return true;
+  if (cleanA.replace(/\s+/g, '') === cleanB.replace(/\s+/g, '')) return true;
+
+  // Controllo stazioni in città metropolitane o con più scali ferroviari
+  for (const city of MULTI_STATION_CITIES) {
+    const aStartsWithCity = cleanA === city || cleanA.startsWith(city + ' ');
+    const bStartsWithCity = cleanB === city || cleanB.startsWith(city + ' ');
+
+    if (aStartsWithCity && bStartsWithCity) {
+      const restA = cleanA.slice(city.length).trim();
+      const restB = cleanB.slice(city.length).trim();
+      // Entrambe specificano uno scalo (es. Tuscolana vs Tiburtina, Centrale vs Rogoredo)
+      if (restA.length > 0 && restB.length > 0) {
+        return restA === restB || restA.replace(/\s+/g, '') === restB.replace(/\s+/g, '');
+      }
+      // Se una ha solo il nome della città (es. "Roma") e l'altra ha uno scalo specifico (es. "Roma Tiburtina"), NON coincidono
+      return false;
+    }
+
+    if (aStartsWithCity && !bStartsWithCity) {
+      const restA = cleanA.slice(city.length).trim();
+      if (restA.length > 0 && (restA === cleanB || restA.replace(/\s+/g, '') === cleanB.replace(/\s+/g, ''))) {
+        return true;
+      }
+    }
+
+    if (!aStartsWithCity && bStartsWithCity) {
+      const restB = cleanB.slice(city.length).trim();
+      if (restB.length > 0 && (restB === cleanA || restB.replace(/\s+/g, '') === cleanA.replace(/\s+/g, ''))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Ottiene i treni in partenza in tempo reale da una stazione
  */
 export async function getLiveStationDepartures(
   stationCode: string,
-  targetDate: Date = new Date()
+  targetDate: Date = new Date(),
+  includeIntercity = false
 ): Promise<LiveTrainInfo[]> {
   try {
     const dateStr = encodeURIComponent(formatViaggiaTrenoDate(targetDate));
@@ -421,14 +517,18 @@ export async function getLiveStationDepartures(
 
     for (const raw of rawList) {
       const catRaw = (raw.categoriaDescrizione || raw.categoria || '').toUpperCase();
-      // STRETTO: Solo treni Regionali o Regionali Veloci (escludi AV, Frecciarossa, Italo, Intercity)
+      const isIntercity =
+        catRaw.includes('IC') ||
+        catRaw.includes('INTERCITY') ||
+        catRaw === 'ICN';
       const isRegional =
         catRaw.includes('REG') ||
         catRaw.includes('RV') ||
         catRaw === 'R' ||
         catRaw.includes('REGIONALE');
 
-      if (!isRegional) continue;
+      const isAllowed = isRegional || (includeIntercity && isIntercity);
+      if (!isAllowed) continue;
       if (raw.provvedimento === 1 || raw.statoTreno === 'SOPPRESSO') continue;
 
       const plannedDep = raw.compOrarioPartenza || '00:00';
@@ -554,7 +654,7 @@ export async function getLiveStationDepartures(
           statusDescription = isOriginStation || !isDeparted || nowMins < plannedDepM ? 'Non partito' : 'In orario';
         }
       } else if (isDepartedFromStation) {
-        statusDescription = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
+        statusDescription = 'In viaggio';
       } else if (isOriginDepartureDelay) {
         statusDescription = effectiveDelay > 0 ? `Non partito (+${effectiveDelay} min)` : 'Non partito';
       } else if (effectiveDelay > 0) {
@@ -586,7 +686,7 @@ export async function getLiveStationDepartures(
         capacityWarning = 'Biglietti non acquistabili (Disponibilità posti limitata)';
       }
 
-      const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE');
+      const isFast = !isIntercity && (catRaw.includes('RV') || catRaw.includes('VELOCE'));
 
       const resolvedOriginName =
         (raw.origine && raw.origine.trim().length > 0)
@@ -595,9 +695,16 @@ export async function getLiveStationDepartures(
           ? getStationNameByCode(stationCode)
           : getStationNameByCode(raw.codOrigine || raw.idOrigine);
 
+      let trainNumber = raw.compNumeroTreno;
+      if (!trainNumber) {
+        trainNumber = isIntercity ? `IC ${raw.numeroTreno}` : (isFast ? `RV ${raw.numeroTreno}` : `REG ${raw.numeroTreno}`);
+      } else if (isIntercity && !/^IC\b/i.test(trainNumber)) {
+        trainNumber = `IC ${raw.numeroTreno}`;
+      }
+
       results.push({
-        trainNumber: raw.compNumeroTreno || `Treno ${raw.numeroTreno}`,
-        category: isFast ? 'RV' : 'REG',
+        trainNumber,
+        category: isIntercity ? 'IC' : (isFast ? 'RV' : 'REG'),
         destination: raw.destinazione ? formatStationName(raw.destinazione) : '',
         originStationName: resolvedOriginName,
         originStationCode: raw.codOrigine || raw.idOrigine || stationCode || undefined,
@@ -736,7 +843,7 @@ export function cleanPlatform(raw?: string | number | null): string | undefined 
 
 export interface ScheduledTrainEntry {
   trainNumber: string;
-  category: 'RV' | 'REG';
+  category: 'RV' | 'REG' | 'IC';
   departureTime: string; // Orte departure
   arrivalTimeTiburtina: string; // Roma Tiburtina arrival
   arrivalTimeTermini: string; // Roma Termini arrival
@@ -748,7 +855,7 @@ export interface ScheduledTrainEntry {
 
 export interface ScheduledReturnTrainEntry {
   trainNumber: string;
-  category: 'RV' | 'REG';
+  category: 'RV' | 'REG' | 'IC';
   departureTimeTiburtina: string; // Roma Tiburtina departure
   departureTimeTermini?: string; // Roma Termini departure
   arrivalTimeOrte: string; // Orte arrival
@@ -764,18 +871,23 @@ export const SCHEDULED_ORTE_TO_ROMA: ScheduledTrainEntry[] = [
   { trainNumber: 'RV 4095', category: 'RV', departureTime: '06:28', arrivalTimeTiburtina: '07:03', arrivalTimeTermini: '07:18', durationMinutesTiburtina: 35, durationMinutesTermini: 50, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4151', category: 'RV', departureTime: '06:34', arrivalTimeTiburtina: '07:14', arrivalTimeTermini: '07:24', durationMinutesTiburtina: 40, durationMinutesTermini: 50, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4521', category: 'RV', departureTime: '07:00', arrivalTimeTiburtina: '07:33', arrivalTimeTermini: '07:48', durationMinutesTiburtina: 33, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'IC 581', category: 'IC', departureTime: '07:18', arrivalTimeTiburtina: '07:49', arrivalTimeTermini: '08:03', durationMinutesTiburtina: 31, durationMinutesTermini: 45, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4256', category: 'RV', departureTime: '07:20', arrivalTimeTiburtina: '07:59', arrivalTimeTermini: '08:15', durationMinutesTiburtina: 39, durationMinutesTermini: 55, platformPlanned: '5', destination: 'ROMA TIBURTINA' },
   { trainNumber: 'RV 4097', category: 'RV', departureTime: '07:28', arrivalTimeTiburtina: '08:03', arrivalTimeTermini: '08:19', durationMinutesTiburtina: 35, durationMinutesTermini: 51, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4523', category: 'RV', departureTime: '07:45', arrivalTimeTiburtina: '08:14', arrivalTimeTermini: '08:32', durationMinutesTiburtina: 29, durationMinutesTermini: 47, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4721', category: 'RV', departureTime: '08:05', arrivalTimeTiburtina: '08:39', arrivalTimeTermini: '08:57', durationMinutesTiburtina: 34, durationMinutesTermini: 52, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'IC 583', category: 'IC', departureTime: '08:34', arrivalTimeTiburtina: '09:05', arrivalTimeTermini: '09:18', durationMinutesTiburtina: 31, durationMinutesTermini: 44, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'IC 533', category: 'IC', departureTime: '09:12', arrivalTimeTiburtina: '09:43', arrivalTimeTermini: '09:56', durationMinutesTiburtina: 31, durationMinutesTermini: 44, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'REG 4519', category: 'REG', departureTime: '09:32', arrivalTimeTiburtina: '10:35', arrivalTimeTermini: '10:48', durationMinutesTiburtina: 63, durationMinutesTermini: 76, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'REG 4099', category: 'REG', departureTime: '09:40', arrivalTimeTiburtina: '10:49', arrivalTimeTermini: '11:02', durationMinutesTiburtina: 69, durationMinutesTermini: 82, platformPlanned: '3', destination: 'ROMA TIBURTINA' },
   { trainNumber: 'RV 4153', category: 'RV', departureTime: '12:16', arrivalTimeTiburtina: '12:47', arrivalTimeTermini: '13:00', durationMinutesTiburtina: 31, durationMinutesTermini: 44, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4725', category: 'RV', departureTime: '13:52', arrivalTimeTiburtina: '14:28', arrivalTimeTermini: '14:40', durationMinutesTiburtina: 36, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'IC 585', category: 'IC', departureTime: '15:43', arrivalTimeTiburtina: '16:14', arrivalTimeTermini: '16:27', durationMinutesTiburtina: 31, durationMinutesTermini: 44, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4105', category: 'RV', departureTime: '16:11', arrivalTimeTiburtina: '16:48', arrivalTimeTermini: '17:00', durationMinutesTiburtina: 37, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4155', category: 'RV', departureTime: '17:10', arrivalTimeTiburtina: '17:46', arrivalTimeTermini: '18:00', durationMinutesTiburtina: 36, durationMinutesTermini: 50, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4733', category: 'RV', departureTime: '17:56', arrivalTimeTiburtina: '18:30', arrivalTimeTermini: '18:45', durationMinutesTiburtina: 34, durationMinutesTermini: 49, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'REG 4107', category: 'REG', departureTime: '18:15', arrivalTimeTiburtina: '19:35', arrivalTimeTermini: '19:48', durationMinutesTiburtina: 80, durationMinutesTermini: 93, platformPlanned: '3', destination: 'ROMA TERMINI' },
+  { trainNumber: 'IC 599', category: 'IC', departureTime: '18:27', arrivalTimeTiburtina: '19:00', arrivalTimeTermini: '19:15', durationMinutesTiburtina: 33, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'REG 4537', category: 'REG', departureTime: '19:02', arrivalTimeTiburtina: '20:10', arrivalTimeTermini: '20:25', durationMinutesTiburtina: 68, durationMinutesTermini: 83, platformPlanned: '3', destination: 'ROMA TIBURTINA' },
   { trainNumber: 'RV 4157', category: 'RV', departureTime: '21:47', arrivalTimeTiburtina: '22:21', arrivalTimeTermini: '22:35', durationMinutesTiburtina: 34, durationMinutesTermini: 48, platformPlanned: '3', destination: 'ROMA TERMINI' },
   { trainNumber: 'RV 4111', category: 'RV', departureTime: '22:25', arrivalTimeTiburtina: '23:01', arrivalTimeTermini: '23:15', durationMinutesTiburtina: 36, durationMinutesTermini: 50, platformPlanned: '3', destination: 'ROMA TERMINI' },
@@ -785,27 +897,34 @@ export const SCHEDULED_ORTE_TO_ROMA: ScheduledTrainEntry[] = [
 export const SCHEDULED_ROMA_TO_ORTE: ScheduledReturnTrainEntry[] = [
   { trainNumber: 'RV 4150', category: 'RV', departureTimeTiburtina: '05:55', arrivalTimeOrte: '06:32', durationMinutesTiburtina: 37, platformPlanned: '6', destination: 'FOLIGNO' },
   { trainNumber: 'RV 4712', category: 'RV', departureTimeTiburtina: '06:53', arrivalTimeOrte: '07:36', durationMinutesTiburtina: 43, platformPlanned: '6', destination: 'PERUGIA' },
+  { trainNumber: 'IC 534', category: 'IC', departureTimeTiburtina: '08:00', arrivalTimeOrte: '08:31', durationMinutesTiburtina: 31, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'RV 4152', category: 'RV', departureTimeTiburtina: '09:33', arrivalTimeOrte: '10:11', durationMinutesTiburtina: 38, platformPlanned: '6', destination: 'ANCONA' },
+  { trainNumber: 'IC 584', category: 'IC', departureTimeTiburtina: '10:00', arrivalTimeOrte: '10:31', durationMinutesTiburtina: 31, platformPlanned: '6', destination: 'TRIESTE CENTRALE' },
+  { trainNumber: 'IC 588', category: 'IC', departureTimeTiburtina: '10:38', arrivalTimeOrte: '11:10', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'RV 4100', category: 'RV', departureTimeTiburtina: '11:08', arrivalTimeOrte: '11:47', durationMinutesTiburtina: 39, platformPlanned: '2', destination: 'FIRENZE SMN' },
   { trainNumber: 'REG 20635', category: 'REG', departureTimeTiburtina: '11:46', arrivalTimeOrte: '13:17', durationMinutesTiburtina: 91, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'REG 4512', category: 'REG', departureTimeTiburtina: '11:53', arrivalTimeOrte: '13:04', durationMinutesTiburtina: 71, platformPlanned: '6', destination: 'FOLIGNO' },
+  { trainNumber: 'IC 590', category: 'IC', departureTimeTiburtina: '12:12', arrivalTimeOrte: '12:44', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'MILANO CENTRALE' },
   { trainNumber: 'REG 20643', category: 'REG', departureTimeTiburtina: '12:46', arrivalTimeOrte: '14:12', durationMinutesTiburtina: 86, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'RV 4154', category: 'RV', departureTimeTiburtina: '13:29', arrivalTimeOrte: '14:03', durationMinutesTiburtina: 34, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'REG 20653', category: 'REG', departureTimeTiburtina: '13:46', arrivalTimeOrte: '15:12', durationMinutesTiburtina: 86, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'RV 4730', category: 'RV', departureTimeTiburtina: '14:28', arrivalTimeOrte: '15:07', durationMinutesTiburtina: 39, platformPlanned: '6', destination: 'PERUGIA' },
   { trainNumber: 'REG 20665', category: 'REG', departureTimeTiburtina: '14:46', arrivalTimeOrte: '16:12', durationMinutesTiburtina: 86, platformPlanned: '1', destination: 'ORTE' },
+  { trainNumber: 'IC 540', category: 'IC', departureTimeTiburtina: '15:38', arrivalTimeOrte: '16:10', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'REG 20677', category: 'REG', departureTimeTiburtina: '16:01', arrivalTimeOrte: '17:25', durationMinutesTiburtina: 84, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'RV 4156', category: 'RV', departureTimeTiburtina: '16:03', arrivalTimeOrte: '16:42', durationMinutesTiburtina: 39, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'REG 20683', category: 'REG', departureTimeTiburtina: '16:46', arrivalTimeOrte: '18:12', durationMinutesTiburtina: 86, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'RV 4514', category: 'RV', departureTimeTiburtina: '17:09', arrivalTimeOrte: '17:45', durationMinutesTiburtina: 36, platformPlanned: '6', destination: 'FOLIGNO' },
-  { trainNumber: 'RV 4106', category: 'RV', departureTimeTiburtina: '17:28', arrivalTimeOrte: '18:02', durationMinutesTiburtina: 34, platformPlanned: '6', destination: 'FIRENZE SMN' },
+  { trainNumber: 'RV 4106', category: 'RV', departureTimeTiburtina: '17:30', departureTimeTermini: '17:20', arrivalTimeOrte: '18:02', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'FIRENZE SMN' },
   { trainNumber: 'REG 4530', category: 'REG', departureTimeTiburtina: '17:37', arrivalTimeOrte: '18:53', durationMinutesTiburtina: 76, platformPlanned: '6', destination: 'VITERBO P. FIORENTINA' },
   { trainNumber: 'REG 20693', category: 'REG', departureTimeTiburtina: '17:46', arrivalTimeOrte: '19:12', durationMinutesTiburtina: 86, platformPlanned: '1', destination: 'ORTE' },
   { trainNumber: 'RV 4732', category: 'RV', departureTimeTiburtina: '18:10', arrivalTimeOrte: '18:45', durationMinutesTiburtina: 35, platformPlanned: '6', destination: 'PERUGIA' },
+  { trainNumber: 'IC 598', category: 'IC', departureTimeTiburtina: '18:28', arrivalTimeOrte: '19:00', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'MILANO CENTRALE' },
   { trainNumber: 'RV 4158', category: 'RV', departureTimeTiburtina: '18:41', arrivalTimeOrte: '19:15', durationMinutesTiburtina: 34, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'RV 4734', category: 'RV', departureTimeTiburtina: '19:12', arrivalTimeOrte: '19:44', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'PERUGIA' },
   { trainNumber: 'RV 4534', category: 'RV', departureTimeTiburtina: '19:20', arrivalTimeOrte: '19:58', durationMinutesTiburtina: 38, platformPlanned: '6', destination: 'VITERBO P. FIORENTINA' },
-  { trainNumber: 'RV 4110', category: 'RV', departureTimeTiburtina: '20:21', arrivalTimeOrte: '20:56', durationMinutesTiburtina: 35, platformPlanned: '6', destination: 'FIRENZE SMN' },
+  { trainNumber: 'IC 592', category: 'IC', departureTimeTiburtina: '19:40', arrivalTimeOrte: '20:12', durationMinutesTiburtina: 32, platformPlanned: '6', destination: 'TRIESTE CENTRALE' },
+  { trainNumber: 'RV 4110', category: 'RV', departureTimeTiburtina: '20:29', departureTimeTermini: '20:21', arrivalTimeOrte: '20:56', durationMinutesTiburtina: 27, platformPlanned: '6', destination: 'FIRENZE SMN' },
   { trainNumber: 'RV 4262', category: 'RV', departureTimeTiburtina: '20:32', arrivalTimeOrte: '21:15', durationMinutesTiburtina: 43, platformPlanned: '17', destination: 'RIETI' },
   { trainNumber: 'RV 4160', category: 'RV', departureTimeTiburtina: '21:25', arrivalTimeOrte: '22:00', durationMinutesTiburtina: 35, platformPlanned: '6', destination: 'ANCONA' },
   { trainNumber: 'RV 4108', category: 'RV', departureTimeTiburtina: '22:00', arrivalTimeOrte: '22:34', durationMinutesTiburtina: 34, platformPlanned: '6', destination: 'CHIUSI-CHIANCIANO' },
@@ -823,6 +942,7 @@ export interface OptimalTrainOptions {
   forceRefresh?: boolean; // true per forzare chiamata diretta a Trenitalia bypassando la cache
   minDepartureMins?: number; // Orario minimo (in minuti da mezzanotte) di partenza del treno affinché sia prendibile dal viaggiatore
   ignoreCurrentTime?: boolean; // true per usare esclusivamente l'orario programmato ufficiale senza ritardi live né filtro sull'ora corrente
+  includeIntercity?: boolean; // Se true, include anche i treni Intercity (IC) oltre a RV e Regionali
 }
 
 export interface OptimalTrainResult {
@@ -839,16 +959,22 @@ async function getTrainOriginInfo(
 ): Promise<{ originCode: string; departureMillis?: number } | null> {
   const cleanNum = trainNum.replace(/\D/g, '');
   if (!cleanNum) return null;
+  const originKey = cleanNum + '_' + new Date().toDateString();
+  const hit = trainOriginInfoCache.get(originKey);
+  if (hit) return hit;
   try {
     const data = await fetchViaggiaTrenoJson(
       `${VIAGGIATRENO_BASE_URL}/cercaNumeroTreno/${cleanNum}`,
-      2000
+      2500,
+      0
     );
     if (data && data.codLocOrig) {
-      return {
-        originCode: data.codLocOrig,
+      const info = {
+        originCode: data.codLocOrig as string,
         departureMillis: data.millisDataPartenza ? Number(data.millisDataPartenza) : undefined,
       };
+      trainOriginInfoCache.set(originKey, info);
+      return info;
     }
   } catch {}
   return null;
@@ -866,7 +992,8 @@ export async function fetchLiveTrenitaliaTimetable(
   targetTimeStr: string,
   direction: 'outbound' | 'return',
   forceRefresh = false,
-  ignoreCurrentTime = false
+  ignoreCurrentTime = false,
+  includeIntercity = false
 ): Promise<LiveTrainInfo[]> {
   try {
     const isToday =
@@ -891,7 +1018,7 @@ export async function fetchLiveTrenitaliaTimetable(
     // Verifica Cache in Memoria ad alte prestazioni
     const dateKey = `${targetDate.getFullYear()}-${targetDate.getMonth() + 1}-${targetDate.getDate()}`;
     const timeBucket = Math.floor(targetDepMins / 30);
-    const cacheKey = `${depCode}_${arrCode}_${dateKey}_${timeBucket}_${direction}_${ignoreCurrentTime ? 'sched' : 'live'}`;
+    const cacheKey = `${depCode}_${arrCode}_${dateKey}_${timeBucket}_${direction}_${ignoreCurrentTime ? 'sched' : 'live'}_${includeIntercity ? 'ic' : 'noic'}`;
 
     if (!forceRefresh) {
       const cached = timetableCache.get(cacheKey);
@@ -968,14 +1095,18 @@ export async function fetchLiveTrenitaliaTimetable(
 
     for (const [num, dep] of depMap) {
       const catRaw = (dep.categoriaDescrizione || dep.categoria || '').toUpperCase();
-      // STRETTO: Solo treni Regionali o Regionali Veloci (escludi AV, Frecciarossa, Italo, Intercity)
+      const isIntercity =
+        catRaw.includes('IC') ||
+        catRaw.includes('INTERCITY') ||
+        catRaw === 'ICN';
       const isRegional =
         catRaw.includes('REG') ||
         catRaw.includes('RV') ||
         catRaw === 'R' ||
         catRaw.includes('REGIONALE');
 
-      if (!isRegional) continue;
+      const isAllowed = isRegional || (includeIntercity && isIntercity);
+      if (!isAllowed) continue;
       if (dep.provvedimento === 1 || dep.statoTreno === 'SOPPRESSO') continue;
 
       const arr = arrMap.get(num);
@@ -1009,8 +1140,8 @@ export async function fetchLiveTrenitaliaTimetable(
       let dur = ah * 60 + am - (dh * 60 + dm);
       if (dur < 0) dur += 1440;
 
-      // Durata ragionevole tra stazioni nella stessa direzione (tra 15 e 150 min)
-      if (dur < 15 || dur > 150) continue;
+      // Durata ragionevole tra stazioni nella stessa direzione (tra 2 min e 15 ore)
+      if (dur < 2 || dur > 900) continue;
 
       // Ritardo reale: preferisce quello alla partenza, altrimenti quello riportato sull'arrivo
       const liveDelay =
@@ -1153,7 +1284,7 @@ export async function fetchLiveTrenitaliaTimetable(
             statusDescription = isOriginStation || !isDeparted || nowMins < depPlanM ? 'Non partito' : 'In orario';
           }
         } else if (isDepartedFromStation) {
-          statusDescription = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
+          statusDescription = 'In viaggio';
         } else if (isOriginDepartureDelay) {
           statusDescription = effectiveDelay > 0 ? `Non partito (+${effectiveDelay} min)` : 'Non partito';
         } else if (effectiveDelay > 0) {
@@ -1188,9 +1319,17 @@ export async function fetchLiveTrenitaliaTimetable(
         capacityWarning = 'Biglietti non acquistabili (Disponibilità posti limitata)';
       }
 
-      const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE') || dur <= 45;
-      const compNum = dep.compNumeroTreno || (isFast ? `RV ${num}` : `REG ${num}`);
-      const trainNumber = isFast ? compNum.replace(/^REG\b/i, 'RV') : compNum;
+      const isFast = !isIntercity && (catRaw.includes('RV') || catRaw.includes('VELOCE') || dur <= 45);
+      let trainNumber = dep.compNumeroTreno;
+      if (!trainNumber) {
+        trainNumber = isIntercity ? `IC ${num}` : (isFast ? `RV ${num}` : `REG ${num}`);
+      } else if (isIntercity) {
+        if (!/^IC\b/i.test(trainNumber)) {
+          trainNumber = `IC ${num}`;
+        }
+      } else if (isFast) {
+        trainNumber = trainNumber.replace(/^REG\b/i, 'RV');
+      }
 
       const platformPlanned =
         dep.binarioProgrammatoPartenzaDescrizione ||
@@ -1219,7 +1358,7 @@ export async function fetchLiveTrenitaliaTimetable(
 
       trains.push({
         trainNumber,
-        category: isFast ? 'RV' : 'REG',
+        category: isIntercity ? 'IC' : (isFast ? 'RV' : 'REG'),
         destination: dep.destinazione ? formatStationName(dep.destinazione) : '',
         originStationName: resolvedOriginName,
         originStationCode: dep.codOrigine || dep.idOrigine || depCode || undefined,
@@ -1258,11 +1397,9 @@ export async function fetchLiveTrenitaliaTimetable(
     // Verifichiamo i treni programmati della linea per recuperare quelli già passati ma non ancora arrivati al capolinea.
     if (isToday) {
       const isOrteToRoma =
-        (depCode === 'S08209' && (arrCode === 'S08409' || arrCode === 'S08217' || arrCode === 'S08406')) ||
-        (direction === 'outbound' && depCode === 'S08209');
+        depCode === 'S08209' && (arrCode === 'S08409' || arrCode === 'S08217' || arrCode === 'S08406');
       const isRomaToOrte =
-        ((depCode === 'S08409' || depCode === 'S08217' || depCode === 'S08406') && arrCode === 'S08209') ||
-        (direction === 'return' && arrCode === 'S08209');
+        (depCode === 'S08409' || depCode === 'S08217' || depCode === 'S08406') && arrCode === 'S08209';
 
       if (isOrteToRoma || isRomaToOrte) {
         const scheduledList = isOrteToRoma ? SCHEDULED_ORTE_TO_ROMA : SCHEDULED_ROMA_TO_ORTE;
@@ -1327,7 +1464,7 @@ export async function fetchLiveTrenitaliaTimetable(
 
           let statusDescription = 'In orario';
           if (isDepartedFromStation) {
-            statusDescription = delay > 0 ? `Già passato (+${delay} min)` : 'Già passato';
+            statusDescription = 'In viaggio';
           } else if (arr.nonPartito === true) {
             statusDescription = 'Non partito';
           } else if (delay > 0) {
@@ -1369,7 +1506,7 @@ export async function fetchLiveTrenitaliaTimetable(
             arrivalTimePlanned: arrPlanned,
             arrivalTimeActual: arrActual,
             platformPlanned: cleanPlatform(platformPlanned),
-            platformActual: cleanPlatform(arr.binarioEffettivoArrivoDescrizione || arr.binarioProgrammatoArrivoDescrizione || platformPlanned),
+            platformActual: cleanPlatform(platformPlanned),
             delayMinutes: delay,
             statusDescription,
             isLive: true,
@@ -1395,12 +1532,17 @@ export async function fetchLiveTrenitaliaTimetable(
           if (arr.provvedimento === 1 || arr.statoTreno === 'SOPPRESSO') continue;
 
           const catRaw = (arr.categoriaDescrizione || arr.categoria || '').toUpperCase();
+          const isIntercity =
+            catRaw.includes('IC') ||
+            catRaw.includes('INTERCITY') ||
+            catRaw === 'ICN';
           const isRegional =
             catRaw.includes('REG') ||
             catRaw.includes('RV') ||
             catRaw === 'R' ||
             catRaw.includes('REGIONALE');
-          if (!isRegional) continue;
+          const isAllowed = isRegional || (includeIntercity && isIntercity);
+          if (!isAllowed) continue;
 
           const arrPlanned = arr.compOrarioArrivo;
           if (!arrPlanned) continue;
@@ -1562,9 +1704,13 @@ export async function fetchLiveTrenitaliaTimetable(
 
                 const dur = Math.max(15, arrPlannedM - parseTimeToMinutes(depPlanned));
                 const catRaw = (arr.categoriaDescrizione || arr.categoria || aData.categoria || '').toUpperCase();
-                const isFast = catRaw.includes('RV') || catRaw.includes('VELOCE');
+                const isIntercity =
+                  catRaw.includes('IC') ||
+                  catRaw.includes('INTERCITY') ||
+                  catRaw === 'ICN';
+                const isFast = !isIntercity && (catRaw.includes('RV') || catRaw.includes('VELOCE'));
                 const numInt = arr.numeroTreno || numStr;
-                const trainNumber = isFast ? `RV ${numInt}` : `REG ${numInt}`;
+                const trainNumber = isIntercity ? `IC ${numInt}` : (isFast ? `RV ${numInt}` : `REG ${numInt}`);
 
                 const rawOrigin = arr.origine || aData.origine;
                 const resolvedOriginName = rawOrigin ? formatStationName(rawOrigin) : getStationNameByCode(resolvedOrigCode);
@@ -1574,7 +1720,7 @@ export async function fetchLiveTrenitaliaTimetable(
 
                 let statusDesc = 'In orario';
                 if (isDepartedFromStation) {
-                  statusDesc = effectiveDelay > 0 ? `Già passato (+${effectiveDelay} min)` : 'Già passato';
+                  statusDesc = 'In viaggio';
                 } else if (isStoppedInStation) {
                   const stName = formatStationName(depStop.stazione || getStationNameByCode(depCode));
                   const estDepM = parseTimeToMinutes(stoppedStationEstimatedDep || depActual || depPlanned);
@@ -1592,7 +1738,9 @@ export async function fetchLiveTrenitaliaTimetable(
 
                 const schedMatch = isOrteToRoma
                   ? SCHEDULED_ORTE_TO_ROMA.find((s) => s.trainNumber.replace(/\D/g, '') === numStr)
-                  : SCHEDULED_ROMA_TO_ORTE.find((s) => s.trainNumber.replace(/\D/g, '') === numStr);
+                  : isRomaToOrte
+                  ? SCHEDULED_ROMA_TO_ORTE.find((s) => s.trainNumber.replace(/\D/g, '') === numStr)
+                  : undefined;
                 const schedPlatform = schedMatch?.platformPlanned;
 
                 const depPlatformPlanned = cleanPlatform(
@@ -1610,7 +1758,7 @@ export async function fetchLiveTrenitaliaTimetable(
 
                 trains.push({
                   trainNumber,
-                  category: isFast ? 'RV' : 'REG',
+                  category: isIntercity ? 'IC' : (isFast ? 'RV' : 'REG'),
                   destination: arr.destinazione ? formatStationName(arr.destinazione) : (aData.destinazione ? formatStationName(aData.destinazione) : ''),
                   originStationName: resolvedOriginName,
                   originStationCode: resolvedOrigCode,
@@ -1635,6 +1783,57 @@ export async function fetchLiveTrenitaliaTimetable(
                   stoppedMinutes,
                   stoppedSinceMillis,
                   stoppedStationEstimatedDep,
+                  lastDetectionStationName: aData.stazioneUltimoRilevamento
+                    ? formatStationName(aData.stazioneUltimoRilevamento)
+                    : undefined,
+                  lastDetectionTime: typeof aData.oraUltimoRilevamento === 'number'
+                    ? formatMillisToTime(aData.oraUltimoRilevamento)
+                    : undefined,
+                  stops: Array.isArray(aData.fermate)
+                    ? aData.fermate.map((f: any) => ({
+                        stationName: formatStationName(f.stazione || ''),
+                        stationCode: f.id,
+                        isPassed: f.partenzaReale !== null && f.partenzaReale !== undefined,
+                        isCurrent: Boolean(
+                          f.arrivoReale !== null &&
+                          f.arrivoReale !== undefined &&
+                          (f.partenzaReale === null || f.partenzaReale === undefined)
+                        ),
+                        actualTime: f.partenzaReale
+                          ? formatMillisToTime(f.partenzaReale)
+                          : f.arrivoReale
+                          ? formatMillisToTime(f.arrivoReale)
+                          : undefined,
+                        plannedTime: f.partenza_teorica
+                          ? formatMillisToTime(f.partenza_teorica)
+                          : f.arrivo_teorico
+                          ? formatMillisToTime(f.arrivo_teorico)
+                          : cleanViaggiaTrenoTime(f.compOrarioPartenza || f.compOrarioArrivo || '') || undefined,
+                        delayMinutes:
+                          typeof f.ritardoPartenza === 'number'
+                            ? f.ritardoPartenza
+                            : typeof f.ritardoArrivo === 'number'
+                            ? f.ritardoArrivo
+                            : undefined,
+                        isExtraordinary: Boolean(
+                          f.tipoFermata === 'S' ||
+                          f.straordinaria === true ||
+                          f.programmata === false ||
+                          (typeof f.tipoFermataDescrizione === 'string' && f.tipoFermataDescrizione.toLowerCase().includes('straordinar')) ||
+                          (typeof f.actualFermataType === 'string' && f.actualFermataType.toLowerCase().includes('straordinar'))
+                        ),
+                      }))
+                    : undefined,
+                  originDepartureTimePlanned:
+                    Array.isArray(aData.fermate) && aData.fermate.length > 0
+                      ? aData.fermate[0].partenza_teorica
+                        ? formatMillisToTime(aData.fermate[0].partenza_teorica)
+                        : cleanViaggiaTrenoTime(aData.fermate[0].compOrarioPartenza || '') || undefined
+                      : undefined,
+                  originDepartureTimeActual:
+                    Array.isArray(aData.fermate) && aData.fermate.length > 0 && aData.fermate[0].partenzaReale
+                      ? formatMillisToTime(aData.fermate[0].partenzaReale)
+                      : undefined,
                 });
 
                 matchedNumbers.add(numStr);
@@ -1652,7 +1851,7 @@ export async function fetchLiveTrenitaliaTimetable(
       const activeCirculating = trains.filter(
         (t) =>
           t.isLive &&
-          Math.abs(nowMins - parseTimeToMinutes(t.departureTimePlanned)) <= 120
+          Math.abs(nowMins - parseTimeToMinutes(t.departureTimePlanned)) <= 240
       );
 
       if (activeCirculating.length > 0) {
@@ -1680,6 +1879,57 @@ export async function fetchLiveTrenitaliaTimetable(
               const aData = await fetchViaggiaTrenoJson(url, 2500);
               if (!aData || !Array.isArray(aData.fermate)) return;
 
+              if (aData.stazioneUltimoRilevamento) {
+                t.lastDetectionStationName = formatStationName(aData.stazioneUltimoRilevamento);
+              }
+              if (typeof aData.oraUltimoRilevamento === 'number') {
+                t.lastDetectionTime = formatMillisToTime(aData.oraUltimoRilevamento);
+              }
+              if (aData.fermate.length > 0) {
+                const firstF = aData.fermate[0];
+                if (firstF.partenza_teorica) {
+                  t.originDepartureTimePlanned = formatMillisToTime(firstF.partenza_teorica);
+                } else if (firstF.compOrarioPartenza) {
+                  t.originDepartureTimePlanned = cleanViaggiaTrenoTime(firstF.compOrarioPartenza) || undefined;
+                }
+                if (firstF.partenzaReale) {
+                  t.originDepartureTimeActual = formatMillisToTime(firstF.partenzaReale);
+                }
+                t.stops = aData.fermate.map((f: any) => ({
+                  stationName: formatStationName(f.stazione || ''),
+                  stationCode: f.id,
+                  isPassed: f.partenzaReale !== null && f.partenzaReale !== undefined,
+                  isCurrent: Boolean(
+                    f.arrivoReale !== null &&
+                    f.arrivoReale !== undefined &&
+                    (f.partenzaReale === null || f.partenzaReale === undefined)
+                  ),
+                  actualTime: f.partenzaReale
+                    ? formatMillisToTime(f.partenzaReale)
+                    : f.arrivoReale
+                    ? formatMillisToTime(f.arrivoReale)
+                    : undefined,
+                  plannedTime: f.partenza_teorica
+                    ? formatMillisToTime(f.partenza_teorica)
+                    : f.arrivo_teorico
+                    ? formatMillisToTime(f.arrivo_teorico)
+                    : cleanViaggiaTrenoTime(f.compOrarioPartenza || f.compOrarioArrivo || '') || undefined,
+                  delayMinutes:
+                    typeof f.ritardoPartenza === 'number'
+                      ? f.ritardoPartenza
+                      : typeof f.ritardoArrivo === 'number'
+                      ? f.ritardoArrivo
+                      : undefined,
+                  isExtraordinary: Boolean(
+                    f.tipoFermata === 'S' ||
+                    f.straordinaria === true ||
+                    f.programmata === false ||
+                    (typeof f.tipoFermataDescrizione === 'string' && f.tipoFermataDescrizione.toLowerCase().includes('straordinar')) ||
+                    (typeof f.actualFermataType === 'string' && f.actualFermataType.toLowerCase().includes('straordinar'))
+                  ),
+                }));
+              }
+
               const depStationFormatted = formatStationName(getStationNameByCode(depCode)).toLowerCase();
 
               // 1. Controlla la fermata corrispondente alla stazione di partenza del pendolare (depCode)
@@ -1702,6 +1952,18 @@ export async function fetchLiveTrenitaliaTimetable(
                 );
                 if (pAct) t.platformActual = pAct;
                 if (pPlan) t.platformPlanned = pPlan;
+
+                // Correzione fondamentale per fermate intermedie (es. Orte su RV 4725 o Tiburtina su RV da Termini):
+                // In ViaggiaTreno depStop.programmata è l'ARRIVO programmato (es. 13:50), mentre la PARTENZA programmata è depStop.partenza_teorica (es. 13:52).
+                if (typeof depStop.partenza_teorica === 'number') {
+                  t.departureTimePlanned = formatMillisToTime(depStop.partenza_teorica);
+                } else if (typeof depStop.programmataPartenza === 'number') {
+                  t.departureTimePlanned = formatMillisToTime(depStop.programmataPartenza);
+                } else if (depStop.compOrarioPartenza) {
+                  t.departureTimePlanned = cleanViaggiaTrenoTime(depStop.compOrarioPartenza) || t.departureTimePlanned;
+                } else if (typeof depStop.programmata === 'number') {
+                  t.departureTimePlanned = formatMillisToTime(depStop.programmata);
+                }
 
                 if (depStop.partenzaReale !== null && depStop.partenzaReale !== undefined) {
                   // Il treno è già partito da questa stazione!
@@ -1739,10 +2001,53 @@ export async function fetchLiveTrenitaliaTimetable(
                     );
                   }
 
-                  t.statusDescription =
-                    t.delayMinutes > 0
-                      ? `Già passato (+${t.delayMinutes} min)`
-                      : 'Già passato';
+                  // Verifica se il treno è già arrivato alla stazione di destinazione del pendolare
+                  const arrStationFormatted = formatStationName(getStationNameByCode(arrCode) || '').toLowerCase();
+                  const arrStop = aData.fermate.find(
+                    (f: any) =>
+                      f.id === arrCode ||
+                      (f.stazione && formatStationName(f.stazione).toLowerCase() === arrStationFormatted)
+                  );
+
+                  if (arrStop) {
+                    if (typeof arrStop.arrivo_teorico === 'number') {
+                      t.arrivalTimePlanned = formatMillisToTime(arrStop.arrivo_teorico);
+                    } else if (typeof arrStop.programmataArrivo === 'number') {
+                      t.arrivalTimePlanned = formatMillisToTime(arrStop.programmataArrivo);
+                    } else if (arrStop.compOrarioArrivo) {
+                      t.arrivalTimePlanned = cleanViaggiaTrenoTime(arrStop.compOrarioArrivo) || t.arrivalTimePlanned;
+                    }
+
+                    const arrRealMilli = arrStop.arrivoReale || (arrStop.partenzaReale && !arrStop.arrivoReale ? arrStop.partenzaReale : undefined);
+                    if (arrRealMilli && typeof arrRealMilli === 'number') {
+                      t.arrivalTimeActual = formatMillisToTime(arrRealMilli);
+                      t.isArrivedAtDestination = true;
+                      t.statusDescription = 'Arrivato';
+                      if (typeof arrStop.ritardoArrivo === 'number') {
+                        t.arrivalDelayAtStation = arrStop.ritardoArrivo;
+                        t.delayMinutes = arrStop.ritardoArrivo;
+                      }
+                      return;
+                    } else if (typeof arrStop.ritardoArrivo === 'number') {
+                      t.arrivalDelayAtStation = arrStop.ritardoArrivo;
+                    }
+                  }
+
+                  if (aData.arrivato === true) {
+                    t.isArrivedAtDestination = true;
+                    t.statusDescription = 'Arrivato';
+                    return;
+                  }
+
+                  const curNowM = nowMins;
+                  const arrActM = t.arrivalTimeActual ? parseTimeToMinutes(t.arrivalTimeActual) : 0;
+                  if (arrActM > 0 && curNowM >= arrActM) {
+                    t.isArrivedAtDestination = true;
+                    t.statusDescription = 'Arrivato';
+                    return;
+                  }
+
+                  t.statusDescription = 'In viaggio';
                   return;
                 }
 
@@ -1808,20 +2113,21 @@ export async function fetchLiveTrenitaliaTimetable(
                   } else {
                     t.departureDelayAtStation = 0;
                     t.departureTimeActual = t.departureTimePlanned;
-                    t.delayMinutes = 0;
+                    const earlyArr =
+                      typeof depStop.ritardoArrivo === 'number' && depStop.ritardoArrivo < 0
+                        ? depStop.ritardoArrivo
+                        : typeof aData.ritardo === 'number' && aData.ritardo < 0
+                        ? aData.ritardo
+                        : 0;
+                    t.delayMinutes = earlyArr;
+                    t.arrivalDelayAtStation = 0;
                     if (t.arrivalTimePlanned) {
                       t.arrivalTimeActual = t.arrivalTimePlanned;
                     }
                   }
 
-                  if (nowMins > estimatedDepM) {
-                    const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
-                    t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
-                  } else if (t.delayMinutes > 0) {
-                    t.statusDescription = `Ritardo di ${t.delayMinutes} min`;
-                  } else {
-                    t.statusDescription = 'In orario';
-                  }
+                  const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
+                  t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
                   return;
                 }
               }
@@ -1878,10 +2184,9 @@ export async function fetchLiveTrenitaliaTimetable(
                   t.stoppedStationEstimatedDep = minutesToTime(stopEstDepM);
                 }
 
-                const accLate = Math.max(
-                  stopInitialDelay,
-                  stopPlanDepM > 0 && nowMins > stopPlanDepM ? nowMins - stopPlanDepM : 0
-                );
+                const globalDelay = typeof aData.ritardo === 'number' ? aData.ritardo : 0;
+                const extraDwell = stopEstDepM > 0 && nowMins > stopEstDepM ? nowMins - stopEstDepM : 0;
+                const accLate = Math.max(stopInitialDelay, globalDelay, extraDwell > 0 ? stopInitialDelay + extraDwell : 0);
                 t.delayMinutes = accLate;
 
                 // Propaga il ritardo accumulato in banchina alla partenza e all'arrivo alla stazione del pendolare
@@ -1895,84 +2200,90 @@ export async function fetchLiveTrenitaliaTimetable(
                   }
                 }
 
-                if (stopEstDepM === 0 || nowMins > stopEstDepM) {
-                  const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
-                  t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
-                } else if (accLate > 0) {
-                  t.statusDescription = `Ritardo di ${accLate} min`;
-                } else {
-                  t.statusDescription = 'In orario';
-                }
-              } else if (
-                aData.fermate &&
-                aData.fermate.length > 0 &&
-                (aData.fermate[0].partenzaReale === null || aData.fermate[0].partenzaReale === undefined) &&
-                (aData.nonPartito === true || (!t.isDeparted && !t.isDepartedFromStation))
-              ) {
-                // 3. Il convoglio è fermo all'ORIGINE della tratta e non è ancora partito
-                const originStop = aData.fermate[0];
-                let originPlanDepM = 0;
-                if (originStop.partenza_teorica) {
-                  const d = new Date(originStop.partenza_teorica);
-                  originPlanDepM = d.getHours() * 60 + d.getMinutes();
-                } else if (originStop.programmata) {
-                  const d = new Date(originStop.programmata);
-                  originPlanDepM = d.getHours() * 60 + d.getMinutes();
-                } else if (originStop.compOrarioPartenza) {
-                  originPlanDepM = parseTimeToMinutes(cleanViaggiaTrenoTime(originStop.compOrarioPartenza) || '00:00');
-                }
-                if (originPlanDepM === 0 && (t.isOriginStation || (depStop && depStop.id === originStop.id))) {
-                  originPlanDepM = parseTimeToMinutes(t.departureTimePlanned);
-                }
-
-                if (originPlanDepM > 0 && nowMins >= originPlanDepM && nowMins - originPlanDepM <= 120) {
-                  const lateM = Math.max(
-                    nowMins - originPlanDepM,
-                    typeof aData.ritardo === 'number' ? aData.ritardo : 0,
-                    typeof originStop.ritardoPartenza === 'number' ? originStop.ritardoPartenza : 0,
-                    1
-                  );
-                  t.isStoppedInStation = true;
-                  t.stoppedStationName = formatStationName(originStop.stazione || t.originStationName || getStationNameByCode(origCode));
-                  t.stoppedMinutes = lateM;
-                  t.delayMinutes = Math.max(t.delayMinutes || 0, lateM);
-                  t.isDeparted = false;
-                  t.isDepartedFromStation = false;
-
-                  const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-                  t.departureDelayAtStation = lateM;
-                  t.departureTimeActual = minutesToTime(depPlanM + lateM);
-                  t.stoppedStationEstimatedDep = minutesToTime(originPlanDepM + lateM);
-                  if (t.arrivalTimePlanned) {
-                    t.arrivalTimeActual = minutesToTime(
-                      parseTimeToMinutes(t.arrivalTimePlanned) + lateM
-                    );
-                  }
-                  t.statusDescription = `Non partito (+${lateM} min)`;
-                  return;
-                } else if (originPlanDepM > 0 && nowMins < originPlanDepM) {
-                  t.isDeparted = false;
-                  t.isDepartedFromStation = false;
-                  t.isStoppedInStation = false;
-                  t.statusDescription = t.delayMinutes > 0 ? `Ritardo di ${t.delayMinutes} min` : 'In orario';
-                }
-              } else if (aData.inStazione === true && aData.stazioneUltimoRilevamento) {
-                t.isStoppedInStation = true;
-                t.stoppedStationName = formatStationName(aData.stazioneUltimoRilevamento);
-                if (typeof aData.ritardo === 'number') {
-                  t.delayMinutes = Math.max(t.delayMinutes, aData.ritardo);
-                }
-                if (t.delayMinutes > 0) {
-                  const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
-                  t.departureTimeActual = minutesToTime(depPlanM + t.delayMinutes);
-                  if (t.arrivalTimePlanned) {
-                    t.arrivalTimeActual = minutesToTime(
-                      parseTimeToMinutes(t.arrivalTimePlanned) + t.delayMinutes
-                    );
-                  }
-                }
                 const durationStr = t.stoppedMinutes ? ` (da ${t.stoppedMinutes} min)` : '';
                 t.statusDescription = `Fermo a ${t.stoppedStationName}${durationStr}`;
+              } else {
+                // 3. Verifica se il convoglio è effettivamente fermo all'ORIGINE della corsa e non è ancora partito
+                const originStop = aData.fermate[0];
+                const hasAnyPassedStop = aData.fermate.some(
+                  (f: any) =>
+                    (f.partenzaReale !== null && f.partenzaReale !== undefined) ||
+                    (f.arrivoReale !== null && f.arrivoReale !== undefined)
+                );
+                const hasMidwayDetection = Boolean(
+                  aData.stazioneUltimoRilevamento &&
+                  originStop &&
+                  !isSameStation(aData.stazioneUltimoRilevamento, originStop.stazione || '')
+                );
+                const isConfirmedNotDepartedFromOrigin =
+                  !hasAnyPassedStop &&
+                  !hasMidwayDetection &&
+                  (aData.nonPartito === true || (t.isOriginStation && !t.isDeparted && !t.isDepartedFromStation));
+
+                if (isConfirmedNotDepartedFromOrigin && originStop) {
+                  let originPlanDepM = 0;
+                  if (originStop.partenza_teorica) {
+                    const d = new Date(originStop.partenza_teorica);
+                    originPlanDepM = d.getHours() * 60 + d.getMinutes();
+                  } else if (originStop.programmata) {
+                    const d = new Date(originStop.programmata);
+                    originPlanDepM = d.getHours() * 60 + d.getMinutes();
+                  } else if (originStop.compOrarioPartenza) {
+                    originPlanDepM = parseTimeToMinutes(cleanViaggiaTrenoTime(originStop.compOrarioPartenza) || '00:00');
+                  }
+                  if (originPlanDepM === 0 && (t.isOriginStation || (depStop && depStop.id === originStop.id))) {
+                    originPlanDepM = parseTimeToMinutes(t.departureTimePlanned);
+                  }
+
+                  if (originPlanDepM > 0 && nowMins >= originPlanDepM && nowMins - originPlanDepM <= 120) {
+                    const lateM = Math.max(
+                      nowMins - originPlanDepM,
+                      typeof aData.ritardo === 'number' ? aData.ritardo : 0,
+                      typeof originStop.ritardoPartenza === 'number' ? originStop.ritardoPartenza : 0,
+                      1
+                    );
+                    t.isStoppedInStation = true;
+                    t.stoppedStationName = formatStationName(originStop.stazione || t.originStationName || getStationNameByCode(origCode));
+                    t.stoppedMinutes = lateM;
+                    t.delayMinutes = Math.max(t.delayMinutes || 0, lateM);
+                    t.isDeparted = false;
+                    t.isDepartedFromStation = false;
+
+                    const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+                    t.departureDelayAtStation = lateM;
+                    t.departureTimeActual = minutesToTime(depPlanM + lateM);
+                    t.stoppedStationEstimatedDep = minutesToTime(originPlanDepM + lateM);
+                    if (t.arrivalTimePlanned) {
+                      t.arrivalTimeActual = minutesToTime(
+                        parseTimeToMinutes(t.arrivalTimePlanned) + lateM
+                      );
+                    }
+                    t.statusDescription = `Non partito (+${lateM} min)`;
+                    return;
+                  } else if (originPlanDepM > 0 && nowMins < originPlanDepM) {
+                    t.isDeparted = false;
+                    t.isDepartedFromStation = false;
+                    t.isStoppedInStation = false;
+                    t.statusDescription = t.delayMinutes > 0 ? `Ritardo di ${t.delayMinutes} min` : 'In orario';
+                  }
+                } else {
+                  // Il treno è REGOLARMENTE IN VIAGGIO lungo la linea ferroviaria (non fermo all'origine):
+                  // fa fede il ritardo reale calcolato da ViaggiaTreno, senza inventare ritardi fittizi!
+                  t.isDeparted = true;
+                  t.isStoppedInStation = false;
+                  if (typeof aData.ritardo === 'number') {
+                    t.delayMinutes = aData.ritardo;
+                  }
+                  if (t.departureTimePlanned) {
+                    const depPlanM = parseTimeToMinutes(t.departureTimePlanned);
+                    t.departureTimeActual = minutesToTime(depPlanM + Math.max(0, t.delayMinutes));
+                  }
+                  if (t.arrivalTimePlanned) {
+                    const arrPlanM = parseTimeToMinutes(t.arrivalTimePlanned);
+                    t.arrivalTimeActual = minutesToTime(arrPlanM + Math.max(0, t.delayMinutes));
+                  }
+                  t.statusDescription = t.delayMinutes > 0 ? `Ritardo di ${t.delayMinutes} min` : 'In orario';
+                }
               }
             } catch {}
           })
@@ -2000,6 +2311,261 @@ export async function fetchLiveTrenitaliaTimetable(
   }
 }
 
+// Cache in memoria delle fermate convoglio (andamentoTreno) per azzerare la latenza nei cambi treno
+const andamentoMemoryCache = new Map<string, { aData: any; timestamp: number; finished: boolean }>();
+const trainOriginInfoCache = new Map<string, { originCode: string; departureMillis?: number }>();
+
+function mapAndamentoStops(aData: any): LiveTrainStop[] {
+  return aData.fermate.map((f: any) => ({
+    stationName: formatStationName(f.stazione || ''),
+    stationCode: f.id,
+    isPassed: f.partenzaReale !== null && f.partenzaReale !== undefined,
+    isCurrent: Boolean(
+      f.arrivoReale !== null &&
+      f.arrivoReale !== undefined &&
+      (f.partenzaReale === null || f.partenzaReale === undefined)
+    ),
+    actualTime: f.partenzaReale
+      ? formatMillisToTime(f.partenzaReale)
+      : f.arrivoReale
+      ? formatMillisToTime(f.arrivoReale)
+      : undefined,
+    plannedTime: f.partenza_teorica
+      ? formatMillisToTime(f.partenza_teorica)
+      : f.arrivo_teorico
+      ? formatMillisToTime(f.arrivo_teorico)
+      : cleanViaggiaTrenoTime(f.compOrarioPartenza || f.compOrarioArrivo || '') || undefined,
+    delayMinutes:
+      typeof f.ritardoPartenza === 'number'
+        ? f.ritardoPartenza
+        : typeof f.ritardoArrivo === 'number'
+        ? f.ritardoArrivo
+        : undefined,
+    isExtraordinary: Boolean(
+      f.tipoFermata === 'S' ||
+      f.straordinaria === true ||
+      f.programmata === false ||
+      (typeof f.tipoFermataDescrizione === 'string' && f.tipoFermataDescrizione.toLowerCase().includes('straordinar')) ||
+      (typeof f.actualFermataType === 'string' && f.actualFermataType.toLowerCase().includes('straordinar'))
+    ),
+  }));
+}
+
+/**
+ * Applica a un treno i dati reali della corsa (andamentoTreno): fermate, orari programmati ed effettivi,
+ * binari e ritardi specifici alle due stazioni del pendolare, stato di partenza/arrivo.
+ * Funziona anche per treni già conclusi (ViaggiaTreno conserva la corsa fino a fine giornata).
+ */
+function applyAndamentoToTrain(
+  train: LiveTrainInfo,
+  aData: any,
+  departureStation: StationInfo,
+  arrivalStation: StationInfo
+): void {
+  train.stops = mapAndamentoStops(aData);
+
+  const findStop = (st: StationInfo) => {
+    const nameLower = formatStationName(st.name).toLowerCase();
+    return aData.fermate.find(
+      (f: any) =>
+        f.id === st.code ||
+        (f.stazione && formatStationName(f.stazione).toLowerCase() === nameLower)
+    );
+  };
+  const depStop = findStop(departureStation);
+  const arrStop = findStop(arrivalStation);
+
+  const firstStop = aData.fermate[0];
+  const hasAnyReal = aData.fermate.some(
+    (f: any) =>
+      (f.partenzaReale !== null && f.partenzaReale !== undefined) ||
+      (f.arrivoReale !== null && f.arrivoReale !== undefined)
+  );
+  const notDepartedFromOrigin = aData.nonPartito === true && !hasAnyReal;
+
+  if (notDepartedFromOrigin) {
+    train.isDeparted = false;
+    train.isDepartedFromStation = false;
+    train.isStoppedInStation = false;
+    train.isArrivedAtDestination = false;
+    train.statusDescription = 'Non partito';
+    train.delayMinutes = 0;
+    if (train.departureTimePlanned) train.departureTimeActual = train.departureTimePlanned;
+  } else if (aData.nonPartito === false || hasAnyReal || (typeof aData.partenzaTreno === 'number' && aData.partenzaTreno > 0)) {
+    train.isDeparted = true;
+  }
+
+  if (aData.origine && !train.originStationName) {
+    train.originStationName = formatStationName(aData.origine);
+  }
+  if (firstStop && firstStop.stazione) {
+    train.originStationName = formatStationName(firstStop.stazione);
+  }
+  if (firstStop && firstStop.id) train.originStationCode = firstStop.id;
+  train.isLive = true;
+
+  if (depStop) {
+    const pAct = cleanPlatform(
+      depStop.binarioEffettivoPartenzaDescrizione ||
+      depStop.binarioEffettivoPartenzaCodice ||
+      depStop.binarioEffettivoArrivoDescrizione
+    );
+    const pPlan = cleanPlatform(
+      depStop.binarioProgrammatoPartenzaDescrizione ||
+      depStop.binarioProgrammatoPartenzaCodice ||
+      depStop.binarioProgrammatoArrivoDescrizione
+    );
+    if (pAct) train.platformActual = pAct;
+    if (pPlan) train.platformPlanned = pPlan;
+
+    // In ViaggiaTreno 'programmata' è l'ARRIVO programmato; la PARTENZA programmata è partenza_teorica.
+    if (typeof depStop.partenza_teorica === 'number') {
+      train.departureTimePlanned = formatMillisToTime(depStop.partenza_teorica);
+    } else if (typeof depStop.programmataPartenza === 'number') {
+      train.departureTimePlanned = formatMillisToTime(depStop.programmataPartenza);
+    } else if (depStop.compOrarioPartenza) {
+      train.departureTimePlanned = cleanViaggiaTrenoTime(depStop.compOrarioPartenza) || train.departureTimePlanned;
+    } else if (typeof depStop.programmata === 'number') {
+      train.departureTimePlanned = formatMillisToTime(depStop.programmata);
+    }
+
+    const planDepM = parseTimeToMinutes(train.departureTimePlanned);
+    if (typeof depStop.partenzaReale === 'number' && depStop.partenzaReale > 0) {
+      const rawDepAct = formatMillisToTime(depStop.partenzaReale);
+      const rawDepDelay =
+        typeof depStop.ritardoPartenza === 'number'
+          ? depStop.ritardoPartenza
+          : parseTimeToMinutes(rawDepAct) - planDepM;
+      // La partenza non anticipa mai rispetto all'orario programmato
+      const depDelay = Math.max(0, rawDepDelay);
+      train.departureDelayAtStation = depDelay;
+      train.departureTimeActual =
+        depDelay > 0 && planDepM > 0
+          ? minutesToTime(planDepM + depDelay)
+          : train.departureTimePlanned;
+      train.isDepartedFromStation = true;
+      train.isDeparted = true;
+      train.isStoppedInStation = false;
+    } else if (typeof depStop.arrivoReale === 'number' && depStop.arrivoReale > 0) {
+      // Il treno è arrivato alla stazione di partenza del pendolare ma non è ancora ripartito
+      train.isDepartedFromStation = false;
+      train.isStoppedInStation = true;
+      train.stoppedStationName = formatStationName(depStop.stazione || departureStation.name);
+      const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+      const posDelay = Math.max(
+        0,
+        typeof depStop.ritardoPartenza === 'number' ? depStop.ritardoPartenza : 0,
+        typeof aData.ritardo === 'number' ? aData.ritardo : 0,
+        planDepM > 0 && nowM > planDepM ? nowM - planDepM : 0
+      );
+      train.departureDelayAtStation = posDelay;
+      train.departureTimeActual =
+        posDelay > 0 && planDepM > 0
+          ? minutesToTime(planDepM + posDelay)
+          : train.departureTimePlanned;
+      if (posDelay === 0) {
+        const earlyArr =
+          typeof depStop.ritardoArrivo === 'number' && depStop.ritardoArrivo < 0
+            ? depStop.ritardoArrivo
+            : typeof aData.ritardo === 'number' && aData.ritardo < 0
+            ? aData.ritardo
+            : 0;
+        train.delayMinutes = earlyArr;
+      } else {
+        train.delayMinutes = posDelay;
+      }
+    } else if (!notDepartedFromOrigin) {
+      // Il treno è ancora a monte della stazione di partenza del pendolare:
+      // un eventuale anticipo a monte non anticipa mai la partenza dalla stazione dell'utente
+      const posDepDelay = Math.max(
+        0,
+        typeof depStop.ritardoPartenza === 'number' && depStop.ritardoPartenza > 0
+          ? depStop.ritardoPartenza
+          : typeof aData.ritardo === 'number' && aData.ritardo > 0
+          ? aData.ritardo
+          : 0
+      );
+      train.departureDelayAtStation = posDepDelay;
+      train.departureTimeActual =
+        posDepDelay > 0 && planDepM > 0
+          ? minutesToTime(planDepM + posDepDelay)
+          : train.departureTimePlanned;
+    }
+  }
+
+  if (arrStop) {
+    if (typeof arrStop.arrivo_teorico === 'number') {
+      train.arrivalTimePlanned = formatMillisToTime(arrStop.arrivo_teorico);
+    } else if (typeof arrStop.programmataArrivo === 'number') {
+      train.arrivalTimePlanned = formatMillisToTime(arrStop.programmataArrivo);
+    } else if (arrStop.compOrarioArrivo) {
+      train.arrivalTimePlanned = cleanViaggiaTrenoTime(arrStop.compOrarioArrivo) || train.arrivalTimePlanned;
+    } else if (typeof arrStop.programmata === 'number') {
+      train.arrivalTimePlanned = formatMillisToTime(arrStop.programmata);
+    }
+
+    const arrReal =
+      typeof arrStop.arrivoReale === 'number' && arrStop.arrivoReale > 0
+        ? arrStop.arrivoReale
+        : typeof arrStop.partenzaReale === 'number' && arrStop.partenzaReale > 0
+        ? arrStop.partenzaReale
+        : undefined;
+
+    const planArrM = parseTimeToMinutes(train.arrivalTimePlanned || '');
+
+    if (arrReal) {
+      const rawArrAct = formatMillisToTime(arrReal);
+      train.isArrivedAtDestination = true;
+      train.isDeparted = true;
+      train.isDepartedFromStation = true;
+      train.isStoppedInStation = false;
+      train.statusDescription = 'Arrivato';
+      train.trainStatusType = 'arrived';
+      const realDelay =
+        typeof arrStop.ritardoArrivo === 'number'
+          ? arrStop.ritardoArrivo
+          : parseTimeToMinutes(rawArrAct) - (planArrM || parseTimeToMinutes(rawArrAct));
+      train.arrivalDelayAtStation = realDelay;
+      train.delayMinutes = realDelay;
+      train.arrivalTimeActual =
+        realDelay !== 0 && planArrM > 0
+          ? minutesToTime(planArrM + realDelay)
+          : rawArrAct;
+    } else if (!notDepartedFromOrigin) {
+      // Non ancora arrivato a destinazione:
+      // - Se il treno è GIÀ PARTITO dalla stazione del pendolare (in viaggio tra le due stazioni di riferimento),
+      //   sia un ritardo sia un anticipo sulla tratta modificano l'orario di arrivo stimato.
+      // - Se il treno NON è ancora partito dalla stazione del pendolare, un anticipo maturato a monte
+      //   si azzera attendendo l'orario di partenza e NON deve anticipare l'arrivo a destinazione.
+      const curDelay =
+        typeof arrStop.ritardoArrivo === 'number' && arrStop.ritardoArrivo !== 0
+          ? arrStop.ritardoArrivo
+          : typeof aData.ritardo === 'number'
+          ? aData.ritardo
+          : 0;
+      if (typeof aData.ritardo === 'number' && !(train.isStoppedInStation && train.delayMinutes < 0)) {
+        train.delayMinutes = aData.ritardo;
+      }
+      if (train.isDepartedFromStation) {
+        train.arrivalDelayAtStation = curDelay;
+        if (planArrM > 0) {
+          train.arrivalTimeActual = minutesToTime(planArrM + curDelay);
+        }
+      } else {
+        const effArrDelay = Math.max(0, curDelay);
+        train.arrivalDelayAtStation = effArrDelay;
+        if (planArrM > 0) {
+          train.arrivalTimeActual = minutesToTime(planArrM + effArrDelay);
+        }
+      }
+    }
+  } else if (aData.arrivato === true) {
+    train.isArrivedAtDestination = true;
+    train.statusDescription = 'Arrivato';
+    train.trainStatusType = 'arrived';
+  }
+}
+
 /**
  * Trova il treno regionale ottimale (privilegiando Regionale Veloce)
  * e fornisce le alternative disponibili prima e dopo per il tragitto pendolare.
@@ -2016,6 +2582,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     forceRefresh = false,
     minDepartureMins,
     ignoreCurrentTime = false,
+    includeIntercity = false,
   } = options;
 
   const departureStation = normalizeStationInfo(rawDepartureStation);
@@ -2023,6 +2590,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
   const isOutbound = direction === 'outbound';
   const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');
+  const isTerminiDeparture = departureStation.name.toUpperCase().includes('TERMINI');
   const now = new Date();
   const isToday =
     !ignoreCurrentTime &&
@@ -2038,31 +2606,31 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     targetTimeStr,
     direction,
     forceRefresh,
-    ignoreCurrentTime
+    ignoreCurrentTime,
+    includeIntercity
   );
 
   // 2. Unione con la tabella oraria ufficiale completa della tratta
   // Assicura che TUTTI i treni programmati della giornata siano sempre presenti e consultabili nello slider
   // (anche quelli del mattino o della sera non compresi nella finestra live istantanea di ViaggiaTreno).
   const isOrteToRoma =
-    (departureStation.code === 'S08209' && (arrivalStation.code === 'S08409' || arrivalStation.code === 'S08217' || arrivalStation.code === 'S08406')) ||
-    (direction === 'outbound' && departureStation.code === 'S08209');
+    departureStation.code === 'S08209' &&
+    (arrivalStation.code === 'S08409' || arrivalStation.code === 'S08217' || arrivalStation.code === 'S08406');
   const isRomaToOrte =
-    ((departureStation.code === 'S08409' || departureStation.code === 'S08217' || departureStation.code === 'S08406') && arrivalStation.code === 'S08209') ||
-    (direction === 'return' && arrivalStation.code === 'S08209');
+    (departureStation.code === 'S08409' || departureStation.code === 'S08217' || departureStation.code === 'S08406') &&
+    arrivalStation.code === 'S08209';
 
   const masterScheduledList = isOrteToRoma
     ? SCHEDULED_ORTE_TO_ROMA
     : isRomaToOrte
     ? SCHEDULED_ROMA_TO_ORTE
-    : isOutbound
-    ? SCHEDULED_ORTE_TO_ROMA
-    : SCHEDULED_ROMA_TO_ORTE;
+    : [];
 
   const nowMinsCurrent = now.getHours() * 60 + now.getMinutes();
   const existingNumbers = new Set(allTrains.map((t) => t.trainNumber.replace(/\D/g, '')));
 
   for (const s of masterScheduledList) {
+    if (!includeIntercity && s.category === 'IC') continue;
     const cleanNum = s.trainNumber.replace(/\D/g, '');
     if (existingNumbers.has(cleanNum)) continue;
 
@@ -2078,7 +2646,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       duration = isTerminiArrival ? entry.durationMinutesTermini : entry.durationMinutesTiburtina;
     } else {
       const entry = s as ScheduledReturnTrainEntry;
-      depPlanned = (isTerminiArrival && entry.departureTimeTermini) ? entry.departureTimeTermini : entry.departureTimeTiburtina;
+      depPlanned = (isTerminiDeparture && entry.departureTimeTermini) ? entry.departureTimeTermini : entry.departureTimeTiburtina;
       arrPlanned = entry.arrivalTimeOrte;
       duration = entry.durationMinutesTiburtina;
     }
@@ -2100,7 +2668,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       platformPlanned: cleanPlatform(platformPlanned),
       platformActual: cleanPlatform(platformPlanned),
       delayMinutes: 0,
-      statusDescription: isToday ? (isPassed ? 'Già passato' : 'Programmato') : 'Programmato',
+      statusDescription: isToday ? (isPassed ? 'In viaggio' : 'Programmato') : 'Programmato',
       isDeparted: isPassed,
       isDepartedFromStation: isPassed,
       isLive: false,
@@ -2228,10 +2796,10 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
         return arr >= targetMins - 80;
       });
 
-      const rvInWindow = windowIndices.filter((idx) => allTrains[idx].isFast);
+      const rvInWindow = windowIndices.filter((idx) => allTrains[idx].isFast || allTrains[idx].category === 'IC');
 
       if (rvInWindow.length > 0) {
-        // Prendi l'ultimo RV nella finestra (viaggio veloce, arriva comodamente prima della lezione)
+        // Prendi l'ultimo RV/IC nella finestra (viaggio veloce, arriva comodamente prima della lezione)
         recommendedIdx = rvInWindow[rvInWindow.length - 1];
       } else if (windowIndices.length > 0) {
         // Altrimenti prendi il Regionale più vicino all'orario
@@ -2264,13 +2832,13 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     });
 
     if (eligibleIndices.length > 0) {
-      // Nei primi 75 minuti successivi, privilegia RV se disponibile
+      // Nei primi 75 minuti successivi, privilegia RV/IC se disponibile
       const soonIndices = eligibleIndices.filter((idx) => {
         const dep = parseTimeToMinutes(allTrains[idx].departureTimePlanned || '');
         return dep <= targetMins + 75;
       });
 
-      const rvSoon = soonIndices.filter((idx) => allTrains[idx].isFast);
+      const rvSoon = soonIndices.filter((idx) => allTrains[idx].isFast || allTrains[idx].category === 'IC');
       if (rvSoon.length > 0) {
         recommendedIdx = rvSoon[0];
       } else {
@@ -2314,6 +2882,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     isLive: false,
     durationMinutes: 45,
     isFast: false,
+    isOriginStation: true,
   };
 
   const chosenTrain = allTrains[selectedIndexSafe]
@@ -2322,6 +2891,53 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
   chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
   chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
+
+  // Arricchisce SEMPRE il treno selezionato con la corsa reale (andamentoTreno) quando è oggi:
+  // vale anche per i treni già arrivati / non più sul tabellone / provenienti dalla tabella statica.
+  if (isToday) {
+    const cleanNum = chosenTrain.trainNumber.replace(/\D/g, '');
+    const cached = andamentoMemoryCache.get(cleanNum);
+    const ttl = cached?.finished ? 10 * 60_000 : 45_000;
+    let aData: any = cached && Date.now() - cached.timestamp < ttl ? cached.aData : null;
+
+    if (!aData) {
+      try {
+        // L'origine reale della corsa NON coincide con la stazione del pendolare per i treni passanti:
+        // la si risolve sempre dal numero treno (con cache) così andamentoTreno riceve codice e data corretti.
+        let origCode: string | undefined;
+        let depMilli: number | undefined;
+        const info = await getTrainOriginInfo(cleanNum);
+        if (info) {
+          origCode = info.originCode;
+          depMilli = info.departureMillis;
+        } else if (chosenTrain.isLive) {
+          origCode = chosenTrain.originStationCode;
+          depMilli = chosenTrain.departureMillis;
+        }
+        if (origCode) {
+          const url = `${VIAGGIATRENO_BASE_URL}/andamentoTreno/${origCode}/${cleanNum}/${depMilli || targetDate.getTime()}`;
+          const fresh = await fetchViaggiaTrenoJson(url, 2500, 0);
+          if (fresh && Array.isArray(fresh.fermate) && fresh.fermate.length > 0) {
+            aData = fresh;
+            const lastStop = fresh.fermate[fresh.fermate.length - 1];
+            andamentoMemoryCache.set(cleanNum, {
+              aData: fresh,
+              timestamp: Date.now(),
+              finished: Boolean(fresh.arrivato === true || (lastStop && lastStop.arrivoReale)),
+            });
+          }
+        }
+      } catch {}
+      // In caso di rete lenta usa l'ultimo dato noto anche se scaduto, meglio di nessun dato
+      if (!aData && cached) aData = cached.aData;
+    }
+
+    if (aData && Array.isArray(aData.fermate) && aData.fermate.length > 0) {
+      applyAndamentoToTrain(chosenTrain, aData, departureStation, arrivalStation);
+      allTrains[selectedIndexSafe] = chosenTrain;
+    }
+  }
+
 
   // Alternative da mostrare nello slider dell'interfaccia:
   // Include tutti i treni della tratta affinché l'utente possa scorrere all'indietro e in avanti liberamente,
@@ -2362,6 +2978,7 @@ export interface TrainStatusResult {
     color: string;
     bg: string;
     border: string;
+    iconName?: string;
   };
   dwellBadge?: {
     label: string;
@@ -2432,6 +3049,15 @@ export function evaluateTrainStatus(
     alertLower.includes('deviato') ||
     alertLower.includes('variazione')
   ) {
+    const delayVal = Math.max(0, train.delayMinutes || 0);
+    const delayBadge = delayVal > 0 ? {
+      label: `+${delayVal}m ritardo`,
+      color: delayVal > 5 ? '#ef4444' : '#f59e0b',
+      bg: delayVal > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+      border: delayVal > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+      iconName: 'warning-outline',
+    } : undefined;
+
     return {
       statusType: 'diverted',
       badgeLabel: 'Deviato',
@@ -2441,6 +3067,7 @@ export function evaluateTrainStatus(
       iconName: 'git-branch-outline',
       alertMessage: train.alertMessage || 'Treno deviato su percorso alternativo da Trenitalia',
       capacityWarning: train.capacityWarning,
+      delayBadge,
     };
   }
 
@@ -2465,8 +3092,7 @@ export function evaluateTrainStatus(
   const isAtCommuterStation =
     !train.stoppedStationName ||
     !stationName ||
-    formatStationName(train.stoppedStationName).toLowerCase() ===
-      formatStationName(stationName).toLowerCase();
+    isSameStation(train.stoppedStationName, stationName);
 
   // ── CASO UNIFICATO: Treno NON ancora partito dalla stazione di partenza/origine ──
   const isNotYetDepartedFromOrigin =
@@ -2549,51 +3175,50 @@ export function evaluateTrainStatus(
     );
     const stName = train.stoppedStationName || stationName || 'Stazione';
     const programDelay = Math.max(0, train.delayMinutes || 0);
+    const isLateBeyondDep = nowMins > estimatedDepMins;
+    const stoppedTime = train.stoppedMinutes ?? (isLateBeyondDep ? nowMins - estimatedDepMins : undefined);
 
-    if (nowMins <= estimatedDepMins) {
-      if (programDelay > 0) {
-        return {
-          statusType: 'delayed',
-          badgeLabel: `+${programDelay}m ritardo`,
-          badgeColor: programDelay > 5 ? '#ef4444' : '#f59e0b',
-          badgeBg: programDelay > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-          badgeBorder: programDelay > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
-          iconName: 'warning-outline',
-          alertMessage: train.alertMessage,
-          capacityWarning: train.capacityWarning,
-        };
-      }
+    const delayBadge = programDelay > 0 ? {
+      label: `+${programDelay}m ritardo`,
+      color: programDelay > 5 ? '#ef4444' : '#f59e0b',
+      bg: programDelay > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+      border: programDelay > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+      iconName: 'warning-outline',
+    } : undefined;
+
+    // Se è fermo regolarmente entro la partenza stimata e senza ritardo: mostra il badge azzurro "Fermo a [Stazione]"
+    // (ed eventuale badge "Anticipo (Xm)" se è arrivato in anticipo alla stazione, senza modificare gli orari)
+    if (!isLateBeyondDep && programDelay === 0) {
+      const earlyBadge =
+        train.delayMinutes < 0
+          ? {
+              label: `Anticipo (${Math.abs(train.delayMinutes)}m)`,
+              color: '#10b981',
+              bg: 'rgba(16, 185, 129, 0.15)',
+              border: 'rgba(16, 185, 129, 0.3)',
+              iconName: 'flash-outline',
+            }
+          : undefined;
       return {
         statusType: 'running',
-        badgeLabel: 'In orario',
-        badgeColor: '#34c759',
-        badgeBg: 'rgba(52, 199, 89, 0.15)',
-        badgeBorder: 'rgba(52, 199, 89, 0.3)',
-        iconName: 'checkmark-circle-outline',
+        badgeLabel: `Fermo a ${stName}`,
+        badgeColor: '#38bdf8',
+        badgeBg: 'rgba(56, 189, 248, 0.15)',
+        badgeBorder: 'rgba(56, 189, 248, 0.3)',
+        iconName: 'pause-circle-outline',
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,
+        delayBadge: earlyBadge,
+        dwellBadge: undefined,
       };
     }
 
-    // Se è fermo oltre la partenza stimata: mostra "Fermo a [Stazione]" + l'eventuale ritardo rispetto al programma
-    const lateAccumulated = programDelay;
-    const stoppedTime = train.stoppedMinutes ?? (nowMins > estimatedDepMins ? nowMins - estimatedDepMins : undefined);
-
-    // Quando è presente un ritardo, il badge principale indica puramente la posizione ("Fermo a [Stazione]"),
-    // senza appendere i minuti di sosta ("da 13m") nello stesso testo per non creare confusione con "+8 min".
-    // I minuti di sosta fisica al binario vengono convogliati in un dwellBadge dedicato e sobrio in grigio.
-    const stoppedInfo = lateAccumulated === 0 && stoppedTime !== undefined && stoppedTime > 0
+    // Se è fermo oltre la partenza stimata o ha ritardo accumulato:
+    const stoppedInfo = programDelay === 0 && stoppedTime !== undefined && stoppedTime > 0
       ? ` (da ${stoppedTime}m)`
       : '';
 
-    const delayBadge = lateAccumulated > 0 ? {
-      label: `+${lateAccumulated} min`,
-      color: lateAccumulated > 5 ? '#ef4444' : '#f59e0b',
-      bg: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-      border: lateAccumulated > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
-    } : undefined;
-
-    const dwellBadge = (lateAccumulated > 0 && stoppedTime !== undefined && stoppedTime > 0) ? {
+    const dwellBadge = (programDelay > 0 && stoppedTime !== undefined && stoppedTime > 0) ? {
       label: `In banchina da ${stoppedTime}m`,
       color: '#94a3b8',
       bg: 'rgba(148, 163, 184, 0.12)',
@@ -2601,19 +3226,19 @@ export function evaluateTrainStatus(
     } : undefined;
 
     return {
-      statusType: lateAccumulated > 5 ? 'delayed' : lateAccumulated > 0 ? 'warning' : 'running',
+      statusType: programDelay > 5 ? 'delayed' : programDelay > 0 ? 'warning' : 'running',
       badgeLabel: `Fermo a ${stName}${stoppedInfo}`,
-      badgeColor: lateAccumulated > 5 ? '#ef4444' : lateAccumulated > 0 ? '#f59e0b' : '#38bdf8',
+      badgeColor: programDelay > 5 ? '#ef4444' : programDelay > 0 ? '#f59e0b' : '#38bdf8',
       badgeBg:
-        lateAccumulated > 5
+        programDelay > 5
           ? 'rgba(239, 68, 68, 0.15)'
-          : lateAccumulated > 0
+          : programDelay > 0
           ? 'rgba(245, 158, 11, 0.15)'
           : 'rgba(56, 189, 248, 0.15)',
       badgeBorder:
-        lateAccumulated > 5
+        programDelay > 5
           ? 'rgba(239, 68, 68, 0.3)'
-          : lateAccumulated > 0
+          : programDelay > 0
           ? 'rgba(245, 158, 11, 0.3)'
           : 'rgba(56, 189, 248, 0.3)',
       iconName: 'pause-circle-outline',
@@ -2626,37 +3251,63 @@ export function evaluateTrainStatus(
 
   // Se il treno è già passato per la stazione di riferimento del pendolare:
   if (train.isDepartedFromStation) {
-    if (actualArrMins > 0 && nowMins > actualArrMins + 3) {
+    const delayBadge =
+      train.delayMinutes > 0
+        ? {
+            label: `+${train.delayMinutes}m ritardo`,
+            color: train.delayMinutes > 5 ? '#ef4444' : '#f59e0b',
+            bg: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+            border: train.delayMinutes > 5 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+            iconName: 'warning-outline',
+          }
+        : train.delayMinutes < 0
+        ? {
+            label: `Anticipo (${Math.abs(train.delayMinutes)}m)`,
+            color: '#10b981',
+            bg: 'rgba(16, 185, 129, 0.15)',
+            border: 'rgba(16, 185, 129, 0.3)',
+            iconName: 'checkmark-circle-outline',
+          }
+        : undefined;
+
+    const isTrainArrivedAtDest = Boolean(
+      train.isArrivedAtDestination ||
+      train.trainStatusType === 'arrived' ||
+      (train.statusDescription && train.statusDescription.toLowerCase().includes('arrivato')) ||
+      (train.isDepartedFromStation && actualArrMins > 0 && nowMins >= actualArrMins) ||
+      (actualArrMins > 0 && nowMins >= actualArrMins && train.isDeparted)
+    );
+
+    if (isTrainArrivedAtDest) {
+      const finalDelay = train.arrivalDelayAtStation !== undefined
+        ? train.arrivalDelayAtStation
+        : train.delayMinutes;
+
+      // Per i treni già arrivati non si mostra il badge di ritardo/anticipo nell'intestazione:
+      // restano solo gli orari effettivi con l'indicazione compatta sotto l'orario.
       return {
-        statusType: train.delayMinutes > 0 ? 'delayed' : 'on_time',
-        badgeLabel: train.delayMinutes > 0 ? `Arrivato (+${train.delayMinutes}m)` : 'Arrivato • In orario',
+        statusType: finalDelay > 0 ? 'delayed' : 'on_time',
+        badgeLabel: 'Arrivato',
         badgeColor: '#64748b',
         badgeBg: 'rgba(100, 116, 139, 0.15)',
         badgeBorder: 'rgba(100, 116, 139, 0.25)',
         iconName: 'flag-outline',
         alertMessage: train.alertMessage,
         capacityWarning: train.capacityWarning,
+        delayBadge: undefined,
       };
     }
 
-    const delayInfo = train.delayMinutes > 0 ? ` (+${train.delayMinutes}m)` : '';
     return {
       statusType: train.delayMinutes > 0 ? 'delayed' : 'running',
-      badgeLabel: `Già passato${delayInfo}`,
-      badgeColor: train.delayMinutes > 5 ? '#ef4444' : train.delayMinutes > 0 ? '#f59e0b' : '#34c759',
-      badgeBg: train.delayMinutes > 5
-        ? 'rgba(239, 68, 68, 0.15)'
-        : train.delayMinutes > 0
-        ? 'rgba(245, 158, 11, 0.15)'
-        : 'rgba(52, 199, 89, 0.15)',
-      badgeBorder: train.delayMinutes > 5
-        ? 'rgba(239, 68, 68, 0.3)'
-        : train.delayMinutes > 0
-        ? 'rgba(245, 158, 11, 0.3)'
-        : 'rgba(52, 199, 89, 0.3)',
+      badgeLabel: 'In viaggio',
+      badgeColor: '#64748b',
+      badgeBg: 'rgba(100, 116, 139, 0.15)',
+      badgeBorder: 'rgba(100, 116, 139, 0.25)',
       iconName: 'train-outline',
       alertMessage: train.alertMessage,
       capacityWarning: train.capacityWarning,
+      delayBadge,
     };
   }
 

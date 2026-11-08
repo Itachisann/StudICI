@@ -1,13 +1,94 @@
-import { CommuterConfig, CommuterItinerary, TripLeg } from '../types/commuter';
+import { CommuterConfig, CommuterItinerary, TripLeg, LiveTrainInfo } from '../types/commuter';
 import { ScheduleData, ClassEvent } from './scraper';
+import {
+  ManualClassEvent,
+  manualEventToClassEvent,
+  isManualEventActiveOnDate,
+} from './manualEvents';
+import { getDateForDayIndex } from './attendance';
 import { resolveClassroom, formatSapienzaAddress, SAPIENZA_BUILDINGS } from './classroomLocations';
 import { getOptimalRomeTransit } from './transitRouter';
+import { getStationTransitBoard } from './transitBoardService';
 import { calculateDrivingEstimate, getStationNavigationQuery } from './drivingRouter';
 import {
   findOptimalCommuterTrain,
   parseTimeToMinutes,
   minutesToTime,
+  formatStationName,
 } from './trenitaliaApi';
+
+/**
+ * Risolve dinamicamente il nome effettivo dello scalo ferroviario di Roma
+ * utilizzato dal treno selezionato (es. "Roma Tiburtina", "Roma Termini", "Roma Ostiense"),
+ * superando il default statico di configurazione quando il convoglio specifico fa capo a una stazione differente.
+ */
+export function getRomeStationName(
+  config: CommuterConfig,
+  train?: LiveTrainInfo | null,
+  direction: 'outbound' | 'return' = 'outbound'
+): string {
+  const userRomeStation = formatStationName(
+    config.arrivalStation.shortName || config.arrivalStation.name || 'Roma Tiburtina'
+  );
+  const userRomeUpper = userRomeStation.toUpperCase();
+  const isUserTiburtina = userRomeUpper.includes('TIBURTINA');
+  const isUserTermini = userRomeUpper.includes('TERMINI');
+  const isUserOstiense = userRomeUpper.includes('OSTIENSE');
+
+  if (train) {
+    const stops = train.stops || [];
+
+    // 1. Se abbiamo l'elenco fermate del convoglio:
+    if (stops.length > 0) {
+      // Se la stazione preferita configurata dal pendolare è tra le fermate del treno,
+      // la stazione di salita/discesa a Roma è RIGOROSAMENTE quella dell'utente
+      // (es. treno che origina a Termini ma ferma a Tiburtina: per chi scende/sale a Tiburtina la stazione è Tiburtina).
+      const userStopExists = stops.some((s) => {
+        const sName = s.stationName.toUpperCase();
+        if (isUserTiburtina && sName.includes('TIBURTINA')) return true;
+        if (isUserTermini && sName.includes('TERMINI')) return true;
+        if (isUserOstiense && sName.includes('OSTIENSE')) return true;
+        return sName.includes(userRomeUpper);
+      });
+
+      if (userStopExists) {
+        return userRomeStation;
+      }
+
+      // Se il treno NON ferma nella stazione configurata dall'utente,
+      // individua l'effettiva fermata di Roma servita dal convoglio
+      const alternativeRomeStop = stops.find((s) => {
+        const u = s.stationName.toUpperCase();
+        return u.includes('TIBURTINA') || u.includes('TERMINI') || u.includes('OSTIENSE') || u.includes('TUSCOLANA');
+      });
+      if (alternativeRomeStop) {
+        return formatStationName(alternativeRomeStop.stationName);
+      }
+    }
+
+    // 2. Se non abbiamo ancora le fermate dettagliate caricate:
+    // La quasi totalità dei convogli regionali/RV della direttrice Orte-Roma (linea FL1 e direttissima)
+    // effettua fermata a Roma Tiburtina. Non bisogna MAI forzare Roma Termini solo perché il treno
+    // ha capolinea di origine o destinazione a Termini se l'utente ha configurato Roma Tiburtina.
+    if (isUserTiburtina) {
+      return 'Roma Tiburtina';
+    }
+
+    if (isUserTermini) {
+      if (direction === 'outbound') {
+        const dest = (train.destination || '').toUpperCase();
+        if (dest.includes('TERMINI')) return 'Roma Termini';
+        if (dest.includes('TIBURTINA') || dest.includes('FIUMICINO')) return 'Roma Tiburtina';
+      } else {
+        const orig = (train.originStationName || '').toUpperCase();
+        if (orig.includes('TERMINI')) return 'Roma Termini';
+        if (orig.includes('TIBURTINA') || orig.includes('FIUMICINO')) return 'Roma Tiburtina';
+      }
+    }
+  }
+
+  return userRomeStation;
+}
 
 export function formatMinutesToHours(minutes: number): string {
   if (!minutes || minutes <= 0) return '0m';
@@ -20,6 +101,7 @@ export function formatMinutesToHours(minutes: number): string {
 export interface OptimizeOptions {
   config: CommuterConfig;
   scheduleData?: ScheduleData | null;
+  manualEvents?: ManualClassEvent[];
   direction: 'outbound' | 'return';
   targetDate?: Date;
   manualHour?: string; // override manuale orario es. "08:30"
@@ -42,6 +124,65 @@ export interface DayLectureTarget {
   longitude?: number;
 }
 
+function classEventToLectureTarget(chosenClass: ClassEvent): DayLectureTarget {
+  const context = `${chosenClass.building || ''} ${chosenClass.address || ''}`.trim();
+  const resolved = resolveClassroom(chosenClass.room || 'Aula', context);
+  const bCode = (
+    chosenClass.building?.match(/RM\d{3}/i)?.[0] ||
+    chosenClass.address?.match(/RM\d{3}/i)?.[0] ||
+    resolved.buildingCode ||
+    ''
+  ).toUpperCase();
+
+  const startTime = chosenClass.startTime || '08:30';
+  const endTime = chosenClass.endTime || minutesToTime(parseTimeToMinutes(startTime) + 120);
+
+  return {
+    subject: chosenClass.subject || 'Lezione',
+    room: chosenClass.room || resolved.displayName,
+    buildingName: chosenClass.building || resolved.buildingName,
+    buildingCode: bCode,
+    address: formatSapienzaAddress(chosenClass.address || resolved.address, bCode),
+    startTime,
+    endTime,
+    latitude: resolved.latitude,
+    longitude: resolved.longitude,
+  };
+}
+
+function getDayClassesForDate(
+  scheduleData?: ScheduleData | null,
+  targetDate: Date = new Date(),
+  manualEvents?: ManualClassEvent[]
+): ClassEvent[] {
+  const dayIndex = targetDate.getDay(); // 0 = dom, 1 = lun, ..., 6 = sab
+  if (dayIndex === 0 || dayIndex === 6) {
+    return [];
+  }
+  const dayScheduleIndex = dayIndex >= 1 && dayIndex <= 5 ? dayIndex - 1 : 0;
+
+  const scrapedClasses: ClassEvent[] =
+    scheduleData?.days && scheduleData.days[dayScheduleIndex]
+      ? [...scheduleData.days[dayScheduleIndex]]
+      : [];
+
+  const { dateStr } = getDateForDayIndex(dayScheduleIndex);
+  const manualClasses: ClassEvent[] = (manualEvents || [])
+    .filter(
+      (e) =>
+        e.dayIndex === dayScheduleIndex &&
+        Boolean(e.room && e.room.trim().length > 0) &&
+        isManualEventActiveOnDate(e, dateStr)
+    )
+    .map(manualEventToClassEvent);
+
+  return [...scrapedClasses, ...manualClasses].sort(
+    (a, b) =>
+      parseTimeToMinutes(a.startTime || '08:30') -
+      parseTimeToMinutes(b.startTime || '08:30')
+  );
+}
+
 /**
  * Calcola l'itinerario ottimizzato per lo studente pendolare
  */
@@ -51,6 +192,7 @@ export async function computeCommuterItinerary(
   const {
     config,
     scheduleData,
+    manualEvents,
     direction,
     targetDate = new Date(),
     manualHour,
@@ -61,6 +203,7 @@ export async function computeCommuterItinerary(
     ignoreCurrentTime = false,
   } = options;
   const isOutbound = direction === 'outbound';
+  const dayClasses = getDayClassesForDate(scheduleData, targetDate, manualEvents);
 
   // 1. Individua la lezione target del giorno
   const targetLecture = findDayLecture(
@@ -69,7 +212,8 @@ export async function computeCommuterItinerary(
     direction,
     manualHour,
     selectedClass,
-    ignoreCurrentTime
+    ignoreCurrentTime,
+    manualEvents
   );
 
   // 2. Calcola i tempi in base alla direzione
@@ -81,7 +225,8 @@ export async function computeCommuterItinerary(
       selectedTrainOffset,
       selectedTrainNumber,
       forceRefresh,
-      ignoreCurrentTime
+      ignoreCurrentTime,
+      dayClasses
     );
   } else {
     return computeReturnItinerary(
@@ -101,7 +246,8 @@ function findDayLecture(
   direction: 'outbound' | 'return' = 'outbound',
   manualHour?: string,
   explicitClass?: ClassEvent | null,
-  ignoreCurrentTime = false
+  ignoreCurrentTime = false,
+  manualEvents?: ManualClassEvent[]
 ): DayLectureTarget | null {
   if (manualHour) {
     const resolved = resolveClassroom('Aula 1');
@@ -120,29 +266,7 @@ function findDayLecture(
 
   // Se l'utente ha selezionato direttamente una lezione dall'interfaccia
   if (explicitClass) {
-    const context = `${explicitClass.building || ''} ${explicitClass.address || ''}`.trim();
-    const resolved = resolveClassroom(explicitClass.room || 'Aula', context);
-    const bCode = (
-      explicitClass.building?.match(/RM\d{3}/i)?.[1] ||
-      explicitClass.address?.match(/RM\d{3}/i)?.[1] ||
-      resolved.buildingCode ||
-      ''
-    ).toUpperCase();
-
-    const startTime = explicitClass.startTime || '08:30';
-    const endTime = explicitClass.endTime || minutesToTime(parseTimeToMinutes(startTime) + 120);
-
-    return {
-      subject: explicitClass.subject || 'Lezione',
-      room: explicitClass.room || resolved.displayName,
-      buildingName: explicitClass.building || resolved.buildingName,
-      buildingCode: bCode,
-      address: formatSapienzaAddress(explicitClass.address || resolved.address, bCode),
-      startTime,
-      endTime,
-      latitude: resolved.latitude,
-      longitude: resolved.longitude,
-    };
+    return classEventToLectureTarget(explicitClass);
   }
 
   const dayIndex = targetDate.getDay(); // 0 = dom, 1 = lun, ..., 6 = sab
@@ -153,19 +277,7 @@ function findDayLecture(
     return null;
   }
 
-  const dayScheduleIndex = dayIndex >= 1 && dayIndex <= 5 ? dayIndex - 1 : 0; // default lunedì
-
-  const dayClasses: ClassEvent[] =
-    scheduleData?.days && scheduleData.days[dayScheduleIndex]
-      ? [...scheduleData.days[dayScheduleIndex]]
-      : [];
-
-  // Ordina per orario di inizio
-  dayClasses.sort(
-    (a, b) =>
-      parseTimeToMinutes(a.startTime || '08:30') -
-      parseTimeToMinutes(b.startTime || '08:30')
-  );
+  const dayClasses = getDayClassesForDate(scheduleData, targetDate, manualEvents);
 
   if (dayClasses.length > 0) {
     let chosenClass: ClassEvent;
@@ -186,13 +298,7 @@ function findDayLecture(
         if (activeOrUpcoming) {
           chosenClass = activeOrUpcoming;
         } else {
-          const refClass = dayClasses[0];
-          chosenClass = {
-            ...refClass,
-            startTime: minutesToTime(nowMins + 60),
-            endTime: minutesToTime(nowMins + 180),
-            duration: 120,
-          };
+          chosenClass = dayClasses[dayClasses.length - 1];
         }
       } else {
         // Ritorno: se c'è una lezione in corso o appena finita, prendi quella, altrimenti l'ultima del giorno
@@ -210,29 +316,7 @@ function findDayLecture(
       chosenClass = direction === 'outbound' ? dayClasses[0] : dayClasses[dayClasses.length - 1];
     }
 
-    const context = `${chosenClass.building || ''} ${chosenClass.address || ''}`.trim();
-    const resolved = resolveClassroom(chosenClass.room || 'Aula', context);
-    const bCode = (
-      chosenClass.building?.match(/RM\d{3}/i)?.[1] ||
-      chosenClass.address?.match(/RM\d{3}/i)?.[1] ||
-      resolved.buildingCode ||
-      ''
-    ).toUpperCase();
-
-    const startTime = chosenClass.startTime || '08:30';
-    const endTime = chosenClass.endTime || minutesToTime(parseTimeToMinutes(startTime) + 120);
-
-    return {
-      subject: chosenClass.subject || 'Lezione',
-      room: chosenClass.room || resolved.displayName,
-      buildingName: chosenClass.building || resolved.buildingName,
-      buildingCode: bCode,
-      address: formatSapienzaAddress(chosenClass.address || resolved.address, bCode),
-      startTime,
-      endTime,
-      latitude: resolved.latitude,
-      longitude: resolved.longitude,
-    };
+    return classEventToLectureTarget(chosenClass);
   }
 
   // Fallback se giornata libera o fine settimana
@@ -263,11 +347,12 @@ async function computeOutboundItinerary(
   selectedTrainOffset = 0,
   selectedTrainNumber?: string,
   forceRefresh = false,
-  ignoreCurrentTime = false
+  ignoreCurrentTime = false,
+  dayClasses: ClassEvent[] = []
 ): Promise<CommuterItinerary> {
   const bufferMins = config.bufferMinutes || 10;
 
-  // Calcolo percorso mezzi urbani ottimizzato (se presente una lezione universitaria target)
+  // Calcolo percorso mezzi urbani o a piedi ottimizzato (se presente una lezione universitaria target)
   const transitSolution = targetLecture
     ? getOptimalRomeTransit({
         fromStationCode: config.arrivalStation.code,
@@ -281,6 +366,7 @@ async function computeOutboundItinerary(
           longitude: targetLecture.longitude,
         },
         direction: 'to_campus',
+        preferredMode: config.transitLeg?.preferredMode || 'auto',
       })
     : null;
 
@@ -345,6 +431,7 @@ async function computeOutboundItinerary(
       forceRefresh,
       minDepartureMins: isToday ? minTrainDepartureMins : undefined,
       ignoreCurrentTime,
+      includeIntercity: config.includeIntercity ?? false,
     }),
     carEnabled
       ? calculateDrivingEstimate(
@@ -358,10 +445,41 @@ async function computeOutboundItinerary(
   ]);
 
   let { train, availableTrains, selectedIndex } = optimalTrainResult;
+  const actualRomeStation = getRomeStationName(config, train, 'outbound');
+
+  let activeTransitSolution = transitSolution;
+  let activeTransitMins = transitMins;
+  if (
+    targetLecture &&
+    actualRomeStation &&
+    actualRomeStation !== (config.arrivalStation.shortName || config.arrivalStation.name)
+  ) {
+    const updatedTransit = getOptimalRomeTransit({
+      fromStationCode: config.arrivalStation.code,
+      fromStationName: actualRomeStation,
+      classroom: {
+        displayName: targetLecture.room,
+        buildingName: targetLecture.buildingName || '',
+        buildingCode: targetLecture.buildingCode || '',
+        address: targetLecture.address,
+        latitude: targetLecture.latitude,
+        longitude: targetLecture.longitude,
+      },
+      direction: 'to_campus',
+      preferredMode: config.transitLeg?.preferredMode || 'auto',
+    });
+    if (updatedTransit) {
+      activeTransitSolution = updatedTransit;
+      activeTransitMins = updatedTransit.durationMinutes;
+    }
+  }
 
   // Tragitto auto con calcolo automatico percorso e profilo traffico Google Maps
   let carDuration = 0;
-  let carDistanceKm = config.carLeg.distanceKm || 17.2;
+  // La distanza chilometrica tra residenza e stazione di riferimento è fissa e costante;
+  // con il traffico varia solo il minutaggio di percorrenza (~X min), non i km.
+  const baseSavedKm = config.carLeg.distanceKm && config.carLeg.distanceKm > 0 ? config.carLeg.distanceKm : 0;
+  let carDistanceKm = baseSavedKm || (drivingEst?.distanceKm ?? 17.2);
   let carTrafficNote: string | undefined = undefined;
   let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
   let carTrafficPeak = false;
@@ -369,7 +487,9 @@ async function computeOutboundItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+    if (!baseSavedKm && drivingEst.distanceKm) {
+      carDistanceKm = drivingEst.distanceKm;
+    }
     carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
@@ -482,13 +602,22 @@ async function computeOutboundItinerary(
     ? `Binario ${train.platformActual || train.platformPlanned}`
     : 'Binario in definizione';
 
+  const outboundDepTime = (isToday && train.departureTimeActual)
+    ? train.departureTimeActual
+    : (train.departureTimePlanned || minutesToTime(trainDepMins));
+  const outboundArrTime = (isToday && train.arrivalTimeActual)
+    ? train.arrivalTimeActual
+    : ((isToday && train.delayMinutes > 0 && train.arrivalTimePlanned)
+        ? minutesToTime(parseTimeToMinutes(train.arrivalTimePlanned) + train.delayMinutes)
+        : (train.arrivalTimePlanned || minutesToTime(trainArrMins)));
+
   legs.push({
     id: 'train-leg',
     type: 'train',
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
-    subtitle: `${config.departureStation.shortName || config.departureStation.name} ➔ ${config.arrivalStation.shortName || config.arrivalStation.name}`,
-    startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
-    endTime: (isToday ? train.arrivalTimeActual : train.arrivalTimePlanned) || minutesToTime(trainArrMins),
+    subtitle: `${config.departureStation.shortName || config.departureStation.name} ➔ ${actualRomeStation}`,
+    startTime: outboundDepTime,
+    endTime: outboundArrTime,
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,
@@ -500,16 +629,148 @@ async function computeOutboundItinerary(
   });
 
   let lectureTimeStatus: CommuterItinerary['lectureTimeStatus'] | undefined = undefined;
+  let resolvedClassroomArrivalMins = trainArrMins + activeTransitMins;
 
-  if (targetLecture && transitSolution) {
-    // Leg 3: Mezzi Pubblici Urbani (ottimizzato dinamicamente)
-    const actualClassroomArrivalMins = trainArrMins + transitMins;
+  if (targetLecture && activeTransitSolution) {
+    // Se il treno effettivamente raggiungibile/selezionato fa arrivare in aula dopo la fine della lezione target iniziale
+    // (es. alle 08:07 la prima lezione 08:00-10:00 è ancora in corso ma il primo treno utile 09:32->10:35 arriva alle 10:53),
+    // riallinea la lezione target alla prima lezione del giorno ancora attiva/futura al momento dell'arrivo in aula.
+    const approxClassroomArrival = trainArrMins + activeTransitMins;
+    if (
+      dayClasses.length > 0 &&
+      approxClassroomArrival >= parseTimeToMinutes(targetLecture.endTime)
+    ) {
+      const nextReachableClass = dayClasses.find((c) => {
+        const cEnd = parseTimeToMinutes(c.endTime || '18:00');
+        return cEnd > approxClassroomArrival && (!isToday || nowMins < cEnd);
+      });
+      if (nextReachableClass) {
+        const updatedTarget = classEventToLectureTarget(nextReachableClass);
+        const roomChanged =
+          updatedTarget.buildingCode !== targetLecture.buildingCode ||
+          updatedTarget.room !== targetLecture.room;
+        targetLecture = updatedTarget;
+        if (roomChanged) {
+          const recalculatedTransit = getOptimalRomeTransit({
+            fromStationCode: config.arrivalStation.code,
+            fromStationName: actualRomeStation || config.arrivalStation.name,
+            classroom: {
+              displayName: targetLecture.room,
+              buildingName: targetLecture.buildingName || '',
+              buildingCode: targetLecture.buildingCode || '',
+              address: targetLecture.address,
+              latitude: targetLecture.latitude,
+              longitude: targetLecture.longitude,
+            },
+            direction: 'to_campus',
+            preferredMode: config.transitLeg?.preferredMode || 'auto',
+          });
+          if (recalculatedTransit) {
+            activeTransitSolution = recalculatedTransit;
+            activeTransitMins = recalculatedTransit.durationMinutes;
+          }
+        }
+      }
+    }
+
+    // Leg 3: Mezzi Pubblici Urbani (risolto dinamicamente sull'ultimo mezzo utile considerando tempi di percorrenza e camminata a piedi)
+    let isWalkLeg = activeTransitSolution.mode === 'walk';
+    let transitStartStr = minutesToTime(trainArrMins);
+    let transitDurMins = activeTransitMins;
+    let actualClassroomArrivalMins = trainArrMins + activeTransitMins;
+    let resolvedOutboundDirectLines: string[] = [];
+
+    if (!isWalkLeg) {
+      try {
+        const isTrainAlreadyArrived = Boolean(
+          train.isArrivedAtDestination || train.trainStatusType === 'arrived'
+        );
+        const isTransitLive = Boolean(
+          isToday &&
+            !isTrainAlreadyArrived &&
+            Math.abs(trainArrMins - nowMins) <= 45
+        );
+        const targetLabel = targetLecture.buildingName
+          ? `${targetLecture.buildingName} (${targetLecture.room})`
+          : targetLecture.room;
+        const boardData = await getStationTransitBoard({
+          stationName: actualRomeStation,
+          targetName: targetLabel,
+          targetCoords:
+            targetLecture.latitude && targetLecture.longitude
+              ? { lat: targetLecture.latitude, lng: targetLecture.longitude }
+              : undefined,
+          targetDate: isTransitLive ? undefined : targetDateStr,
+          targetTime: isTransitLive ? 'now' : targetLecture.startTime,
+          direction: 'to_campus',
+          isLiveContext: isTransitLive,
+          constraintTime: targetLecture.startTime,
+          minDepartureTime: outboundArrTime,
+        });
+        resolvedOutboundDirectLines = boardData.directLines || [];
+        const opt = boardData.optimalDeparture || boardData.departures[0];
+        if (opt) {
+          const optDepStr = isTransitLive
+            ? opt.estimatedTime || opt.scheduledTime
+            : opt.scheduledTime;
+          const optArrM = parseTimeToMinutes(opt.arrivalTime);
+          if (optDepStr && optArrM > 0) {
+            transitStartStr = optDepStr;
+            transitDurMins = opt.durationMinutes;
+            actualClassroomArrivalMins = optArrM;
+          }
+        }
+      } catch {
+        // Fallback silenzioso alla stima statica
+      }
+    }
+
+    // Secondo controllo post-risoluzione del mezzo urbano reale: se l'orario esatto di arrivo in aula
+    // supera la fine di targetLecture ma c'è una lezione successiva in corso/futura, aggiorna targetLecture.
+    if (
+      dayClasses.length > 0 &&
+      actualClassroomArrivalMins >= parseTimeToMinutes(targetLecture.endTime)
+    ) {
+      const nextReachableClass = dayClasses.find((c) => {
+        const cEnd = parseTimeToMinutes(c.endTime || '18:00');
+        return cEnd > actualClassroomArrivalMins && (!isToday || nowMins < cEnd);
+      });
+      if (nextReachableClass) {
+        const updatedTarget = classEventToLectureTarget(nextReachableClass);
+        const roomChanged =
+          updatedTarget.buildingCode !== targetLecture.buildingCode ||
+          updatedTarget.room !== targetLecture.room;
+        targetLecture = updatedTarget;
+        if (roomChanged) {
+          const recalculatedTransit = getOptimalRomeTransit({
+            fromStationCode: config.arrivalStation.code,
+            fromStationName: actualRomeStation || config.arrivalStation.name,
+            classroom: {
+              displayName: targetLecture.room,
+              buildingName: targetLecture.buildingName || '',
+              buildingCode: targetLecture.buildingCode || '',
+              address: targetLecture.address,
+              latitude: targetLecture.latitude,
+              longitude: targetLecture.longitude,
+            },
+            direction: 'to_campus',
+            preferredMode: config.transitLeg?.preferredMode || 'auto',
+          });
+          if (recalculatedTransit) {
+            activeTransitSolution = recalculatedTransit;
+            activeTransitMins = recalculatedTransit.durationMinutes;
+            isWalkLeg = activeTransitSolution.mode === 'walk';
+          }
+        }
+      }
+    }
+
+    resolvedClassroomArrivalMins = actualClassroomArrivalMins;
     const lectureStartMins = parseTimeToMinutes(targetLecture.startTime);
     const lectureEndMins = parseTimeToMinutes(targetLecture.endTime);
 
     const isLectureFinished =
-      actualClassroomArrivalMins >= lectureEndMins ||
-      (isToday && nowMins >= lectureEndMins);
+      lectureEndMins > 0 && actualClassroomArrivalMins >= lectureEndMins;
 
     const isLateArrival =
       !isLectureFinished &&
@@ -518,29 +779,33 @@ async function computeOutboundItinerary(
 
     legs.push({
       id: 'transit-leg',
-      type: 'transit',
-      title: transitSolution.lineName,
-      subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${targetLecture.room}${targetLecture.buildingName ? ` (${targetLecture.buildingName})` : ''}`,
-      startTime: minutesToTime(trainArrMins),
+      type: isWalkLeg ? 'walk' : 'transit',
+      title: isWalkLeg
+        ? 'A piedi'
+        : resolvedOutboundDirectLines.length > 0
+          ? `Linee ${resolvedOutboundDirectLines.join(' / ')}`
+          : activeTransitSolution.lineName,
+      subtitle: `${actualRomeStation} → ${targetLecture.room}${targetLecture.buildingName ? ` (${targetLecture.buildingName})` : ''}`,
+      startTime: transitStartStr,
       endTime: minutesToTime(actualClassroomArrivalMins),
-      durationMinutes: transitMins,
+      durationMinutes: transitDurMins,
       details: {
-        transitLine: transitSolution.lineName,
-        transitMode: transitSolution.mode,
-        mapOriginQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+        transitLine: activeTransitSolution.lineName,
+        transitMode: activeTransitSolution.mode,
+        mapOriginQuery: `Stazione ${actualRomeStation}`,
         mapQuery: targetLecture.address,
         mapCoords: targetLecture.latitude && targetLecture.longitude ? { lat: targetLecture.latitude, lng: targetLecture.longitude } : undefined,
-        travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+        travelMode: activeTransitSolution.mode === 'walk' ? 'walking' : 'transit',
         targetDate: targetDateStr,
         targetTime: targetLecture.startTime,
         timeType: 'arrive_by',
-        notes: transitSolution.routeDescription,
+        notes: activeTransitSolution.routeDescription,
       },
     });
 
     if (isLectureFinished) {
-      // Se la lezione è già finita: elimina quell'ultima tappa arrivo a lezione!
-      // (Nessuna tappa 'lecture-leg' viene inserita nell'itinerario)
+      // Se la lezione è già finita al momento in cui l'utente arriva in aula,
+      // all'andata la card dell'aula NON deve uscire tra le tappe del viaggio
     } else if (isLateArrival) {
       // Arrivo a lezione già in corso: la tappa diventa "Arrivo a lezione" con badge dei minuti rimanenti
       const remainingMins = Math.max(1, lectureEndMins - actualClassroomArrivalMins);
@@ -588,7 +853,7 @@ async function computeOutboundItinerary(
     legs.push({
       id: 'destination-station-leg',
       type: 'destination',
-      title: `Arrivo a Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+      title: `Arrivo a Stazione ${actualRomeStation}`,
       subtitle: 'Destinazione del tragitto ferroviario raggiunta',
       startTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
       endTime: train.arrivalTimeActual || minutesToTime(trainArrMins),
@@ -599,7 +864,7 @@ async function computeOutboundItinerary(
     });
   }
 
-  const finalArrivalMins = targetLecture ? (trainArrMins + transitMins) : trainArrMins;
+  const finalArrivalMins = targetLecture ? resolvedClassroomArrivalMins : trainArrMins;
   const totalTripDuration = finalArrivalMins - homeDepartureMins;
 
   // Status badge dell'itinerario globale
@@ -683,7 +948,7 @@ async function computeReturnItinerary(
 ): Promise<CommuterItinerary> {
   const exitClassroomBuffer = 7; // minuti per uscire e raggiungere fermata
 
-  // Percorso ritorno mezzi urbani (verso stazione FS, se presente una lezione)
+  // Percorso ritorno mezzi urbani o a piedi (verso stazione FS, se presente una lezione)
   const transitSolution = targetLecture
     ? getOptimalRomeTransit({
         fromStationCode: config.arrivalStation.code,
@@ -697,6 +962,7 @@ async function computeReturnItinerary(
           longitude: targetLecture.longitude,
         },
         direction: 'to_station',
+        preferredMode: config.transitLeg?.preferredMode || 'auto',
       })
     : null;
 
@@ -742,6 +1008,7 @@ async function computeReturnItinerary(
       selectedTrainNumber,
       forceRefresh,
       minDepartureMins: isToday ? stationArrivalMins : undefined,
+      includeIntercity: config.includeIntercity ?? false,
     }),
     carEnabled
       ? calculateDrivingEstimate(
@@ -772,6 +1039,35 @@ async function computeReturnItinerary(
     }
   }
 
+  const actualRomeStation = getRomeStationName(config, train, 'return');
+
+  let activeTransitSolution = transitSolution;
+  let activeTransitMins = transitMins;
+  if (
+    targetLecture &&
+    actualRomeStation &&
+    actualRomeStation !== (config.arrivalStation.shortName || config.arrivalStation.name)
+  ) {
+    const updatedTransit = getOptimalRomeTransit({
+      fromStationCode: config.arrivalStation.code,
+      fromStationName: actualRomeStation,
+      classroom: {
+        displayName: targetLecture.room,
+        buildingName: targetLecture.buildingName || '',
+        buildingCode: targetLecture.buildingCode || '',
+        address: targetLecture.address,
+        latitude: targetLecture.latitude,
+        longitude: targetLecture.longitude,
+      },
+      direction: 'to_station',
+      preferredMode: config.transitLeg?.preferredMode || 'auto',
+    });
+    if (updatedTransit) {
+      activeTransitSolution = updatedTransit;
+      activeTransitMins = updatedTransit.durationMinutes;
+    }
+  }
+
   // NOTA COMMUTER: La partenza del treno a cui ancorare il rientro da Roma
   // deve essere l'orario programmato ufficiale. L'arrivo effettivo incorpora il ritardo reale solo se la data è oggi.
   const trainDepMins = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
@@ -780,7 +1076,10 @@ async function computeReturnItinerary(
     : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
 
   let carDuration = 0;
-  let carDistanceKm = config.carLeg.distanceKm || 17.2;
+  // La distanza chilometrica tra stazione di riferimento e residenza è fissa e costante;
+  // con il traffico varia solo il minutaggio di percorrenza (~X min), non i km.
+  const baseSavedReturnKm = config.carLeg.distanceKm && config.carLeg.distanceKm > 0 ? config.carLeg.distanceKm : 0;
+  let carDistanceKm = baseSavedReturnKm || (drivingEst?.distanceKm ?? 17.2);
   let carTrafficNote: string | undefined = undefined;
   let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
   let carTrafficPeak = false;
@@ -788,7 +1087,9 @@ async function computeReturnItinerary(
   let carTrafficDelay = 0;
 
   if (drivingEst) {
-    carDistanceKm = drivingEst.distanceKm || carDistanceKm;
+    if (!baseSavedReturnKm && drivingEst.distanceKm) {
+      carDistanceKm = drivingEst.distanceKm;
+    }
     carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
     carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
     carTrafficPeak = Boolean(drivingEst.isPeakHour);
@@ -826,33 +1127,93 @@ async function computeReturnItinerary(
     )
   );
 
-  if (targetLecture && transitSolution) {
+  if (targetLecture && activeTransitSolution) {
     const lectureStartMins = parseTimeToMinutes(targetLecture.startTime);
     const lectureEndMins = parseTimeToMinutes(targetLecture.endTime);
 
     // Orario massimo stimato entro cui uscire dall'aula per raggiungere la stazione e prendere il treno
-    const requiredDepartureFromCampusMins = trainDepMins - transitMins - exitClassroomBuffer;
+    const requiredDepartureFromCampusMins = trainDepMins - activeTransitMins - exitClassroomBuffer;
 
     const isLectureFinished = isToday && nowMins >= lectureEndMins;
     const isLectureInProgress = isToday && nowMins >= lectureStartMins && nowMins < lectureEndMins;
     const isEarlyDeparture = !isLectureFinished && (requiredDepartureFromCampusMins < lectureEndMins);
 
+    const isWalkLeg = activeTransitSolution.mode === 'walk';
+    let resolvedReturnDirectLines: string[] = [];
+    let resolvedReturnOpt: {
+      startMins: number;
+      endMins: number;
+      durationMinutes: number;
+    } | null = null;
+
+    if (!isWalkLeg && trainDepMins > 0) {
+      try {
+        const isTransitLive = Boolean(
+          isToday &&
+            !isTrainAlreadyPassed &&
+            (isLectureFinished ||
+              isLectureInProgress ||
+              Math.abs(trainDepMins - nowMins) <= 60) &&
+            Math.abs(trainDepMins - nowMins) <= 75
+        );
+        const targetLabel = targetLecture.buildingName
+          ? `${targetLecture.buildingName} (${targetLecture.room})`
+          : targetLecture.room;
+        const boardData = await getStationTransitBoard({
+          stationName: actualRomeStation,
+          targetName: targetLabel,
+          targetCoords:
+            targetLecture.latitude && targetLecture.longitude
+              ? { lat: targetLecture.latitude, lng: targetLecture.longitude }
+              : undefined,
+          targetDate: isTransitLive ? undefined : targetDateStr,
+          targetTime: isTransitLive ? 'now' : minutesToTime(Math.max(0, trainDepMins - activeTransitMins)),
+          direction: 'to_station',
+          isLiveContext: isTransitLive,
+          constraintTime: minutesToTime(trainDepMins),
+          minDepartureTime:
+            !isLectureFinished && !isEarlyDeparture ? targetLecture.endTime : undefined,
+        });
+        resolvedReturnDirectLines = boardData.directLines || [];
+        const opt = boardData.optimalDeparture || boardData.departures[0];
+        if (opt) {
+          const depStr = isTransitLive
+            ? opt.estimatedTime || opt.scheduledTime
+            : opt.scheduledTime;
+          const sM = parseTimeToMinutes(depStr);
+          const eM = parseTimeToMinutes(opt.arrivalTime);
+          if (sM > 0 && eM > 0) {
+            resolvedReturnOpt = {
+              startMins: sM,
+              endMins: eM,
+              durationMinutes: opt.durationMinutes,
+            };
+          }
+        }
+      } catch {
+        // Fallback silenzioso alla stima statica
+      }
+    }
+
     if (isTrainAlreadyPassed) {
       // SCENARIO DEDICATO: Treno già passato dalla stazione di partenza del pendolare (es. Roma Tiburtina)
       // Blocca la tappa del viaggio relativa al pullman all'ultimo orario utile prima del passaggio del treno,
       // preservando la coerenza di tutta l'architettura delle lezioni (in corso, terminata, orario naturale).
-      const lockedTransitEndMins = trainDepMins;
-      const lockedTransitStartMins = Math.max(0, lockedTransitEndMins - transitMins);
+      const lockedTransitEndMins = resolvedReturnOpt ? resolvedReturnOpt.endMins : trainDepMins;
+      const lockedTransitStartMins = resolvedReturnOpt
+        ? resolvedReturnOpt.startMins
+        : Math.max(0, lockedTransitEndMins - activeTransitMins);
+      const lockedDurMins = resolvedReturnOpt ? resolvedReturnOpt.durationMinutes : activeTransitMins;
       initialStartMins = lockedTransitStartMins;
 
       const isEarlyForLecture =
         requiredDepartureFromCampusMins < lectureEndMins &&
         trainDepMins > lectureStartMins;
 
-      let transitBadgeText = 'Ultimo mezzo utile';
+      let transitBadgeText: string | undefined = undefined;
       let transitBadgeColor = '#64748b';
       let transitBadgeBg = 'rgba(100, 116, 139, 0.15)';
-      let transitNotes = transitSolution.routeDescription || 'Ultimo mezzo utile prima del passaggio del treno';
+      let transitNotes = activeTransitSolution.routeDescription || 'Ultimo mezzo utile prima del passaggio del treno';
       let lostLectureMins: number | undefined = undefined;
 
       if (isEarlyForLecture) {
@@ -875,18 +1236,24 @@ async function computeReturnItinerary(
 
       legs.push({
         id: 'return-transit-leg',
-        type: 'transit',
-        title: transitSolution.lineName,
-        subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name} • Ultimo mezzo utile`,
+        type: isWalkLeg ? 'walk' : 'transit',
+        title: isWalkLeg
+        ? 'A piedi'
+        : resolvedReturnDirectLines.length > 0
+          ? `Linee ${resolvedReturnDirectLines.join(' / ')}`
+          : activeTransitSolution.lineName,
+        subtitle: isWalkLeg
+          ? `${targetLecture.room} → Stazione ${actualRomeStation}`
+          : `${targetLecture.room} ➔ Stazione ${actualRomeStation}`,
         startTime: minutesToTime(lockedTransitStartMins),
         endTime: minutesToTime(lockedTransitEndMins),
-        durationMinutes: transitMins,
+        durationMinutes: lockedDurMins,
         details: {
-          transitLine: transitSolution.lineName,
-          transitMode: transitSolution.mode,
-          travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+          transitLine: activeTransitSolution.lineName,
+          transitMode: activeTransitSolution.mode,
+          travelMode: activeTransitSolution.mode === 'walk' ? 'walking' : 'transit',
           mapOriginQuery: targetLecture.address,
-          mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          mapQuery: `Stazione ${actualRomeStation}`,
           targetDate: targetDateStr,
           targetTime: minutesToTime(lockedTransitStartMins),
           timeType: 'depart_at',
@@ -900,33 +1267,49 @@ async function computeReturnItinerary(
       // Nessuna attesa fittizia o negativa: il pullman è ancorato all'orario esatto di passaggio del treno.
     } else if (isLectureFinished) {
       // SCENARIO 1: Lezione già terminata (treno non ancora passato)
-      // Elude la prima tappa "Fine lezione" e calcola il percorso partendo direttamente dall'orario attuale,
-      // mostrando il pullman come primo mezzo utile nel caso del ritorno.
-      const startTransitMins = nowMins;
-      const endTransitMins = startTransitMins + transitMins;
+      // Calcola l'ultimo mezzo utile prima del treno per arrivare alla stazione in tempo
+      const stationBuffer = 5; // buffer per raggiungere il binario
+      const targetArrivalAtStationMins = Math.max(0, trainDepMins - stationBuffer);
+      const idealLatestDepartureMins = Math.max(0, targetArrivalAtStationMins - activeTransitMins);
+
+      // Se l'orario attuale supera l'orario ideale di partenza, prendi il mezzo adesso live
+      const startTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.startMins
+        : (isToday && nowMins > idealLatestDepartureMins)
+          ? nowMins
+          : idealLatestDepartureMins;
+      const endTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.endMins
+        : startTransitMins + activeTransitMins;
+      const durTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.durationMinutes
+        : activeTransitMins;
       initialStartMins = startTransitMins;
 
       legs.push({
         id: 'return-transit-leg',
-        type: 'transit',
-        title: transitSolution.lineName,
-        subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name} • Primo mezzo utile`,
+        type: isWalkLeg ? 'walk' : 'transit',
+        title: isWalkLeg
+        ? 'A piedi'
+        : resolvedReturnDirectLines.length > 0
+          ? `Linee ${resolvedReturnDirectLines.join(' / ')}`
+          : activeTransitSolution.lineName,
+        subtitle: isWalkLeg
+          ? `${targetLecture.room} → Stazione ${actualRomeStation}`
+          : `${targetLecture.room} ➔ Stazione ${actualRomeStation}`,
         startTime: minutesToTime(startTransitMins),
         endTime: minutesToTime(endTransitMins),
-        durationMinutes: transitMins,
+        durationMinutes: durTransitMins,
         details: {
-          transitLine: transitSolution.lineName,
-          transitMode: transitSolution.mode,
-          travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+          transitLine: activeTransitSolution.lineName,
+          transitMode: activeTransitSolution.mode,
+          travelMode: activeTransitSolution.mode === 'walk' ? 'walking' : 'transit',
           mapOriginQuery: targetLecture.address,
-          mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          mapQuery: `Stazione ${actualRomeStation}`,
           targetDate: targetDateStr,
           targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
-          notes: transitSolution.routeDescription,
-          badgeText: 'Primo mezzo utile',
-          badgeColor: '#38bdf8',
-          badgeBg: 'rgba(56, 189, 248, 0.15)',
+          notes: activeTransitSolution.routeDescription,
         },
       });
 
@@ -935,7 +1318,7 @@ async function computeReturnItinerary(
         legs.push({
           id: 'station-wait-leg',
           type: 'wait',
-          title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          title: `Attesa in Stazione a ${actualRomeStation}`,
           subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
           startTime: minutesToTime(endTransitMins),
           endTime: minutesToTime(trainDepMins),
@@ -947,12 +1330,14 @@ async function computeReturnItinerary(
       }
     } else if (isEarlyDeparture) {
       // SCENARIO 2: Treno che richiede di partire prima del termine della lezione
-      // Se la lezione è già in corso: la partenza è nowMins (o l'orario necessario), mostrando il pullman come primo mezzo utile.
-      // Se la lezione non è ancora iniziata (pianificazione anticipata): la partenza è l'orario necessario (non nowMins!).
       let startTransitMins: number;
       let lostMins: number;
 
-      if (isLectureInProgress) {
+      if (resolvedReturnOpt) {
+        startTransitMins = resolvedReturnOpt.startMins;
+        const effectiveLeaveFromLecture = Math.max(lectureStartMins, startTransitMins);
+        lostMins = Math.max(1, lectureEndMins - effectiveLeaveFromLecture);
+      } else if (isLectureInProgress) {
         startTransitMins = Math.max(nowMins, requiredDepartureFromCampusMins);
         lostMins = Math.max(1, lectureEndMins - startTransitMins);
       } else {
@@ -962,7 +1347,12 @@ async function computeReturnItinerary(
         lostMins = Math.max(1, lectureEndMins - effectiveLeaveFromLecture);
       }
 
-      const endTransitMins = startTransitMins + transitMins;
+      const endTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.endMins
+        : startTransitMins + activeTransitMins;
+      const durTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.durationMinutes
+        : activeTransitMins;
       const formattedLost = formatMinutesToHours(lostMins);
       const lostBadge = `Perdi ${formattedLost} di lezione`;
 
@@ -975,18 +1365,24 @@ async function computeReturnItinerary(
 
       legs.push({
         id: 'return-transit-leg',
-        type: 'transit',
-        title: transitSolution.lineName,
-        subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name} • Primo mezzo utile`,
+        type: isWalkLeg ? 'walk' : 'transit',
+        title: isWalkLeg
+        ? 'A piedi'
+        : resolvedReturnDirectLines.length > 0
+          ? `Linee ${resolvedReturnDirectLines.join(' / ')}`
+          : activeTransitSolution.lineName,
+        subtitle: isWalkLeg
+          ? `${targetLecture.room} → Stazione ${actualRomeStation}`
+          : `${targetLecture.room} ➔ Stazione ${actualRomeStation}`,
         startTime: minutesToTime(startTransitMins),
         endTime: minutesToTime(endTransitMins),
-        durationMinutes: transitMins,
+        durationMinutes: durTransitMins,
         details: {
-          transitLine: transitSolution.lineName,
-          transitMode: transitSolution.mode,
-          travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+          transitLine: activeTransitSolution.lineName,
+          transitMode: activeTransitSolution.mode,
+          travelMode: activeTransitSolution.mode === 'walk' ? 'walking' : 'transit',
           mapOriginQuery: targetLecture.address,
-          mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          mapQuery: `Stazione ${actualRomeStation}`,
           targetDate: targetDateStr,
           targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
@@ -1003,7 +1399,7 @@ async function computeReturnItinerary(
         legs.push({
           id: 'station-wait-leg',
           type: 'wait',
-          title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          title: `Attesa in Stazione a ${actualRomeStation}`,
           subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
           startTime: minutesToTime(endTransitMins),
           endTime: minutesToTime(trainDepMins),
@@ -1015,39 +1411,68 @@ async function computeReturnItinerary(
       }
     } else {
       // SCENARIO 3: Rientro al termine naturale della lezione
-      initialStartMins = lectureEndMins;
+      // Calcola l'ultimo mezzo utile per arrivare in stazione in tempo per il treno selezionato
+      const stationBuffer = 4;
+      const earliestCampusLeaveMins = lectureEndMins + exitClassroomBuffer;
+      const targetArrivalAtStationMins = Math.max(
+        earliestCampusLeaveMins + activeTransitMins,
+        trainDepMins - stationBuffer
+      );
+      const startTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.startMins
+        : Math.max(
+            earliestCampusLeaveMins,
+            targetArrivalAtStationMins - activeTransitMins
+          );
+      const transitEndMins = resolvedReturnOpt
+        ? resolvedReturnOpt.endMins
+        : startTransitMins + activeTransitMins;
+      const durTransitMins = resolvedReturnOpt
+        ? resolvedReturnOpt.durationMinutes
+        : activeTransitMins;
 
-      // Leg 1: Uscita da Aula
-      legs.push({
-        id: 'leave-lecture-leg',
-        type: 'destination',
-        title: `Fine Lezione: ${targetLecture.subject}`,
-        subtitle: `Uscita da ${targetLecture.room} (${targetLecture.address})`,
-        startTime: targetLecture.endTime,
-        endTime: minutesToTime(lectureEndMins + exitClassroomBuffer),
-        durationMinutes: exitClassroomBuffer,
-      });
+      // Se il mezzo parte entro 25 minuti dalla fine della lezione, mostra l'uscita dall'aula come prima tappa;
+      // altrimenti (treno molto successivo) ancora l'inizio del viaggio direttamente all'ultimo mezzo utile.
+      if (startTransitMins - earliestCampusLeaveMins <= 25) {
+        initialStartMins = lectureEndMins;
+        legs.push({
+          id: 'leave-lecture-leg',
+          type: 'destination',
+          title: `Fine Lezione: ${targetLecture.subject}`,
+          subtitle: `Uscita da ${targetLecture.room} (${targetLecture.address})`,
+          startTime: targetLecture.endTime,
+          endTime: minutesToTime(earliestCampusLeaveMins),
+          durationMinutes: exitClassroomBuffer,
+        });
+      } else {
+        initialStartMins = startTransitMins;
+      }
 
-      // Leg 2: Mezzi Urbani verso Stazione
-      const transitEndMins = lectureEndMins + exitClassroomBuffer + transitMins;
+      // Leg 2: Mezzi Urbani verso Stazione (ancorato all'ultimo mezzo utile)
       legs.push({
         id: 'return-transit-leg',
-        type: 'transit',
-        title: transitSolution.lineName,
-        subtitle: `${targetLecture.room} ➔ Stazione ${config.arrivalStation.shortName || config.arrivalStation.name}`,
-        startTime: minutesToTime(lectureEndMins + exitClassroomBuffer),
+        type: isWalkLeg ? 'walk' : 'transit',
+        title: isWalkLeg
+        ? 'A piedi'
+        : resolvedReturnDirectLines.length > 0
+          ? `Linee ${resolvedReturnDirectLines.join(' / ')}`
+          : activeTransitSolution.lineName,
+        subtitle: isWalkLeg
+          ? `${targetLecture.room} → Stazione ${actualRomeStation}`
+          : `${targetLecture.room} ➔ Stazione ${actualRomeStation}`,
+        startTime: minutesToTime(startTransitMins),
         endTime: minutesToTime(transitEndMins),
-        durationMinutes: transitMins,
+        durationMinutes: durTransitMins,
         details: {
-          transitLine: transitSolution.lineName,
-          transitMode: transitSolution.mode,
-          travelMode: transitSolution.mode === 'walk' ? 'walking' : 'transit',
+          transitLine: activeTransitSolution.lineName,
+          transitMode: activeTransitSolution.mode,
+          travelMode: activeTransitSolution.mode === 'walk' ? 'walking' : 'transit',
           mapOriginQuery: targetLecture.address,
-          mapQuery: `Stazione Roma ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          mapQuery: `Stazione ${actualRomeStation}`,
           targetDate: targetDateStr,
-          targetTime: targetLecture.endTime,
+          targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
-          notes: transitSolution.routeDescription,
+          notes: activeTransitSolution.routeDescription,
         },
       });
 
@@ -1056,7 +1481,7 @@ async function computeReturnItinerary(
         legs.push({
           id: 'station-wait-leg',
           type: 'wait',
-          title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          title: `Attesa in Stazione a ${actualRomeStation}`,
           subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
           startTime: minutesToTime(transitEndMins),
           endTime: minutesToTime(trainDepMins),
@@ -1078,7 +1503,7 @@ async function computeReturnItinerary(
         legs.push({
           id: 'station-wait-leg',
           type: 'wait',
-          title: `Attesa in Stazione a ${config.arrivalStation.shortName || config.arrivalStation.name}`,
+          title: `Attesa in Stazione a ${actualRomeStation}`,
           subtitle: `Binario di partenza: ${train.platformActual || train.platformPlanned || 'In definizione'}`,
           startTime: minutesToTime(stationArrivalMins),
           endTime: minutesToTime(trainDepMins),
@@ -1093,13 +1518,22 @@ async function computeReturnItinerary(
 
   // Leg 3: Treno di Ritorno
   const trainDuration = Math.max(10, trainArrMins - trainDepMins);
+  const returnDepTime = (isToday && train.departureTimeActual)
+    ? train.departureTimeActual
+    : (train.departureTimePlanned || minutesToTime(trainDepMins));
+  const returnArrTime = (isToday && train.arrivalTimeActual)
+    ? train.arrivalTimeActual
+    : ((isToday && train.delayMinutes > 0 && train.arrivalTimePlanned)
+        ? minutesToTime(parseTimeToMinutes(train.arrivalTimePlanned) + train.delayMinutes)
+        : (train.arrivalTimePlanned || minutesToTime(trainArrMins)));
+
   legs.push({
     id: 'return-train-leg',
     type: 'train',
     title: `Treno ${train.trainNumber} (${train.isFast ? 'Regionale Veloce' : 'Regionale'})`,
-    subtitle: `${config.arrivalStation.shortName || config.arrivalStation.name} ➔ ${config.departureStation.shortName || config.departureStation.name}`,
-    startTime: train.departureTimePlanned || minutesToTime(trainDepMins),
-    endTime: (isToday ? train.arrivalTimeActual : train.arrivalTimePlanned) || minutesToTime(trainArrMins),
+    subtitle: `${actualRomeStation} ➔ ${config.departureStation.shortName || config.departureStation.name}`,
+    startTime: returnDepTime,
+    endTime: returnArrTime,
     durationMinutes: trainDuration,
     details: {
       trainNumber: train.trainNumber,

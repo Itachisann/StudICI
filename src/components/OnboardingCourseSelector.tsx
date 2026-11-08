@@ -17,13 +17,18 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import {
   DarkTheme,
@@ -87,17 +92,17 @@ const QUICK_ARRIVAL_CODES = [
 ];
 
 const STATION_SHORT_NAMES: Record<string, string> = {
-  "S06421": "Firenze SMN",
-  "S05043": "Bologna C.le",
-  "S01700": "Milano C.le",
-  "S09218": "Napoli C.le",
-  "S08409": "Roma Termini",
-  "S08217": "Roma Tiburtina",
-  "S08406": "Roma Ostiense",
-  "S08408": "Roma Tuscolana",
-  "S08402": "Roma S. Pietro",
-  "S07004": "Perugia",
-  "S07226": "Terni",
+  S06421: "Firenze SMN",
+  S05043: "Bologna C.le",
+  S01700: "Milano C.le",
+  S09218: "Napoli C.le",
+  S08409: "Roma Termini",
+  S08217: "Roma Tiburtina",
+  S08406: "Roma Ostiense",
+  S08408: "Roma Tuscolana",
+  S08402: "Roma S. Pietro",
+  S07004: "Perugia",
+  S07226: "Terni",
 };
 
 const OnboardingStack = createNativeStackNavigator();
@@ -116,10 +121,7 @@ function WelcomeScreen({ navigation }: any) {
         <View style={styles.cleanWelcomeCenter}>
           <View style={styles.cleanLogoWrapper}>
             <View
-              style={[
-                styles.cleanLogoGlow,
-                { backgroundColor: theme.primary },
-              ]}
+              style={[styles.cleanLogoGlow, { backgroundColor: theme.primary }]}
             />
             <StudICILogo
               size={120}
@@ -134,7 +136,8 @@ function WelcomeScreen({ navigation }: any) {
             Sapienza Università di Roma
           </Text>
           <Text style={styles.cleanAppDesc}>
-            Orari ufficiali delle lezioni, aule e tragitto pendolare in un&apos;unica app moderna.
+            Orari ufficiali delle lezioni, aule e tragitto pendolare in
+            un&apos;unica app moderna.
           </Text>
         </View>
 
@@ -144,13 +147,7 @@ function WelcomeScreen({ navigation }: any) {
             onPress={() => navigation.navigate("SetupMode")}
             accentColor={theme.primary}
             glow={true}
-            icon={
-              <Ionicons
-                name="arrow-forward"
-                size={18}
-                color="#ffffff"
-              />
-            }
+            icon={<Ionicons name="arrow-forward" size={18} color="#ffffff" />}
             style={{ width: "100%", maxWidth: 300 }}
           />
         </View>
@@ -193,10 +190,16 @@ function SetupModeScreen({ navigation }: any) {
                   },
                 ]}
               >
-                <Ionicons name="school-outline" size={26} color={theme.primary} />
+                <Ionicons
+                  name="school-outline"
+                  size={26}
+                  color={theme.primary}
+                />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.setupModeCardTitle}>Configura manualmente</Text>
+                <Text style={styles.setupModeCardTitle}>
+                  Configura manualmente
+                </Text>
                 <Text style={styles.setupModeCardSubtitle}>
                   Scegli il tuo corso dalla lista della Sapienza
                 </Text>
@@ -222,7 +225,11 @@ function SetupModeScreen({ navigation }: any) {
                   },
                 ]}
               >
-                <Ionicons name="cloud-download-outline" size={26} color="#3b82f6" />
+                <Ionicons
+                  name="cloud-download-outline"
+                  size={26}
+                  color="#3b82f6"
+                />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.setupModeCardTitle}>Sincronizza</Text>
@@ -282,9 +289,9 @@ function SyncScreen() {
           </View>
           <Text style={styles.syncCardTitle}>Sincronizza via Cloud</Text>
           <Text style={styles.syncCardDesc}>
-            Se hai già configurato StudICI su un altro dispositivo, inserisci
-            il codice univoco per sincronizzare corso, canali e presenze. Il
-            codice è visibile nella sezione &quot;Sincronizzazione&quot;
+            Se hai già configurato StudICI su un altro dispositivo, inserisci il
+            codice univoco per sincronizzare corso, canali e presenze. Il codice
+            è visibile nella sezione &quot;Sincronizzazione&quot;
             dell&apos;altro dispositivo.
           </Text>
 
@@ -318,7 +325,11 @@ function SyncScreen() {
               activeOpacity={0.7}
               onPress={handlePasteSyncCode}
             >
-              <Ionicons name="clipboard-outline" size={16} color={theme.accent} />
+              <Ionicons
+                name="clipboard-outline"
+                size={16}
+                color={theme.accent}
+              />
               <Text style={[styles.syncPasteBtnText, { color: theme.accent }]}>
                 Incolla
               </Text>
@@ -357,7 +368,9 @@ function SyncScreen() {
               />
             )}
             <Text style={styles.syncSubmitBtnText}>
-              {isLinkingSync ? "Collegamento in corso..." : "Collega"}
+              {isLinkingSync
+                ? "Collegamento in corso..."
+                : "Avvia sincronizzazione"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -383,20 +396,22 @@ function CourseSelectScreen({ navigation }: any) {
   // Search bar autentica nativa di @react-navigation/native-stack (Apple UISearchBar)
   useEffect(() => {
     navigation.setOptions({
-      headerSearchBarOptions: isNativeIos ? {
-        placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
-        placement: "stacked",
-        allowToolbarIntegration: false,
-        hideWhenScrolling: false,
-        autoCapitalize: "none",
-        tintColor: theme.primary,
-        textColor: "#ffffff",
-        headerIconColor: "#8e8e93",
-        hintTextColor: "#71717a",
-        barTintColor: "rgba(255, 255, 255, 0.08)",
-        onChangeText: (e: any) => setSearch(e.nativeEvent.text),
-        onCancelButtonPress: () => setSearch(""),
-      } : undefined,
+      headerSearchBarOptions: isNativeIos
+        ? {
+            placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+            placement: "stacked",
+            allowToolbarIntegration: false,
+            hideWhenScrolling: false,
+            autoCapitalize: "none",
+            tintColor: theme.primary,
+            textColor: "#ffffff",
+            headerIconColor: "#8e8e93",
+            hintTextColor: "#71717a",
+            barTintColor: "rgba(255, 255, 255, 0.08)",
+            onChangeText: (e: any) => setSearch(e.nativeEvent.text),
+            onCancelButtonPress: () => setSearch(""),
+          }
+        : undefined,
     });
   }, [navigation, theme.primary, setSearch]);
 
@@ -404,7 +419,12 @@ function CourseSelectScreen({ navigation }: any) {
     <View style={styles.screenRoot}>
       {!isNativeIos && (
         <View style={styles.expoSearchWrapper}>
-          <Ionicons name="search" size={16} color="#71717a" style={{ marginRight: 8 }} />
+          <Ionicons
+            name="search"
+            size={16}
+            color="#71717a"
+            style={{ marginRight: 8 }}
+          />
           <TextInput
             style={styles.expoSearchInput}
             value={search}
@@ -478,16 +498,10 @@ function CourseSelectScreen({ navigation }: any) {
                       },
                     ]}
                   >
-                    <Ionicons
-                      name="school"
-                      size={18}
-                      color={theme.primary}
-                    />
+                    <Ionicons name="school" size={18} color={theme.primary} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.modalItemTitle}>
-                      {cleanDegreeName}
-                    </Text>
+                    <Text style={styles.modalItemTitle}>{cleanDegreeName}</Text>
                     <View style={styles.courseBadgesRow}>
                       <View
                         style={[
@@ -496,12 +510,8 @@ function CourseSelectScreen({ navigation }: any) {
                             backgroundColor: isMagistrale
                               ? "rgba(168, 85, 247, 0.25)"
                               : "rgba(59, 130, 246, 0.25)",
-                            borderColor: isMagistrale
-                              ? "#c084fc"
-                              : "#60a5fa",
-                            shadowColor: isMagistrale
-                              ? "#c084fc"
-                              : "#60a5fa",
+                            borderColor: isMagistrale ? "#c084fc" : "#60a5fa",
+                            shadowColor: isMagistrale ? "#c084fc" : "#60a5fa",
                           },
                         ]}
                       >
@@ -516,34 +526,42 @@ function CourseSelectScreen({ navigation }: any) {
                           {isMagistrale ? "Magistrale" : "Triennale"}
                         </Text>
                       </View>
-                      {deg.className ? (() => {
-                        const classTheme = getDegreeClassTheme(deg.className);
-                        return (
-                          <View
-                            style={[
-                              styles.classBadge,
-                              {
-                                backgroundColor: classTheme.backgroundColor,
-                                borderColor: classTheme.borderColor,
-                                shadowColor: classTheme.glowColor,
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.classBadgeText,
-                                { color: classTheme.textColor },
-                              ]}
-                            >
-                              {deg.className}
-                            </Text>
-                          </View>
-                        );
-                      })() : null}
+                      {deg.className
+                        ? (() => {
+                            const classTheme = getDegreeClassTheme(
+                              deg.className,
+                            );
+                            return (
+                              <View
+                                style={[
+                                  styles.classBadge,
+                                  {
+                                    backgroundColor: classTheme.backgroundColor,
+                                    borderColor: classTheme.borderColor,
+                                    shadowColor: classTheme.glowColor,
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.classBadgeText,
+                                    { color: classTheme.textColor },
+                                  ]}
+                                >
+                                  {deg.className}
+                                </Text>
+                              </View>
+                            );
+                          })()
+                        : null}
                     </View>
                   </View>
                   {isPendingSelected ? (
-                    <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={20}
+                      color={theme.primary}
+                    />
                   ) : (
                     <Ionicons
                       name="chevron-forward"
@@ -612,6 +630,10 @@ function PostDownloadScreen() {
     selectStationFromSearch,
     bufferMinutes,
     setBufferMinutes,
+    includeIntercity,
+    setIncludeIntercity,
+    urbanMode,
+    setUrbanMode,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -649,15 +671,15 @@ function PostDownloadScreen() {
 
   const isOtherDepartureSelected = Boolean(
     departureStation &&
-      !quickDepartureStations.some(
-        (s: StationInfo) => s.code === departureStation.code,
-      ),
+    !quickDepartureStations.some(
+      (s: StationInfo) => s.code === departureStation.code,
+    ),
   );
   const isOtherArrivalSelected = Boolean(
     arrivalStation &&
-      !quickArrivalStations.some(
-        (s: StationInfo) => s.code === arrivalStation.code,
-      ),
+    !quickArrivalStations.some(
+      (s: StationInfo) => s.code === arrivalStation.code,
+    ),
   );
 
   const line1Width = scrollX.interpolate({
@@ -848,9 +870,7 @@ function PostDownloadScreen() {
                         >
                           <Ionicons
                             name={
-                              isSelected
-                                ? "checkmark-circle"
-                                : "people-outline"
+                              isSelected ? "checkmark-circle" : "people-outline"
                             }
                             size={15}
                             color={isSelected ? "#ffffff" : "#8e8e93"}
@@ -894,10 +914,7 @@ function PostDownloadScreen() {
                       {selectedYear || uniqueYears[0] || "Corso Unico"}
                       {selectedChannel ? ` · ${selectedChannel}` : ""}
                     </Text>
-                    <Text
-                      style={styles.summaryOriginalName}
-                      numberOfLines={1}
-                    >
+                    <Text style={styles.summaryOriginalName} numberOfLines={1}>
                       Foglio: {resolvedTab.name}
                     </Text>
                   </View>
@@ -953,9 +970,7 @@ function PostDownloadScreen() {
 
               {/* ── 1. LUOGO DI PARTENZA ── */}
               <View style={styles.pillSection}>
-                <Text style={styles.pillSectionLabel}>
-                  LUOGO DI PARTENZA
-                </Text>
+                <Text style={styles.pillSectionLabel}>LUOGO DI PARTENZA</Text>
                 <View
                   style={[
                     styles.iosPillInputWrapper,
@@ -1003,11 +1018,7 @@ function PostDownloadScreen() {
                       }}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
-                      <Ionicons
-                        name="close-circle"
-                        size={18}
-                        color="#71717a"
-                      />
+                      <Ionicons name="close-circle" size={18} color="#71717a" />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1115,9 +1126,7 @@ function PostDownloadScreen() {
                   >
                     <Ionicons
                       name={
-                        carMode === "no"
-                          ? "checkmark-circle"
-                          : "walk-outline"
+                        carMode === "no" ? "checkmark-circle" : "walk-outline"
                       }
                       size={16}
                       color={carMode === "no" ? "#ffffff" : "#8e8e93"}
@@ -1161,7 +1170,9 @@ function PostDownloadScreen() {
                               onPress={() => setParkingBufferMinutes(mins)}
                             >
                               <Ionicons
-                                name={isSel ? "checkmark-circle" : "time-outline"}
+                                name={
+                                  isSel ? "checkmark-circle" : "time-outline"
+                                }
                                 size={13}
                                 color={isSel ? "#ffffff" : "#8e8e93"}
                                 style={{ marginRight: 4 }}
@@ -1192,11 +1203,7 @@ function PostDownloadScreen() {
                               )
                             }
                           >
-                            <Ionicons
-                              name="remove"
-                              size={14}
-                              color="#ffffff"
-                            />
+                            <Ionicons name="remove" size={14} color="#ffffff" />
                           </TouchableOpacity>
                           <View
                             style={[
@@ -1229,7 +1236,9 @@ function PostDownloadScreen() {
                             style={styles.fineStepPill}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
-                              setParkingBufferMinutes((p: number | null) => (p ?? 10) + 1)
+                              setParkingBufferMinutes(
+                                (p: number | null) => (p ?? 10) + 1,
+                              )
                             }
                           >
                             <Ionicons name="add" size={14} color="#ffffff" />
@@ -1267,9 +1276,7 @@ function PostDownloadScreen() {
                         onPress={() => setDepartureStation(st)}
                       >
                         <Ionicons
-                          name={
-                            isSel ? "checkmark-circle" : "train-outline"
-                          }
+                          name={isSel ? "checkmark-circle" : "train-outline"}
                           size={14}
                           color={isSel ? "#ffffff" : "#8e8e93"}
                           style={{ marginRight: 5 }}
@@ -1283,7 +1290,9 @@ function PostDownloadScreen() {
                           adjustsFontSizeToFit
                           minimumFontScale={0.7}
                         >
-                          {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
+                          {STATION_SHORT_NAMES[st.code] ||
+                            st.shortName ||
+                            st.name}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -1310,9 +1319,13 @@ function PostDownloadScreen() {
                     onPress={() => setStationPickerType("departure")}
                   >
                     <Ionicons
-                      name={isOtherDepartureSelected ? "checkmark-circle" : "search"}
+                      name={
+                        isOtherDepartureSelected ? "checkmark-circle" : "search"
+                      }
                       size={14}
-                      color={isOtherDepartureSelected ? "#ffffff" : theme.accent}
+                      color={
+                        isOtherDepartureSelected ? "#ffffff" : theme.accent
+                      }
                       style={{ marginRight: 5 }}
                     />
                     <Text
@@ -1327,18 +1340,16 @@ function PostDownloadScreen() {
                       minimumFontScale={0.7}
                     >
                       {isOtherDepartureSelected
-                        ? (STATION_SHORT_NAMES[departureStation?.code ?? ""] ||
-                            departureStation?.shortName ||
-                            departureStation?.name ||
-                            "Altro...")
+                        ? STATION_SHORT_NAMES[departureStation?.code ?? ""] ||
+                          departureStation?.shortName ||
+                          departureStation?.name ||
+                          "Altro..."
                         : "Altro..."}
                     </Text>
                   </TouchableOpacity>
                 </View>
 
-                <Text
-                  style={[styles.pillSectionLabel, { marginTop: 18 }]}
-                >
+                <Text style={[styles.pillSectionLabel, { marginTop: 18 }]}>
                   STAZIONE DI ARRIVO (ROMA)
                 </Text>
                 <View style={styles.stationGrid}>
@@ -1362,9 +1373,7 @@ function PostDownloadScreen() {
                         onPress={() => setArrivalStation(st)}
                       >
                         <Ionicons
-                          name={
-                            isSel ? "checkmark-circle" : "flag-outline"
-                          }
+                          name={isSel ? "checkmark-circle" : "flag-outline"}
                           size={14}
                           color={isSel ? "#ffffff" : "#8e8e93"}
                           style={{ marginRight: 5 }}
@@ -1378,7 +1387,9 @@ function PostDownloadScreen() {
                           adjustsFontSizeToFit
                           minimumFontScale={0.7}
                         >
-                          {STATION_SHORT_NAMES[st.code] || st.shortName || st.name}
+                          {STATION_SHORT_NAMES[st.code] ||
+                            st.shortName ||
+                            st.name}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -1405,7 +1416,9 @@ function PostDownloadScreen() {
                     onPress={() => setStationPickerType("arrival")}
                   >
                     <Ionicons
-                      name={isOtherArrivalSelected ? "checkmark-circle" : "search"}
+                      name={
+                        isOtherArrivalSelected ? "checkmark-circle" : "search"
+                      }
                       size={14}
                       color={isOtherArrivalSelected ? "#ffffff" : theme.accent}
                       style={{ marginRight: 5 }}
@@ -1422,10 +1435,10 @@ function PostDownloadScreen() {
                       minimumFontScale={0.7}
                     >
                       {isOtherArrivalSelected
-                        ? (STATION_SHORT_NAMES[arrivalStation?.code ?? ""] ||
-                            arrivalStation?.shortName ||
-                            arrivalStation?.name ||
-                            "Altro...")
+                        ? STATION_SHORT_NAMES[arrivalStation?.code ?? ""] ||
+                          arrivalStation?.shortName ||
+                          arrivalStation?.name ||
+                          "Altro..."
                         : "Altro..."}
                     </Text>
                   </TouchableOpacity>
@@ -1453,7 +1466,8 @@ function PostDownloadScreen() {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.liveRoutePreviewTitle}>
                           {originAddress} ➔{" "}
-                          {STATION_SHORT_NAMES[departureStation.code] || departureStation.shortName ||
+                          {STATION_SHORT_NAMES[departureStation.code] ||
+                            departureStation.shortName ||
                             departureStation.name}
                         </Text>
                         <Text
@@ -1470,20 +1484,141 @@ function PostDownloadScreen() {
                         </Text>
                       </View>
                       {calculatingDriving && (
-                        <ActivityIndicator
-                          size="small"
-                          color={theme.accent}
-                        />
+                        <ActivityIndicator size="small" color={theme.accent} />
                       )}
                     </View>
                   )}
+
+                {/* ── TOGGLE TRENI INTERCITY ── */}
+                <View style={styles.intercityCard}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={styles.intercityTitle}>
+                      Includi treni Intercity
+                    </Text>
+                    <Text style={styles.intercityDesc}>
+                      Mostra anche i treni Intercity (IC)
+                    </Text>
+                  </View>
+                  <Switch
+                    value={Boolean(includeIntercity)}
+                    onValueChange={setIncludeIntercity}
+                    trackColor={{ false: theme.border, true: theme.primary }}
+                    thumbColor={
+                      Platform.OS === "android"
+                        ? includeIntercity
+                          ? theme.primary
+                          : "#94a3b8"
+                        : undefined
+                    }
+                    ios_backgroundColor={theme.border}
+                  />
+                </View>
               </View>
 
-              {/* ── 4. ANTICIPO DI SICUREZZA IN AULA ── */}
+              {/* ── 4. TRAGITTO URBANO A ROMA ── */}
               <View style={styles.pillSection}>
                 <Text style={styles.pillSectionLabel}>
-                  ANTICIPO IN AULA
+                  TRAGITTO URBANO A ROMA
                 </Text>
+                <View style={{ marginBottom: 4 }}>
+                  {isNativeIos ? (
+                    <SegmentedControl
+                      key={`seg-onboarding-urban-${theme.primary}`}
+                      values={["Con i mezzi", "A piedi"]}
+                      selectedIndex={urbanMode === "walk" ? 1 : 0}
+                      onChange={(event) => {
+                        const idx = event.nativeEvent.selectedSegmentIndex;
+                        setUrbanMode(idx === 1 ? "walk" : "auto");
+                      }}
+                      appearance="dark"
+                      tintColor={theme.primary}
+                      fontStyle={{
+                        fontSize: 13,
+                        fontWeight: "600",
+                        color: "#a1a1aa",
+                      }}
+                      activeFontStyle={{
+                        fontSize: 13,
+                        fontWeight: "700",
+                        color: "#ffffff",
+                      }}
+                      style={{ height: 36, width: "100%" }}
+                    />
+                  ) : (
+                    <View style={styles.urbanSelectorContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          urbanMode !== "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setUrbanMode("auto")}
+                      >
+                        <Ionicons
+                          name="bus-outline"
+                          size={14}
+                          color={urbanMode !== "walk" ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorBtnText,
+                            urbanMode !== "walk" && {
+                              color: "#ffffff",
+                              fontWeight: "700",
+                            },
+                          ]}
+                        >
+                          Con i mezzi
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.urbanSelectorBtn,
+                          urbanMode === "walk" && [
+                            styles.urbanSelectorBtnActive,
+                            {
+                              backgroundColor: theme.bg,
+                              borderColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setUrbanMode("walk")}
+                      >
+                        <Ionicons
+                          name="walk-outline"
+                          size={14}
+                          color={urbanMode === "walk" ? "#ffffff" : "#8e8e93"}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.urbanSelectorBtnText,
+                            urbanMode === "walk" && {
+                              color: "#ffffff",
+                              fontWeight: "700",
+                            },
+                          ]}
+                        >
+                          A piedi
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              {/* ── 5. ANTICIPO DI SICUREZZA IN AULA ── */}
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>ANTICIPO IN AULA</Text>
                 <View style={styles.timeBufferContainer}>
                   <View style={styles.timeQuickRow}>
                     {[5, 10, 15, 20].map((mins) => {
@@ -1506,9 +1641,7 @@ function PostDownloadScreen() {
                           onPress={() => setBufferMinutes(mins)}
                         >
                           <Ionicons
-                            name={
-                              isSel ? "checkmark-circle" : "time-outline"
-                            }
+                            name={isSel ? "checkmark-circle" : "time-outline"}
                             size={13}
                             color={isSel ? "#ffffff" : "#8e8e93"}
                             style={{ marginRight: 4 }}
@@ -1539,11 +1672,7 @@ function PostDownloadScreen() {
                           )
                         }
                       >
-                        <Ionicons
-                          name="remove"
-                          size={14}
-                          color="#ffffff"
-                        />
+                        <Ionicons name="remove" size={14} color="#ffffff" />
                       </TouchableOpacity>
                       <View
                         style={[
@@ -1645,7 +1774,12 @@ function PostDownloadScreen() {
                     color={theme.primary}
                     style={{ marginRight: 6 }}
                   />
-                  <Text style={[styles.swipeHintTextLocked, { color: theme.primary, opacity: 1 }]}>
+                  <Text
+                    style={[
+                      styles.swipeHintTextLocked,
+                      { color: theme.primary, opacity: 1 },
+                    ]}
+                  >
                     Scorri per continuare
                   </Text>
                 </View>
@@ -1671,11 +1805,22 @@ function PostDownloadScreen() {
               <NativeActionButton
                 label="Configura più tardi"
                 onPress={() => finalizeOnboarding(false)}
-                variant="glass"
+                variant="filled"
+                accentColor="#2c2c2e"
                 glow={false}
                 style={{ flex: 1, height: 48, borderRadius: 24 }}
-                pillStyle={{ height: 48, borderRadius: 24, paddingHorizontal: 12 }}
-                textStyle={{ color: "#ffffff", fontSize: 13.5, fontWeight: "600" }}
+                pillStyle={{
+                  height: 48,
+                  borderRadius: 24,
+                  paddingHorizontal: 12,
+                  backgroundColor: "#2c2c2e",
+                  borderColor: "rgba(255, 255, 255, 0.15)",
+                }}
+                textStyle={{
+                  color: "#ffffff",
+                  fontSize: 13.5,
+                  fontWeight: "600",
+                }}
               />
 
               <NativeActionButton
@@ -1721,7 +1866,8 @@ function PostDownloadScreen() {
           hintTextColor: "#71717a",
           autoCapitalize: "none",
           autoFocus: true,
-          onChangeText: (e: any) => handleStationSearchChange(e.nativeEvent.text),
+          onChangeText: (e: any) =>
+            handleStationSearchChange(e.nativeEvent.text),
           onCancelButtonPress: () => handleStationSearchChange(""),
         }}
       >
@@ -1784,11 +1930,7 @@ function PostDownloadScreen() {
                     Codice RFI: {st.code}
                   </Text>
                 </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color="#71717a"
-                />
+                <Ionicons name="chevron-forward" size={18} color="#71717a" />
               </TouchableOpacity>
             )}
           />
@@ -1822,7 +1964,8 @@ export function OnboardingCourseSelector({
   const [progressText, setProgressText] = useState("");
   const [currentDegreeName, setCurrentDegreeName] = useState("");
 
-  const [syncCodeInput, setSyncCodeInput] = useState("");  const [isLinkingSync, setIsLinkingSync] = useState(false);
+  const [syncCodeInput, setSyncCodeInput] = useState("");
+  const [isLinkingSync, setIsLinkingSync] = useState(false);
 
   const [currentPage, setCurrentPage] = useState<1 | 2>(1);
 
@@ -1850,6 +1993,8 @@ export function OnboardingCourseSelector({
     null,
   );
   const [bufferMinutes, setBufferMinutes] = useState<number | null>(null);
+  const [includeIntercity, setIncludeIntercity] = useState<boolean>(false);
+  const [urbanMode, setUrbanMode] = useState<"auto" | "walk">("auto");
 
   const [stationPickerType, setStationPickerType] = useState<
     "departure" | "arrival" | null
@@ -2159,10 +2304,17 @@ export function OnboardingCourseSelector({
             enabled: carMode === "yes",
             parkingBufferMinutes: parkingBufferMinutes || 15,
             durationMinutes: drivingEstimate?.durationMinutes || 0,
-            distanceKm: drivingEstimate ? drivingEstimate.distanceKm : undefined,
+            distanceKm: drivingEstimate
+              ? drivingEstimate.distanceKm
+              : undefined,
           },
           departureStation,
           arrivalStation,
+          includeIntercity,
+          transitLeg: {
+            ...DEFAULT_COMMUTER_CONFIG.transitLeg,
+            preferredMode: urbanMode,
+          },
           bufferMinutes: bufferMinutes ?? 15,
         });
       }
@@ -2184,10 +2336,7 @@ export function OnboardingCourseSelector({
         );
       }
 
-      await AsyncStorage.setItem(
-        "hasCompletedInitialCourseSelection",
-        "true",
-      );
+      await AsyncStorage.setItem("hasCompletedInitialCourseSelection", "true");
 
       onComplete();
     } catch (err) {
@@ -2241,8 +2390,8 @@ export function OnboardingCourseSelector({
           "true",
         );
         Alert.alert(
-          "Sincronizzazione Riuscita",
-          "Il dispositivo è stato associato con successo!",
+          "Configurazione sincronizzata",
+          "Tutti i tuoi dati sono stati importati con successo",
           [{ text: "Inizia", onPress: () => onComplete() }],
         );
       } else {
@@ -2365,6 +2514,10 @@ export function OnboardingCourseSelector({
     selectStationFromSearch,
     bufferMinutes,
     setBufferMinutes,
+    includeIntercity,
+    setIncludeIntercity,
+    urbanMode,
+    setUrbanMode,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -2391,7 +2544,10 @@ export function OnboardingCourseSelector({
                 headerBackButtonMenuEnabled: false,
               }}
             >
-              <OnboardingStack.Screen name="Welcome" component={WelcomeScreen} />
+              <OnboardingStack.Screen
+                name="Welcome"
+                component={WelcomeScreen}
+              />
               <OnboardingStack.Screen
                 name="SetupMode"
                 component={SetupModeScreen}
@@ -2428,7 +2584,8 @@ export function OnboardingCourseSelector({
                   headerBackTitle: "",
                   headerSearchBarOptions: isNativeIos
                     ? {
-                        placeholder: "Cerca corso o classe (es. Informatica, L-8)...",
+                        placeholder:
+                          "Cerca corso o classe (es. Informatica, L-8)...",
                         placement: "stacked",
                         allowToolbarIntegration: false,
                         hideWhenScrolling: false,
@@ -2449,7 +2606,7 @@ export function OnboardingCourseSelector({
                 component={SyncScreen}
                 options={{
                   headerShown: true,
-                  headerTitle: "Sincronizzazione",
+                  headerTitle: "Cloud",
                   headerLargeTitle: false,
                   headerStyle: { backgroundColor: UNIFORM_SCREEN_BG },
                   headerTintColor: "#ffffff",
@@ -3333,5 +3490,61 @@ const styles = StyleSheet.create({
     flex: 1,
     color: "#ffffff",
     fontSize: 15,
+  },
+
+  /* ── Intercity Toggle Card ── */
+  intercityCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#16171d",
+    borderRadius: 14,
+    borderCurve: "continuous",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 14,
+  },
+  intercityTitle: {
+    fontSize: 13.5,
+    fontWeight: "700",
+    color: "#ffffff",
+    marginBottom: 2,
+  },
+  intercityDesc: {
+    fontSize: 11.5,
+    color: "#8e8e93",
+    fontWeight: "500",
+  },
+
+  /* ── Urban Leg Selector (Fallback if non-iOS) ── */
+  urbanSelectorContainer: {
+    flexDirection: "row",
+    backgroundColor: "#121214",
+    borderRadius: 12,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+  },
+  urbanSelectorBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 9,
+    borderRadius: 9,
+  },
+  urbanSelectorBtnActive: {
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  urbanSelectorBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#8e8e93",
   },
 });

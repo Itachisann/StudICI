@@ -11,66 +11,92 @@ import { tint as tintModifier } from '@expo/ui/swift-ui/modifiers';
 
 interface CardContextMenuProps {
   title: string;
-  isAttended: boolean;
+  isAttended?: boolean;
   isManual?: boolean;
   isNativeAvailable: boolean;
-  onTogglePresence: () => void;
+  onTogglePresence?: () => void;
   onEditManual?: () => void;
   onDeleteManual?: () => void;
+  onAddOrViewNote?: () => void;
   children: React.ReactNode;
   style?: any;
 }
 
 export function CardContextMenu({
   title,
-  isAttended,
+  isAttended = false,
   isManual,
   isNativeAvailable,
   onTogglePresence,
   onEditManual,
   onDeleteManual,
+  onAddOrViewNote,
   children,
   style,
 }: CardContextMenuProps) {
   // Standalone iOS: UIContextMenuInteraction SwiftUI nativo con colori vividi ad alto contrasto
   if (isNativeAvailable) {
     return (
-      <Host matchContents style={style} ignoreSafeArea="all">
+      <Host matchContents={{ vertical: true }} style={style} ignoreSafeArea="all">
         <ContextMenu>
           <ContextMenu.Trigger>
-            <RNHostView matchContents>
+            <RNHostView matchContents={{ vertical: true }}>
               <>{children}</>
             </RNHostView>
           </ContextMenu.Trigger>
           <ContextMenu.Items>
             <Section title={title}>
-              {/* Presenza: icona piena bold con rosso sistema vivido (#ff453a) per rimozione, verde smeraldo (#34d399) per segnatura */}
-              <Button
-                label={isAttended ? 'Rimuovi Presenza' : 'Segna Presenza'}
-                systemImage={isAttended ? 'xmark.circle.fill' : 'checkmark.circle.fill'}
-                role={isAttended ? 'destructive' : undefined}
-                modifiers={[tintModifier(isAttended ? '#ff453a' : '#34d399')]}
-                onPress={onTogglePresence}
-              />
+              {/* Presenza: se fornita, icona piena bold con rosso sistema vivido (#ff453a) per rimozione, verde smeraldo (#34d399) per segnatura */}
+              {onTogglePresence ? (
+                <Button
+                  label={isAttended ? 'Rimuovi presenza' : 'Segna presenza'}
+                  systemImage={isAttended ? 'xmark.circle.fill' : 'checkmark.circle.fill'}
+                  role={isAttended ? 'destructive' : undefined}
+                  modifiers={[tintModifier(isAttended ? '#ff453a' : '#34d399')]}
+                  onPress={onTogglePresence}
+                />
+              ) : null}
+
+              {/* Note e Promemoria per questa lezione */}
+              {onAddOrViewNote ? (
+                <Button
+                  label="Note & Promemoria"
+                  systemImage="note.text"
+                  modifiers={[tintModifier('#60a5fa')]}
+                  onPress={() => {
+                    setTimeout(() => {
+                      onAddOrViewNote?.();
+                    }, 180);
+                  }}
+                />
+              ) : null}
 
               {/* Modifica lezione manuale: icona matita bianca pura (#ffffff) per risaltare chiaramente */}
               {isManual && onEditManual ? (
                 <Button
-                  label="Modifica Lezione Manuale"
+                  label="Modifica lezione"
                   systemImage="pencil"
                   modifiers={[tintModifier('#ffffff')]}
-                  onPress={onEditManual}
+                  onPress={() => {
+                    setTimeout(() => {
+                      onEditManual?.();
+                    }, 180);
+                  }}
                 />
               ) : null}
 
               {/* Elimina lezione manuale: icona cestino piena (trash.fill) con rosso sistema vivido (#ff453a) */}
               {isManual && onDeleteManual ? (
                 <Button
-                  label="Elimina Lezione Manuale"
+                  label="Elimina lezione"
                   systemImage="trash.fill"
                   role="destructive"
                   modifiers={[tintModifier('#ff453a')]}
-                  onPress={onDeleteManual}
+                  onPress={() => {
+                    setTimeout(() => {
+                      onDeleteManual?.();
+                    }, 180);
+                  }}
                 />
               ) : null}
             </Section>
@@ -87,38 +113,34 @@ export function CardContextMenu({
       activeOpacity={0.85}
       delayLongPress={400}
       onLongPress={() => {
-        if (isManual) {
-          Alert.alert(
-            title,
-            'Gestisci lezione o presenza',
-            [
-              {
-                text: isAttended ? 'Rimuovi Presenza' : 'Segna Presenza',
-                onPress: onTogglePresence,
-              },
-              ...(onEditManual
-                ? [
-                    {
-                      text: 'Modifica Lezione',
-                      onPress: onEditManual,
-                    },
-                  ]
-                : []),
-              ...(onDeleteManual
-                ? [
-                    {
-                      text: 'Elimina Lezione',
-                      style: 'destructive' as const,
-                      onPress: onDeleteManual,
-                    },
-                  ]
-                : []),
-              { text: 'Annulla', style: 'cancel' as const },
-            ]
-          );
-        } else {
-          onTogglePresence();
+        const buttons: any[] = [];
+        if (onTogglePresence) {
+          buttons.push({
+            text: isAttended ? 'Rimuovi presenza' : 'Segna presenza',
+            onPress: onTogglePresence,
+          });
         }
+        if (onAddOrViewNote) {
+          buttons.push({
+            text: 'Note & Promemoria',
+            onPress: onAddOrViewNote,
+          });
+        }
+        if (isManual && onEditManual) {
+          buttons.push({
+            text: 'Modifica lezione',
+            onPress: onEditManual,
+          });
+        }
+        if (isManual && onDeleteManual) {
+          buttons.push({
+            text: 'Elimina lezione',
+            style: 'destructive' as const,
+            onPress: onDeleteManual,
+          });
+        }
+        buttons.push({ text: 'Annulla', style: 'cancel' as const });
+        Alert.alert(title, 'Gestisci lezione', buttons);
       }}
     >
       {children}

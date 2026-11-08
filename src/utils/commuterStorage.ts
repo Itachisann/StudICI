@@ -34,6 +34,7 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
   destinationType: 'auto',
   customDestinationName: 'Città Universitaria Sapienza',
   customDestinationAddress: 'Piazzale Aldo Moro 5, 00185 Roma',
+  includeIntercity: false,
 };
 
 export async function getCommuterConfig(): Promise<CommuterConfig> {
@@ -52,6 +53,7 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
     return {
       ...DEFAULT_COMMUTER_CONFIG,
       ...parsed,
+      includeIntercity: Boolean(parsed.includeIntercity),
       carLeg: {
         ...DEFAULT_COMMUTER_CONFIG.carLeg,
         ...(parsed.carLeg || {}),

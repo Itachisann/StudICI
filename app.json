@@ -2,14 +2,14 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.9.1",
+    "version": "1.9.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "70",
+      "buildNumber": "72",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "CFBundleDevelopmentRegion": "it",
@@ -22,6 +22,7 @@
         "NSAlarmKitUsageDescription": "StudICI utilizza le sveglie di sistema per svegliarti automaticamente in base all'orario del treno ideale per la tua prima lezione.",
         "NSRemindersUsageDescription": "StudICI utilizza i promemoria e gli avvisi nativi per le sveglie automatiche delle lezioni.",
         "NSRemindersFullAccessUsageDescription": "StudICI utilizza i promemoria e gli avvisi nativi per le sveglie automatiche delle lezioni.",
+        "NSLocationWhenInUseUsageDescription": "StudICI utilizza la tua posizione per mostrarti le fermate, i pullman e i mezzi pubblici più vicini in tempo reale.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
           "NSExceptionDomains": {
@@ -49,11 +50,14 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 63,
+      "versionCode": 64,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.READ_CALENDAR",
-        "android.permission.WRITE_CALENDAR"
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.vitor.studici"
     },
@@ -80,7 +84,14 @@
         }
       ],
       "react-native-bottom-tabs",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "StudICI utilizza la tua posizione per mostrarti le fermate, i pullman e i mezzi pubblici più vicini in tempo reale."
+        }
+      ],
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,

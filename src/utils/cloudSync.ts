@@ -5,7 +5,15 @@ import * as FileSystem from "expo-file-system/legacy";
 import { AppState, AppStateStatus, Platform } from "react-native";
 import { SYNC_DB_URL } from "../config/syncConfig";
 import { CommuterConfig } from "../types/commuter";
-import { refreshAppleCalendarIfConfigured } from "./appleCalendar";
+import {
+  getCalendarAutoSync,
+  getCalendarConfigUpdatedAt,
+  getCalendarTitle,
+  refreshAppleCalendarIfConfigured,
+  setCalendarAutoSync,
+  setCalendarTitle,
+  subscribeToCalendarConfigChanges,
+} from "./appleCalendar";
 import {
   refreshCommuterAlarmsInBackground,
   cancelAllNativeAlarms,
@@ -38,6 +46,28 @@ import {
   saveCommuterConfig,
   setCommuterChangeListener,
 } from "./commuterStorage";
+import {
+  StudentInfo,
+  getStudentInfo,
+  saveStudentInfo,
+  subscribeToStudentInfoChanges,
+} from "./studentInfo";
+import {
+  SavedDocument,
+  getSavedDocuments,
+  setAllSavedDocuments,
+  getSavedDocumentsTombstones,
+  setSavedDocumentsTombstones,
+  subscribeToSavedDocumentsChanges,
+} from "./savedDocuments";
+import {
+  AppNote,
+  getNotes,
+  getNotesTombstones,
+  setAllNotes,
+  setNotesTombstones,
+  subscribeToNotesChanges,
+} from "./notesStorage";
 
 const CLOUD_SYNC_ID_KEY = "studici_cloud_sync_id";
 const MASTER_SYNC_CODE_KEY = "studici_master_sync_code";
@@ -90,6 +120,16 @@ export interface PreAssociationBackup {
   allCoursesAttendance?: Record<string, AttendanceRecord[]>;
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter: CommuterConfig;
+  studentInfo?: StudentInfo;
+  savedDocuments?: SavedDocument[];
+  savedDocumentsTombstones?: Record<string, number>;
+  notes?: AppNote[];
+  notesTombstones?: Record<string, number>;
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
   timestamp: number;
 }
 
@@ -109,6 +149,14 @@ export interface CloudBackupPayload {
   allCoursesAttendance?: Record<string, AttendanceRecord[]>;
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter?: CommuterConfig;
+  studentInfo?: StudentInfo;
+  savedDocuments?: SavedDocument[];
+  notes?: AppNote[];
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
 }
 
 export interface CourseData {
@@ -135,6 +183,19 @@ interface RemoteDoc {
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
   commuter?: CommuterConfig;
   commuterModified?: number;
+  studentInfo?: { matricola: string; email: string };
+  studentInfoModified?: number;
+  savedDocuments?: SavedDocument[];
+  savedDocumentsTombstones?: Record<string, number>;
+  savedDocumentsModified?: number;
+  notes?: AppNote[];
+  notesTombstones?: Record<string, number>;
+  notesModified?: number;
+  calendarConfig?: {
+    customTitle?: string;
+    autoSync?: boolean;
+    updatedAt?: number;
+  };
   devices?: Record<string, SyncDeviceInfo>;
   dissociatedDevices?: Record<string, number>;
 }
@@ -297,17 +358,35 @@ export async function getLastCloudSync(): Promise<number | null> {
 export async function savePreAssociationBackup(): Promise<void> {
   const existing = await AsyncStorage.getItem(PRE_ASSOCIATION_BACKUP_KEY);
   if (!existing) {
-    const [course, attendance, tombstones, commuter, manualEvents, manualTombstones, allAtt, allManual] =
-      await Promise.all([
-        readLocalCourse(),
-        getAttendanceRecords(),
-        getAttendanceTombstones(),
-        readLocalCommuter(),
-        getManualEvents(),
-        getManualEventsTombstones(),
-        getAllAttendanceAcrossCourses(),
-        getAllManualEventsAcrossCourses(),
-      ]);
+    const [
+      course,
+      attendance,
+      tombstones,
+      commuter,
+      manualEvents,
+      manualTombstones,
+      allAtt,
+      allManual,
+      studentInfo,
+      savedDocs,
+      savedDocTomb,
+      notes,
+      notesTomb,
+    ] = await Promise.all([
+      readLocalCourse(),
+      getAttendanceRecords(),
+      getAttendanceTombstones(),
+      readLocalCommuter(),
+      getManualEvents(),
+      getManualEventsTombstones(),
+      getAllAttendanceAcrossCourses(),
+      getAllManualEventsAcrossCourses(),
+      getStudentInfo(),
+      getSavedDocuments(),
+      getSavedDocumentsTombstones(),
+      getNotes(),
+      getNotesTombstones(),
+    ]);
     const backup: PreAssociationBackup = {
       course,
       attendance,
@@ -317,6 +396,11 @@ export async function savePreAssociationBackup(): Promise<void> {
       allCoursesAttendance: allAtt,
       allCoursesManualEvents: allManual,
       commuter,
+      studentInfo,
+      savedDocuments: savedDocs,
+      savedDocumentsTombstones: savedDocTomb,
+      notes,
+      notesTombstones: notesTomb,
       timestamp: Date.now(),
     };
     await AsyncStorage.setItem(
@@ -356,6 +440,29 @@ export async function restorePreAssociationBackup(): Promise<void> {
       }
       if (backup.commuter) {
         await writeLocalCommuter(backup.commuter);
+      }
+      if (backup.studentInfo) {
+        await saveStudentInfo(
+          backup.studentInfo,
+          backup.studentInfo.updatedAt,
+          true
+        );
+      }
+      if (backup.savedDocuments) {
+        await setAllSavedDocuments(
+          backup.savedDocuments,
+          backup.savedDocumentsTombstones,
+          backup.timestamp,
+          true
+        );
+      }
+      if (backup.notes) {
+        await setAllNotes(
+          backup.notes,
+          backup.notesTombstones,
+          backup.timestamp,
+          true
+        );
       }
       await AsyncStorage.removeItem(PRE_ASSOCIATION_BACKUP_KEY);
     } else {
@@ -404,18 +511,37 @@ export async function performCloudSync(): Promise<{
   const timestamp = Date.now();
   const formattedDate = new Date(timestamp).toLocaleString("it-IT");
 
-  const [url, name, className, defaultTabUrl, records, commuter, manualEvents, allAtt, allManual] =
-    await Promise.all([
-      AsyncStorage.getItem("selectedDegreeUrl"),
-      AsyncStorage.getItem("selectedDegreeName"),
-      AsyncStorage.getItem("selectedDegreeClassName"),
-      AsyncStorage.getItem("defaultTabUrl"),
-      getAttendanceRecords(),
-      readLocalCommuter(),
-      getManualEvents(),
-      getAllAttendanceAcrossCourses(),
-      getAllManualEventsAcrossCourses(),
-    ]);
+  const [
+    url,
+    name,
+    className,
+    defaultTabUrl,
+    records,
+    commuter,
+    manualEvents,
+    allAtt,
+    allManual,
+    studentInfo,
+    savedDocs,
+    notesList,
+    calendarTitle,
+    calendarAutoSync,
+  ] = await Promise.all([
+    AsyncStorage.getItem("selectedDegreeUrl"),
+    AsyncStorage.getItem("selectedDegreeName"),
+    AsyncStorage.getItem("selectedDegreeClassName"),
+    AsyncStorage.getItem("defaultTabUrl"),
+    getAttendanceRecords(),
+    readLocalCommuter(),
+    getManualEvents(),
+    getAllAttendanceAcrossCourses(),
+    getAllManualEventsAcrossCourses(),
+    getStudentInfo(),
+    getSavedDocuments(),
+    getNotes(),
+    getCalendarTitle(),
+    getCalendarAutoSync(),
+  ]);
 
   const payload: CloudBackupPayload = {
     syncId,
@@ -433,6 +559,14 @@ export async function performCloudSync(): Promise<{
     allCoursesAttendance: allAtt,
     allCoursesManualEvents: allManual,
     commuter,
+    studentInfo,
+    savedDocuments: savedDocs,
+    notes: notesList,
+    calendarConfig: {
+      customTitle: calendarTitle,
+      autoSync: calendarAutoSync,
+      updatedAt: timestamp,
+    },
   };
 
   const jsonStr = JSON.stringify(payload);
@@ -456,10 +590,29 @@ export async function performCloudSync(): Promise<{
   };
 }
 
+/**
+ * Assicura che il codice di questo dispositivo sia registrato sul cloud remoto (Supabase)
+ * anche prima che l'utente prema manualmente "Sincronizza". In questo modo un altro dispositivo
+ * può collegarsi al codice immediatamente senza errori.
+ */
+export async function ensureDeviceRegisteredInCloud(): Promise<void> {
+  if (!isCloudConfigured()) return;
+  try {
+    const isSlave = await isCurrentDeviceSlave();
+    if (isSlave) return;
+    const ownId = await getCloudSyncId();
+    const existing = await fetchRemote(ownId);
+    if (!existing) {
+      await syncWithICloudStorage();
+    }
+  } catch {}
+}
+
 export async function copyCloudSyncCodeToClipboard(): Promise<string> {
-  const res = await performCloudSync();
-  await Clipboard.setStringAsync(res.backupCode);
-  return res.backupCode;
+  const ownId = await getCloudSyncId();
+  ensureDeviceRegisteredInCloud().catch(() => {});
+  await Clipboard.setStringAsync(ownId);
+  return ownId;
 }
 
 export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
@@ -514,6 +667,41 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
 
     if (data.commuter) {
       await writeLocalCommuter(data.commuter);
+    }
+
+    if (data.studentInfo) {
+      await saveStudentInfo(
+        data.studentInfo,
+        data.studentInfo.updatedAt,
+        true
+      );
+    }
+
+    if (data.savedDocuments) {
+      await setAllSavedDocuments(
+        data.savedDocuments,
+        undefined,
+        data.timestamp,
+        true
+      );
+    }
+
+    if (data.notes) {
+      await setAllNotes(
+        data.notes,
+        undefined,
+        data.timestamp,
+        true
+      );
+    }
+
+    if (data.calendarConfig) {
+      if (data.calendarConfig.customTitle) {
+        await setCalendarTitle(data.calendarConfig.customTitle);
+      }
+      if (data.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(data.calendarConfig.autoSync);
+      }
     }
 
     const timestamp = Date.now();
@@ -609,6 +797,12 @@ function sanitizeDocForFirebase(doc: RemoteDoc): RemoteDoc {
     allCoursesManualEvents: encodeSafeKeys(doc.allCoursesManualEvents),
     tombstones: encodeSafeKeys(doc.tombstones),
     manualTombstones: encodeSafeKeys(doc.manualTombstones),
+    notesTombstones: encodeSafeKeys(doc.notesTombstones),
+    // Il percorso file locale è specifico del dispositivo: non va mai sincronizzato
+    savedDocuments: doc.savedDocuments?.map((d) => {
+      const { fileUri, ...rest } = d;
+      return rest as SavedDocument;
+    }),
   };
 }
 
@@ -620,6 +814,7 @@ function parseDocFromFirebase(rawDoc: RemoteDoc | null): RemoteDoc | null {
     allCoursesManualEvents: decodeSafeKeys(rawDoc.allCoursesManualEvents),
     tombstones: decodeSafeKeys(rawDoc.tombstones),
     manualTombstones: decodeSafeKeys(rawDoc.manualTombstones),
+    notesTombstones: decodeSafeKeys(rawDoc.notesTombstones),
   };
 }
 
@@ -904,6 +1099,14 @@ async function handleLocalDeviceWasKickedOut(
         allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
         commuter: await readLocalCommuter(),
         commuterModified: Date.now(),
+        studentInfo: await getStudentInfo(),
+        studentInfoModified: Date.now(),
+        savedDocuments: await getSavedDocuments(),
+        savedDocumentsTombstones: await getSavedDocumentsTombstones(),
+        savedDocumentsModified: Date.now(),
+        notes: await getNotes(),
+        notesTombstones: await getNotesTombstones(),
+        notesModified: Date.now(),
         devices: {
           [myDevice.id]: freshMyDevice,
         },
@@ -1207,6 +1410,19 @@ async function runSync(): Promise<CloudSyncResult> {
         allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
         commuter: localCommuter,
         commuterModified: Date.now(),
+        studentInfo: await getStudentInfo(),
+        studentInfoModified: Date.now(),
+        savedDocuments: await getSavedDocuments(),
+        savedDocumentsTombstones: await getSavedDocumentsTombstones(),
+        savedDocumentsModified: Date.now(),
+        notes: await getNotes(),
+        notesTombstones: await getNotesTombstones(),
+        notesModified: Date.now(),
+        calendarConfig: {
+          customTitle: await getCalendarTitle(),
+          autoSync: await getCalendarAutoSync(),
+          updatedAt: Date.now(),
+        },
         devices: devicesMap,
         dissociatedDevices: remote?.dissociatedDevices || {},
       });
@@ -1370,6 +1586,117 @@ async function runSync(): Promise<CloudSyncResult> {
       String(finalCommuterMod),
     );
 
+    // 4. Sincronizzazione Dati Studente (Matricola & Email) (LWW)
+    const localStudent = await getStudentInfo();
+    const remoteStudent = remote?.studentInfo;
+    const remoteStudentMod = remote?.studentInfoModified || 0;
+    let finalStudent = localStudent;
+    let finalStudentMod = localStudent.updatedAt || 0;
+    let studentChanged = false;
+
+    if (remoteStudent && remoteStudentMod > (localStudent.updatedAt || 0)) {
+      studentChanged =
+        remoteStudent.matricola !== localStudent.matricola ||
+        remoteStudent.email !== localStudent.email;
+      if (studentChanged) {
+        await saveStudentInfo(remoteStudent, remoteStudentMod, true);
+      }
+      finalStudent = { ...remoteStudent, updatedAt: remoteStudentMod };
+      finalStudentMod = remoteStudentMod;
+    } else if (
+      (localStudent.matricola || localStudent.email) &&
+      localStudent.updatedAt > remoteStudentMod
+    ) {
+      finalStudentMod = localStudent.updatedAt;
+    }
+
+    // 5. Sincronizzazione Documenti / Link da conservare (Union con tombstones)
+    const localDocs = await getSavedDocuments();
+    const remoteDocs: SavedDocument[] = Array.isArray(remote?.savedDocuments)
+      ? remote!.savedDocuments!.filter(Boolean)
+      : [];
+    const localDocTomb = await getSavedDocumentsTombstones();
+    const remoteDocTomb = remote?.savedDocumentsTombstones || {};
+
+    const docTombstones: Record<string, number> = {};
+    for (const src of [localDocTomb, remoteDocTomb]) {
+      for (const [id, ts] of Object.entries(src)) {
+        if (now - ts > TOMBSTONE_TTL_MS) continue;
+        docTombstones[id] = Math.max(docTombstones[id] || 0, ts);
+      }
+    }
+
+    const byDocId = new Map<string, SavedDocument>();
+    for (const d of [...remoteDocs, ...localDocs]) {
+      const prev = byDocId.get(d.id);
+      if (
+        !prev ||
+        (d.updatedAt || d.createdAt || 0) > (prev.updatedAt || prev.createdAt || 0)
+      ) {
+        byDocId.set(d.id, d);
+      }
+    }
+    const mergedDocs = Array.from(byDocId.values())
+      .map((d) => {
+        const l = localDocs.find((x) => x.id === d.id);
+        return l?.fileUri ? { ...d, fileUri: l.fileUri } : d;
+      })
+      .filter(
+        (d) =>
+          !(
+            docTombstones[d.id] &&
+            docTombstones[d.id] >= (d.updatedAt || d.createdAt || 0)
+          )
+      )
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    const docsChanged =
+      JSON.stringify(mergedDocs) !== JSON.stringify(localDocs);
+    if (docsChanged) {
+      await setAllSavedDocuments(mergedDocs, docTombstones, now, true);
+    } else {
+      await setSavedDocumentsTombstones(docTombstones);
+    }
+
+    // 6. Sincronizzazione Note e Promemoria (Union con tombstones)
+    const localNotes = await getNotes();
+    const remoteNotes: AppNote[] = Array.isArray(remote?.notes)
+      ? remote!.notes!.filter(Boolean)
+      : [];
+    const localNotesTomb = await getNotesTombstones();
+    const remoteNotesTomb = remote?.notesTombstones || {};
+
+    const notesTombstones: Record<string, number> = {};
+    for (const src of [localNotesTomb, remoteNotesTomb]) {
+      for (const [id, ts] of Object.entries(src)) {
+        if (now - ts > TOMBSTONE_TTL_MS) continue;
+        notesTombstones[id] = Math.max(notesTombstones[id] || 0, ts);
+      }
+    }
+
+    const byNoteId = new Map<string, AppNote>();
+    for (const n of [...remoteNotes, ...localNotes]) {
+      const prev = byNoteId.get(n.id);
+      const nTs = new Date(n.updatedAt || n.createdAt).getTime() || 0;
+      const prevTs = prev ? new Date(prev.updatedAt || prev.createdAt).getTime() || 0 : 0;
+      if (!prev || nTs > prevTs) {
+        byNoteId.set(n.id, n);
+      }
+    }
+    const mergedNotes = Array.from(byNoteId.values())
+      .filter((n) => {
+        const nTs = new Date(n.updatedAt || n.createdAt).getTime() || 0;
+        return !(notesTombstones[n.id] && notesTombstones[n.id] >= nTs);
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const notesChanged = JSON.stringify(mergedNotes) !== JSON.stringify(localNotes);
+    if (notesChanged) {
+      await setAllNotes(mergedNotes, notesTombstones, now, true);
+    } else {
+      await setNotesTombstones(notesTombstones);
+    }
+
     let activeCachedSchedule: string | undefined = undefined;
     let activeCachedTabs: string | undefined = undefined;
     if (finalCourse.url) {
@@ -1390,6 +1717,19 @@ async function runSync(): Promise<CloudSyncResult> {
       }
     }
 
+    // Configurazione Calendario (risoluzione con timestamp per non sovrascrivere personalizzazioni locali)
+    const localCalMod = await getCalendarConfigUpdatedAt();
+    const remoteCalMod = remote?.calendarConfig?.updatedAt || 0;
+
+    if (remote?.calendarConfig && remoteCalMod > localCalMod) {
+      if (remote.calendarConfig.customTitle) {
+        await setCalendarTitle(remote.calendarConfig.customTitle, remoteCalMod);
+      }
+      if (remote.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(remote.calendarConfig.autoSync, remoteCalMod);
+      }
+    }
+
     // Pubblica al gruppo attivo
     await pushRemote(activeSyncId, {
       updatedAt: now,
@@ -1405,6 +1745,22 @@ async function runSync(): Promise<CloudSyncResult> {
       allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
+      studentInfo: {
+        matricola: finalStudent.matricola,
+        email: finalStudent.email,
+      },
+      studentInfoModified: finalStudentMod,
+      savedDocuments: mergedDocs,
+      savedDocumentsTombstones: docTombstones,
+      savedDocumentsModified: now,
+      notes: mergedNotes,
+      notesTombstones: notesTombstones,
+      notesModified: now,
+      calendarConfig: {
+        customTitle: await getCalendarTitle(),
+        autoSync: await getCalendarAutoSync(),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod, now),
+      },
       devices: devicesMap,
       dissociatedDevices: remote?.dissociatedDevices || {},
     });
@@ -1424,7 +1780,13 @@ async function runSync(): Promise<CloudSyncResult> {
     }
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
-    const updated = attChanged || courseChanged || manualChanged || commuterChanged;
+    const updated =
+      attChanged ||
+      courseChanged ||
+      manualChanged ||
+      commuterChanged ||
+      studentChanged ||
+      docsChanged;
     return {
       success: true,
       updated,
@@ -1662,6 +2024,83 @@ export async function linkDeviceWithCode(
       String(finalCommuterMod),
     );
 
+    // 4. Dati Studente (Matricola & Email)
+    const localStudent = await getStudentInfo();
+    let finalStudent = localStudent;
+    let finalStudentMod = localStudent.updatedAt || 0;
+    if (rootRemote.studentInfo) {
+      const rootStudentMod = rootRemote.studentInfoModified || Date.now();
+      if (rootStudentMod >= (localStudent.updatedAt || 0) || (!localStudent.matricola && !localStudent.email)) {
+        await saveStudentInfo(rootRemote.studentInfo, rootStudentMod, true);
+        finalStudent = { ...rootRemote.studentInfo, updatedAt: rootStudentMod };
+        finalStudentMod = rootStudentMod;
+      }
+    }
+
+    // 5. Documenti e Link: unione
+    const localDocs = await getSavedDocuments();
+    const remoteDocs: SavedDocument[] = Array.isArray(rootRemote.savedDocuments)
+      ? rootRemote.savedDocuments
+      : [];
+    const localDocTomb = await getSavedDocumentsTombstones();
+    const remoteDocTomb = rootRemote.savedDocumentsTombstones || {};
+    const docTombstones: Record<string, number> = { ...localDocTomb, ...remoteDocTomb };
+    const byDocId = new Map<string, SavedDocument>();
+    for (const d of [...remoteDocs, ...localDocs]) {
+      const prev = byDocId.get(d.id);
+      if (!prev || (d.updatedAt || d.createdAt || 0) > (prev.updatedAt || prev.createdAt || 0)) {
+        byDocId.set(d.id, d);
+      }
+    }
+    const mergedDocs = Array.from(byDocId.values())
+      .map((d) => {
+        const l = localDocs.find((x) => x.id === d.id);
+        return l?.fileUri ? { ...d, fileUri: l.fileUri } : d;
+      })
+      .filter((d) => !(docTombstones[d.id] && docTombstones[d.id] >= (d.updatedAt || d.createdAt || 0)))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    await setAllSavedDocuments(mergedDocs, docTombstones, Date.now(), true);
+
+    // 6. Note e Promemoria: unione
+    const localNotes = await getNotes();
+    const remoteNotes: AppNote[] = Array.isArray(rootRemote.notes)
+      ? rootRemote.notes
+      : [];
+    const localNotesTomb = await getNotesTombstones();
+    const remoteNotesTomb = rootRemote.notesTombstones || {};
+    const notesTombstones: Record<string, number> = { ...localNotesTomb, ...remoteNotesTomb };
+    const byNoteId = new Map<string, AppNote>();
+    for (const n of [...remoteNotes, ...localNotes]) {
+      const prev = byNoteId.get(n.id);
+      const nTs = new Date(n.updatedAt || n.createdAt).getTime() || 0;
+      const prevTs = prev ? new Date(prev.updatedAt || prev.createdAt).getTime() || 0 : 0;
+      if (!prev || nTs > prevTs) {
+        byNoteId.set(n.id, n);
+      }
+    }
+    const mergedNotes = Array.from(byNoteId.values())
+      .filter((n) => {
+        const nTs = new Date(n.updatedAt || n.createdAt).getTime() || 0;
+        return !(notesTombstones[n.id] && notesTombstones[n.id] >= nTs);
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    await setAllNotes(mergedNotes, notesTombstones, Date.now(), true);
+
+    // Configurazione Calendario (risoluzione con timestamp)
+    const localCalModRoot = await getCalendarConfigUpdatedAt();
+    const remoteCalModRoot = rootRemote?.calendarConfig?.updatedAt || 0;
+
+    if (rootRemote?.calendarConfig && remoteCalModRoot > localCalModRoot) {
+      if (rootRemote.calendarConfig.customTitle) {
+        await setCalendarTitle(rootRemote.calendarConfig.customTitle, remoteCalModRoot);
+      }
+      if (rootRemote.calendarConfig.autoSync !== undefined) {
+        await setCalendarAutoSync(rootRemote.calendarConfig.autoSync, remoteCalModRoot);
+      }
+    }
+
     // Salva nel gruppo master
     await pushRemote(rootMasterCode, {
       updatedAt: Date.now(),
@@ -1675,6 +2114,22 @@ export async function linkDeviceWithCode(
       allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
+      studentInfo: {
+        matricola: finalStudent.matricola,
+        email: finalStudent.email,
+      },
+      studentInfoModified: finalStudentMod,
+      savedDocuments: mergedDocs,
+      savedDocumentsTombstones: docTombstones,
+      savedDocumentsModified: Date.now(),
+      notes: mergedNotes,
+      notesTombstones: notesTombstones,
+      notesModified: Date.now(),
+      calendarConfig: {
+        customTitle: await getCalendarTitle(),
+        autoSync: await getCalendarAutoSync(),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalModRoot, Date.now()),
+      },
       devices: updatedDevices,
       dissociatedDevices: updatedDissociated,
     });
@@ -1743,6 +2198,10 @@ function scheduleAutoPush() {
 setAttendanceChangeListener(scheduleAutoPush);
 setCommuterChangeListener(scheduleAutoPush);
 setManualEventsChangeListener(scheduleAutoPush);
+subscribeToStudentInfoChanges(scheduleAutoPush);
+subscribeToSavedDocumentsChanges(scheduleAutoPush);
+subscribeToNotesChanges(scheduleAutoPush);
+subscribeToCalendarConfigChanges(scheduleAutoPush);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale
@@ -1964,6 +2423,7 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     notifyAttendanceChanged();
     notifyManualEventsChanged();
     await notifyLiveSyncListeners(true);
+    notifyAppReset();
 
     return newCode;
   } catch (err) {
@@ -1973,6 +2433,25 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, fallbackCode);
     notifyAttendanceChanged();
     notifyManualEventsChanged();
+    notifyAppReset();
     return fallbackCode;
   }
+}
+
+type AppResetListener = () => void;
+const appResetListeners = new Set<AppResetListener>();
+
+export function subscribeToAppReset(listener: AppResetListener): () => void {
+  appResetListeners.add(listener);
+  return () => {
+    appResetListeners.delete(listener);
+  };
+}
+
+export function notifyAppReset(): void {
+  appResetListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
 }

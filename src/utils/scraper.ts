@@ -642,7 +642,7 @@ export async function fetchScheduleData(
       if (!canon || canon === 'aula') return;
       if (!mappedRooms[canon] && !mappedRooms[`aula ${canon}`]) {
         const resolved = resolveClassroom(room, headerLines + '\n' + mapText);
-        const bCode = (resolved.buildingName || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        const bCode = (resolved.buildingName || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
         const addr = formatSapienzaAddress(resolved.address, bCode);
         const item = {
           key: canon,
@@ -665,7 +665,7 @@ export async function fetchScheduleData(
     Object.values(mappedRooms).forEach(m => {
       const canon = getCanonicalRoomKey(m.displayName || m.key);
       if (!uniqueClassroomsMap.has(canon)) {
-        const bCode = (m.building || '').match(/RM\d{3}/i)?.[1]?.toUpperCase();
+        const bCode = (m.building || '').match(/RM\d{3}/i)?.[0]?.toUpperCase();
         uniqueClassroomsMap.set(canon, {
           aulaName: normalizeDisplayName(m.displayName || m.key),
           building: m.building,
@@ -693,7 +693,7 @@ export async function fetchScheduleData(
           let finalAddress = '';
 
           // 1. Risolvi da codice edificio estratto da Gemini o dalla cella (es. RM032, RM031, RM018)
-          const bCode = (p.buildingCode || rawCellText.match(/RM\d{3}/i)?.[1] || '').toUpperCase();
+          const bCode = (p.buildingCode || rawCellText.match(/RM\d{3}/i)?.[0] || '').toUpperCase();
           if (bCode && SAPIENZA_BUILDINGS[bCode]) {
             finalBuilding = SAPIENZA_BUILDINGS[bCode].name;
             finalAddress = SAPIENZA_BUILDINGS[bCode].address;
@@ -709,19 +709,22 @@ export async function fetchScheduleData(
             }
           }
 
+          const roomClean = roomLabel.replace(/^aula\s+/i, '').toLowerCase().trim();
+          const dayNames = ['lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi'];
+          const currentDayStr = dayNames[day];
+          const escapedRoom = roomClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+          const specificDayKey = roomClean
+            ? Object.keys(mappedRooms).find(k => {
+                const canonK = getCanonicalRoomKey(k);
+                const hasRoom = new RegExp(`^${escapedRoom}\\s*\\(`, 'i').test(canonK);
+                const hasDay = canonK.includes(currentDayStr);
+                return hasRoom && hasDay;
+              })
+            : undefined;
+
           // 3. Se non ancora risolto, cerca in mappedRooms dall'intestazione
           if (!finalBuilding || !finalAddress) {
-            const roomClean = roomLabel.replace(/^aula\s+/i, '').toLowerCase().trim();
-            const dayNames = ['lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi'];
-            const currentDayStr = dayNames[day];
-            
-            const specificDayKey = Object.keys(mappedRooms).find(k => {
-               const canonK = getCanonicalRoomKey(k);
-               const hasRoom = new RegExp(`\\b${roomClean}\\b`, 'i').test(canonK);
-               const hasDay = canonK.includes(currentDayStr);
-               return hasRoom && hasDay;
-            });
-
             const mInfo = specificDayKey
               ? mappedRooms[specificDayKey]
               : (mappedRooms[getCanonicalRoomKey(roomLabel)] || mappedRooms[roomClean] || mappedRooms[p.room]);
@@ -740,15 +743,18 @@ export async function fetchScheduleData(
           }
 
           if (finalAddress) {
-            finalAddress = formatSapienzaAddress(finalAddress, (finalBuilding.match(/RM\d{3}/i)?.[1]));
+            finalAddress = formatSapienzaAddress(finalAddress, (finalBuilding.match(/RM\d{3}/i)?.[0]));
           }
 
-          // Registra l'aula nella mappa aule del corso
+          // Registra l'aula nella mappa aule del corso rispettando eventuali varianti giornaliere
           if (roomLabel) {
-            const canon = getCanonicalRoomKey(roomLabel);
-            if (!uniqueClassroomsMap.has(canon)) {
-              uniqueClassroomsMap.set(canon, {
-                aulaName: roomLabel,
+            const targetCanon = specificDayKey ? getCanonicalRoomKey(specificDayKey) : getCanonicalRoomKey(roomLabel);
+            const targetAulaName = specificDayKey && mappedRooms[specificDayKey]?.displayName
+              ? normalizeDisplayName(mappedRooms[specificDayKey].displayName)
+              : roomLabel;
+            if (!uniqueClassroomsMap.has(targetCanon)) {
+              uniqueClassroomsMap.set(targetCanon, {
+                aulaName: targetAulaName,
                 building: finalBuilding,
                 address: finalAddress,
               });

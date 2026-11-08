@@ -30,6 +30,18 @@ export interface CommuterConfig {
   destinationType: 'auto' | 'custom'; // 'auto' usa l'aula della prima lezione, 'custom' usa customAddress
   customDestinationAddress?: string;
   customDestinationName?: string;
+  includeIntercity?: boolean; // Se true, include anche i treni Intercity (IC) oltre a RV e Regionali
+}
+
+export interface LiveTrainStop {
+  stationName: string;
+  stationCode?: string;
+  isPassed?: boolean;
+  isCurrent?: boolean;
+  actualTime?: string;
+  plannedTime?: string;
+  delayMinutes?: number;
+  isExtraordinary?: boolean;
 }
 
 export interface LiveTrainInfo {
@@ -54,15 +66,22 @@ export interface LiveTrainInfo {
   isOriginStation?: boolean; // true se il treno ha origine da questa stazione (senza fermate precedenti)
   isDeparted?: boolean; // true se il treno è già effettivamente partito dall'origine
   isDepartedFromStation?: boolean; // true se il treno è già partito dalla stazione di riferimento del pendolare
-  departureDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
+  departureDelayAtStation?: number;
+  isArrivedAtDestination?: boolean;
+  arrivalDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
   isStoppedInStation?: boolean; // true se il treno è attualmente fermo in una stazione (arrivato ma non ancora partito)
   stoppedStationName?: string; // nome della stazione in cui il treno è fermo
   stoppedStationEstimatedDep?: string; // orario di partenza stimato (HH:MM) dalla stazione in cui è fermo
   stoppedMinutes?: number; // quanti minuti effettivi il treno è fermo nella stazione (da quanto è fermo)
   stoppedSinceMillis?: number; // timestamp ms di arrivo nella stazione in cui è fermo
+  stops?: LiveTrainStop[]; // fermate sequenziali del convoglio dall'origine al capolinea
+  lastDetectionStationName?: string; // nome della stazione dell'ultimo rilevamento (transito/fermata)
+  lastDetectionTime?: string; // orario dell'ultimo rilevamento
+  originDepartureTimePlanned?: string; // orario programmato di partenza dall'origine
+  originDepartureTimeActual?: string; // orario effettivo di partenza dall'origine
   hasEarlierTrain?: boolean;
   hasLaterTrain?: boolean;
-  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
+  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'arrived' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
   statusBadgeLabel?: string;
   alertMessage?: string;
   capacityWarning?: string;

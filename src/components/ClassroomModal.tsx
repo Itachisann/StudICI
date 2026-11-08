@@ -34,16 +34,18 @@ export function ClassroomModal({
 
   if (!classroom) return null;
 
-  const lat = classroom.latitude || 41.90382;
-  const lng = classroom.longitude || 12.51685;
+  const lat = classroom.latitude || 41.90561;
+  const lng = classroom.longitude || 12.51786;
   const isWeb = Platform.OS === "web";
 
   const handleShare = async () => {
     try {
-      const msg = `📍 ${classroom.displayName} · ${classroom.buildingName}\nIndirizzo: ${classroom.address}\n\nCondiviso da StudICI Sapienza`;
+      const appleMapsUrl = `https://maps.apple.com/?ll=${lat},${lng}&q=${encodeURIComponent(classroom.displayName + " - " + (classroom.buildingName || "Sapienza"))}`;
+      const msg = `📍 ${classroom.displayName} · ${classroom.buildingName}\nIndirizzo: ${classroom.address}\nPosizione Mappe Apple: ${appleMapsUrl}\n\nCondiviso da StudICI Sapienza`;
       await Share.share({
         title: classroom.displayName,
         message: msg,
+        url: Platform.OS === "ios" ? appleMapsUrl : undefined,
       });
     } catch {}
   };
@@ -79,38 +81,12 @@ export function ClassroomModal({
       ]}
     >
       <View collapsable={false} style={styles.sheetContent}>
-        {/* Header Sottotitolo Edificio e Campus Badge */}
-        {Boolean(classroom.buildingName || classroom.campus) && (
+        {/* Header Sottotitolo Edificio */}
+        {Boolean(classroom.buildingName) && (
           <View style={styles.headerInfoRow}>
-            {Boolean(classroom.buildingName) && (
-              <Text style={styles.buildingSubtitle} numberOfLines={1}>
-                {classroom.buildingName}
-              </Text>
-            )}
-            {classroom.campus ? (
-              <View
-                style={[
-                  styles.campusBadge,
-                  {
-                    backgroundColor: theme.cardTint,
-                    borderColor: theme.border,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name="business"
-                  size={11}
-                  color={theme.accent}
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[styles.campusBadgeText, { color: theme.accent }]}
-                  numberOfLines={1}
-                >
-                  {classroom.campus}
-                </Text>
-              </View>
-            ) : null}
+            <Text style={styles.buildingSubtitle} numberOfLines={1}>
+              {classroom.buildingName}
+            </Text>
           </View>
         )}
 
@@ -118,8 +94,16 @@ export function ClassroomModal({
         <View style={styles.mapCard}>
           {!isWeb ? (
             <MapView
+              key={`classroom-map-${classroom.buildingCode || "b"}-${lat.toFixed(5)}-${lng.toFixed(5)}`}
               style={styles.mapView}
-              initialRegion={{
+              region={{
+                latitude: lat,
+                longitude: lng,
+                latitudeDelta: 0.0035,
+                longitudeDelta: 0.0035,
+              }}
+              initialRegion={
+{
                 latitude: lat,
                 longitude: lng,
                 latitudeDelta: 0.0035,
@@ -402,9 +386,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#27272a",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6.5,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.06)",
   },

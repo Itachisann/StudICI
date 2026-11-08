@@ -45,6 +45,7 @@ export interface NativeSheetModalProps {
   title: string;
   backgroundColor?: string;
   tintColor?: string;
+  headerTransparent?: boolean;
   leftActions?: SheetAction[];
   rightActions?: SheetAction[];
   sheetAllowedDetents?: number[] | 'fitToContents';
@@ -102,6 +103,7 @@ export function NativeSheetModal({
   onBack,
   title,
   backgroundColor = UNIFORM_MODAL_BG,
+  headerTransparent,
   leftActions,
   rightActions,
   sheetAllowedDetents,
@@ -297,7 +299,10 @@ export function NativeSheetModal({
                   title,
                   headerTitleAlign: 'center',
                   headerTintColor: effectiveTitleColor,
-                  headerStyle: { backgroundColor },
+                  headerTransparent: headerTransparent ?? Boolean(searchBarOptions),
+                  headerStyle: {
+                    backgroundColor: (headerTransparent || Boolean(searchBarOptions)) ? 'transparent' : backgroundColor,
+                  },
                   headerShadowVisible: false, // Header e sfondo sono tutt'uno senza linee divisorie
                   headerTitleStyle: {
                     color: effectiveTitleColor,
