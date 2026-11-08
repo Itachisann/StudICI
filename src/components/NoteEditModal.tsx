@@ -1,7 +1,8 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   ScrollView,
   StyleSheet,
@@ -9,18 +10,52 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  UIManager,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  DateTimePicker,
+  type DateTimePickerChangeEvent,
+} from '@expo/ui/community/datetime-picker';
+import { UNIFORM_MODAL_BG } from '../constants/theme';
 import { NativeSheetModal } from './NativeSheetModal';
+import { NativeActionButton } from './NativeActionButton';
+import { useTheme } from '../context/ThemeContext';
 import {
   AppNote,
   deleteNote,
+  getAppleReminderStatus,
   NoteTargetType,
   saveNote,
 } from '../utils/notesStorage';
 
-const UNIFORM_MODAL_BG = '#0b0d13';
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// 8 preset uniformati: 4 per riga
+const LESSON_REMINDER_PRESETS = [
+  { id: '15m', label: '-15 min' },
+  { id: '30m', label: '-30 min' },
+  { id: '1h', label: '-1 ora' },
+  { id: '2h', label: '-2 ore' },
+  { id: '4h', label: '-4 ore' },
+  { id: '12h', label: '-12 ore' },
+  { id: '1d', label: '-1 giorno' },
+  { id: 'custom', label: 'Orario' },
+];
+
+const DAY_REMINDER_PRESETS = [
+  { id: '15m', label: '-15 min' },
+  { id: '30m', label: '-30 min' },
+  { id: '1h', label: '-1 ora' },
+  { id: '2h', label: '-2 ore' },
+  { id: '4h', label: '-4 ore' },
+  { id: '12h', label: '-12 ore' },
+  { id: '1d', label: '-1 giorno' },
+  { id: 'custom', label: 'Orario' },
+];
 
 export interface NoteEditModalProps {
   visible: boolean;
@@ -33,6 +68,7 @@ export interface NoteEditModalProps {
     teacher?: string;
     dayIndex?: number;
     dateStr?: string;
+    dayName?: string;
   } | null;
   initialDay?: {
     dayIndex: number;
@@ -53,6 +89,31 @@ export interface NoteEditModalProps {
 
 const DAYS_NAMES = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
 
+const formatReminderTargetPretty = (d: Date): string => {
+  try {
+    const today = new Date();
+    const isToday =
+      d.getDate() === today.getDate() &&
+      d.getMonth() === today.getMonth() &&
+      d.getFullYear() === today.getFullYear();
+    if (isToday) return 'Oggi';
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const isTomorrow =
+      d.getDate() === tomorrow.getDate() &&
+      d.getMonth() === tomorrow.getMonth() &&
+      d.getFullYear() === tomorrow.getFullYear();
+    if (isTomorrow) return 'Domani';
+
+    const dayName = DAYS_NAMES[(d.getDay() + 6) % 7];
+    const months = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
+    return `${dayName} ${d.getDate()} ${months[d.getMonth()]}`;
+  } catch {
+    return '';
+  }
+};
+
 const NoteEditForm: React.FC<NoteEditModalProps> = ({
   visible,
   onClose,
@@ -61,14 +122,11 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
   initialDay,
   onSaved,
   onDeleted,
-  theme = {
-    primary: '#822433',
-    accent: '#60a5fa',
-    cardTint: 'rgba(255, 255, 255, 0.05)',
-    border: 'rgba(255, 255, 255, 0.1)',
-    subtle: 'rgba(255, 255, 255, 0.08)',
-  },
+  theme,
 }) => {
+  const { theme: ctxTheme } = useTheme();
+  const activeTheme = theme || ctxTheme;
+
   const [nowTs] = useState(() => Date.now());
   const [targetType, setTargetType] = useState<NoteTargetType>(() => {
     if (noteToEdit) return noteToEdit.targetType;
@@ -80,43 +138,170 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
   const lessonSubject = noteToEdit?.lessonSubject || initialLesson?.subject || '';
   const lessonTime = noteToEdit?.lessonTime || initialLesson?.time || '';
   const lessonRoom = noteToEdit?.lessonRoom || initialLesson?.room || '';
-  const dayIndex = typeof noteToEdit?.dayIndex === 'number'
-    ? noteToEdit.dayIndex
-    : typeof initialLesson?.dayIndex === 'number'
-    ? initialLesson.dayIndex
-    : typeof initialDay?.dayIndex === 'number'
-    ? initialDay.dayIndex
-    : 0;
-  const dateStr = noteToEdit?.dateStr ||
+  const dateStr =
+    noteToEdit?.dateStr ||
     initialLesson?.dateStr ||
     initialDay?.dateStr ||
     new Date().toISOString().split('T')[0];
+
+  const dayIndex = useMemo(() => {
+    if (typeof noteToEdit?.dayIndex === 'number' && noteToEdit.dayIndex >= 0) return noteToEdit.dayIndex;
+    if (typeof initialLesson?.dayIndex === 'number' && initialLesson.dayIndex >= 0) return initialLesson.dayIndex;
+    if (typeof initialDay?.dayIndex === 'number' && initialDay.dayIndex >= 0) return initialDay.dayIndex;
+    if (dateStr) {
+      try {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const dt = new Date(y, m - 1, d);
+        return (dt.getDay() + 6) % 7;
+      } catch {}
+    }
+    return (new Date().getDay() + 6) % 7;
+  }, [noteToEdit?.dayIndex, initialLesson?.dayIndex, initialDay?.dayIndex, dateStr]);
+
+  const formattedDayDate = useMemo(() => {
+    if (!dateStr) return '';
+    try {
+      const [, m, d] = dateStr.split('-').map(Number);
+      const months = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
+      return `${DAYS_NAMES[dayIndex]} ${d} ${months[m - 1]}`;
+    } catch {
+      return dateStr;
+    }
+  }, [dateStr, dayIndex]);
+
+  const dayRelativeBadge = useMemo(() => {
+    if (!dateStr) return null;
+    try {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      if (!y || !m || !d) return null;
+      const target = new Date(y, m - 1, d);
+      const now = new Date();
+      if (
+        target.getDate() === now.getDate() &&
+        target.getMonth() === now.getMonth() &&
+        target.getFullYear() === now.getFullYear()
+      ) {
+        return 'Oggi';
+      }
+      const tomorrow = new Date(now);
+      tomorrow.setDate(now.getDate() + 1);
+      if (
+        target.getDate() === tomorrow.getDate() &&
+        target.getMonth() === tomorrow.getMonth() &&
+        target.getFullYear() === tomorrow.getFullYear()
+      ) {
+        return 'Domani';
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [dateStr]);
+
+  // Data di riferimento per il promemoria: permette di impostare promemoria anche per settimane future
+  const [reminderTargetDate, setReminderTargetDate] = useState<Date>(() => {
+    if (noteToEdit?.reminderDate) {
+      try {
+        const d = new Date(noteToEdit.reminderDate);
+        if (!isNaN(d.getTime())) return d;
+      } catch {}
+    }
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    if (dateStr && dateStr >= todayStr) {
+      try {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const dt = new Date(y, m - 1, d);
+        if (!isNaN(dt.getTime())) return dt;
+      } catch {}
+    }
+    // Prossima occorrenza del giorno della settimana
+    const currentWeekday = (now.getDay() + 6) % 7;
+    let diffDays = (dayIndex - currentWeekday + 7) % 7;
+    if (diffDays === 0) {
+      const startH = parseInt((lessonTime.split('-')[0] || '8').split(':')[0] || '8', 10);
+      if (now.getHours() >= startH) {
+        diffDays = 7;
+      }
+    }
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffDays);
+  });
 
   // Promemoria
   const [reminderEnabled, setReminderEnabled] = useState(() => Boolean(noteToEdit?.reminderEnabled));
   const [reminderPreset, setReminderPreset] = useState<string>(() => {
     if (noteToEdit?.reminderDate) return 'custom';
-    if (initialDay) return '08:00';
-    return 'start';
+    return '15m';
   });
-  const [customTime, setCustomTime] = useState(() => {
+  const [customTimeDate, setCustomTimeDate] = useState<Date>(() => {
     if (noteToEdit?.reminderDate) {
       try {
         const d = new Date(noteToEdit.reminderDate);
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        return `${hh}:${mm}`;
+        if (!isNaN(d.getTime())) return d;
       } catch {}
     }
-    return '08:00';
+    const d = new Date();
+    d.setHours(8, 0, 0, 0);
+    return d;
   });
 
-  // Calcola la data/ora esatta del promemoria in base al preset scelto
+  const toggleReminder = (val: boolean) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setReminderEnabled(val);
+  };
+
+  const selectPreset = (presetId: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setReminderPreset(presetId);
+  };
+
+  const selectTargetType = (type: NoteTargetType) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setTargetType(type);
+  };
+
+  const handleReminderDateChange = (event: DateTimePickerChangeEvent, selectedDate?: Date) => {
+    if (selectedDate) {
+      setReminderTargetDate(selectedDate);
+    } else {
+      const ts = (event as any)?.nativeEvent?.timestamp;
+      if (ts) {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) setReminderTargetDate(d);
+      }
+    }
+  };
+
+  const handleCustomTimeChange = (event: DateTimePickerChangeEvent, selectedDate?: Date) => {
+    if (selectedDate) {
+      setCustomTimeDate(selectedDate);
+    } else {
+      const ts = (event as any)?.nativeEvent?.timestamp;
+      if (ts) {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) setCustomTimeDate(d);
+      }
+    }
+  };
+
+  // Se il promemoria nativo Apple è stato eliminato dall'app Promemoria, disattiva il toggle
+  useEffect(() => {
+    if (visible && noteToEdit?.appleReminderId) {
+      getAppleReminderStatus(noteToEdit.appleReminderId).then((status) => {
+        if (!status.exists) {
+          setReminderEnabled(false);
+        }
+      });
+    }
+  }, [visible, noteToEdit?.appleReminderId]);
+
+  // Calcola la data/ora esatta del promemoria in base alla data target e al preset scelto
   const computeReminderDateIso = useCallback((): string | undefined => {
     if (!reminderEnabled) return undefined;
 
-    const baseDate = dateStr || new Date().toISOString().split('T')[0];
-    const [year, month, day] = baseDate.split('-').map(Number);
+    const year = reminderTargetDate.getFullYear();
+    const month = reminderTargetDate.getMonth();
+    const day = reminderTargetDate.getDate();
 
     if (targetType === 'lesson') {
       const startTimeStr = (lessonTime.split('-')[0] || '').trim();
@@ -128,44 +313,59 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
         if (!isNaN(m)) lessonM = m;
       }
 
-      const targetD = new Date(year, month - 1, day, lessonH, lessonM, 0, 0);
+      const targetD = new Date(year, month, day, lessonH, lessonM, 0, 0);
 
       switch (reminderPreset) {
-        case 'start':
-          return targetD.toISOString();
         case '15m':
           return new Date(targetD.getTime() - 15 * 60 * 1000).toISOString();
         case '30m':
           return new Date(targetD.getTime() - 30 * 60 * 1000).toISOString();
         case '1h':
           return new Date(targetD.getTime() - 60 * 60 * 1000).toISOString();
+        case '2h':
+          return new Date(targetD.getTime() - 2 * 60 * 60 * 1000).toISOString();
+        case '4h':
+          return new Date(targetD.getTime() - 4 * 60 * 60 * 1000).toISOString();
+        case '12h':
+          return new Date(targetD.getTime() - 12 * 60 * 60 * 1000).toISOString();
+        case '1d':
+          return new Date(targetD.getTime() - 24 * 60 * 60 * 1000).toISOString();
         case 'custom':
         default: {
-          const [cH, cM] = customTime.split(':').map(Number);
-          const cD = new Date(year, month - 1, day, isNaN(cH) ? 8 : cH, isNaN(cM) ? 0 : cM, 0, 0);
+          const cH = customTimeDate.getHours();
+          const cM = customTimeDate.getMinutes();
+          const cD = new Date(year, month, day, cH, cM, 0, 0);
           return cD.toISOString();
         }
       }
     } else {
-      // Per il giorno
+      // Per il giorno (riferimento convenzionale alle 09:00 del giorno)
+      const baseDayD = new Date(year, month, day, 9, 0, 0, 0);
       switch (reminderPreset) {
-        case '08:00':
-          return new Date(year, month - 1, day, 8, 0, 0, 0).toISOString();
-        case '09:00':
-          return new Date(year, month - 1, day, 9, 0, 0, 0).toISOString();
-        case '20:00_prev': {
-          const prev = new Date(year, month - 1, day - 1, 20, 0, 0, 0);
-          return prev.toISOString();
-        }
+        case '15m':
+          return new Date(baseDayD.getTime() - 15 * 60 * 1000).toISOString();
+        case '30m':
+          return new Date(baseDayD.getTime() - 30 * 60 * 1000).toISOString();
+        case '1h':
+          return new Date(baseDayD.getTime() - 60 * 60 * 1000).toISOString();
+        case '2h':
+          return new Date(baseDayD.getTime() - 2 * 60 * 60 * 1000).toISOString();
+        case '4h':
+          return new Date(baseDayD.getTime() - 4 * 60 * 60 * 1000).toISOString();
+        case '12h':
+          return new Date(baseDayD.getTime() - 12 * 60 * 60 * 1000).toISOString();
+        case '1d':
+          return new Date(baseDayD.getTime() - 24 * 60 * 60 * 1000).toISOString();
         case 'custom':
         default: {
-          const [cH, cM] = customTime.split(':').map(Number);
-          const cD = new Date(year, month - 1, day, isNaN(cH) ? 8 : cH, isNaN(cM) ? 0 : cM, 0, 0);
+          const cH = customTimeDate.getHours();
+          const cM = customTimeDate.getMinutes();
+          const cD = new Date(year, month, day, cH, cM, 0, 0);
           return cD.toISOString();
         }
       }
     }
-  }, [reminderEnabled, dateStr, targetType, lessonTime, reminderPreset, customTime]);
+  }, [reminderEnabled, reminderTargetDate, targetType, lessonTime, reminderPreset, customTimeDate]);
 
   const handleSave = async () => {
     if (!content.trim()) {
@@ -185,6 +385,7 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
         lessonTime: targetType === 'lesson' ? lessonTime.trim() : undefined,
         lessonRoom: targetType === 'lesson' ? lessonRoom.trim() : undefined,
         dayIndex,
+        dayName: DAYS_NAMES[dayIndex] || undefined,
         dateStr: dateStr || new Date().toISOString().split('T')[0],
         reminderEnabled,
         reminderDate,
@@ -236,14 +437,14 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
     <NativeSheetModal
       visible={visible}
       onClose={onClose}
-      title={noteToEdit ? 'Modifica Nota' : 'Nuova Nota'}
+      title={noteToEdit ? 'Modifica nota' : 'Nuova nota'}
       backgroundColor={UNIFORM_MODAL_BG}
       rightActions={[
         {
           label: '',
           sfSymbol: 'checkmark',
           prominent: true,
-          tintColor: theme.primary,
+          tintColor: activeTheme.primary,
           accessibilityLabel: 'Salva',
           onPress: handleSave,
         },
@@ -260,19 +461,26 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Selettore Tipologia se creata da zero */}
+            {/* Selettore Segmentato Tipologia (se creata da zero senza contesto fisso) */}
             {!noteToEdit && !initialLesson && !initialDay && (
               <View style={styles.typeSelectorRow}>
                 <TouchableOpacity
                   style={[
                     styles.typeSelectorBtn,
-                    targetType === 'lesson' && styles.typeSelectorBtnActive,
+                    targetType === 'lesson' && [
+                      styles.typeSelectorBtnActive,
+                      {
+                        backgroundColor: activeTheme.primary,
+                        shadowColor: activeTheme.primary,
+                      },
+                    ],
                   ]}
-                  onPress={() => setTargetType('lesson')}
+                  onPress={() => selectTargetType('lesson')}
+                  activeOpacity={0.75}
                 >
                   <Ionicons
                     name="book-outline"
-                    size={13}
+                    size={13.5}
                     color={targetType === 'lesson' ? '#ffffff' : '#94a3b8'}
                     style={{ marginRight: 6 }}
                   />
@@ -282,20 +490,27 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
                       targetType === 'lesson' && styles.typeSelectorTextActive,
                     ]}
                   >
-                    Associata a Lezione
+                    Lezione
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={[
                     styles.typeSelectorBtn,
-                    targetType === 'day' && styles.typeSelectorBtnActive,
+                    targetType === 'day' && [
+                      styles.typeSelectorBtnActive,
+                      {
+                        backgroundColor: activeTheme.primary,
+                        shadowColor: activeTheme.primary,
+                      },
+                    ],
                   ]}
-                  onPress={() => setTargetType('day')}
+                  onPress={() => selectTargetType('day')}
+                  activeOpacity={0.75}
                 >
                   <Ionicons
                     name="calendar-outline"
-                    size={13}
+                    size={13.5}
                     color={targetType === 'day' ? '#ffffff' : '#94a3b8'}
                     style={{ marginRight: 6 }}
                   />
@@ -305,298 +520,340 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
                       targetType === 'day' && styles.typeSelectorTextActive,
                     ]}
                   >
-                    Associata al Giorno
+                    Giorno intero
                   </Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {/* Badge Contesto / Associazione */}
-            <View style={styles.contextBadgeBox}>
-              <View style={styles.contextBadgeIconCircle}>
-                <Ionicons
-                  name={targetType === 'lesson' ? 'book' : 'calendar'}
-                  size={14}
-                  color="#60a5fa"
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.contextBadgeTitle}>
-                  {targetType === 'lesson'
-                    ? lessonSubject || 'Lezione'
-                    : `Giorno: ${DAYS_NAMES[dayIndex] || 'Giorno'}`}
-                </Text>
-                <Text style={styles.contextBadgeSubtitle}>
-                  {targetType === 'lesson'
-                    ? `${DAYS_NAMES[dayIndex] || ''}${lessonTime ? ` • ${lessonTime}` : ''}${lessonRoom ? ` • ${lessonRoom}` : ''}`
-                    : `Data: ${dateStr || 'Odierna'}`}
-                </Text>
+            {/* Header / Badge Contesto Associazione */}
+            <View>
+              <Text style={styles.sectionHeader}>ASSOCIAZIONE</Text>
+              <View style={styles.contextCard}>
+                <View
+                  style={[
+                    styles.contextIconSquircle,
+                    {
+                      backgroundColor: activeTheme.subtle,
+                      borderColor: activeTheme.border,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={targetType === 'lesson' ? 'book' : 'calendar'}
+                    size={18}
+                    color={activeTheme.accent}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.contextTitle} numberOfLines={1}>
+                    {targetType === 'lesson'
+                      ? lessonSubject || 'Lezione'
+                      : formattedDayDate || DAYS_NAMES[dayIndex] || 'Giorno'}
+                  </Text>
+
+                  {targetType === 'lesson' ? (
+                    <View style={styles.contextMetaRow}>
+                      <View style={styles.contextMetaPill}>
+                        <Ionicons
+                          name="calendar-outline"
+                          size={11}
+                          color="#94a3b8"
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text style={styles.contextMetaPillText}>
+                          {DAYS_NAMES[dayIndex] || 'Giorno'}
+                        </Text>
+                      </View>
+                      {Boolean(lessonTime) && (
+                        <View style={styles.contextMetaPill}>
+                          <Ionicons
+                            name="time-outline"
+                            size={11}
+                            color="#94a3b8"
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={styles.contextMetaPillText}>{lessonTime}</Text>
+                        </View>
+                      )}
+                      {Boolean(lessonRoom) && (
+                        <View style={styles.contextMetaPill}>
+                          <Ionicons
+                            name="location-outline"
+                            size={11}
+                            color="#94a3b8"
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={styles.contextMetaPillText}>
+                            {lessonRoom.toLowerCase().startsWith('aula')
+                              ? lessonRoom
+                              : `Aula ${lessonRoom}`}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : (
+                    <View style={styles.contextMetaRow}>
+                      <View style={styles.contextMetaPill}>
+                        <Ionicons
+                          name="time-outline"
+                          size={11}
+                          color="#94a3b8"
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text style={styles.contextMetaPillText}>Tutto il giorno</Text>
+                      </View>
+                      {dayRelativeBadge && (
+                        <View style={styles.contextMetaPill}>
+                          <Ionicons
+                            name="calendar-outline"
+                            size={11}
+                            color="#94a3b8"
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={styles.contextMetaPillText}>{dayRelativeBadge}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
               </View>
             </View>
 
-            {/* Sezione Contenuto */}
-            <View style={styles.cardSection}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.fieldLabel}>TITOLO (OPZIONALE)</Text>
+            {/* Sezione Contenuto Nota (Stile Inset Apple Notes) */}
+            <View>
+              <Text style={styles.sectionHeader}>CONTENUTO NOTA</Text>
+              <View style={styles.cardSection}>
                 <TextInput
                   style={styles.titleInput}
                   value={title}
                   onChangeText={setTitle}
-                  placeholder="Es. Portare fogli protocollo, Esercizio 4..."
-                  placeholderTextColor="#64748b"
+                  placeholder="Titolo (opzionale)"
+                  placeholderTextColor="#71717a"
                   maxLength={60}
+                  returnKeyType="next"
                 />
-              </View>
 
-              <View style={styles.divider} />
+                <View style={styles.hairlineDivider} />
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.fieldLabel}>TESTO DELLA NOTA *</Text>
                 <TextInput
                   style={styles.contentInput}
                   value={content}
                   onChangeText={setContent}
-                  placeholder="Scrivi qui gli appunti, le cose da ricordare, compiti..."
-                  placeholderTextColor="#64748b"
+                  placeholder="Scrivi qui i tuoi appunti, compiti o cose da ricordare..."
+                  placeholderTextColor="#71717a"
                   multiline
-                  numberOfLines={4}
+                  numberOfLines={5}
                   textAlignVertical="top"
                 />
               </View>
             </View>
 
-            {/* Sezione Promemoria e Notifica */}
-            <View style={styles.cardSection}>
-              <View style={styles.switchRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            {/* Sezione Promemoria e Avvisi */}
+            <View>
+              <Text style={styles.sectionHeader}>PROMEMORIA</Text>
+              <View style={styles.cardSection}>
+                <View style={styles.switchRow}>
                   <View
                     style={[
-                      styles.reminderIconCircle,
-                      reminderEnabled && { backgroundColor: 'rgba(16, 185, 129, 0.2)' },
+                      styles.switchIconSquircle,
+                      {
+                        backgroundColor: activeTheme.subtle,
+                        borderColor: activeTheme.border,
+                      },
                     ]}
                   >
                     <Ionicons
-                      name={reminderEnabled ? 'notifications' : 'notifications-outline'}
-                      size={16}
-                      color={reminderEnabled ? '#10b981' : '#94a3b8'}
+                      name="notifications"
+                      size={17}
+                      color={activeTheme.accent}
                     />
                   </View>
-                  <View style={{ marginLeft: 10, flex: 1 }}>
-                    <Text style={styles.reminderSwitchLabel}>Attiva Promemoria</Text>
-                    <Text style={styles.reminderSwitchSub}>
-                      Invia una notifica locale sul dispositivo
+                  <View style={{ marginLeft: 12, flex: 1 }}>
+                    <Text style={styles.switchTitle}>Attiva promemoria</Text>
+                    <Text style={styles.switchSubtitle}>
+                      Sincronizzato con l&apos;app Promemoria
                     </Text>
                   </View>
+                  <Switch
+                    value={reminderEnabled}
+                    onValueChange={toggleReminder}
+                    trackColor={{ false: '#39393d', true: activeTheme.primary }}
+                    thumbColor="#ffffff"
+                    ios_backgroundColor="#39393d"
+                  />
                 </View>
-                <Switch
-                  value={reminderEnabled}
-                  onValueChange={setReminderEnabled}
-                  trackColor={{ false: '#334155', true: '#10b981' }}
-                  thumbColor="#ffffff"
-                />
-              </View>
 
-              {reminderEnabled && (
-                <View style={styles.reminderDetailsBox}>
-                  <Text style={styles.presetSectionTitle}>QUANDO AVVISARE</Text>
-                  <View style={styles.presetChipsRow}>
-                    {targetType === 'lesson' ? (
-                      <>
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === 'start' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('start')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === 'start' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            All&apos;inizio
-                          </Text>
-                        </TouchableOpacity>
+                {reminderEnabled && (
+                  <View style={styles.reminderExpandedContent}>
+                    <View style={styles.hairlineDivider} />
 
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === '15m' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('15m')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === '15m' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            -15 min
-                          </Text>
-                        </TouchableOpacity>
+                    {/* Selettore Giorno/Data Promemoria (con Apple native compact DatePicker) */}
+                    <View style={styles.datePickerRow}>
+                      <View
+                        style={[
+                          styles.rowIconSquircle,
+                          {
+                            backgroundColor: activeTheme.subtle,
+                            borderColor: activeTheme.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="calendar-outline"
+                          size={16}
+                          color={activeTheme.accent}
+                        />
+                      </View>
+                      <View style={{ marginLeft: 12, flex: 1, marginRight: 8 }}>
+                        <Text style={styles.pickerRowTitle}>Giorno promemoria</Text>
+                        <Text style={styles.pickerRowSubtitle}>
+                          {formatReminderTargetPretty(reminderTargetDate)}
+                        </Text>
+                      </View>
+                      <View style={styles.datePickerWrapper}>
+                        <DateTimePicker
+                          value={reminderTargetDate}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                          locale="it_IT"
+                          themeVariant="dark"
+                          accentColor={activeTheme.primary}
+                          onValueChange={handleReminderDateChange}
+                          style={styles.datePickerControl}
+                        />
+                      </View>
+                    </View>
 
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === '30m' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('30m')}
-                        >
-                          <Text
+                    <Text style={styles.cardSubHeader}>QUANDO AVVISARE</Text>
+                    <View style={styles.presetsGrid}>
+                      {(targetType === 'lesson'
+                        ? LESSON_REMINDER_PRESETS
+                        : DAY_REMINDER_PRESETS
+                      ).map((preset) => {
+                        const isSelected = reminderPreset === preset.id;
+                        return (
+                          <TouchableOpacity
+                            key={preset.id}
                             style={[
-                              styles.presetChipText,
-                              reminderPreset === '30m' && styles.presetChipTextActive,
+                              styles.presetPill,
+                              isSelected && [
+                                styles.presetPillActive,
+                                {
+                                  backgroundColor: `${activeTheme.primary}25`,
+                                  borderColor: activeTheme.primary,
+                                  shadowColor: activeTheme.primary,
+                                },
+                              ],
                             ]}
+                            onPress={() => selectPreset(preset.id)}
+                            activeOpacity={0.7}
                           >
-                            -30 min
-                          </Text>
-                        </TouchableOpacity>
+                            <Text
+                              style={[
+                                styles.presetPillText,
+                                isSelected && {
+                                  color: activeTheme.accent,
+                                  fontWeight: '700',
+                                },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {preset.label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
 
-                        <TouchableOpacity
+                    {reminderPreset === 'custom' && (
+                      <View style={styles.timePickerRow}>
+                        <View
                           style={[
-                            styles.presetChip,
-                            reminderPreset === '1h' && styles.presetChipActive,
+                            styles.rowIconSquircle,
+                            {
+                              backgroundColor: activeTheme.subtle,
+                              borderColor: activeTheme.border,
+                            },
                           ]}
-                          onPress={() => setReminderPreset('1h')}
                         >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === '1h' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            -1 ora
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === 'custom' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('custom')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === 'custom' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            Orario...
-                          </Text>
-                        </TouchableOpacity>
-                      </>
-                    ) : (
-                      <>
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === '08:00' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('08:00')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === '08:00' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            08:00
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === '09:00' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('09:00')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === '09:00' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            09:00
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === '20:00_prev' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('20:00_prev')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === '20:00_prev' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            Sera prima (20:00)
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.presetChip,
-                            reminderPreset === 'custom' && styles.presetChipActive,
-                          ]}
-                          onPress={() => setReminderPreset('custom')}
-                        >
-                          <Text
-                            style={[
-                              styles.presetChipText,
-                              reminderPreset === 'custom' && styles.presetChipTextActive,
-                            ]}
-                          >
-                            Orario...
-                          </Text>
-                        </TouchableOpacity>
-                      </>
+                          <Ionicons
+                            name="time-outline"
+                            size={16}
+                            color={activeTheme.accent}
+                          />
+                        </View>
+                        <View style={{ marginLeft: 12, flex: 1, marginRight: 8 }}>
+                          <Text style={styles.pickerRowTitle}>Orario personalizzato</Text>
+                        </View>
+                        <View style={styles.timePickerWrapper}>
+                          <DateTimePicker
+                            value={customTimeDate}
+                            mode="time"
+                            display={Platform.OS === 'ios' ? 'compact' : 'default'}
+                            locale="it_IT"
+                            themeVariant="dark"
+                            accentColor={activeTheme.primary}
+                            onValueChange={handleCustomTimeChange}
+                            style={styles.timePickerControl}
+                          />
+                        </View>
+                      </View>
                     )}
+
+                    {reminderPreviewText ? (
+                      <View
+                        style={[
+                          styles.previewNoticeCard,
+                          {
+                            backgroundColor: activeTheme.subtle,
+                            borderColor: activeTheme.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="notifications-outline"
+                          size={14}
+                          color={activeTheme.accent}
+                          style={{ marginRight: 8 }}
+                        />
+                        <Text
+                          style={[
+                            styles.previewNoticeText,
+                            { color: activeTheme.accent },
+                          ]}
+                        >
+                          Promemoria: {reminderPreviewText}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
-
-                  {reminderPreset === 'custom' && (
-                    <View style={styles.customTimeRow}>
-                      <Ionicons name="time-outline" size={14} color="#60a5fa" style={{ marginRight: 6 }} />
-                      <Text style={styles.customTimeLabel}>Imposta orario (HH:mm):</Text>
-                      <TextInput
-                        style={styles.customTimeInput}
-                        value={customTime}
-                        onChangeText={setCustomTime}
-                        placeholder="08:00"
-                        placeholderTextColor="#64748b"
-                        maxLength={5}
-                      />
-                    </View>
-                  )}
-
-                  {reminderPreviewText ? (
-                    <View style={styles.previewNoticeBox}>
-                      <Ionicons name="alarm-outline" size={13} color="#10b981" style={{ marginRight: 5 }} />
-                      <Text style={styles.previewNoticeText}>
-                        Notifica: {reminderPreviewText}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-              )}
+                )}
+              </View>
             </View>
 
-            {/* Pulsante Elimina se in modifica */}
+            {/* Pulsante Elimina Callstack Liquid Glass in basso se in modifica */}
             {noteToEdit && (
-              <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={handleDelete}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="trash-outline" size={16} color="#ef4444" style={{ marginRight: 6 }} />
-                <Text style={styles.deleteBtnText}>Elimina questa nota</Text>
-              </TouchableOpacity>
+              <View style={styles.deleteSection}>
+                <NativeActionButton
+                  label="Elimina nota"
+                  accentColor="#ef4444"
+                  glow={true}
+                  glowColor="rgba(239, 68, 68, 0.4)"
+                  onPress={handleDelete}
+                  icon={
+                    <Ionicons
+                      name="trash-outline"
+                      size={17}
+                      color="#ffffff"
+                      style={{ marginRight: 6 }}
+                    />
+                  }
+                  style={{ width: '100%', height: 48, borderRadius: 24 }}
+                  pillStyle={{ height: 48, borderRadius: 24 }}
+                  textStyle={{ fontSize: 15, fontWeight: '700', color: '#ffffff' }}
+                />
+              </View>
             )}
           </ScrollView>
         </KeyboardAvoidingView>
@@ -624,231 +881,288 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
+    backgroundColor: UNIFORM_MODAL_BG,
   },
   contentContainer: {
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 40,
+    paddingTop: 8,
+    paddingBottom: 48,
     gap: 14,
   },
+
+  /* Segmented Bar Tipologia */
   typeSelectorRow: {
     flexDirection: 'row',
-    backgroundColor: '#161b26',
-    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
     padding: 3,
     borderWidth: 1,
-    borderColor: '#242e42',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: 2,
   },
   typeSelectorBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 7,
-    borderRadius: 8,
+    paddingVertical: 8,
+    borderRadius: 11,
   },
   typeSelectorBtnActive: {
-    backgroundColor: '#2563eb',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    elevation: 3,
   },
   typeSelectorText: {
     color: '#94a3b8',
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '600',
   },
   typeSelectorTextActive: {
     color: '#ffffff',
     fontWeight: '700',
   },
-  contextBadgeBox: {
+
+  /* Sezione Titoli iOS */
+  sectionHeader: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#8e8e93',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    marginLeft: 6,
+  },
+
+  /* Card Contesto Associazione */
+  contextCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#161b26',
-    borderRadius: 12,
-    padding: 12,
+    backgroundColor: '#16171d',
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    padding: 13,
     borderWidth: 1,
-    borderColor: '#242e42',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  contextBadgeIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(96, 165, 250, 0.15)',
+  contextIconSquircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
-  },
-  contextBadgeTitle: {
-    color: '#f8fafc',
-    fontSize: 13.5,
-    fontWeight: '700',
-  },
-  contextBadgeSubtitle: {
-    color: '#94a3b8',
-    fontSize: 11.5,
-    marginTop: 2,
-  },
-  cardSection: {
-    backgroundColor: '#141824',
-    borderRadius: 12,
-    padding: 12,
     borderWidth: 1,
-    borderColor: '#21293a',
-    gap: 10,
+    marginRight: 12,
   },
-  inputGroup: {
-    gap: 4,
-  },
-  fieldLabel: {
-    color: '#64748b',
-    fontSize: 10.5,
+  contextTitle: {
+    color: '#ffffff',
+    fontSize: 15.5,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: -0.2,
   },
-  titleInput: {
-    backgroundColor: '#0d111a',
+  contextMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  contextMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#242c3d',
-    color: '#f8fafc',
-    fontSize: 14,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  contextMetaPillText: {
+    color: '#cbd5e1',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+
+  /* Sezione Card Base (Stile Inset iOS) */
+  cardSection: {
+    backgroundColor: '#16171d',
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    overflow: 'hidden',
+  },
+
+  /* Input Note Stile Apple Notes */
+  titleInput: {
+    color: '#ffffff',
+    fontSize: 16.5,
     fontWeight: '600',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
   },
   contentInput: {
-    backgroundColor: '#0d111a',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#242c3d',
-    color: '#f8fafc',
-    fontSize: 13.5,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 88,
-    lineHeight: 19,
+    color: '#e4e4e7',
+    fontSize: 15,
+    lineHeight: 22,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 16,
+    minHeight: 110,
   },
-  divider: {
-    height: 1,
-    backgroundColor: '#202636',
+  hairlineDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    marginHorizontal: 16,
   },
+
+  /* Riga Switch Promemoria */
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  reminderIconCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+  switchIconSquircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
   },
-  reminderSwitchLabel: {
-    color: '#f8fafc',
-    fontSize: 13.5,
+  switchTitle: {
+    color: '#ffffff',
+    fontSize: 15,
     fontWeight: '600',
   },
-  reminderSwitchSub: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 1,
+  switchSubtitle: {
+    color: '#8e8e93',
+    fontSize: 12,
+    marginTop: 2,
   },
-  reminderDetailsBox: {
-    marginTop: 6,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#202636',
-    gap: 8,
+
+  /* Contenuto Espanso Promemoria */
+  reminderExpandedContent: {
+    paddingBottom: 14,
+    gap: 10,
   },
-  presetSectionTitle: {
-    color: '#64748b',
-    fontSize: 10,
+  cardSubHeader: {
+    fontSize: 10.5,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    color: '#71717a',
+    letterSpacing: 0.6,
+    marginTop: 4,
+    marginLeft: 16,
+    textTransform: 'uppercase',
   },
-  presetChipsRow: {
+
+  /* Griglia Preset Orari: 4 elementi per riga */
+  presetsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
+    paddingHorizontal: 14,
   },
-  presetChip: {
-    backgroundColor: '#1b2232',
-    paddingHorizontal: 10,
-    paddingVertical: 5.5,
-    borderRadius: 8,
+  presetPill: {
+    flexBasis: '23%',
+    flexGrow: 1,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
     borderWidth: 1,
-    borderColor: '#2b364e',
+    borderColor: 'rgba(255, 255, 255, 0.09)',
   },
-  presetChipActive: {
-    backgroundColor: '#10b981',
-    borderColor: '#10b981',
+  presetPillActive: {
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  presetChipText: {
-    color: '#94a3b8',
+  presetPillText: {
     fontSize: 11.5,
+    color: '#94a3b8',
     fontWeight: '600',
   },
-  presetChipTextActive: {
+
+  /* Righe Tabellari Inset iOS per Selettori (DatePicker & TimePicker) */
+  datePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  timePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  rowIconSquircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  pickerRowTitle: {
     color: '#ffffff',
-    fontWeight: '700',
+    fontSize: 14.5,
+    fontWeight: '600',
   },
-  customTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0d111a',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#242c3d',
-    alignSelf: 'flex-start',
-    marginTop: 4,
-  },
-  customTimeLabel: {
-    color: '#cbd5e1',
+  pickerRowSubtitle: {
+    color: '#8e8e93',
     fontSize: 12,
-    fontWeight: '500',
-    marginRight: 6,
+    marginTop: 2,
   },
-  customTimeInput: {
-    color: '#60a5fa',
-    fontSize: 13,
-    fontWeight: '700',
-    minWidth: 50,
-    padding: 0,
+  datePickerWrapper: {
+    width: 135,
+    height: 36,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
   },
-  previewNoticeBox: {
+  datePickerControl: {
+    width: 135,
+    height: 36,
+  },
+  timePickerWrapper: {
+    width: 95,
+    height: 36,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  timePickerControl: {
+    width: 95,
+    height: 36,
+  },
+
+  /* Avviso Data/Ora Calcolata */
+  previewNoticeCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    marginTop: 4,
   },
   previewNoticeText: {
-    color: '#6ee7b7',
-    fontSize: 11.5,
+    fontSize: 12,
     fontWeight: '600',
     flex: 1,
   },
-  deleteBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 10,
-    paddingVertical: 11,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-    marginTop: 4,
-  },
-  deleteBtnText: {
-    color: '#ef4444',
-    fontSize: 13,
-    fontWeight: '600',
+
+  /* Sezione Elimina */
+  deleteSection: {
+    marginTop: 6,
+    paddingBottom: 6,
   },
 });

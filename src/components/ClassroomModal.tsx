@@ -40,10 +40,12 @@ export function ClassroomModal({
 
   const handleShare = async () => {
     try {
-      const msg = `📍 ${classroom.displayName} · ${classroom.buildingName}\nIndirizzo: ${classroom.address}\n\nCondiviso da StudICI Sapienza`;
+      const appleMapsUrl = `https://maps.apple.com/?ll=${lat},${lng}&q=${encodeURIComponent(classroom.displayName + " - " + (classroom.buildingName || "Sapienza"))}`;
+      const msg = `📍 ${classroom.displayName} · ${classroom.buildingName}\nIndirizzo: ${classroom.address}\nPosizione Mappe Apple: ${appleMapsUrl}\n\nCondiviso da StudICI Sapienza`;
       await Share.share({
         title: classroom.displayName,
         message: msg,
+        url: Platform.OS === "ios" ? appleMapsUrl : undefined,
       });
     } catch {}
   };

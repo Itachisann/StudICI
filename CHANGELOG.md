@@ -5,6 +5,31 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.2
+
+[Aggiornamento obbligatorio]
+
+### Note e Promemoria
+- **Gestione note di contesto e registro (`NoteEditModal.tsx`, `ContextNotesListModal.tsx`, `NotesRegistryModal.tsx`, `notesStorage.ts`)**: introdotto il sistema di annotazioni collegate sia a specifiche lezioni sia a intere giornate, con supporto a titoli, testi e marcatura completato/da fare.
+- **Integrazione esclusiva con Promemoria di iOS (`notesStorage.ts`, `NoteEditModal.tsx`)**: i promemoria delle note si integrano con l'app di sistema Promemoria di Apple (`EKReminder`) tramite EventKit, con selezione della data libera via `DateTimePicker` nativo compatto e preset temporali calibrati (`-15m`, `-30m`, `-1h`, `-2h`, `-4h`, `-12h`, `-1g`, orario personalizzato). Rimosso l'uso delle notifiche push locali per evitare errori di permessi (`UNErrorDomain 1`).
+- **Registro unificato e sincronizzazione Cloud (`NotesRegistryModal.tsx`, `cloudSync.ts`, `settings.tsx`)**: il registro consultabile dalla sezione *Documenti salvati* del Profilo consente la ricerca istantanea, il filtraggio per categoria e la gestione delle note. Note e promemoria vengono inclusi nella sincronizzazione automatica bidirezionale tra dispositivi master e slave via Firebase con gestione dei tombstone di cancellazione.
+- **Disaccoppiamento gesture swipe ed eliminazione (`SwipeToDeleteRow.tsx`)**: le righe delle note supportano lo scorrimento orizzontale per l'eliminazione diretta senza attivare involontariamente il tocco per l'apertura del modale di modifica.
+
+### Orari e Navigazione Settimanale
+- **Slider dei giorni esteso a 7 giorni (`index.tsx`, `ManualEventModal.tsx`, `YearChannelSelector.tsx`, `theme.ts`)**: lo slider della settimana include sabato e domenica con badge dedicato, permettendo la visualizzazione e l'aggiunta di lezioni manuali anche nei fine settimana.
+- **Tracciamento continuo dello swipe (`index.tsx`, `viaggio.tsx`)**: la schermata segue il trascinamento orizzontale dell'utente in tempo reale (`pageDragAnim`) con rimbalzo elastico sui margini della settimana e transizione a molla morbida tra i giorni.
+- **Uniformità layout per display ampi (`theme.ts`, `YearChannelSelector.tsx`, `aule.tsx`, `index.tsx`)**: introdotto il vincolo `MAX_CONTENT_WIDTH = 600` per allineare la larghezza massima dei selettori e delle card tra le sezioni Orari, Aule e Viaggio su tablet e schermi larghi.
+
+### Sveglie Pendolari iOS 26
+- **Modulo nativo StudICIAlarms (`StudICIAlarmsModule.swift`, `alarmSync.ts`, `commuterOptimizer.ts`)**: per dispositivi con iOS 26+ è implementato il supporto nativo ad `AlarmKit` (`AlarmManager.shared.schedule`) con fallback su EventKit. L'app programma automaticamente le sveglie di sistema settimanali calcolate sull'orario del treno ideale della prima lezione del giorno, aggiornandole silenziosamente in background all'avvio dell'app o alla variazione dell'orario accademico.
+
+### Aule e Mappe
+- **Condivisione aula con posizione geografica (`ClassroomModal.tsx`)**: la condivisione rapida dell'aula include il deep link nativo di Apple Maps con coordinate GPS e denominazione della sede per la navigazione diretta.
+
+### Interfaccia e Sincronizzazione
+- **Pannello sincronizzazione e ripristino (`settings.tsx`)**: uniformata l'icona del pulsante di sincronizzazione Cloud con quella del Calendario Apple (`sync-outline`). Semplificato il dialogo di conferma per il ripristino totale dell'applicazione.
+- **Allineamento sfondi modali (`theme.ts`, `NoteEditModal.tsx`, `settings.tsx`)**: uniformato il colore di sfondo di tutti i modali applicativi a `UNIFORM_MODAL_BG` (`#0d0e12`).
+
 ## 1.9.1
 
 ### Sincronizzazione e Ripristino Applicazione

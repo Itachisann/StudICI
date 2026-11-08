@@ -33,6 +33,7 @@ import { ManualEventModal } from "../components/ManualEventModal";
 import { NativeActionButton } from "../components/NativeActionButton";
 import { NativeSheetModal } from "../components/NativeSheetModal";
 import { NoteEditModal } from "../components/NoteEditModal";
+import { ContextNotesListModal } from "../components/ContextNotesListModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
 import {
@@ -98,6 +99,7 @@ import {
   filterNotesForLesson,
   getNotes,
   subscribeToNotesChanges,
+  syncAppleRemindersWithNotes,
 } from "../utils/notesStorage";
 
 const SAPIENZA_RED = "#822433";
@@ -357,6 +359,7 @@ export default function ScheduleScreen() {
     time?: string;
     teacher?: string;
     dayIndex?: number;
+    dayName?: string;
     dateStr?: string;
   } | null>(null);
   const [initialNoteDay, setInitialNoteDay] = useState<{
@@ -365,9 +368,48 @@ export default function ScheduleScreen() {
     dayName?: string;
   } | null>(null);
 
+  // Modal Elenco Note di Contesto (Giorno o Lezione)
+  const [contextNotesModalVisible, setContextNotesModalVisible] = useState(false);
+  const [selectedContextNotes, setSelectedContextNotes] = useState<{
+    title: string;
+    subtitle?: string;
+    subject?: string;
+    room?: string;
+    time?: string;
+    dayName?: string;
+    dateStr?: string;
+    initialLesson?: {
+      subject: string;
+      room?: string;
+      time?: string;
+      teacher?: string;
+      dayIndex?: number;
+      dayName?: string;
+      dateStr?: string;
+    } | null;
+    initialDay?: {
+      dayIndex: number;
+      dateStr: string;
+      dayName?: string;
+    } | null;
+  } | null>(null);
+
+  const activeContextNotesList = useMemo(() => {
+    if (!selectedContextNotes) return [];
+    if (selectedContextNotes.initialLesson) {
+      const il = selectedContextNotes.initialLesson;
+      return filterNotesForLesson(allNotes, il.subject, il.time, il.dateStr, il.dayIndex);
+    }
+    if (selectedContextNotes.initialDay) {
+      const id = selectedContextNotes.initialDay;
+      return filterNotesForDay(allNotes, id.dayIndex, id.dateStr);
+    }
+    return [];
+  }, [allNotes, selectedContextNotes]);
+
   useEffect(() => {
     let isMounted = true;
-    getNotes().then((list) => {
+    syncAppleRemindersWithNotes().then((list) => {
       if (isMounted) setAllNotes(list);
     });
     const unsub = subscribeToNotesChanges(() => {
@@ -388,7 +430,7 @@ export default function ScheduleScreen() {
         if (info.isMajor) {
           const showBlocking = () => {
             Alert.alert(
-              "Aggiornamento Disponibile",
+              "Aggiornamento disponibile",
               `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
               [
                 {
@@ -406,7 +448,7 @@ export default function ScheduleScreen() {
           showBlocking();
         } else {
           Alert.alert(
-            "Aggiornamento Disponibile",
+            "Aggiornamento disponibile",
             `È disponibile la nuova versione v${info.latestVersion} di StudICI (installata: v${info.currentVersion}).\n\nVuoi aggiornare ora con le ultime correzioni e miglioramenti?`,
             [
               { text: "Più tardi", style: "cancel" },
@@ -864,6 +906,34 @@ export default function ScheduleScreen() {
     const isAttended = checkIsAttended(cls, dayIdx);
     const { dateStr } = getDateForDayIndex(dayIdx);
     const lectureNotes = filterNotesForLesson(allNotes, cls.subject, cls.startTime, dateStr, dayIdx);
+    const cleanRoom = cls.room
+      ? cls.room.trim().toLowerCase().startsWith("aula")
+        ? cls.room.trim()
+        : `Aula ${cls.room.trim()}`
+      : undefined;
+
+    const handleOpenLectureNotes = () => {
+      setSelectedContextNotes({
+        title: "Note della Lezione",
+        subject: cls.subject,
+        room: cleanRoom,
+        time: `${cls.startTime} - ${cls.endTime}`,
+        dayName: DAYS_FULL[dayIdx],
+        dateStr,
+        initialLesson: {
+          subject: cls.subject,
+          room: cls.room,
+          time: `${cls.startTime} - ${cls.endTime}`,
+          teacher: cls.teacher,
+          dayIndex: dayIdx,
+          dayName: DAYS_FULL[dayIdx],
+          dateStr,
+        },
+        initialDay: null,
+      });
+      setContextNotesModalVisible(true);
+    };
+
     const disruptionAlert = getDisruptionsImpactingLecture(
       dateStr,
       cls.startTime,
@@ -1017,6 +1087,7 @@ export default function ScheduleScreen() {
                     time: `${cls.startTime} - ${cls.endTime}`,
                     teacher: cls.teacher,
                     dayIndex: dayIdx,
+                    dayName: DAYS_FULL[dayIdx],
                     dateStr,
                   });
                   setInitialNoteDay(null);
@@ -1028,33 +1099,29 @@ export default function ScheduleScreen() {
                 <Text style={[styles.roomBadgeText, { color: "#94a3b8" }]}>+ Nota</Text>
               </TouchableOpacity>
             )}
-          </View>
 
-          {/* Badge Note Esistenti sulla lezione */}
-          {lectureNotes.length > 0 && (
-            <TouchableOpacity
-              style={styles.lectureNotePill}
-              activeOpacity={0.7}
-              onPress={() => {
-                setEditingNote(lectureNotes[0]);
-                setInitialNoteLesson(null);
-                setInitialNoteDay(null);
-                setNoteModalVisible(true);
-              }}
-            >
-              <Ionicons
-                name={lectureNotes.some((n) => n.reminderEnabled) ? "notifications" : "document-text"}
-                size={11.5}
-                color={lectureNotes.some((n) => n.reminderEnabled) ? "#10b981" : "#60a5fa"}
-                style={{ marginRight: 4 }}
-              />
-              <Text style={styles.lectureNotePillText} numberOfLines={1}>
-                {lectureNotes.length === 1
-                  ? (lectureNotes[0].title || lectureNotes[0].content)
-                  : `${lectureNotes.length} note salvate`}
-              </Text>
-            </TouchableOpacity>
-          )}
+            {/* Cerchio color tema con icona nota se presenti note (senza scritta +1) */}
+            {lectureNotes.length > 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.lectureNoteCircleBadge,
+                  {
+                    backgroundColor: theme.subtle,
+                    borderColor: theme.border,
+                  },
+                ]}
+                activeOpacity={0.7}
+                onPress={handleOpenLectureNotes}
+                accessibilityLabel={`${lectureNotes.length} note per questa lezione`}
+              >
+                <Ionicons
+                  name={lectureNotes.some((n) => n.reminderEnabled) ? "notifications" : "document-text"}
+                  size={12.5}
+                  color={theme.accent}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
           {disruptionAlert ? (
@@ -1132,8 +1199,7 @@ export default function ScheduleScreen() {
         onTogglePresence={() => handleClassLongPress(cls, dayIdx)}
         onAddOrViewNote={() => {
           if (lectureNotes.length > 0) {
-            setEditingNote(lectureNotes[0]);
-            setInitialNoteLesson(null);
+            handleOpenLectureNotes();
           } else {
             setEditingNote(null);
             setInitialNoteLesson({
@@ -1142,11 +1208,12 @@ export default function ScheduleScreen() {
               time: `${cls.startTime} - ${cls.endTime}`,
               teacher: cls.teacher,
               dayIndex: dayIdx,
+              dayName: DAYS_FULL[dayIdx],
               dateStr,
             });
+            setInitialNoteDay(null);
+            setNoteModalVisible(true);
           }
-          setInitialNoteDay(null);
-          setNoteModalVisible(true);
         }}
         onEditManual={() => {
           if (cls.manualId) {
@@ -1233,7 +1300,7 @@ export default function ScheduleScreen() {
             <View style={{ flex: 1, paddingRight: 6 }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Text style={styles.updateBannerTitle}>
-                  Nuova Versione {appUpdate.latestVersion}
+                  Versione {appUpdate.latestVersion}
                 </Text>
                 <View
                   style={[
@@ -1245,7 +1312,7 @@ export default function ScheduleScreen() {
                 </View>
               </View>
               <Text style={styles.updateBannerSub} numberOfLines={1}>
-                {"Tocca per scaricare l'aggiornamento da GitHub Releases"}
+                {"Tocca per scaricare l'aggiornamento"}
               </Text>
             </View>
             <TouchableOpacity
@@ -1481,34 +1548,40 @@ export default function ScheduleScreen() {
                         <Text style={styles.dayLabel}>
                           {DAYS_FULL[w.dayIdx]} · {dayClasses.length} LEZIONI
                         </Text>
-                        {/* Badge note del giorno */}
-                        {dayNotes.length > 0 &&
-                          dayNotes.map((dn) => (
-                            <TouchableOpacity
-                              key={dn.id}
-                              style={[
-                                styles.dayNoteBadge,
-                                dn.isCompleted && { opacity: 0.6 },
-                              ]}
-                              onPress={() => {
-                                setEditingNote(dn);
-                                setInitialNoteLesson(null);
-                                setInitialNoteDay(null);
-                                setNoteModalVisible(true);
-                              }}
-                              activeOpacity={0.75}
-                            >
-                              <Ionicons
-                                name={dn.reminderEnabled ? "notifications" : "document-text"}
-                                size={10.5}
-                                color={dn.reminderEnabled ? "#10b981" : "#f59e0b"}
-                                style={{ marginRight: 3.5 }}
-                              />
-                              <Text style={styles.dayNoteBadgeText} numberOfLines={1}>
-                                {dn.title || dn.content}
-                              </Text>
-                            </TouchableOpacity>
-                          ))}
+                        {/* Cerchio color tema con icona note del giorno (senza scritta +1) */}
+                        {dayNotes.length > 0 && (
+                          <TouchableOpacity
+                            style={[
+                              styles.dayNoteCircleBadge,
+                              {
+                                backgroundColor: theme.subtle,
+                                borderColor: theme.border,
+                              },
+                            ]}
+                            onPress={() => {
+                              setSelectedContextNotes({
+                                title: `Note di ${DAYS_FULL[w.dayIdx]}`,
+                                dayName: DAYS_FULL[w.dayIdx],
+                                dateStr: currentWeekDate,
+                                initialLesson: null,
+                                initialDay: {
+                                  dayIndex: w.dayIdx,
+                                  dateStr: currentWeekDate,
+                                  dayName: DAYS_FULL[w.dayIdx],
+                                },
+                              });
+                              setContextNotesModalVisible(true);
+                            }}
+                            activeOpacity={0.75}
+                            accessibilityLabel={`${dayNotes.length} note per questa giornata`}
+                          >
+                            <Ionicons
+                              name={dayNotes.some((n) => n.reminderEnabled) ? "notifications" : "document-text"}
+                              size={12}
+                              color={theme.accent}
+                            />
+                          </TouchableOpacity>
+                        )}
                         {futureEventsForDay.length > 0 && (
                           <CardContextMenu
                             title={
@@ -1547,10 +1620,7 @@ export default function ScheduleScreen() {
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                       {/* Tasto rapido aggiungi nota al giorno */}
                       <TouchableOpacity
-                        style={[
-                          styles.addManualButton,
-                          { backgroundColor: "#181f2e", borderColor: "#2e3a52" },
-                        ]}
+                        style={styles.addManualButton}
                         onPress={() => {
                           setEditingNote(null);
                           setInitialNoteLesson(null);
@@ -1564,7 +1634,7 @@ export default function ScheduleScreen() {
                         activeOpacity={0.7}
                         accessibilityLabel="Aggiungi nota al giorno"
                       >
-                        <Ionicons name="document-text-outline" size={14} color="#94a3b8" />
+                        <Ionicons name="document-text-outline" size={15} color="#ffffff" />
                       </TouchableOpacity>
 
                       <TouchableOpacity
@@ -1601,10 +1671,10 @@ export default function ScheduleScreen() {
                             Fine settimana libero
                           </Text>
                           <Text style={styles.weekendSub}>
-                            Nessuna lezione universitaria in programma per {w.fullLabel.toLowerCase()}.
+                            Nessuna lezione in programma per {w.fullLabel.toLowerCase()}.
                           </Text>
                           <NativeActionButton
-                            label="Vedi lezioni di Lunedì"
+                            label="Vedi lezioni di lunedì"
                             onPress={() => handleDayChange(0)}
                             accentColor={theme.primary}
                             glow={true}
@@ -1748,6 +1818,33 @@ export default function ScheduleScreen() {
         noteToEdit={editingNote}
         initialLesson={initialNoteLesson}
         initialDay={initialNoteDay}
+        theme={theme}
+      />
+
+      {/* Modal Elenco Note di Contesto (Giorno o Lezione) */}
+      <ContextNotesListModal
+        visible={contextNotesModalVisible}
+        onClose={() => setContextNotesModalVisible(false)}
+        title={selectedContextNotes?.title || 'Note'}
+        subtitle={selectedContextNotes?.subtitle}
+        subject={selectedContextNotes?.subject}
+        room={selectedContextNotes?.room}
+        time={selectedContextNotes?.time}
+        dayName={selectedContextNotes?.dayName}
+        dateStr={selectedContextNotes?.dateStr}
+        notes={activeContextNotesList}
+        onOpenEditNote={(note) => {
+          setEditingNote(note);
+          setInitialNoteLesson(null);
+          setInitialNoteDay(null);
+          setNoteModalVisible(true);
+        }}
+        onAddNewNote={() => {
+          setEditingNote(null);
+          setInitialNoteLesson(selectedContextNotes?.initialLesson || null);
+          setInitialNoteDay(selectedContextNotes?.initialDay || null);
+          setNoteModalVisible(true);
+        }}
         theme={theme}
       />
     </SafeAreaView>
@@ -2579,22 +2676,20 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: "700",
   },
-  lectureNotePill: {
-    flexDirection: "row",
+  dayNoteCircleBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
-    backgroundColor: "rgba(96, 165, 250, 0.12)",
-    paddingHorizontal: 8,
-    paddingVertical: 3.5,
-    borderRadius: 7,
+    justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(96, 165, 250, 0.28)",
-    marginTop: 4,
-    alignSelf: "flex-start",
-    maxWidth: "90%",
   },
-  lectureNotePillText: {
-    color: "#93c5fd",
-    fontSize: 11,
-    fontWeight: "600",
+  lectureNoteCircleBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
   },
 });

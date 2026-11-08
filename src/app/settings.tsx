@@ -52,7 +52,6 @@ import { PastAttendanceModal } from "../components/PastAttendanceModal";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
 import { parseTabHierarchy } from "../components/YearChannelSelector";
 import { CommuterConfig } from "../types/commuter";
-import { getNotes, subscribeToNotesChanges } from "../utils/notesStorage";
 import {
   AlarmSettings,
   DEFAULT_ALARM_SETTINGS,
@@ -108,6 +107,7 @@ import {
 } from "../utils/commuterStorage";
 import { extractClassCode, getDegreeClassTheme } from "../utils/degreeColors";
 import { getManualEvents, ManualClassEvent } from "../utils/manualEvents";
+import { getNotes, subscribeToNotesChanges } from "../utils/notesStorage";
 import { exportAttendanceToPdf, exportScheduleToPdf } from "../utils/pdfExport";
 import {
   deleteSavedDocument,
@@ -377,7 +377,8 @@ export default function ProfiloScreen() {
   >(null);
 
   // Note e Promemoria
-  const [notesRegistryModalVisible, setNotesRegistryModalVisible] = useState(false);
+  const [notesRegistryModalVisible, setNotesRegistryModalVisible] =
+    useState(false);
   const [notesSummary, setNotesSummary] = useState({ total: 0, reminders: 0 });
 
   useEffect(() => {
@@ -420,7 +421,7 @@ export default function ProfiloScreen() {
       );
     } else {
       Alert.alert(
-        "App Aggiornata",
+        "App aggiornata",
         `Hai già installato l'ultima versione disponibile (v${info.currentVersion}).`,
         [{ text: "OK" }],
       );
@@ -1188,7 +1189,7 @@ export default function ProfiloScreen() {
   const resetApp = async () => {
     Alert.alert(
       "Ripristina applicazione",
-      "Sei sicuro di voler ripristinare StudICI? Verranno rimossi il corso, tutte le presenze, le lezioni e le impostazioni salvate. Il dispositivo verrà inoltre dissociato dalla sincronizzazione eliminando il vecchio codice cloud.",
+      "Sei sicuro di voler ripristinare l'applicazione? Perderai tutti i tuoi dati",
       [
         { text: "Annulla", style: "cancel" },
         {
@@ -1613,7 +1614,7 @@ export default function ProfiloScreen() {
       } else {
         if (res.notPaired) {
           Alert.alert(
-            "Nessun Dispositivo Associato",
+            "Nessun dispositivo Associato",
             "Copia il codice e inseriscilo sul secondo dispositivo per avviare la sincronizzazione.",
           );
         } else {
@@ -1932,7 +1933,7 @@ export default function ProfiloScreen() {
 
     // Codice di backup manuale (STUDICI_CLOUD:...)
     Alert.alert(
-      "Ripristina dati Cloud",
+      "Ripristina dati cloud",
       "I dati attuali sul dispositivo verranno sostituiti con quelli presenti nel backup cloud. Continuare?",
       [
         { text: "Annulla", style: "cancel" },
@@ -2421,9 +2422,41 @@ export default function ProfiloScreen() {
         </View>
         <Text style={styles.sectionFooter}>Salva i tuoi dati.</Text>
 
-        {/* Gruppo: DOCUMENTI E LINK (Modale dedicato) */}
-        <Text style={styles.sectionHeader}>DOCUMENTI E LINK</Text>
+        {/* Gruppo Unificato: PROMEMORIA, DOCUMENTI E LINK */}
+        <Text style={styles.sectionHeader}>Documenti salvati</Text>
         <View style={styles.groupedCard}>
+          {/* Riga 1: Promemoria e Note */}
+          <TouchableOpacity
+            style={styles.tableRow}
+            activeOpacity={0.7}
+            onPress={() => setNotesRegistryModalVisible(true)}
+          >
+            <View
+              style={[
+                styles.iconBox,
+                { backgroundColor: theme.subtle, borderColor: theme.border },
+              ]}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={17}
+                color={theme.accent}
+              />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.rowTitle}>Promemoria</Text>
+              <Text style={styles.docRowSubtitle} numberOfLines={1}>
+                {notesSummary.total === 0
+                  ? "Nessun elemento registrato"
+                  : `${notesSummary.total} ${notesSummary.total === 1 ? "nota salvata" : "note salvate"}${notesSummary.reminders > 0 ? ` • ${notesSummary.reminders} con promemoria` : ""}`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color="#48484a" />
+          </TouchableOpacity>
+
+          <View style={styles.separator} />
+
+          {/* Riga 2: Documenti e Link Salvati */}
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
@@ -2449,38 +2482,7 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Accedi a dispense, PDF, note e link.
-        </Text>
-
-        {/* Gruppo: REGISTRO NOTE & PROMEMORIA (Modale dedicato) */}
-        <Text style={styles.sectionHeader}>NOTE E PROMEMORIA</Text>
-        <View style={styles.groupedCard}>
-          <TouchableOpacity
-            style={styles.tableRow}
-            activeOpacity={0.7}
-            onPress={() => setNotesRegistryModalVisible(true)}
-          >
-            <View
-              style={[
-                styles.iconBox,
-                { backgroundColor: 'rgba(245, 158, 11, 0.15)', borderColor: 'rgba(245, 158, 11, 0.3)' },
-              ]}
-            >
-              <Ionicons name="document-text-outline" size={17} color="#f59e0b" />
-            </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.rowTitle}>Registro note e promemoria</Text>
-              <Text style={styles.docRowSubtitle} numberOfLines={1}>
-                {notesSummary.total === 0
-                  ? "Nessuna nota registrata"
-                  : `${notesSummary.total} ${notesSummary.total === 1 ? "nota salvata" : "note salvate"}${notesSummary.reminders > 0 ? ` • ${notesSummary.reminders} con promemoria` : ""}`}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={15} color="#48484a" />
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.sectionFooter}>
-          Gestisci appunti, cose da ricordare e promemoria per lezioni e giorni.
+          Gestisci promemoria, note, dispense, PDF e link salvati.
         </Text>
 
         {/* Gruppo: ASPETTO & TEMA */}
@@ -2664,7 +2666,7 @@ export default function ProfiloScreen() {
               )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Sincronizzazione</Text>
+              <Text style={styles.rowTitle}>Cloud</Text>
               <Text style={styles.rowSubTitle}>
                 {lastCloudSyncTime
                   ? `${iCloudAutoSync ? "Auto • " : ""}${formatSyncDate(lastCloudSyncTime)}`
@@ -2770,7 +2772,8 @@ export default function ProfiloScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.sectionFooter}>
-          Sincronizza tra dispositivi o esporta nel calendario Apple.
+          Mantieni allineati i tuoi orari, note, canali e presenze su tutti i
+          tuoi dispositivi.
         </Text>
 
         {/* Gruppo: ITINERARIO PENDOLARE */}
@@ -3426,7 +3429,7 @@ export default function ProfiloScreen() {
       <NativeSheetModal
         visible={cloudModalVisible}
         onClose={() => setCloudModalVisible(false)}
-        title="Sincronizzazione"
+        title="Cloud"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
@@ -3464,7 +3467,9 @@ export default function ProfiloScreen() {
                   <Ionicons name="cloud" size={26} color="#ffffff" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 14 }}>
-                  <Text style={styles.cloudHeroTitle}>Cloud Sync StudICI</Text>
+                  <Text style={styles.cloudHeroTitle}>
+                    Sincronizzazione Cloud
+                  </Text>
                   <Text style={styles.cloudHeroSub}>
                     {lastCloudSyncTime
                       ? `Ultimo salvataggio: ${formatSyncDate(lastCloudSyncTime)}`
@@ -3561,7 +3566,7 @@ export default function ProfiloScreen() {
                   accentColor={theme.primary}
                   icon={
                     <Ionicons
-                      name={isSyncingCloud ? "refresh" : "cloud-upload-outline"}
+                      name={isSyncingCloud ? "refresh" : "sync-outline"}
                       size={16}
                       color="#ffffff"
                     />
@@ -3587,9 +3592,8 @@ export default function ProfiloScreen() {
 
             {/* Footnote sotto il box principale */}
             <Text style={styles.cloudBoxFootnote}>
-              La sincronizzazione automatica mantiene allineati orari, corsi,
-              registro presenze e impostazioni di viaggio su tutti i dispositivi
-              associati.
+              Mantieni allineati i tuoi orari, note, canali e presenze su tutti
+              i tuoi dispositivi.
             </Text>
 
             {/* Box 2: I MIEI DISPOSITIVI */}
@@ -3989,7 +3993,7 @@ export default function ProfiloScreen() {
               </View>
 
               {/* Box 2: Nome Calendario Personalizzato */}
-              <Text style={styles.sectionHeader}>NOME CALENDARIO SU IOS</Text>
+              <Text style={styles.sectionHeader}>Nome calendario</Text>
               <View style={styles.groupedCard}>
                 <View style={{ padding: 16 }}>
                   <Text
@@ -4179,8 +4183,7 @@ export default function ProfiloScreen() {
                       Rimuovi calendario da iOS
                     </Text>
                     <Text style={styles.rowSubTitle}>
-                      Elimina il calendario dedicato e tutti gli eventi dal
-                      dispositivo
+                      Elimina calendario dedicato
                     </Text>
                   </View>
                   <Ionicons
@@ -4198,11 +4201,11 @@ export default function ProfiloScreen() {
       <NativeSheetModal
         visible={studentModalVisible}
         onClose={() => setStudentModalVisible(false)}
-        title="Dati studente"
+        title="Dati studenti"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
           {
-            label: "Salva",
+            label: "Salva modifiche",
             sfSymbol: "checkmark",
             prominent: true,
             tintColor: theme.primary,
@@ -4219,7 +4222,7 @@ export default function ProfiloScreen() {
         ]}
       >
         <ScrollView
-          style={{ flex: 1 }}
+          style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}
           contentContainerStyle={{ padding: 16 }}
           keyboardShouldPersistTaps="handled"
         >
@@ -4267,12 +4270,6 @@ export default function ProfiloScreen() {
               )}
             </View>
           </View>
-
-          <Text style={styles.modalCardHelperText}>
-            La matricola e l&apos;email istituzionale sono salvate sul
-            dispositivo e sincronizzate in cloud su tutti i tuoi dispositivi
-            collegati. Appaiono sotto i badge della scheda del tuo profilo.
-          </Text>
         </ScrollView>
       </NativeSheetModal>
 
@@ -4444,7 +4441,7 @@ export default function ProfiloScreen() {
             accessibilityLabel: "Aggiungi un altro elemento",
           },
           {
-            label: "Salva",
+            label: "Salva modifiche",
             sfSymbol: "checkmark",
             prominent: true,
             tintColor: theme.primary,
@@ -4769,7 +4766,7 @@ export default function ProfiloScreen() {
         ]}
         rightActions={[
           {
-            label: "Salva",
+            label: "Salva modifiche",
             sfSymbol: "checkmark",
             prominent: true,
             tintColor: theme.primary,

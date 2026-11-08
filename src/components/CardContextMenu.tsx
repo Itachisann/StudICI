@@ -49,7 +49,7 @@ export function CardContextMenu({
               {/* Presenza: se fornita, icona piena bold con rosso sistema vivido (#ff453a) per rimozione, verde smeraldo (#34d399) per segnatura */}
               {onTogglePresence ? (
                 <Button
-                  label={isAttended ? 'Rimuovi Presenza' : 'Segna Presenza'}
+                  label={isAttended ? 'Rimuovi presenza' : 'Segna presenza'}
                   systemImage={isAttended ? 'xmark.circle.fill' : 'checkmark.circle.fill'}
                   role={isAttended ? 'destructive' : undefined}
                   modifiers={[tintModifier(isAttended ? '#ff453a' : '#34d399')]}
@@ -74,7 +74,7 @@ export function CardContextMenu({
               {/* Modifica lezione manuale: icona matita bianca pura (#ffffff) per risaltare chiaramente */}
               {isManual && onEditManual ? (
                 <Button
-                  label="Modifica Lezione Manuale"
+                  label="Modifica lezione"
                   systemImage="pencil"
                   modifiers={[tintModifier('#ffffff')]}
                   onPress={() => {
@@ -88,7 +88,7 @@ export function CardContextMenu({
               {/* Elimina lezione manuale: icona cestino piena (trash.fill) con rosso sistema vivido (#ff453a) */}
               {isManual && onDeleteManual ? (
                 <Button
-                  label="Elimina Lezione Manuale"
+                  label="Elimina lezione"
                   systemImage="trash.fill"
                   role="destructive"
                   modifiers={[tintModifier('#ff453a')]}
@@ -116,7 +116,7 @@ export function CardContextMenu({
         const buttons: any[] = [];
         if (onTogglePresence) {
           buttons.push({
-            text: isAttended ? 'Rimuovi Presenza' : 'Segna Presenza',
+            text: isAttended ? 'Rimuovi presenza' : 'Segna presenza',
             onPress: onTogglePresence,
           });
         }
@@ -128,13 +128,13 @@ export function CardContextMenu({
         }
         if (isManual && onEditManual) {
           buttons.push({
-            text: 'Modifica Lezione',
+            text: 'Modifica lezione',
             onPress: onEditManual,
           });
         }
         if (isManual && onDeleteManual) {
           buttons.push({
-            text: 'Elimina Lezione',
+            text: 'Elimina lezione',
             style: 'destructive' as const,
             onPress: onDeleteManual,
           });

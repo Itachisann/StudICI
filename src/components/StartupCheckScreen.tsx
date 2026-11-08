@@ -36,7 +36,7 @@ export function StartupCheckScreen({
 }: StartupCheckScreenProps) {
   const { theme } = useTheme();
   const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date' | 'blocked'>('checking');
-  const [statusMessage, setStatusMessage] = useState('Verifica orario in corso...');
+  const [statusMessage, setStatusMessage] = useState('Controlla aggiornamento orario');
   const [progressDetail, setProgressDetail] = useState('');
   const [blockingUpdate, setBlockingUpdate] = useState<AppUpdateInfo | null>(null);
 
@@ -141,7 +141,7 @@ export function StartupCheckScreen({
 
           const showBlockingAlert = () => {
             Alert.alert(
-              'Aggiornamento Disponibile',
+              'Aggiornamento disponibile',
               `È disponibile la nuova versione v${updateInfo.latestVersion} di StudICI (installata: v${updateInfo.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
               [
                 {
@@ -231,7 +231,7 @@ export function StartupCheckScreen({
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         Alert.alert(
-          'Aggiornamento Disponibile',
+          'Aggiornamento disponibile',
           `È disponibile la nuova versione v${blockingUpdate.latestVersion} di StudICI (installata: v${blockingUpdate.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
           [
             {
@@ -259,7 +259,7 @@ export function StartupCheckScreen({
   const handleCapsulePress = () => {
     if (status === 'blocked' && blockingUpdate) {
       Alert.alert(
-        'Aggiornamento Disponibile',
+        'Aggiornamento disponibile',
         `È disponibile la nuova versione v${blockingUpdate.latestVersion} di StudICI (installata: v${blockingUpdate.currentVersion}).\n\nPer continuare a utilizzare l'applicazione è necessario effettuare l'aggiornamento.`,
         [
           {
@@ -378,7 +378,7 @@ export function StartupCheckScreen({
 
       {/* Footer Minimal iOS */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Sapienza Università di Roma</Text>
+        <Text style={styles.footerText}>Verifica delle ultime modifiche</Text>
       </View>
     </View>
   );

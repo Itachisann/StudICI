@@ -327,8 +327,8 @@ function ManualEventForm({
   const handleDelete = () => {
     if (!activeEditing || !onDelete) return;
     Alert.alert(
-      'Elimina Lezione',
-      `Sei sicuro di voler eliminare la lezione "${activeEditing.subject}"?`,
+      'Elimina lezione',
+      'Sei sicuro di voler eliminare questa lezione manuale?',
       [
         { text: 'Annulla', style: 'cancel' },
         {

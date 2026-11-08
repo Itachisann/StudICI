@@ -594,7 +594,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   card: {
-    backgroundColor: '#16171d',
+    backgroundColor: '#1c1c1e',
     borderRadius: 24,
     borderCurve: 'continuous',
     paddingVertical: 15,
