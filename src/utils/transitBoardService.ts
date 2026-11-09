@@ -67,6 +67,8 @@ export interface TransitDepartureItem {
   transferWalkPolylines?: LatLngPoint[][];
   crowdingLevel?: 'low' | 'medium' | 'high';
   operator?: string;
+  isSuggested?: boolean;
+  isOptimal?: boolean;
 }
 
 export interface TransitBoardResult {
@@ -913,7 +915,6 @@ export function findOptimalTransitDeparture(
 
   // 2. Filtra le corse che arrivano a destinazione (inclusa la camminata dalla fermata di discesa) entro il vincolo orario
   let onTimeCandidates = reachable;
-  let hasOnTimeCandidates = false;
   if (deadlineMins > 0) {
     // Per il ritorno in stazione consideriamo almeno 2 minuti di margine per raggiungere il binario;
     // per l'andata l'arrivo in aula (inclusa la camminata a piedi) deve avvenire entro l'orario di inizio lezione
@@ -925,7 +926,6 @@ export function findOptimalTransitDeparture(
 
     if (withinEffective.length > 0) {
       onTimeCandidates = withinEffective;
-      hasOnTimeCandidates = true;
     } else {
       const withinStrict = reachable.filter((d) => {
         const destArrM = getDestArrMins(d);
@@ -933,7 +933,6 @@ export function findOptimalTransitDeparture(
       });
       if (withinStrict.length > 0) {
         onTimeCandidates = withinStrict;
-        hasOnTimeCandidates = true;
       }
     }
   }
@@ -953,56 +952,67 @@ export function findOptimalTransitDeparture(
 
   const pool = nonDominated.length > 0 ? nonDominated : onTimeCandidates;
 
-  // 4. Scelta del mezzo ottimale (card esterna della tappa): l'ULTIMO mezzo utile per arrivare a destinazione in tempo
-  //    (inclusi camminate e durata reale). Può non comparire ancora nella lista, che mostra le prime corse da adesso / dopo il treno.
-  let chosen: TransitDepartureItem | undefined;
-  if (hasOnTimeCandidates) {
-    let maxDep = -1;
-    for (const d of pool) {
-      const dm = getDepMins(d);
-      if (dm > maxDep) maxDep = dm;
-    }
+  // 4. Scelta del mezzo ottimale (soluzione più rapida, vicina ed efficiente):
+  //    Tra le corse raggiungibili nella prima finestra utile dopo l'arrivo del treno o da adesso,
+  //    privilegia l'arrivo anticipato a destinazione con la minore durata di viaggio e camminata a piedi.
+  //    (Es. bus alle 8:47 che impiega 16m -> arrivo 9:03 vs bus alle 8:50 che impiega 10m -> arrivo 9:00:
+  //    viene selezionato e suggerito quello delle 8:50 perché arriva prima a destinazione e risparmia tempo).
+  const sortedPool = [...pool].sort((a, b) => getDepMins(a) - getDepMins(b));
+  const firstDep = sortedPool.length > 0 ? getDepMins(sortedPool[0]) : 0;
 
-    const finalWindow = pool.filter((d) => getDepMins(d) >= maxDep - 1);
-    chosen =
-      finalWindow.length > 0
-        ? finalWindow.reduce((best, curr) => {
-            // Priorità 1: Minima camminata a piedi a destinazione (percorso combinato più breve a piedi, evitando fermate lontane o in salita)
-            if (
-              curr.walkAfterMinutes !== best.walkAfterMinutes &&
-              Math.abs(curr.walkAfterMinutes - best.walkAfterMinutes) >= 2
-            ) {
-              return curr.walkAfterMinutes < best.walkAfterMinutes ? curr : best;
-            }
-            // Priorità 2: Minima durata totale complessiva
-            if (curr.durationMinutes !== best.durationMinutes) {
-              return curr.durationMinutes < best.durationMinutes ? curr : best;
-            }
-            const bArr = getDestArrMins(best);
-            const cArr = getDestArrMins(curr);
-            if (cArr !== bArr) return cArr < bArr ? curr : best;
-            return getDepMins(curr) > getDepMins(best) ? curr : best;
-          })
-        : pool[pool.length - 1];
-  } else {
-    chosen = pool.reduce((best, curr) => {
-      if (
-        curr.walkAfterMinutes !== best.walkAfterMinutes &&
-        Math.abs(curr.walkAfterMinutes - best.walkAfterMinutes) >= 2
-      ) {
-        return curr.walkAfterMinutes < best.walkAfterMinutes ? curr : best;
-      }
+  // Finestra di connessione utile (corse entro 25 minuti dalla prima partenza raggiungibile)
+  const immediateWindow = sortedPool.filter((d) => getDepMins(d) <= firstDep + 25);
+  const candidates = immediateWindow.length > 0 ? immediateWindow : sortedPool.slice(0, 4);
+
+  const chooseBest = (list: TransitDepartureItem[]): TransitDepartureItem => {
+    return list.reduce((best, curr) => {
       const bArr = getDestArrMins(best);
       const cArr = getDestArrMins(curr);
-      if (cArr !== bArr) return cArr < bArr ? curr : best;
-      return curr.durationMinutes < best.durationMinutes ? curr : best;
-    }, pool[0]);
+      const bWalk = (best.walkBeforeMinutes || 0) + (best.walkAfterMinutes || 0);
+      const cWalk = (curr.walkBeforeMinutes || 0) + (curr.walkAfterMinutes || 0);
+
+      // Criterio 1: Arrivo a destinazione (se differisce di almeno 2 minuti, vince chi arriva prima)
+      if (cArr > 0 && bArr > 0 && Math.abs(cArr - bArr) >= 2) {
+        return cArr < bArr ? curr : best;
+      }
+
+      // Criterio 2: A parità di arrivo (differenza <= 1 min), vicinanza fermata / minore camminata
+      if (Math.abs(cWalk - bWalk) >= 2) {
+        return cWalk < bWalk ? curr : best;
+      }
+
+      // Criterio 3: Minore durata complessiva / tempo effettivo a bordo
+      if (curr.durationMinutes !== best.durationMinutes) {
+        return curr.durationMinutes < best.durationMinutes ? curr : best;
+      }
+
+      // Criterio 4: Corsa diretta (meno cambi)
+      if (curr.transfersCount !== best.transfersCount) {
+        return curr.transfersCount < best.transfersCount ? curr : best;
+      }
+
+      // Criterio 5: Meno attesa a vuoto alla fermata di salita
+      return getDepMins(curr) > getDepMins(best) ? curr : best;
+    }, list[0]);
+  };
+
+  const chosen = candidates.length > 0 ? chooseBest(candidates) : departures[0];
+
+  if (chosen) {
+    chosen.isSuggested = true;
+    chosen.isOptimal = true;
   }
 
   const idx = chosen ? departures.findIndex((d) => d.id === chosen.id) : 0;
+  const optimalIndex = idx >= 0 ? idx : 0;
+  if (departures[optimalIndex]) {
+    departures[optimalIndex].isSuggested = true;
+    departures[optimalIndex].isOptimal = true;
+  }
+
   return {
     optimal: chosen || departures[0],
-    optimalIndex: idx >= 0 ? idx : 0,
+    optimalIndex,
   };
 }
 

@@ -349,17 +349,24 @@ export const ContextNotesListModal: React.FC<ContextNotesListModalProps> = ({
                         color="#94a3b8"
                         style={{ marginRight: 4 }}
                       />
-                      <Text style={styles.contextMetaPillText}>Tutto il giorno</Text>
+                      <Text style={styles.contextMetaPillText}>Intera giornata</Text>
                     </View>
                     {dayRelativeBadge && (
                       <View style={styles.contextMetaPill}>
                         <Ionicons
-                          name="calendar-outline"
+                          name="sparkles-outline"
                           size={11}
-                          color="#94a3b8"
+                          color={activeTheme.accent}
                           style={{ marginRight: 4 }}
                         />
-                        <Text style={styles.contextMetaPillText}>{dayRelativeBadge}</Text>
+                        <Text
+                          style={[
+                            styles.contextMetaPillText,
+                            { color: activeTheme.accent, fontWeight: '600' },
+                          ]}
+                        >
+                          {dayRelativeBadge}
+                        </Text>
                       </View>
                     )}
                   </View>

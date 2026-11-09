@@ -601,17 +601,24 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
                           color="#94a3b8"
                           style={{ marginRight: 4 }}
                         />
-                        <Text style={styles.contextMetaPillText}>Tutto il giorno</Text>
+                        <Text style={styles.contextMetaPillText}>Intera giornata</Text>
                       </View>
                       {dayRelativeBadge && (
                         <View style={styles.contextMetaPill}>
                           <Ionicons
-                            name="calendar-outline"
+                            name="sparkles-outline"
                             size={11}
-                            color="#94a3b8"
+                            color={activeTheme.accent}
                             style={{ marginRight: 4 }}
                           />
-                          <Text style={styles.contextMetaPillText}>{dayRelativeBadge}</Text>
+                          <Text
+                            style={[
+                              styles.contextMetaPillText,
+                              { color: activeTheme.accent, fontWeight: '600' },
+                            ]}
+                          >
+                            {dayRelativeBadge}
+                          </Text>
                         </View>
                       )}
                     </View>
@@ -705,9 +712,11 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
                           color={activeTheme.accent}
                         />
                       </View>
-                      <View style={{ marginLeft: 12, flex: 1, marginRight: 8 }}>
-                        <Text style={styles.pickerRowTitle}>Giorno promemoria</Text>
-                        <Text style={styles.pickerRowSubtitle}>
+                      <View style={styles.pickerTextColumn}>
+                        <Text style={styles.pickerRowTitle} numberOfLines={1}>
+                          Data promemoria
+                        </Text>
+                        <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
                           {formatReminderTargetPretty(reminderTargetDate)}
                         </Text>
                       </View>
@@ -783,8 +792,13 @@ const NoteEditForm: React.FC<NoteEditModalProps> = ({
                             color={activeTheme.accent}
                           />
                         </View>
-                        <View style={{ marginLeft: 12, flex: 1, marginRight: 8 }}>
-                          <Text style={styles.pickerRowTitle}>Orario personalizzato</Text>
+                        <View style={styles.pickerTextColumn}>
+                          <Text style={styles.pickerRowTitle} numberOfLines={1}>
+                            Orario personalizzato
+                          </Text>
+                          <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
+                            Ora esatta notifica
+                          </Text>
                         </View>
                         <View style={styles.timePickerWrapper}>
                           <DateTimePicker
@@ -1113,6 +1127,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
   },
+  pickerTextColumn: {
+    marginLeft: 12,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: 8,
+    justifyContent: 'center',
+  },
   pickerRowTitle: {
     color: '#ffffff',
     fontSize: 14.5,
@@ -1124,23 +1146,25 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   datePickerWrapper: {
-    width: 135,
+    width: Platform.OS === 'ios' ? 120 : 130,
     height: 36,
     alignItems: 'flex-end',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   datePickerControl: {
-    width: 135,
+    width: Platform.OS === 'ios' ? 120 : 130,
     height: 36,
   },
   timePickerWrapper: {
-    width: 95,
+    width: Platform.OS === 'ios' ? 90 : 100,
     height: 36,
     alignItems: 'flex-end',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   timePickerControl: {
-    width: 95,
+    width: Platform.OS === 'ios' ? 90 : 100,
     height: 36,
   },
 

@@ -1,5 +1,5 @@
-# Changelog Interno (Note di Commit & Release - Ciclo successivo a v1.9.2)
+# Changelog Interno (Note di Commit & Release - Ciclo successivo a v1.9.3)
 
-Questo file raccoglie in modo strutturato tutti i cambiamenti tecnici effettuati sul codice sorgente di StudICI a partire dal rilascio `v1.9.2`.
+Questo file raccoglie in modo strutturato tutti i cambiamenti tecnici effettuati sul codice sorgente di StudICI a partire dal rilascio `v1.9.3`.
 
 ---

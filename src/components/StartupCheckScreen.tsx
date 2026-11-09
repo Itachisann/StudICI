@@ -36,7 +36,7 @@ export function StartupCheckScreen({
 }: StartupCheckScreenProps) {
   const { theme } = useTheme();
   const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date' | 'blocked'>('checking');
-  const [statusMessage, setStatusMessage] = useState('Controlla aggiornamento orario');
+  const [statusMessage, setStatusMessage] = useState('Verifico aggiornamento orario');
   const [progressDetail, setProgressDetail] = useState('');
   const [blockingUpdate, setBlockingUpdate] = useState<AppUpdateInfo | null>(null);
 
