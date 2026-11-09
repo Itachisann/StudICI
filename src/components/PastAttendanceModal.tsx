@@ -515,7 +515,7 @@ export function PastAttendanceModal({
             {/* Scorciatoie Rapide Data Singola */}
             <View style={styles.shortcutsRow}>
               {[
-                { label: '-1 giorno', days: -1, icon: 'chevron-back' },
+                { label: '-1 giorno', days: -1, icon: 'calendar-outline' },
                 { label: '-1 settimana', days: -7, icon: 'calendar-outline' },
                 { label: '-2 settimane', days: -14, icon: 'calendar-outline' },
               ].map((p) => {
@@ -633,13 +633,6 @@ export function PastAttendanceModal({
                   />
                 </View>
               </View>
-            </View>
-
-            {/* Anteprima Intervallo Completo su riga orizzontale dedicata */}
-            <View style={styles.rangeDatePreviewRow}>
-              <Text style={styles.rangeDatePreviewText}>
-                {formatDateParts(startDate).displayDate} — {formatDateParts(endDate).displayDate}
-              </Text>
             </View>
 
             {/* Scorciatoie Rapide Intervallo */}

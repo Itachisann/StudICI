@@ -1067,16 +1067,14 @@ export default function ScheduleScreen() {
               </TouchableOpacity>
             ) : null}
 
-            {/* Pulsante rapido aggiungi nota se non ce ne sono ancora */}
+            {/* Icona circolare aggiungi nota (se non ci sono ancora note per questa lezione) */}
             {lectureNotes.length === 0 && (
               <TouchableOpacity
                 style={[
-                  styles.roomBadge,
+                  styles.lectureNoteCircleBadge,
                   {
                     backgroundColor: "rgba(255, 255, 255, 0.04)",
                     borderColor: "rgba(255, 255, 255, 0.08)",
-                    borderWidth: 1,
-                    marginTop: 0,
                   },
                 ]}
                 onPress={() => {
@@ -1094,9 +1092,9 @@ export default function ScheduleScreen() {
                   setNoteModalVisible(true);
                 }}
                 activeOpacity={0.7}
+                accessibilityLabel="Aggiungi nota per questa lezione"
               >
-                <Ionicons name="create-outline" size={11.5} color="#94a3b8" />
-                <Text style={[styles.roomBadgeText, { color: "#94a3b8" }]}>+ Nota</Text>
+                <Ionicons name="create-outline" size={12} color="#94a3b8" />
               </TouchableOpacity>
             )}
 

@@ -5,6 +5,24 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.3
+
+### Viaggio e Mobilità
+- **Selezione dinamica del mezzo di trasporto più rapido (`transitBoardService.ts`, `viaggio.tsx`)**: il calcolo del mezzo ottimale nella tratta di collegamento urbano non seleziona più la partenza più tarda a ridosso del vincolo orario, ma individua dinamicamente la corsa che minimizza la durata complessiva del viaggio e garantisce l'arrivo anticipato a destinazione a parità di finestra utile (es. a parità di arrivo treno alle 08:39, una corsa alle 08:50 che impiega 10m con arrivo alle 09:00 prevale su una alle 08:47 da 16m con arrivo alle 09:03). A parità di arrivo, applica tie-break su vicinanza fermata a piedi, minor tempo a bordo e assenza di cambi.
+- **Evidenziazione della corsa consigliata (`TransitBoardCard.tsx`)**: la corsa ottimale identificata è contrassegnata nella lista partenze da un riquadro dedicato con bordo in blu tenue (`schematicCardSuggested`) e viene garantita la sua presenza a schermo anche nella visualizzazione compressa a 3 elementi. La tappa del viaggio in `viaggio.tsx` aggiorna dinamicamente orario, durata e linea selezionata.
+
+### Note e Promemoria
+- **Risoluzione layout DatePicker su iOS (`NoteEditModal.tsx`)**: corretto il difetto di overflow del controllo nativo compatto `DateTimePicker` che debordava oltre il margine destro della card con troncamento della data e blocco degli eventi di tocco (`hitTest`). Introdotto il contenitore `pickerTextColumn` con `flexShrink: 1` e larghezza fissa di sicurezza a 120pt, ripristinando la corretta reattività al tocco del calendario nativo Apple.
+- **Riorganizzazione associazione note giornaliere (`NoteEditModal.tsx`, `ContextNotesListModal.tsx`)**: eliminata la duplicazione del giorno della settimana nelle annotazioni giornaliere; la data estesa compare esclusivamente nel titolo della card, accompagnata dai metadati contestuali (*Intera giornata* e badge *Oggi*/*Domani*).
+
+### Schermata Orari e Menu Contestuale
+- **Icona circolare aggiunta nota (`index.tsx`)**: rimosso il pulsante allungato con testo `+ Nota` nelle card delle lezioni prive di annotazioni, sostituendolo con l'icona circolare compatta `create-outline` (`lectureNoteCircleBadge`) coerente con il badge delle lezioni con note già salvate.
+- **Pulizia menu a comparsa (`CardContextMenu.tsx`)**: rimossa la voce ridondante *Promemoria* dal menu a comparsa della card lezione, riservandolo alla marcatura delle presenze e alla gestione degli eventi manuali.
+- **Verifica iniziale all'avvio (`StartupCheckScreen.tsx`)**: aggiornato il testo informativo della schermata di verifica iniziale in *Verifico aggiornamento orario*.
+
+### Modal Presenze Passate
+- **Uniformazione pill e rimozione testi ridondanti (`PastAttendanceModal.tsx`)**: sostituita l'icona chevron della pill *-1 giorno* con `calendar-outline`, allineandola graficamente alle pill adiacenti. Rimossa la stringa di testo della data estesa posizionata sotto i selettori dell'intervallo date in quanto ridondante.
+
 ## 1.9.2
 
 [Aggiornamento obbligatorio]

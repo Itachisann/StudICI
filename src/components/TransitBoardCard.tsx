@@ -358,9 +358,21 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       const count = Math.max(3, halfHourDepartures.length);
       return filteredDepartures.slice(0, count);
     }
-    // Modalità 'collapsed' (default: prime 3 corse)
+    // Modalità 'collapsed' (default: prime 3 corse, includendo la corsa consigliata/ottimale)
     if (direction === 'to_campus') {
-      return filteredDepartures.slice(0, 3);
+      const top3 = filteredDepartures.slice(0, 3);
+      if (
+        boardData?.optimalDeparture &&
+        !top3.some((d) => d.id === boardData.optimalDeparture?.id)
+      ) {
+        const opt = filteredDepartures.find(
+          (d) => d.id === boardData.optimalDeparture?.id
+        );
+        if (opt) {
+          return [...top3, opt];
+        }
+      }
+      return top3;
     }
     if (!selectedLineFilter && boardData) {
       const optIdx = boardData.optimalIndex ?? 0;
@@ -743,13 +755,21 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
             const isHeavyDelay = liveInfo.isHeavyDelay;
             const dotColor = liveInfo.dotColor;
             const isLiveTrip = liveInfo.isLiveActive;
+            const isSuggested = Boolean(
+              dep.isSuggested ||
+                dep.isOptimal ||
+                (boardData?.optimalDeparture && dep.id === boardData.optimalDeparture.id)
+            );
 
             return (
               <TouchableOpacity
                 key={dep.id || `dep-${index}`}
                 activeOpacity={0.8}
                 onPress={() => setSelectedDepartureModal(dep)}
-                style={styles.schematicCard}
+                style={[
+                  styles.schematicCard,
+                  isSuggested && styles.schematicCardSuggested,
+                ]}
               >
                 {/* Riga 1: Badge Linea + Pallino Live a sinistra; Orario + Durata (e sotto Countdown) a destra */}
                 <View style={styles.schematicTopRow}>
@@ -1181,6 +1201,11 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: '#252a38',
+  },
+  schematicCardSuggested: {
+    borderColor: 'rgba(96, 165, 250, 0.45)',
+    borderWidth: 1.5,
+    backgroundColor: '#191f2e',
   },
   schematicTopRow: {
     flexDirection: 'row',

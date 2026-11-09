@@ -57,20 +57,6 @@ export function CardContextMenu({
                 />
               ) : null}
 
-              {/* Note e Promemoria per questa lezione */}
-              {onAddOrViewNote ? (
-                <Button
-                  label="Note & Promemoria"
-                  systemImage="note.text"
-                  modifiers={[tintModifier('#60a5fa')]}
-                  onPress={() => {
-                    setTimeout(() => {
-                      onAddOrViewNote?.();
-                    }, 180);
-                  }}
-                />
-              ) : null}
-
               {/* Modifica lezione manuale: icona matita bianca pura (#ffffff) per risaltare chiaramente */}
               {isManual && onEditManual ? (
                 <Button
@@ -118,12 +104,6 @@ export function CardContextMenu({
           buttons.push({
             text: isAttended ? 'Rimuovi presenza' : 'Segna presenza',
             onPress: onTogglePresence,
-          });
-        }
-        if (onAddOrViewNote) {
-          buttons.push({
-            text: 'Note & Promemoria',
-            onPress: onAddOrViewNote,
           });
         }
         if (isManual && onEditManual) {
