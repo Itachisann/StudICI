@@ -5,6 +5,22 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.4
+
+### Viaggio e Treni
+- **Recupero dinamico dell'intera giornata ferroviaria (`trenitaliaApi.ts`, `commuter.ts`)**: la selezione dei treni recupera dinamicamente la programmazione dell'intera giornata a partire dalle prime corse del mattino fino a tarda sera tramite l'integrazione con il piano GTFS di Transitous (MOTIS 2). È ora possibile scorrere all'indietro nel tempo selezionando i treni precedenti della giornata; i dati vengono fusi con lo stato in tempo reale di ViaggiaTreno per ritardi, binari effettivi e contrassegno dei convogli già partiti. Il meccanismo opera in modo generico per qualunque tratta ferroviaria con risoluzione automatica delle stazioni.
+- **Correzione fuso orario nello slider treni (`trenitaliaApi.ts`)**: risolta la discrepanza tra l'orario mostrato sui chip dello slider e la card del treno (es. 08:40 vs 09:40) causata dal mancato supporto dei fusi orari da parte del motore JavaScript Hermes su iOS; la formattazione dei timestamp ISO applica ora l'offset astronomico ufficiale italiano (CET/CEST) in modo deterministico.
+
+### Mappe e Mobilità Urbana
+- **Eliminazione deviazioni a zig-zag e aggancio carreggiata (`transitRoadwayRouter.ts`, `transitBoardService.ts`)**: implementato un algoritmo multi-pass (`smoothOffRoadSpikes`, `pruneAnomalousLoopsAndSpikes`) per rilevare e appiattire le deviazioni laterali dei tracciati bus generate da fermate con coordinate GTFS collocate dentro cortili, stabili o lotti privati. Tutte le fermate intermedie e i capolinea vengono proiettati matematicamente sul marciapiede della carreggiata stradale (`snapCoordinateToPolyline`), eliminando le rientranze anomale dei percorsi.
+- **Risoluzione percorsi pedonali e continuità di discesa (`TransitDepartureModal.tsx`, `transitBoardService.ts`)**: rimosse le sovrascritture statiche e i waypoint forzati; il percorso a piedi verso la destinazione (`walkAfterRouteCoords`) si aggancia con continuità esatta all'ultima fermata di sbarco anche nei viaggi con interscambio (`multiLegRoutes`), seguendo fedelmente la rete stradale pedonale senza tagli rettilinei sopra fabbricati né false inversioni a U.
+- **Ottimizzazione dinamica della fermata di sbarco (`transitBoardService.ts`)**: la selezione della fermata più vicina alla destinazione valuta dinamicamente tutte le fermate GTFS della linea per minimizzare la camminata a piedi, sia nei tragitti di andata che di ritorno verso la stazione.
+
+### Interfaccia e Navigazione
+- **Refactoring selettore di partenza mezzi (`TransitBoardCard.tsx`)**: riprogettato il blocco di selezione partenza nella card dei mezzi urbani. L'etichetta "PARTENZA DA" è posizionata all'esterno su riga singola; la commutazione tra sede e GPS avviene tramite pillola compatta con icona bidirezionale (`swap-horizontal`), lasciando spazio completo all'indirizzo e alla denominazione del luogo senza troncamenti di testo.
+- **Selettore modalità Mezzi / A piedi (`viaggio.tsx`)**: risolto il blocco nella commutazione del `SegmentedControl` tra modalità con i mezzi e percorso a piedi con aggiornamento istantaneo dell'interfaccia.
+- **Modale comunicazioni e avvisi (`index.tsx`)**: sostituito l'accordion inline delle comunicazioni nella schermata Orari con un modale nativo a mezza altezza (`NativeSheetModal` con detent ~48%), richiamabile dalla nuova icona a campanello con supporto allo swipe verso il basso per la chiusura.
+
 ## 1.9.3
 
 ### Viaggio e Mobilità

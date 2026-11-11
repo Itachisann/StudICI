@@ -192,6 +192,11 @@ export default function ViaggioScreen() {
   const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
   const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
   const activeDayIdxRef = useRef<number>(new Date().getDay());
+  const activeClassIdxRef = useRef<number | null>(null);
+  const directionRef = useRef<"outbound" | "return">("outbound");
+  const configCacheRef = useRef<CommuterConfig | null>(null);
+  const scheduleCacheRef = useRef<ScheduleData | null>(null);
+  const manualsCacheRef = useRef<ManualClassEvent[] | null>(null);
   const loadRequestIdRef = useRef<number>(0);
 
   useEffect(() => {
@@ -245,9 +250,7 @@ export default function ViaggioScreen() {
   const initialPagerPositioned = useRef(false);
   const activeWeekdayIndexRef = useRef(initialWeekdayIndex);
   const handleDayChangeRef = useRef<(dayIdx: number) => void>(() => {});
-  const itinerariesCacheRef = useRef<{
-    [dayIdx: number]: CommuterItinerary | null;
-  }>({});
+  const itinerariesCacheRef = useRef<Record<string | number, CommuterItinerary | null>>({});
   const [itinerariesByDay, setItinerariesByDay] = useState<{
     [dayIdx: number]: CommuterItinerary | null;
   }>({});
@@ -601,7 +604,13 @@ export default function ViaggioScreen() {
       }
 
       try {
-        const currentConfig = await getCommuterConfig();
+        let currentConfig: CommuterConfig;
+        if (!isRefresh && configCacheRef.current) {
+          currentConfig = configCacheRef.current;
+        } else {
+          currentConfig = await getCommuterConfig();
+          configCacheRef.current = currentConfig;
+        }
         if (requestId !== loadRequestIdRef.current) return;
         setConfig(currentConfig);
 
@@ -615,7 +624,12 @@ export default function ViaggioScreen() {
         // Carica lezioni manuali salvate
         let currentManuals: ManualClassEvent[] = [];
         try {
-          currentManuals = await getManualEvents();
+          if (!isRefresh && manualsCacheRef.current) {
+            currentManuals = manualsCacheRef.current;
+          } else {
+            currentManuals = await getManualEvents();
+            manualsCacheRef.current = currentManuals;
+          }
           setManualEvents(currentManuals);
         } catch (err) {
           console.warn("Errore lettura manual events:", err);
@@ -625,24 +639,29 @@ export default function ViaggioScreen() {
         let sched: ScheduleData | null = null;
         let defaultTab: string | null = null;
         try {
-          const url = await AsyncStorage.getItem("selectedDegreeUrl");
-          defaultTab = await AsyncStorage.getItem("defaultTabUrl");
-          setDefaultTabUrl(defaultTab);
-          if (url) {
-            const courseData = await fetchAllCourseData(url);
-            const activeTab =
-              courseData.tabs.find((t) => t.url === defaultTab) ||
-              courseData.tabs[0];
-            if (activeTab) {
-              // Indice per URL del tab (o per nome se fallback)
-              sched =
-                courseData.schedules[activeTab.url] ||
-                courseData.schedules[activeTab.name] ||
-                null;
+          if (!isRefresh && scheduleCacheRef.current) {
+            sched = scheduleCacheRef.current;
+          } else {
+            const url = await AsyncStorage.getItem("selectedDegreeUrl");
+            defaultTab = await AsyncStorage.getItem("defaultTabUrl");
+            setDefaultTabUrl(defaultTab);
+            if (url) {
+              const courseData = await fetchAllCourseData(url);
+              const activeTab =
+                courseData.tabs.find((t) => t.url === defaultTab) ||
+                courseData.tabs[0];
+              if (activeTab) {
+                // Indice per URL del tab (o per nome se fallback)
+                sched =
+                  courseData.schedules[activeTab.url] ||
+                  courseData.schedules[activeTab.name] ||
+                  null;
 
-              if (!sched) {
-                sched = await fetchScheduleData(activeTab.url);
+                if (!sched) {
+                  sched = await fetchScheduleData(activeTab.url);
+                }
               }
+              scheduleCacheRef.current = sched;
             }
           }
         } catch (err) {
@@ -672,9 +691,12 @@ export default function ViaggioScreen() {
         const nowMins = now.getHours() * 60 + now.getMinutes();
 
         let targetClassForCalculation: ClassEvent | null = null;
+        const isExplicitClass =
+          effClassIdx !== null && Boolean(currentDayClasses[effClassIdx]);
+
         if (!isEffWeekend && currentDayClasses.length > 0) {
-          if (effClassIdx !== null && currentDayClasses[effClassIdx]) {
-            targetClassForCalculation = currentDayClasses[effClassIdx];
+          if (isExplicitClass) {
+            targetClassForCalculation = currentDayClasses[effClassIdx!];
           } else {
             targetClassForCalculation = getAutoTargetClass(
               currentDayClasses,
@@ -685,12 +707,24 @@ export default function ViaggioScreen() {
           }
         }
 
+        const lastClass =
+          currentDayClasses.length > 0
+            ? currentDayClasses[currentDayClasses.length - 1]
+            : null;
+        const isAllClassesFinished = Boolean(
+          isToday &&
+          !isEffWeekend &&
+          lastClass &&
+          nowMins >= parseTimeToMinutes(lastClass.endTime || "18:00")
+        );
+
         const isTargetClassFinished = Boolean(
           isToday &&
           !isEffWeekend &&
           targetClassForCalculation &&
-          nowMins >=
-            parseTimeToMinutes(targetClassForCalculation.endTime || "18:00"),
+          (isAllClassesFinished ||
+            nowMins >=
+              parseTimeToMinutes(targetClassForCalculation.endTime || "18:00")),
         );
 
         const isTargetClassInProgress = Boolean(
@@ -707,7 +741,7 @@ export default function ViaggioScreen() {
         if (
           targetClassForCalculation &&
           !isTargetClassFinished &&
-          !isTargetClassInProgress
+          !(effDir === "outbound" && isTargetClassInProgress)
         ) {
           const timeToUse =
             effDir === "outbound"
@@ -730,6 +764,7 @@ export default function ViaggioScreen() {
           direction: effDir,
           targetDate,
           selectedClass: targetClassForCalculation,
+          isExplicitClass,
           selectedTrainOffset: effTrainOffset,
           selectedTrainNumber: effTrainNum || undefined,
           forceRefresh: isRefresh,
@@ -739,9 +774,12 @@ export default function ViaggioScreen() {
         // Ignora il risultato se l'utente ha già switchato a un altro giorno
         if (effDayIdx !== activeDayIdxRef.current) return;
 
-        itinerariesCacheRef.current[effDayIdx] = itin;
+        const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
+        itinerariesCacheRef.current[cacheKey] = itin;
         setItinerary(itin);
-        setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
+        if (effClassIdx === null) {
+          setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
+        }
         setLastUpdated(new Date());
       } catch (err: any) {
         console.warn("Errore calcolo itinerario pendolare", err);
@@ -793,12 +831,17 @@ export default function ViaggioScreen() {
   const handleDayChange = useCallback(
     (dayIdx: number) => {
       activeDayIdxRef.current = dayIdx;
+      activeClassIdxRef.current = null;
       setSelectedDayIdx(dayIdx);
       setSelectedClassIndex(null);
       setSelectedTrainOffset(0);
       setSelectedTrainNumber(null);
+      const cacheKey = `${direction}_${dayIdx}_auto`;
       const cached =
-        itinerariesCacheRef.current[dayIdx] || itinerariesByDay[dayIdx];
+        itinerariesCacheRef.current[cacheKey] ||
+        itinerariesCacheRef.current[`${dayIdx}_auto`] ||
+        itinerariesCacheRef.current[dayIdx] ||
+        itinerariesByDay[dayIdx];
       if (cached) {
         setItinerary(cached);
         setLoading(false);
@@ -813,7 +856,7 @@ export default function ViaggioScreen() {
         selectedTrainNumber: null,
       });
     },
-    [loadData, itinerariesByDay],
+    [loadData, itinerariesByDay, direction],
   );
 
   useEffect(() => {
@@ -864,19 +907,30 @@ export default function ViaggioScreen() {
   };
 
   const handleDirectionChange = (newDir: "outbound" | "return") => {
+    directionRef.current = newDir;
     setDirection(newDir);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
-    itinerariesCacheRef.current = {};
-    setItinerariesByDay({});
-    loadData(false, false, {
+    activeClassIdxRef.current = null;
+    setSelectedClassIndex(null);
+    const cacheKey = `${newDir}_${selectedDayIdx}_auto`;
+    const cached = itinerariesCacheRef.current[cacheKey];
+    if (cached) {
+      setItinerary(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+    loadData(false, Boolean(cached), {
       direction: newDir,
+      selectedClassIndex: null,
       selectedTrainOffset: 0,
       selectedTrainNumber: null,
     });
   };
 
   const handleSelectClass = (idx: number) => {
+    activeClassIdxRef.current = idx;
     setSelectedClassIndex(idx);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
@@ -884,7 +938,15 @@ export default function ViaggioScreen() {
       screenWidth > 0 ? Math.max(0, (screenWidth - 200) / 2) : 80;
     const targetOffset = Math.max(0, idx * 208 - halfScreen);
     lecturesScrollRef.current?.scrollTo({ x: targetOffset, animated: true });
-    loadData(false, false, {
+    const cacheKey = `${direction}_${selectedDayIdx}_${idx}`;
+    const cached = itinerariesCacheRef.current[cacheKey];
+    if (cached) {
+      setItinerary(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+    loadData(false, Boolean(cached), {
       selectedClassIndex: idx,
       selectedTrainOffset: 0,
       selectedTrainNumber: null,
@@ -964,11 +1026,39 @@ export default function ViaggioScreen() {
         preferredMode: mode,
       },
     };
+    configCacheRef.current = newConfig;
+    setConfig(newConfig);
     itinerariesCacheRef.current = {};
     setItinerariesByDay({});
+
+    // Aggiornamento ottimistico immediato dello stato per garantire reattività istantanea nella UI
+    setItinerary((prev) => {
+      if (!prev || !prev.legs) return prev;
+      const isWalk = mode === "walk";
+      const updatedLegs = prev.legs.map((l) => {
+        if (
+          l.id === "transit-leg" ||
+          l.id === "return-transit-leg" ||
+          l.type === "transit" ||
+          l.type === "walk"
+        ) {
+          return {
+            ...l,
+            type: (isWalk ? "walk" : "transit") as TripLeg["type"],
+            title: isWalk ? "A piedi" : (l.details?.transitLine || "Mezzi Urbani"),
+            details: {
+              ...l.details,
+              travelMode: (isWalk ? "walking" : "transit") as "walking" | "transit",
+            },
+          };
+        }
+        return l;
+      });
+      return { ...prev, legs: updatedLegs };
+    });
+
     await saveCommuterConfig(newConfig);
-    setConfig(newConfig);
-    loadData(false, true);
+    loadData(true, true);
   };
 
   const openGoogleMapsRoute = (
@@ -1248,6 +1338,10 @@ export default function ViaggioScreen() {
         };
 
         const dayIdx = activeDayIdxRef.current;
+        const cacheKey = `${directionRef.current}_${dayIdx}_${activeClassIdxRef.current ?? "auto"}`;
+        if (itinerariesCacheRef.current[cacheKey]) {
+          itinerariesCacheRef.current[cacheKey] = nextItin;
+        }
         if (itinerariesCacheRef.current[dayIdx]) {
           itinerariesCacheRef.current[dayIdx] = nextItin;
         }
@@ -3368,12 +3462,15 @@ export default function ViaggioScreen() {
                             isNativeIos ? (
                               <View style={styles.inlineSegmentedWrapper}>
                                 <SegmentedControl
-                                  key={`seg-leg-mode-${theme.primary}`}
+                                  key={`seg-leg-mode-${theme.primary}-${leg.type}-${config?.transitLeg?.preferredMode}`}
                                   values={["Con i mezzi", "A piedi"]}
-                                  selectedIndex={leg.type === "walk" ? 1 : 0}
+                                  selectedIndex={leg.type === "walk" || config?.transitLeg?.preferredMode === "walk" ? 1 : 0}
                                   onChange={(e) => {
                                     const idx = e.nativeEvent.selectedSegmentIndex;
                                     handleToggleTransitMode(idx === 1 ? "walk" : "auto");
+                                  }}
+                                  onValueChange={(val) => {
+                                    handleToggleTransitMode(val === "A piedi" ? "walk" : "auto");
                                   }}
                                   appearance="dark"
                                   tintColor={theme.primary}
@@ -3395,7 +3492,7 @@ export default function ViaggioScreen() {
                                 <TouchableOpacity
                                   style={[
                                     styles.inlineTransitBtn,
-                                    leg.type === "transit" && styles.inlineTransitBtnActiveTransit,
+                                    (leg.type === "transit" && config?.transitLeg?.preferredMode !== "walk") && styles.inlineTransitBtnActiveTransit,
                                   ]}
                                   activeOpacity={0.7}
                                   onPress={() => handleToggleTransitMode("auto")}
@@ -3403,13 +3500,13 @@ export default function ViaggioScreen() {
                                   <Ionicons
                                     name="bus-outline"
                                     size={11}
-                                    color={leg.type === "transit" ? "#ffffff" : "#94a3b8"}
+                                    color={leg.type === "transit" && config?.transitLeg?.preferredMode !== "walk" ? "#ffffff" : "#94a3b8"}
                                     style={{ marginRight: 4 }}
                                   />
                                   <Text
                                     style={[
                                       styles.inlineTransitBtnText,
-                                      leg.type === "transit" && styles.inlineTransitBtnTextActive,
+                                      (leg.type === "transit" && config?.transitLeg?.preferredMode !== "walk") && styles.inlineTransitBtnTextActive,
                                     ]}
                                   >
                                     Con i mezzi
@@ -3419,7 +3516,7 @@ export default function ViaggioScreen() {
                                 <TouchableOpacity
                                   style={[
                                     styles.inlineTransitBtn,
-                                    leg.type === "walk" && styles.inlineTransitBtnActiveWalk,
+                                    (leg.type === "walk" || config?.transitLeg?.preferredMode === "walk") && styles.inlineTransitBtnActiveWalk,
                                   ]}
                                   activeOpacity={0.7}
                                   onPress={() => handleToggleTransitMode("walk")}
@@ -3427,13 +3524,13 @@ export default function ViaggioScreen() {
                                   <Ionicons
                                     name="walk-outline"
                                     size={11}
-                                    color={leg.type === "walk" ? "#ffffff" : "#94a3b8"}
+                                    color={leg.type === "walk" || config?.transitLeg?.preferredMode === "walk" ? "#ffffff" : "#94a3b8"}
                                     style={{ marginRight: 4 }}
                                   />
                                   <Text
                                     style={[
                                       styles.inlineTransitBtnText,
-                                      leg.type === "walk" && styles.inlineTransitBtnTextActive,
+                                      (leg.type === "walk" || config?.transitLeg?.preferredMode === "walk") && styles.inlineTransitBtnTextActive,
                                     ]}
                                   >
                                     A piedi
@@ -3444,10 +3541,26 @@ export default function ViaggioScreen() {
                           )}
 
                           {/* Tabellone Partenze & Linee Urbane (attivo con Mezzi Pubblici) */}
-                          {leg.type === "transit" && (() => {
+                          {leg.type === "transit" && config?.transitLeg?.preferredMode !== "walk" && (() => {
                             const liveTr = itinerary.liveTrain;
                             const anchorTimeStr =
                               leg.details?.targetTime || leg.startTime;
+
+                            // Verifica se la lezione target odierna è in corso oppure già conclusa
+                            const lectureStartMins = itinerary.targetLecture?.startTime
+                              ? parseTimeToMinutes(itinerary.targetLecture.startTime)
+                              : -1;
+                            const isLectureActiveOrFinished = Boolean(
+                              isSelectedDayToday &&
+                              itinerary.targetLecture &&
+                              (isTargetLectureFinished ||
+                                (lectureStartMins > 0 && currentNowMins >= lectureStartMins) ||
+                                itinerary.targetLecture.subject === "Lezioni di oggi terminate")
+                            );
+
+                            // Se una lezione è in corso o conclusa, la card dei mezzi deve mostrare le linee "programmate"
+                            // per quell'orario precedente, selezionando la corsa consigliata (primi mezzi utili)
+                            const isTransitLiveContext = Boolean(isSelectedDayToday) && !isLectureActiveOrFinished;
 
                             const constraintTimeForTransit =
                               direction === "return"
@@ -3463,13 +3576,7 @@ export default function ViaggioScreen() {
                                   ? liveTr?.arrivalTimeActual ||
                                     liveTr?.arrivalTimePlanned
                                   : liveTr?.arrivalTimePlanned
-                                : !isTargetLectureFinished &&
-                                    itinerary.lectureTimeStatus?.type !== "early_departure"
-                                  ? itinerary.targetLecture?.endTime
-                                  : undefined;
-
-                            // Controllo giorno attivo: il contesto live è attivo se il giorno selezionato nel selettore orizzontale corrisponde ad oggi
-                            const isTransitLiveContext = Boolean(isSelectedDayToday);
+                                : itinerary.targetLecture?.endTime;
 
                             return (
                               <TransitBoardCard

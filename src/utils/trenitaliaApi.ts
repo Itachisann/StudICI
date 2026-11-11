@@ -39,9 +39,11 @@ interface TimetableCacheEntry {
   trains: LiveTrainInfo[];
 }
 const timetableCache = new Map<string, TimetableCacheEntry>();
+const fullDayRailCache = new Map<string, { timestamp: number; trains: LiveTrainInfo[] }>();
 
 export function clearTrenitaliaCache(): void {
   timetableCache.clear();
+  fullDayRailCache.clear();
   andamentoMemoryCache.clear();
 }
 
@@ -114,40 +116,86 @@ async function runLimited<T>(tasks: (() => Promise<T>)[], limit = 8): Promise<T[
 }
 
 export const POPULAR_STATIONS: StationInfo[] = [
-  { name: 'ROMA TERMINI', code: 'S08409', shortName: 'Roma Termini' },
-  { name: 'ROMA TIBURTINA', code: 'S08217', shortName: 'Roma Tiburtina' },
-  { name: 'FIRENZE SANTA MARIA NOVELLA', code: 'S06421', shortName: 'Firenze SMN' },
-  { name: 'NAPOLI CENTRALE', code: 'S09218', shortName: 'Napoli C.le' },
-  { name: 'BOLOGNA CENTRALE', code: 'S05043', shortName: 'Bologna C.le' },
-  { name: 'MILANO CENTRALE', code: 'S01700', shortName: 'Milano C.le' },
-  { name: 'TORINO PORTA NUOVA', code: 'S00219', shortName: 'Torino P. Nuova' },
-  { name: 'VENEZIA SANTA LUCIA', code: 'S02593', shortName: 'Venezia S. Lucia' },
-  { name: 'PISA CENTRALE', code: 'S06500', shortName: 'Pisa C.le' },
-  { name: 'PERUGIA', code: 'S07004', shortName: 'Perugia' },
-  { name: 'TERNI', code: 'S07226', shortName: 'Terni' },
-  { name: 'ANCONA', code: 'S07113', shortName: 'Ancona' },
-  { name: 'PESCARA', code: 'S07810', shortName: 'Pescara' },
-  { name: 'ROMA OSTIENSE', code: 'S08406', shortName: 'Roma Ostiense' },
-  { name: 'ROMA TUSCOLANA', code: 'S08408', shortName: 'Roma Tuscolana' },
-  { name: 'ROMA S. PIETRO', code: 'S08402', shortName: 'Roma S. Pietro' },
-  { name: 'VITERBO PORTA FIORENTINA', code: 'S08304', shortName: 'Viterbo P. Fiorentina' },
-  { name: 'VITERBO PORTA ROMANA', code: 'S08306', shortName: 'Viterbo P. Romana' },
-  { name: 'ORTE', code: 'S08209', shortName: 'Orte' },
-  { name: 'NARNI AMELIA', code: 'S07230', shortName: 'Narni Amelia' },
-  { name: 'CHIUSI-CHIANCIANO TERME', code: 'S06925', shortName: 'Chiusi-Chianciano' },
-  { name: 'CIVITA CASTELLANA-MAGLIANO', code: 'S08211', shortName: 'Civita Castellana' },
-  { name: 'FARA SABINA-MONTELIBRETTI', code: 'S08214', shortName: 'Fara Sabina' },
-  { name: 'MONTEROTONDO-MENTANA', code: 'S08215', shortName: 'Monterotondo' },
-  { name: 'ORVIETO', code: 'S08203', shortName: 'Orvieto' },
-  { name: 'FOLIGNO', code: 'S07217', shortName: 'Foligno' },
-  { name: 'SPOLETO', code: 'S07221', shortName: 'Spoleto' },
-  { name: 'ASSISI', code: 'S07008', shortName: 'Assisi' },
-  { name: 'AREZZO', code: 'S06915', shortName: 'Arezzo' },
-  { name: 'CASERTA', code: 'S09211', shortName: 'Caserta' },
-  { name: 'NETTUNO', code: 'S08710', shortName: 'Nettuno' },
-  { name: 'GROSSETO', code: 'S06039', shortName: 'Grosseto' },
-  { name: 'FIUMICINO AEROPORTO', code: 'S08411', shortName: 'Fiumicino Aeroporto' },
+  { name: 'ROMA TERMINI', code: 'S08409', shortName: 'Roma Termini', lat: 41.9013, lng: 12.5008 },
+  { name: 'ROMA TIBURTINA', code: 'S08217', shortName: 'Roma Tiburtina', lat: 41.9102, lng: 12.5302 },
+  { name: 'FIRENZE SANTA MARIA NOVELLA', code: 'S06421', shortName: 'Firenze SMN', lat: 43.7765, lng: 11.2479 },
+  { name: 'NAPOLI CENTRALE', code: 'S09218', shortName: 'Napoli C.le', lat: 40.8529, lng: 14.2723 },
+  { name: 'BOLOGNA CENTRALE', code: 'S05043', shortName: 'Bologna C.le', lat: 44.5058, lng: 11.3431 },
+  { name: 'MILANO CENTRALE', code: 'S01700', shortName: 'Milano C.le', lat: 45.4862, lng: 9.2045 },
+  { name: 'TORINO PORTA NUOVA', code: 'S00219', shortName: 'Torino P. Nuova', lat: 45.0622, lng: 7.6784 },
+  { name: 'VENEZIA SANTA LUCIA', code: 'S02593', shortName: 'Venezia S. Lucia', lat: 45.4411, lng: 12.3210 },
+  { name: 'PISA CENTRALE', code: 'S06500', shortName: 'Pisa C.le', lat: 43.7085, lng: 10.3985 },
+  { name: 'PERUGIA', code: 'S07004', shortName: 'Perugia', lat: 43.1065, lng: 12.3752 },
+  { name: 'TERNI', code: 'S07226', shortName: 'Terni', lat: 42.5694, lng: 12.6468 },
+  { name: 'ANCONA', code: 'S07113', shortName: 'Ancona', lat: 43.6067, lng: 13.5002 },
+  { name: 'PESCARA', code: 'S07810', shortName: 'Pescara', lat: 42.4697, lng: 14.2056 },
+  { name: 'ROMA OSTIENSE', code: 'S08406', shortName: 'Roma Ostiense', lat: 41.8727, lng: 12.4842 },
+  { name: 'ROMA TUSCOLANA', code: 'S08408', shortName: 'Roma Tuscolana', lat: 41.8824, lng: 12.5238 },
+  { name: 'ROMA S. PIETRO', code: 'S08402', shortName: 'Roma S. Pietro', lat: 41.8988, lng: 12.4542 },
+  { name: 'VITERBO PORTA FIORENTINA', code: 'S08304', shortName: 'Viterbo P. Fiorentina', lat: 42.4277, lng: 12.1062 },
+  { name: 'VITERBO PORTA ROMANA', code: 'S08306', shortName: 'Viterbo P. Romana', lat: 42.4132, lng: 12.1120 },
+  { name: 'ORTE', code: 'S08209', shortName: 'Orte', lat: 42.4375, lng: 12.4085 },
+  { name: 'NARNI AMELIA', code: 'S07230', shortName: 'Narni Amelia', lat: 42.5315, lng: 12.5192 },
+  { name: 'CHIUSI-CHIANCIANO TERME', code: 'S06925', shortName: 'Chiusi-Chianciano', lat: 43.0147, lng: 11.9482 },
+  { name: 'CIVITA CASTELLANA-MAGLIANO', code: 'S08211', shortName: 'Civita Castellana', lat: 42.3021, lng: 12.4431 },
+  { name: 'FARA SABINA-MONTELIBRETTI', code: 'S08214', shortName: 'Fara Sabina', lat: 42.1643, lng: 12.7214 },
+  { name: 'MONTEROTONDO-MENTANA', code: 'S08215', shortName: 'Monterotondo', lat: 42.0526, lng: 12.6074 },
+  { name: 'ORVIETO', code: 'S08203', shortName: 'Orvieto', lat: 42.7247, lng: 12.1278 },
+  { name: 'FOLIGNO', code: 'S07217', shortName: 'Foligno', lat: 42.9556, lng: 12.7107 },
+  { name: 'SPOLETO', code: 'S07221', shortName: 'Spoleto', lat: 42.7471, lng: 12.7402 },
+  { name: 'ASSISI', code: 'S07008', shortName: 'Assisi', lat: 43.0592, lng: 12.5833 },
+  { name: 'AREZZO', code: 'S06915', shortName: 'Arezzo', lat: 43.4632, lng: 11.8741 },
+  { name: 'CASERTA', code: 'S09211', shortName: 'Caserta', lat: 41.0664, lng: 14.3283 },
+  { name: 'NETTUNO', code: 'S08710', shortName: 'Nettuno', lat: 41.4588, lng: 12.6631 },
+  { name: 'GROSSETO', code: 'S06039', shortName: 'Grosseto', lat: 42.7667, lng: 11.1186 },
+  { name: 'FIUMICINO AEROPORTO', code: 'S08411', shortName: 'Fiumicino Aeroporto', lat: 41.7933, lng: 12.2519 },
 ];
+
+const stationGeoCache = new Map<string, { lat: number; lng: number }>();
+
+export async function resolveStationGeoCoordinates(
+  station: StationInfo
+): Promise<{ lat: number; lng: number } | null> {
+  if (typeof station.lat === 'number' && typeof station.lng === 'number') {
+    return { lat: station.lat, lng: station.lng };
+  }
+  const cleanCode = (station.code || '').trim().toUpperCase();
+  const pop = POPULAR_STATIONS.find(
+    (s) =>
+      (cleanCode && s.code.toUpperCase() === cleanCode) ||
+      (station.name && normalizeStationKey(s.name) === normalizeStationKey(station.name))
+  );
+  if (pop?.lat && pop?.lng) {
+    return { lat: pop.lat, lng: pop.lng };
+  }
+
+  const cacheKey = (station.name || cleanCode).toLowerCase().trim();
+  if (stationGeoCache.has(cacheKey)) {
+    return stationGeoCache.get(cacheKey)!;
+  }
+
+  try {
+    const q = `Stazione ${station.name || cleanCode}`;
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1`;
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 3500);
+    const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'StudICI/1.0' } });
+    clearTimeout(to);
+    if (res.ok) {
+      const data = await res.json();
+      const coords = data?.features?.[0]?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const found = { lat: coords[1], lng: coords[0] };
+        stationGeoCache.set(cacheKey, found);
+        return found;
+      }
+    }
+  } catch {
+    // fallback automatico
+  }
+
+  return null;
+}
 
 function normalizeStationKey(str?: string | null): string {
   if (!str) return '';
@@ -1394,169 +1442,43 @@ export async function fetchLiveTrenitaliaTimetable(
     // Quando un treno lascia la stazione di partenza da oltre 10-15 minuti, ViaggiaTreno lo rimuove
     // dall'endpoint /partenze. Tuttavia, il treno è ancora presente nell'endpoint /arrivi della stazione
     // di arrivo (arrMap) con ritardo reale e orario effettivo.
-    // Verifichiamo i treni programmati della linea per recuperare quelli già passati ma non ancora arrivati al capolinea.
+    // Recupero dinamico e verificato al 100% per qualsiasi tratta senza dipendenza da orari statici:
     if (isToday) {
-      const isOrteToRoma =
-        depCode === 'S08209' && (arrCode === 'S08409' || arrCode === 'S08217' || arrCode === 'S08406');
-      const isRomaToOrte =
-        (depCode === 'S08409' || depCode === 'S08217' || depCode === 'S08406') && arrCode === 'S08209';
+      // RECUPERO DINAMICO E VERIFICATO DA arrMap:
+      // Solo convogli regionali/RV/IC non ancora abbinati che transitano REALMENTE per depCode e arrCode.
+      // Si verifica la fermata tramite origine corsa o andamentoTreno in tempo reale per la data odierna.
+      const unverifiedCandidates: { numStr: string; arr: any; origCode: string; datePart: number }[] = [];
 
-      if (isOrteToRoma || isRomaToOrte) {
-        const scheduledList = isOrteToRoma ? SCHEDULED_ORTE_TO_ROMA : SCHEDULED_ROMA_TO_ORTE;
-        for (const sched of scheduledList) {
-          const cleanNum = sched.trainNumber.replace(/\D/g, '');
-          if (matchedNumbers.has(cleanNum)) continue;
+      for (const [numStr, arr] of arrMap) {
+        if (matchedNumbers.has(numStr)) continue;
+        if (arr.provvedimento === 1 || arr.statoTreno === 'SOPPRESSO') continue;
 
-          const arr = arrMap.get(cleanNum);
-          if (!arr) continue;
+        const catRaw = (arr.categoriaDescrizione || arr.categoria || '').toUpperCase();
+        const isIntercity =
+          catRaw.includes('IC') ||
+          catRaw.includes('INTERCITY') ||
+          catRaw === 'ICN';
+        const isRegional =
+          catRaw.includes('REG') ||
+          catRaw.includes('RV') ||
+          catRaw === 'R' ||
+          catRaw.includes('REGIONALE');
+        const isAllowed = isRegional || (includeIntercity && isIntercity);
+        if (!isAllowed) continue;
 
-          // Se il treno è soppresso, saltalo
-          if (arr.provvedimento === 1 || arr.statoTreno === 'SOPPRESSO') continue;
+        const arrPlanned = arr.compOrarioArrivo;
+        if (!arrPlanned) continue;
+        const arrPlannedM = parseTimeToMinutes(arrPlanned);
 
-          const catRaw = (arr.categoriaDescrizione || arr.categoria || sched.category || '').toUpperCase();
-          const isRegional =
-            catRaw.includes('REG') ||
-            catRaw.includes('RV') ||
-            catRaw === 'R' ||
-            catRaw.includes('REGIONALE');
-          if (!isRegional) continue;
-
-          let depPlanned = '';
-          let arrPlanned = '';
-          let dur = 0;
-          const platformPlanned = sched.platformPlanned;
-
-          if (isOrteToRoma) {
-            const s = sched as ScheduledTrainEntry;
-            depPlanned = s.departureTime;
-            arrPlanned = arr.compOrarioArrivo || (arrCode === 'S08409' ? s.arrivalTimeTermini : s.arrivalTimeTiburtina);
-            dur = arrCode === 'S08409' ? s.durationMinutesTermini : s.durationMinutesTiburtina;
-          } else {
-            const s = sched as ScheduledReturnTrainEntry;
-            depPlanned = (depCode === 'S08409' && s.departureTimeTermini) ? s.departureTimeTermini : s.departureTimeTiburtina;
-            arrPlanned = arr.compOrarioArrivo || s.arrivalTimeOrte;
-            dur = s.durationMinutesTiburtina;
-          }
-
-          if (!depPlanned || !arrPlanned) continue;
-
-          const arrPlannedM = parseTimeToMinutes(arrPlanned);
-
-          const liveDelay = typeof arr.ritardo === 'number' ? arr.ritardo : 0;
-          const delay = liveDelay;
-
-          let depActual = depPlanned;
-          let departureDelayAtStation = 0;
-
-          let arrActual = arrPlanned;
-          const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
-          if (cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= arrPlannedM) {
-            arrActual = cleanLiveArr;
-          } else if (delay > 0) {
-            arrActual = minutesToTime(arrPlannedM + delay);
-          }
-
-          const depActualM = parseTimeToMinutes(depActual);
-          const isDeparted = Boolean(arr.nonPartito === false || arr.inStazione === true || arr.arrivato === true);
-
-          // Il treno è già passato dalla stazione di partenza se l'orario effettivo di passaggio è trascorso
-          const isDepartedFromStation = nowMins >= depActualM;
-
-          let statusDescription = 'In orario';
-          if (isDepartedFromStation) {
-            statusDescription = 'In viaggio';
-          } else if (arr.nonPartito === true) {
-            statusDescription = 'Non partito';
-          } else if (delay > 0) {
-            statusDescription = `Ritardo di ${delay} min`;
-          } else if (delay < 0) {
-            statusDescription = `Anticipo di ${Math.abs(delay)} min`;
-          }
-
-          let alertMessage: string | undefined = undefined;
-          const rawNotice = (arr.segnalazioni || arr.subTitle || arr.avviso || '').trim();
-          const delayReason = (arr.motivoRitardoPrevalente || '').trim();
-          if (rawNotice) {
-            alertMessage = rawNotice;
-          } else if (delayReason) {
-            alertMessage = `Causa ritardo: ${delayReason}`;
-          }
-
-          const isFast = sched.category === 'RV';
-          const isOriginStation = Boolean(
-            (arr.codOrigine && arr.codOrigine === depCode) ||
-            (arr.idOrigine && arr.idOrigine === depCode)
-          );
-
-          const rawOrigin = arr.origine && arr.origine.trim().length > 0 ? arr.origine : undefined;
-          const codeOrigin = getStationNameByCode(arr.codOrigine || arr.idOrigine);
-          const resolvedOriginName = rawOrigin
-            ? formatStationName(rawOrigin)
-            : (codeOrigin || (isOriginStation ? getStationNameByCode(depCode) : ''));
-
-          trains.push({
-            trainNumber: sched.trainNumber,
-            category: sched.category,
-            destination: sched.destination ? formatStationName(sched.destination) : (arr.destinazione ? formatStationName(arr.destinazione) : ''),
-            originStationName: resolvedOriginName,
-            originStationCode: arr.codOrigine || arr.idOrigine || undefined,
-            departureTimePlanned: depPlanned,
-            departureTimeActual: depActual,
-            departureMillis: targetDate.getTime(),
-            arrivalTimePlanned: arrPlanned,
-            arrivalTimeActual: arrActual,
-            platformPlanned: cleanPlatform(platformPlanned),
-            platformActual: cleanPlatform(platformPlanned),
-            delayMinutes: delay,
-            statusDescription,
-            isLive: true,
-            durationMinutes: dur,
-            isFast,
-            isOriginStation,
-            isDeparted,
-            isDepartedFromStation,
-            departureDelayAtStation,
-            alertMessage,
-          });
-
-          matchedNumbers.add(cleanNum);
+        // Filtra solo treni che arrivano entro una finestra plausibile rispetto all'orario attuale / target
+        if (arrPlannedM < Math.max(0, nowMins - 90) || arrPlannedM > Math.min(1439, targetDepMins + 240)) {
+          continue;
         }
 
-        // RECUPERO DINAMICO E VERIFICATO DA arrMap:
-        // Solo convogli regionali/RV non ancora abbinati che transitano REALMENTE per depCode e arrCode.
-        // NON si effettuano stime cieche: si verifica la fermata tramite origine corsa o andamentoTreno.
-        const unverifiedCandidates: { numStr: string; arr: any; origCode: string; datePart: number }[] = [];
-
-        for (const [numStr, arr] of arrMap) {
-          if (matchedNumbers.has(numStr)) continue;
-          if (arr.provvedimento === 1 || arr.statoTreno === 'SOPPRESSO') continue;
-
-          const catRaw = (arr.categoriaDescrizione || arr.categoria || '').toUpperCase();
-          const isIntercity =
-            catRaw.includes('IC') ||
-            catRaw.includes('INTERCITY') ||
-            catRaw === 'ICN';
-          const isRegional =
-            catRaw.includes('REG') ||
-            catRaw.includes('RV') ||
-            catRaw === 'R' ||
-            catRaw.includes('REGIONALE');
-          const isAllowed = isRegional || (includeIntercity && isIntercity);
-          if (!isAllowed) continue;
-
-          const arrPlanned = arr.compOrarioArrivo;
-          if (!arrPlanned) continue;
-          const arrPlannedM = parseTimeToMinutes(arrPlanned);
-
-          // Filtra solo treni che arrivano entro una finestra plausibile rispetto all'orario attuale / target
-          if (arrPlannedM < Math.max(0, nowMins - 90) || arrPlannedM > Math.min(1439, targetDepMins + 240)) {
-            continue;
-          }
-
-          const origCode = arr.codOrigine || arr.idOrigine || '';
-          const datePart = arr.dataPartenzaTreno || targetDate.getTime();
-          unverifiedCandidates.push({ numStr, arr, origCode, datePart });
-        }
+        const origCode = arr.codOrigine || arr.idOrigine || '';
+        const datePart = arr.dataPartenzaTreno || targetDate.getTime();
+        unverifiedCandidates.push({ numStr, arr, origCode, datePart });
+      }
 
         // Se ci sono candidati, verifichiamo il loro percorso reale con andamentoTreno in parallelo
         if (unverifiedCandidates.length > 0) {
@@ -1736,18 +1658,10 @@ export async function fetchLiveTrenitaliaTimetable(
                   statusDesc = `Ritardo di ${effectiveDelay} min`;
                 }
 
-                const schedMatch = isOrteToRoma
-                  ? SCHEDULED_ORTE_TO_ROMA.find((s) => s.trainNumber.replace(/\D/g, '') === numStr)
-                  : isRomaToOrte
-                  ? SCHEDULED_ROMA_TO_ORTE.find((s) => s.trainNumber.replace(/\D/g, '') === numStr)
-                  : undefined;
-                const schedPlatform = schedMatch?.platformPlanned;
-
                 const depPlatformPlanned = cleanPlatform(
                   depStop.binarioProgrammatoPartenzaDescrizione ||
                   depStop.binarioProgrammatoPartenzaCodice ||
-                  depStop.binarioProgrammatoArrivoDescrizione ||
-                  schedPlatform
+                  depStop.binarioProgrammatoArrivoDescrizione
                 );
                 const depPlatformActual = cleanPlatform(
                   depStop.binarioEffettivoPartenzaDescrizione ||
@@ -1842,7 +1756,6 @@ export async function fetchLiveTrenitaliaTimetable(
           );
         }
       }
-    }
 
     // Arricchimento in tempo reale con andamentoTreno:
     // Rileva con precisione se un convoglio è attualmente fermo in una stazione (arrivato ma non partito)
@@ -2567,6 +2480,199 @@ function applyAndamentoToTrain(
 }
 
 /**
+ * Calcola con precisione astronomica l'offset UTC in ore del fuso orario italiano
+ * (Europe/Rome: CET UTC+1 in inverno, CEST UTC+2 in estate con ora legale).
+ * Implementazione deterministica e indipendente dal supporto timeZone del motore JS (Hermes/JSC/V8).
+ */
+export function getItalyOffsetHours(d: Date): number {
+  const year = d.getUTCFullYear();
+  // Inizio ora legale in Europa: ultima domenica di marzo alle 01:00 UTC (02:00 CET -> 03:00 CEST)
+  const march31 = new Date(Date.UTC(year, 2, 31));
+  const lastSundayMarch = 31 - march31.getUTCDay();
+  const dstStart = new Date(Date.UTC(year, 2, lastSundayMarch, 1, 0, 0));
+
+  // Fine ora legale in Europa: ultima domenica di ottobre alle 01:00 UTC (03:00 CEST -> 02:00 CET)
+  const oct31 = new Date(Date.UTC(year, 9, 31));
+  const lastSundayOct = 31 - oct31.getUTCDay();
+  const dstEnd = new Date(Date.UTC(year, 9, lastSundayOct, 1, 0, 0));
+
+  const t = d.getTime();
+  return t >= dstStart.getTime() && t < dstEnd.getTime() ? 2 : 1;
+}
+
+/**
+ * Converte un timestamp ISO (espresso in UTC con 'Z' o con offset)
+ * nell'orario locale della stazione ferroviaria italiana ('Europe/Rome').
+ * Gestisce con precisione millimetrica sia l'ora solare (CET, UTC+1) che l'ora legale (CEST, UTC+2),
+ * evitando discrepanze di fuso orario tra GTFS e orari reali di ViaggiaTreno anche su Hermes.
+ */
+export function formatIsoToLocalHHMM(
+  isoString?: string | null,
+  _timeZone = 'Europe/Rome'
+): string {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  const offset = getItalyOffsetHours(d);
+  const localD = new Date(d.getTime() + offset * 3600_000);
+  const hh = String(localD.getUTCHours()).padStart(2, '0');
+  const mm = String(localD.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
+ * Converte un timestamp ISO nella data locale in formato 'YYYY-MM-DD' ('Europe/Rome').
+ */
+export function formatIsoToLocalDate(
+  isoString?: string | null,
+  _timeZone = 'Europe/Rome'
+): string {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  const offset = getItalyOffsetHours(d);
+  const localD = new Date(d.getTime() + offset * 3600_000);
+  const yyyy = localD.getUTCFullYear();
+  const mm = String(localD.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(localD.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Recupera l'orario ferroviario dinamico dell'intera giornata da GTFS (Transitous)
+ * per consentire all'utente di scorrere e selezionare qualsiasi treno della data prescelta
+ * (inclusi treni del mattino o della sera precedenti a quello attualmente visualizzato),
+ * calcolato dinamicamente sulle stazioni reali di salita e discesa senza dipendere da dati statici.
+ */
+export async function fetchDynamicFullDayRailTimetable(
+  depStation: StationInfo,
+  arrStation: StationInfo,
+  targetDate: Date,
+  includeIntercity = false
+): Promise<LiveTrainInfo[]> {
+  const depCoords = await resolveStationGeoCoordinates(depStation);
+  const arrCoords = await resolveStationGeoCoordinates(arrStation);
+  if (!depCoords || !arrCoords) {
+    return [];
+  }
+
+  const p = (n: number) => String(n).padStart(2, '0');
+  const dateIso = `${targetDate.getFullYear()}-${p(targetDate.getMonth() + 1)}-${p(targetDate.getDate())}`;
+  const targetDayStr = formatIsoToLocalDate(targetDate.toISOString());
+  const cacheKey = `${depStation.code}_${arrStation.code}_${dateIso}_${includeIntercity ? 'ic' : 'noic'}`;
+
+  const cached = fullDayRailCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 1000 * 60 * 60 * 2) {
+    return cached.trains;
+  }
+
+  try {
+    // Richiesta a Transitous a partire dalle ore 03:00 UTC (ore 04:00/05:00 locali in Italia)
+    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${depCoords.lat.toFixed(5)},${depCoords.lng.toFixed(5)}&toPlace=${arrCoords.lat.toFixed(5)},${arrCoords.lng.toFixed(5)}&time=${dateIso}T03:00:00Z&numItineraries=50`;
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 6500);
+    const res = await fetch(planUrl, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'StudICI/1.0' },
+    });
+    clearTimeout(to);
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const data = await res.json();
+    const itineraries: any[] = Array.isArray(data?.itineraries) ? data.itineraries : [];
+    const trains: LiveTrainInfo[] = [];
+    const seenTrainNumbers = new Set<string>();
+
+    for (const it of itineraries) {
+      const legs: any[] = Array.isArray(it?.legs) ? it.legs : [];
+      for (const leg of legs) {
+        const mode = (leg.mode || '').toUpperCase();
+        const isRail = mode === 'RAIL' || mode === 'REGIONAL_RAIL' || mode === 'LONG_DISTANCE';
+        if (!isRail) continue;
+
+        const startTime: string = leg.startTime || leg.scheduledStartTime || '';
+        // Controlla che il treno parta nella giornata richiesta in fuso orario locale italiano
+        const legDayStr = formatIsoToLocalDate(startTime);
+        if (legDayStr !== targetDayStr) continue;
+
+        const rawCat = (leg.routeShortName || leg.mode || '').toUpperCase();
+        const isIC = rawCat.includes('IC') || mode === 'LONG_DISTANCE';
+        if (isIC && !includeIntercity) continue;
+
+        const rawNum: string =
+          leg.tripShortName ||
+          (leg.routeShortName ? leg.routeShortName.replace(/\D/g, '') : '') ||
+          (leg.tripId ? String(leg.tripId).replace(/\D/g, '') : '');
+        const cleanNum = rawNum.replace(/\D/g, '');
+        if (!cleanNum || seenTrainNumbers.has(cleanNum)) continue;
+
+        seenTrainNumbers.add(cleanNum);
+
+        // Conversione corretta dal timestamp ISO UTC al fuso orario locale italiano (CET / CEST)
+        const depTime = formatIsoToLocalHHMM(startTime);
+        const endTime: string = leg.endTime || leg.scheduledEndTime || '';
+        const arrTime = formatIsoToLocalHHMM(endTime);
+
+        if (!depTime || !arrTime) continue;
+
+        const durMinutes =
+          typeof leg.duration === 'number'
+            ? Math.round(leg.duration / 60)
+            : parseTimeToMinutes(arrTime) - parseTimeToMinutes(depTime);
+
+        const isFast = rawCat === 'RV' || rawCat.includes('VELOCE');
+        const category = isFast ? 'RV' : isIC ? 'IC' : 'REG';
+        const destName = leg.headsign || leg.to?.name || arrStation.name;
+
+        const intermediateStops: LiveTrainStop[] = Array.isArray(leg.intermediateStops)
+          ? leg.intermediateStops.map((st: any) => ({
+              stationName: st.name || '',
+            }))
+          : [];
+
+        trains.push({
+          trainNumber: `${category} ${cleanNum}`,
+          category,
+          destination: destName,
+          originStationName: depStation.name,
+          originStationCode: depStation.code,
+          departureTimePlanned: depTime,
+          departureTimeActual: depTime,
+          departureMillis: new Date(startTime).getTime() || targetDate.getTime(),
+          arrivalTimePlanned: arrTime,
+          arrivalTimeActual: arrTime,
+          delayMinutes: 0,
+          statusDescription: 'Programmato',
+          isDeparted: false,
+          isDepartedFromStation: false,
+          isLive: false,
+          durationMinutes: Math.max(1, durMinutes),
+          isFast,
+          stops: intermediateStops.length > 0 ? intermediateStops : undefined,
+        });
+      }
+    }
+
+    if (trains.length > 0) {
+      trains.sort(
+        (a, b) =>
+          parseTimeToMinutes(a.departureTimePlanned) -
+          parseTimeToMinutes(b.departureTimePlanned)
+      );
+      fullDayRailCache.set(cacheKey, { timestamp: Date.now(), trains });
+      return trains;
+    }
+  } catch (err) {
+    console.warn('[TrenitaliaApi] Full-day dynamic schedule fetch failed:', err);
+  }
+
+  return [];
+}
+
+/**
  * Trova il treno regionale ottimale (privilegiando Regionale Veloce)
  * e fornisce le alternative disponibili prima e dopo per il tragitto pendolare.
  */
@@ -2589,8 +2695,6 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const arrivalStation = normalizeStationInfo(rawArrivalStation);
 
   const isOutbound = direction === 'outbound';
-  const isTerminiArrival = arrivalStation.name.toUpperCase().includes('TERMINI');
-  const isTerminiDeparture = departureStation.name.toUpperCase().includes('TERMINI');
   const now = new Date();
   const isToday =
     !ignoreCurrentTime &&
@@ -2599,83 +2703,59 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     targetDate.getFullYear() === now.getFullYear();
 
   // 1. Interroga ViaggiaTreno in tempo reale per trovare i treni reali programmati/circolanti
-  let allTrains: LiveTrainInfo[] = await fetchLiveTrenitaliaTimetable(
-    departureStation.code,
-    arrivalStation.code,
-    targetDate,
-    targetTimeStr,
-    direction,
-    forceRefresh,
-    ignoreCurrentTime,
-    includeIntercity
-  );
+  // e contemporaneamente recupera l'intera tabella oraria ufficiale della giornata da GTFS
+  const [liveTrains, fullDayTrains] = await Promise.all([
+    fetchLiveTrenitaliaTimetable(
+      departureStation.code,
+      arrivalStation.code,
+      targetDate,
+      targetTimeStr,
+      direction,
+      forceRefresh,
+      ignoreCurrentTime,
+      includeIntercity
+    ),
+    fetchDynamicFullDayRailTimetable(
+      departureStation,
+      arrivalStation,
+      targetDate,
+      includeIntercity
+    ),
+  ]);
 
-  // 2. Unione con la tabella oraria ufficiale completa della tratta
-  // Assicura che TUTTI i treni programmati della giornata siano sempre presenti e consultabili nello slider
-  // (anche quelli del mattino o della sera non compresi nella finestra live istantanea di ViaggiaTreno).
-  const isOrteToRoma =
-    departureStation.code === 'S08209' &&
-    (arrivalStation.code === 'S08409' || arrivalStation.code === 'S08217' || arrivalStation.code === 'S08406');
-  const isRomaToOrte =
-    (departureStation.code === 'S08409' || departureStation.code === 'S08217' || departureStation.code === 'S08406') &&
-    arrivalStation.code === 'S08209';
+  const liveMap = new Map<string, LiveTrainInfo>();
+  for (const t of liveTrains) {
+    const clean = t.trainNumber.replace(/\D/g, '');
+    if (clean) liveMap.set(clean, t);
+  }
 
-  const masterScheduledList = isOrteToRoma
-    ? SCHEDULED_ORTE_TO_ROMA
-    : isRomaToOrte
-    ? SCHEDULED_ROMA_TO_ORTE
-    : [];
-
+  const allTrains: LiveTrainInfo[] = [];
   const nowMinsCurrent = now.getHours() * 60 + now.getMinutes();
-  const existingNumbers = new Set(allTrains.map((t) => t.trainNumber.replace(/\D/g, '')));
 
-  for (const s of masterScheduledList) {
-    if (!includeIntercity && s.category === 'IC') continue;
-    const cleanNum = s.trainNumber.replace(/\D/g, '');
-    if (existingNumbers.has(cleanNum)) continue;
-
-    let depPlanned = '';
-    let arrPlanned = '';
-    let duration = 0;
-    const platformPlanned = s.platformPlanned;
-
-    if (isOutbound || isOrteToRoma) {
-      const entry = s as ScheduledTrainEntry;
-      depPlanned = entry.departureTime;
-      arrPlanned = isTerminiArrival ? entry.arrivalTimeTermini : entry.arrivalTimeTiburtina;
-      duration = isTerminiArrival ? entry.durationMinutesTermini : entry.durationMinutesTiburtina;
-    } else {
-      const entry = s as ScheduledReturnTrainEntry;
-      depPlanned = (isTerminiDeparture && entry.departureTimeTermini) ? entry.departureTimeTermini : entry.departureTimeTiburtina;
-      arrPlanned = entry.arrivalTimeOrte;
-      duration = entry.durationMinutesTiburtina;
+  if (fullDayTrains.length > 0) {
+    for (const ft of fullDayTrains) {
+      const clean = ft.trainNumber.replace(/\D/g, '');
+      const live = liveMap.get(clean);
+      if (live) {
+        allTrains.push(live);
+        liveMap.delete(clean);
+      } else {
+        const depM = parseTimeToMinutes(ft.departureTimePlanned);
+        const isPassed = isToday && nowMinsCurrent > depM + 3;
+        allTrains.push({
+          ...ft,
+          isDeparted: isPassed,
+          isDepartedFromStation: isPassed,
+          statusDescription: isToday ? (isPassed ? 'In viaggio' : 'Programmato') : 'Programmato',
+        });
+      }
     }
-
-    const depM = parseTimeToMinutes(depPlanned);
-    const isPassed = isToday && nowMinsCurrent > depM + 3;
-
-    allTrains.push({
-      trainNumber: s.trainNumber,
-      category: s.category,
-      destination: s.destination,
-      originStationName: departureStation.name,
-      originStationCode: departureStation.code,
-      departureTimePlanned: depPlanned,
-      departureTimeActual: depPlanned,
-      departureMillis: targetDate.getTime(),
-      arrivalTimePlanned: arrPlanned,
-      arrivalTimeActual: arrPlanned,
-      platformPlanned: cleanPlatform(platformPlanned),
-      platformActual: cleanPlatform(platformPlanned),
-      delayMinutes: 0,
-      statusDescription: isToday ? (isPassed ? 'In viaggio' : 'Programmato') : 'Programmato',
-      isDeparted: isPassed,
-      isDepartedFromStation: isPassed,
-      isLive: false,
-      durationMinutes: duration,
-      isFast: s.category === 'RV',
-    });
-    existingNumbers.add(cleanNum);
+    // Aggiungi eventuali corse straordinarie presenti in ViaggiaTreno ma non in GTFS
+    for (const lt of liveMap.values()) {
+      allTrains.push(lt);
+    }
+  } else {
+    allTrains.push(...liveTrains);
   }
 
   // Se la data richiesta NON è oggi (es. giorni precedenti o successivi),

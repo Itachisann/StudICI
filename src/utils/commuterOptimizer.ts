@@ -106,6 +106,7 @@ export interface OptimizeOptions {
   targetDate?: Date;
   manualHour?: string; // override manuale orario es. "08:30"
   selectedClass?: ClassEvent | null; // lezione esplicitamente selezionata dall'utente
+  isExplicitClass?: boolean;
   selectedTrainOffset?: number; // -1 = treno prima, 0 = consigliato, +1 = treno dopo
   selectedTrainNumber?: string; // override selezione treno specifico
   forceRefresh?: boolean;
@@ -216,6 +217,8 @@ export async function computeCommuterItinerary(
     manualEvents
   );
 
+  const isExplicitClass = Boolean(options.isExplicitClass);
+
   // 2. Calcola i tempi in base alla direzione
   if (isOutbound) {
     return computeOutboundItinerary(
@@ -226,7 +229,8 @@ export async function computeCommuterItinerary(
       selectedTrainNumber,
       forceRefresh,
       ignoreCurrentTime,
-      dayClasses
+      dayClasses,
+      isExplicitClass
     );
   } else {
     return computeReturnItinerary(
@@ -348,7 +352,8 @@ async function computeOutboundItinerary(
   selectedTrainNumber?: string,
   forceRefresh = false,
   ignoreCurrentTime = false,
-  dayClasses: ClassEvent[] = []
+  dayClasses: ClassEvent[] = [],
+  isExplicitClass = false
 ): Promise<CommuterItinerary> {
   const bufferMins = config.bufferMinutes || 10;
 
@@ -637,6 +642,7 @@ async function computeOutboundItinerary(
     // riallinea la lezione target alla prima lezione del giorno ancora attiva/futura al momento dell'arrivo in aula.
     const approxClassroomArrival = trainArrMins + activeTransitMins;
     if (
+      !isExplicitClass &&
       dayClasses.length > 0 &&
       approxClassroomArrival >= parseTimeToMinutes(targetLecture.endTime)
     ) {
@@ -728,6 +734,7 @@ async function computeOutboundItinerary(
     // Secondo controllo post-risoluzione del mezzo urbano reale: se l'orario esatto di arrivo in aula
     // supera la fine di targetLecture ma c'è una lezione successiva in corso/futura, aggiorna targetLecture.
     if (
+      !isExplicitClass &&
       dayClasses.length > 0 &&
       actualClassroomArrivalMins >= parseTimeToMinutes(targetLecture.endTime)
     ) {

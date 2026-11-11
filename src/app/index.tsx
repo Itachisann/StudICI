@@ -1341,34 +1341,35 @@ export default function ScheduleScreen() {
         </View>
       ) : null}
 
-      {/* ── Info banner (AI Alerts) in stile fluttuante iOS ── */}
+      {/* ── Info banner (Comunicazioni / Avvisi) con campanello ── */}
       {schedule?.alerts && schedule.alerts.length > 0 ? (
         <View style={styles.centeredCardContainer}>
           <TouchableOpacity
             style={styles.infoBanner}
             onPress={() => setAlertsModalVisible(true)}
-            activeOpacity={0.7}
+            activeOpacity={0.75}
           >
-            <View style={styles.alertIconSquircle}>
-              <Ionicons name="megaphone" size={15} color="#ff9f0a" />
-            </View>
-            <Text style={styles.infoBannerText} numberOfLines={1}>
-              {schedule.alerts[0]}
-            </Text>
-            {schedule.alerts.length > 1 ? (
-              <View style={styles.moreAlertsBadge}>
-                <Text style={styles.moreAlertsText}>
-                  +{schedule.alerts.length - 1}
-                </Text>
+            <View style={styles.infoBannerHeaderRow}>
+              <View style={styles.alertIconSquircle}>
+                <Ionicons name="notifications" size={15} color="#ff9f0a" />
               </View>
-            ) : (
+              <Text style={styles.infoBannerText} numberOfLines={1}>
+                {schedule.alerts[0]}
+              </Text>
+              {schedule.alerts.length > 1 ? (
+                <View style={styles.moreAlertsBadge}>
+                  <Text style={styles.moreAlertsText}>
+                    +{schedule.alerts.length - 1}
+                  </Text>
+                </View>
+              ) : null}
               <Ionicons
                 name="chevron-forward"
                 size={14}
                 color="#71717a"
                 style={{ marginLeft: 6 }}
               />
-            )}
+            </View>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -1712,12 +1713,14 @@ export default function ScheduleScreen() {
         </ScrollView>
       )}
 
-{/* ── Modal Avvisi (Alerts) Nativo iOS ── */}
+{/* ── Modal Avvisi (Alerts) Nativo iOS a Mezza Altezza (Mezzo Modale) ── */}
       <NativeSheetModal
         visible={alertsModalVisible}
         onClose={() => setAlertsModalVisible(false)}
         title="Comunicazioni"
         backgroundColor={UNIFORM_MODAL_BG}
+        sheetAllowedDetents={[0.48, 0.75]}
+        sheetInitialDetentIndex={0}
       >
         <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
           <ScrollView
@@ -1999,17 +2002,64 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  /* Info Banner Fluttuante iOS */
+  /* Info Banner Fluttuante iOS (con supporto accordion espandibile) */
   infoBanner: {
-    flexDirection: "row",
     backgroundColor: "rgba(255, 159, 10, 0.08)",
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    alignItems: "center",
     borderWidth: 1,
     borderColor: "rgba(255, 159, 10, 0.22)",
     width: "100%",
+  },
+  infoBannerExpanded: {
+    backgroundColor: "rgba(255, 159, 10, 0.12)",
+    borderColor: "rgba(255, 159, 10, 0.38)",
+    paddingVertical: 12,
+  },
+  infoBannerHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+  },
+  infoBannerTitle: {
+    color: "#ff9f0a",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  infoBannerSubtitle: {
+    color: "#a1a1aa",
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 1,
+  },
+  expandedAlertsList: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 159, 10, 0.18)",
+  },
+  expandedAlertItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 6,
+    paddingHorizontal: 2,
+  },
+  expandedAlertDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#ff9f0a",
+    marginTop: 6,
+    marginRight: 8,
+  },
+  expandedAlertText: {
+    color: "#f4f4f5",
+    fontSize: 12.5,
+    fontWeight: "500",
+    lineHeight: 18,
+    flex: 1,
   },
   alertIconSquircle: {
     width: 28,

@@ -12,6 +12,11 @@ import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeSheetModal, UNIFORM_MODAL_BG } from './NativeSheetModal';
 import {
+  resolveTransitRoadwayPolyline,
+  getTransitRoadwayPolylineSync,
+  resolvePedestrianRoadwayPolyline,
+} from '../utils/transitRoadwayRouter';
+import {
   calculateRealWalkMinutes,
   haversineMeters,
   getLineBadgeColor,
@@ -19,13 +24,15 @@ import {
   LatLngPoint,
   minsToHHMM,
   parseHHMMToMins,
-  snapStopToRoadway,
   snapCoordinateToPolyline,
   resolveOptimizedTransitPolyline,
+  ensureContinuousTransitPolyline,
   TIBURTINA_INBOUND_FROM_CASTRO,
   TIBURTINA_INBOUND_FROM_VERANO,
+  TIBURTINA_INBOUND_FROM_SAN_LORENZO,
   TIBURTINA_OUTBOUND_TO_CASTRO,
   TIBURTINA_OUTBOUND_TO_VERANO,
+  TIBURTINA_OUTBOUND_TO_SAN_LORENZO,
   TransitDepartureItem,
 } from '../utils/transitBoardService';
 import { AppTheme } from '@/constants/theme';
@@ -59,17 +66,35 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
   const [osrmWalkAfterCoordsById, setOsrmWalkAfterCoordsById] = useState<
     Record<string, LatLngPoint[]>
   >({});
+  // Traccia pedonale calcolata con OSRM foot per il percorso dall'origine alla salita del mezzo
+  const [osrmWalkBeforeCoordsById, setOsrmWalkBeforeCoordsById] = useState<
+    Record<string, LatLngPoint[]>
+  >({});
+  // Traccia del mezzo calcolata con OSRM driving multi-stop ad alta precisione lungo la viabilita stradale
+  const [roadwayTransitCoordsById, setRoadwayTransitCoordsById] = useState<
+    Record<string, LatLngPoint[]>
+  >({});
+  const [roadwayLegCoordsById, setRoadwayLegCoordsById] = useState<
+    Record<string, LatLngPoint[]>
+  >({});
 
   const fromCoords = useMemo(() => {
     if (departure?.fromStopCoords?.lat && departure?.fromStopCoords?.lng) {
-      return snapStopToRoadway(departure.fromStop, departure.fromStopCoords);
+      return departure.fromStopCoords;
     }
     return { lat: 41.9102, lng: 12.5302 };
   }, [departure]);
 
+  const originCoords = useMemo(() => {
+    if (departure?.initialOriginCoords?.lat && departure?.initialOriginCoords?.lng) {
+      return departure.initialOriginCoords;
+    }
+    return fromCoords;
+  }, [departure, fromCoords]);
+
   const rawToCoords = useMemo(() => {
     if (departure?.toStopCoords?.lat && departure?.toStopCoords?.lng) {
-      return snapStopToRoadway(departure.toStop, departure.toStopCoords);
+      return departure.toStopCoords;
     }
     return { lat: 41.903932, lng: 12.520330 };
   }, [departure]);
@@ -85,131 +110,69 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     return toCoords;
   }, [departure, toCoords]);
 
-    // Calcola il percorso pedonale reale (OSRM foot) dalla fermata di discesa alla destinazione finale
-  useEffect(() => {
-    if (!visible || !departure) return;
-    let cancelled = false;
-    const depId = departure.id;
-
-    if ((departure.walkAfterMinutes ?? 0) > 0) {
-      const footUrl = `https://router.project-osrm.org/route/v1/foot/${toCoords.lng.toFixed(6)},${toCoords.lat.toFixed(6)};${finalCoords.lng.toFixed(6)},${finalCoords.lat.toFixed(6)}?overview=full&geometries=geojson`;
-      fetch(footUrl)
-        .then((fr) => (fr.ok ? fr.json() : null))
-        .then((fJson) => {
-          if (cancelled) return;
-          const route = fJson?.routes?.[0];
-          const fCoords = route?.geometry?.coordinates;
-          const directDist =
-            Math.hypot(toCoords.lat - finalCoords.lat, toCoords.lng - finalCoords.lng) *
-            111000;
-          // Se OSRM restituisce un loop anomalo (> 2.0x la distanza stradale diretta a breve raggio), scartalo
-          if (
-            typeof route?.distance === 'number' &&
-            directDist < 600 &&
-            route.distance > directDist * 2.0
-          ) {
-            return;
-          }
-          if (Array.isArray(fCoords) && fCoords.length >= 2) {
-            const mappedFoot: LatLngPoint[] = fCoords.map(
-              (c: [number, number]) => ({
-                latitude: c[1],
-                longitude: c[0],
-              })
-            );
-            setOsrmWalkAfterCoordsById((prev) => ({
-              ...prev,
-              [depId]: mappedFoot,
-            }));
-          }
-        })
-        .catch(() => {});
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, departure, toCoords, finalCoords]);
-
   const transitRouteCoords = useMemo<LatLngPoint[]>(() => {
     if (!departure) return [];
+    const roadCoords = roadwayTransitCoordsById[departure.id];
+    if (roadCoords && roadCoords.length >= 2) {
+      return roadCoords;
+    }
+    if (departure.transitPolyline && departure.transitPolyline.length >= 8) {
+      return departure.transitPolyline;
+    }
+    const syncRoad = getTransitRoadwayPolylineSync({
+      id: departure.id,
+      line: departure.line,
+      mode: departure.mode,
+      fromCoords,
+      toCoords,
+      fromName: departure.fromStop,
+      toName: departure.toStop,
+      intermediateStops: departure.intermediateStopCoords,
+      alerts: departure.alerts,
+      existingPolyline: departure.transitPolyline,
+    });
+    if (syncRoad && syncRoad.length >= 8) {
+      return syncRoad;
+    }
     if (departure.transitPolyline && departure.transitPolyline.length >= 2) {
       return departure.transitPolyline;
     }
-    const isVerano = (departure.toStop || '').toLowerCase().includes('verano');
-    const isToStation =
-      (departure.toStop || '').toLowerCase().includes('tiburtina') &&
-      !(departure.fromStop || '').toLowerCase().includes('tiburtina');
-    if (isToStation) {
-      return isVerano
+    const isSanLorenzo =
+      (departure.fromStop || '').toLowerCase().includes('san lorenzo') ||
+      (departure.toStop || '').toLowerCase().includes('san lorenzo') ||
+      fromCoords.lat < 41.9015 ||
+      toCoords.lat < 41.9015;
+    const isVerano =
+      (departure.fromStop || '').toLowerCase().includes('verano') ||
+      (departure.toStop || '').toLowerCase().includes('verano') ||
+      fromCoords.lat < 41.9036 ||
+      toCoords.lat < 41.9036;
+    const isHeadingNorthEast =
+      toCoords.lat > fromCoords.lat + 0.0005 ||
+      (departure.toStop || '').toLowerCase().includes('tiburtina') ||
+      departure.id.includes('-ret');
+    let basePoly: LatLngPoint[] = [];
+    if (isHeadingNorthEast) {
+      basePoly = isSanLorenzo
+        ? TIBURTINA_INBOUND_FROM_SAN_LORENZO
+        : isVerano
         ? TIBURTINA_INBOUND_FROM_VERANO
         : TIBURTINA_INBOUND_FROM_CASTRO;
-    }
-    return isVerano
-      ? TIBURTINA_OUTBOUND_TO_VERANO
-      : TIBURTINA_OUTBOUND_TO_CASTRO;
-  }, [departure]);
-
-  const walkAfterRouteCoords = useMemo<LatLngPoint[]>(() => {
-    if (!departure || (departure.walkAfterMinutes ?? 0) <= 0) return [];
-
-    // 1. Percorso pedonale diretto verified da fermata Tiburtina / Castro Laurenziano verso aule/edifici di Via del Castro Laurenziano
-    // (percorso più breve a piedi: marciapiede continuo dritto lungo Via del Castro Laurenziano senza deviazioni anomale)
-    if (
-      (departure.toStop || '').toLowerCase().includes('castro') &&
-      finalCoords.lat < 41.9039
-    ) {
-      return [
-        { latitude: toCoords.lat, longitude: toCoords.lng },
-        { latitude: 41.903650, longitude: 12.520150 }, // Ingresso pedonale su marciapiede Via del Castro Laurenziano
-        { latitude: 41.903100, longitude: 12.520250 }, // Asse pedonale dritto di Via del Castro Laurenziano
-        { latitude: finalCoords.lat, longitude: finalCoords.lng },
-      ];
+    } else {
+      basePoly = isSanLorenzo
+        ? TIBURTINA_OUTBOUND_TO_SAN_LORENZO
+        : isVerano
+        ? TIBURTINA_OUTBOUND_TO_VERANO
+        : TIBURTINA_OUTBOUND_TO_CASTRO;
     }
 
-    const osrmWalkAfterCoords = osrmWalkAfterCoordsById[departure.id];
-    // Se OSRM ha calcolato un percorso pedonale, verifichiamo che non sia un loop o giro anomalo (> 1.35x distanza diretta)
-    if (osrmWalkAfterCoords && osrmWalkAfterCoords.length >= 2) {
-      let osrmMeters = 0;
-      for (let i = 1; i < osrmWalkAfterCoords.length; i++) {
-        osrmMeters += haversineMeters(osrmWalkAfterCoords[i - 1], osrmWalkAfterCoords[i]);
-      }
-      const directMeters = haversineMeters(
-        { latitude: toCoords.lat, longitude: toCoords.lng },
-        { latitude: finalCoords.lat, longitude: finalCoords.lng }
-      );
-      if (osrmMeters <= directMeters * 1.35) {
-        return osrmWalkAfterCoords;
-      }
-    }
-
-    if (
-      departure.walkAfterPolyline &&
-      departure.walkAfterPolyline.length >= 2
-    ) {
-      return departure.walkAfterPolyline;
-    }
-
-    const dist =
-      Math.abs(toCoords.lat - finalCoords.lat) +
-      Math.abs(toCoords.lng - finalCoords.lng);
-    if (dist < 0.00015) return [];
-    return [
+    return ensureContinuousTransitPolyline(
+      { latitude: fromCoords.lat, longitude: fromCoords.lng },
       { latitude: toCoords.lat, longitude: toCoords.lng },
-      { latitude: finalCoords.lat, longitude: finalCoords.lng },
-    ];
-  }, [departure, toCoords, finalCoords, osrmWalkAfterCoordsById]);
-
-  const walkBeforeRouteCoords = useMemo<LatLngPoint[]>(() => {
-    if (!departure || (departure.walkBeforeMinutes ?? 0) <= 1) return [];
-    if (
-      departure.walkBeforePolyline &&
-      departure.walkBeforePolyline.length >= 2
-    ) {
-      return departure.walkBeforePolyline;
-    }
-    return [];
-  }, [departure]);
+      departure.intermediateStopCoords,
+      basePoly
+    );
+  }, [departure, fromCoords, toCoords, roadwayTransitCoordsById]);
 
   const isMultiLeg = Boolean(departure && departure.legs && departure.legs.length > 1);
 
@@ -217,18 +180,26 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
   const multiLegRoutes = useMemo(() => {
     if (!departure || !isMultiLeg || !departure.legs) return [];
     return departure.legs.map((leg, idx) => {
-      let poly = leg.polyline;
+      const legKey = `${departure.id}_leg_${idx}`;
+      const legRoadCoords = roadwayLegCoordsById[legKey];
+      const legFrom = leg.fromStopCoords || fromCoords;
+      const legTo = leg.toStopCoords || toCoords;
+      let poly = legRoadCoords && legRoadCoords.length >= 2 ? legRoadCoords : leg.polyline;
       if (!poly || poly.length < 2) {
-        if (leg.fromStopCoords && leg.toStopCoords) {
-          poly = resolveOptimizedTransitPolyline(
-            leg.fromStop,
-            leg.toStop,
-            leg.fromStopCoords,
-            leg.toStopCoords,
-            []
-          );
-        }
+        poly = resolveOptimizedTransitPolyline(
+          leg.fromStop,
+          leg.toStop,
+          legFrom,
+          legTo,
+          []
+        );
       }
+      const continuousPoly = ensureContinuousTransitPolyline(
+        { latitude: legFrom.lat, longitude: legFrom.lng },
+        { latitude: legTo.lat, longitude: legTo.lng },
+        [],
+        poly
+      );
       const rawColor = getLineBadgeColor(leg.line, leg.mode);
       let color = rawColor;
       if (idx === 1 && departure.legs!.length > 1) {
@@ -241,34 +212,245 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
       }
       return {
         leg,
-        polyline: poly && poly.length >= 2 ? poly : [],
+        polyline: continuousPoly,
         color,
       };
     });
-  }, [departure, isMultiLeg]);
+  }, [departure, isMultiLeg, fromCoords, toCoords, roadwayLegCoordsById]);
+
+  // Aggancio matematico dei marker di salita e discesa sulla polilinea del percorso:
+  // Se la corsa è con cambio (multi-tratta), il punto di partenza è l'inizio della prima tratta
+  // e il punto di discesa finale è la fine dell'ultima tratta (dove si scende definitivamente).
+  // Se è diretta, coincidono con il primo e l'ultimo punto della polilinea del mezzo.
+  const snappedFrom = useMemo(() => {
+    if (isMultiLeg && multiLegRoutes.length > 0) {
+      const firstLegPoly = multiLegRoutes[0].polyline;
+      if (firstLegPoly.length >= 2) {
+        return firstLegPoly[0];
+      }
+      const firstLeg = multiLegRoutes[0].leg;
+      const lFrom = firstLeg.fromStopCoords || fromCoords;
+      return { latitude: lFrom.lat, longitude: lFrom.lng };
+    }
+    if (transitRouteCoords.length >= 2) {
+      return transitRouteCoords[0];
+    }
+    return snapCoordinateToPolyline(fromCoords, transitRouteCoords, 250);
+  }, [isMultiLeg, multiLegRoutes, fromCoords, transitRouteCoords]);
+
+  const snappedTo = useMemo(() => {
+    if (isMultiLeg && multiLegRoutes.length > 0) {
+      const lastLegPoly = multiLegRoutes[multiLegRoutes.length - 1].polyline;
+      if (lastLegPoly.length >= 2) {
+        return lastLegPoly[lastLegPoly.length - 1];
+      }
+      const lastLeg = multiLegRoutes[multiLegRoutes.length - 1].leg;
+      const lTo = lastLeg.toStopCoords || toCoords;
+      return { latitude: lTo.lat, longitude: lTo.lng };
+    }
+    if (transitRouteCoords.length >= 2) {
+      return transitRouteCoords[transitRouteCoords.length - 1];
+    }
+    return snapCoordinateToPolyline(toCoords, transitRouteCoords, 250);
+  }, [isMultiLeg, multiLegRoutes, toCoords, transitRouteCoords]);
+
+  // Calcola il percorso pedonale reale (Valhalla pedestrian / OSRM foot) garantendo assoluta continuità
+  // tra i punti esatti di salita (snappedFrom) e discesa (snappedTo) e le posizioni di partenza e arrivo
+  useEffect(() => {
+    if (!visible || !departure) return;
+    let cancelled = false;
+    const depId = departure.id;
+
+    const needWalkBefore =
+      (departure.walkBeforeMinutes ?? 0) > 0 ||
+      (originCoords &&
+        haversineMeters(
+          { latitude: originCoords.lat, longitude: originCoords.lng },
+          snappedFrom
+        ) > 25);
+
+    if (needWalkBefore && originCoords) {
+      resolvePedestrianRoadwayPolyline(originCoords, snappedFrom)
+        .then((mappedFoot) => {
+          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
+          setOsrmWalkBeforeCoordsById((prev) => ({
+            ...prev,
+            [depId]: mappedFoot,
+          }));
+        })
+        .catch(() => {});
+    }
+
+    const needWalkAfter =
+      (departure.walkAfterMinutes ?? 0) > 0 ||
+      haversineMeters(
+        snappedTo,
+        { latitude: finalCoords.lat, longitude: finalCoords.lng }
+      ) > 25;
+
+    if (needWalkAfter) {
+      resolvePedestrianRoadwayPolyline(snappedTo, finalCoords)
+        .then((mappedFoot) => {
+          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
+          setOsrmWalkAfterCoordsById((prev) => ({
+            ...prev,
+            [depId]: mappedFoot,
+          }));
+        })
+        .catch(() => {});
+    }
+
+    // Risolve la traiettoria stradale reale per autobus e tram via motore di routing stradale multi-stop
+    if (departure.mode === 'bus' || departure.mode === 'tram') {
+      resolveTransitRoadwayPolyline({
+        id: depId,
+        line: departure.line,
+        mode: departure.mode,
+        fromCoords,
+        toCoords,
+        fromName: departure.fromStop,
+        toName: departure.toStop,
+        intermediateStops: departure.intermediateStopCoords,
+        alerts: departure.alerts,
+        existingPolyline: departure.transitPolyline,
+      })
+        .then((roadPts) => {
+          if (cancelled || !roadPts || roadPts.length < 2) return;
+          setRoadwayTransitCoordsById((prev) => ({
+            ...prev,
+            [depId]: roadPts,
+          }));
+        })
+        .catch(() => {});
+    }
+
+    // Per viaggi con interscambio (multi-tratta), risolve il tracciato stradale di ogni singola tratta su gomma
+    if (departure.legs && departure.legs.length > 1) {
+      departure.legs.forEach((leg, idx) => {
+        if (leg.mode === 'bus' || leg.mode === 'tram') {
+          const lFrom = leg.fromStopCoords || fromCoords;
+          const lTo = leg.toStopCoords || toCoords;
+          const legKey = depId + '_leg_' + idx;
+          resolveTransitRoadwayPolyline({
+            id: legKey,
+            line: leg.line,
+            mode: leg.mode,
+            fromCoords: lFrom,
+            toCoords: lTo,
+            fromName: leg.fromStop,
+            toName: leg.toStop,
+            alerts: departure.alerts,
+            existingPolyline: leg.polyline,
+          })
+            .then((legPts) => {
+              if (cancelled || !legPts || legPts.length < 2) return;
+              setRoadwayLegCoordsById((prev) => ({
+                ...prev,
+                [legKey]: legPts,
+              }));
+            })
+            .catch(() => {});
+        }
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, departure, toCoords, finalCoords, fromCoords, originCoords, snappedFrom, snappedTo]);
+
+  const walkBeforeRouteCoords = useMemo<LatLngPoint[]>(() => {
+    if (!departure) return [];
+    const origPt: LatLngPoint = { latitude: originCoords.lat, longitude: originCoords.lng };
+    const distToBus = haversineMeters(origPt, snappedFrom);
+    if ((departure.walkBeforeMinutes ?? 0) <= 0 && distToBus <= 25) {
+      return [];
+    }
+
+    const osrmBefore = osrmWalkBeforeCoordsById[departure.id];
+    if (osrmBefore && osrmBefore.length >= 2) {
+      return [origPt, ...osrmBefore.slice(1, -1), snappedFrom];
+    }
+    if (
+      departure.walkBeforePolyline &&
+      departure.walkBeforePolyline.length >= 2 &&
+      haversineMeters(origPt, departure.walkBeforePolyline[0]) < 120 &&
+      haversineMeters(snappedFrom, departure.walkBeforePolyline[departure.walkBeforePolyline.length - 1]) < 120
+    ) {
+      return [origPt, ...departure.walkBeforePolyline.slice(1, -1), snappedFrom];
+    }
+    if (distToBus > 20) {
+      return [origPt, snappedFrom];
+    }
+    return [];
+  }, [departure, originCoords, snappedFrom, osrmWalkBeforeCoordsById]);
+
+  const walkAfterRouteCoords = useMemo<LatLngPoint[]>(() => {
+    if (!departure) return [];
+    const destPt: LatLngPoint = { latitude: finalCoords.lat, longitude: finalCoords.lng };
+    const distFromBus = haversineMeters(snappedTo, destPt);
+    if ((departure.walkAfterMinutes ?? 0) <= 0 && distFromBus <= 25) {
+      return [];
+    }
+
+    let coords: LatLngPoint[] = [];
+
+    const osrmWalkAfter = osrmWalkAfterCoordsById[departure.id];
+    if (osrmWalkAfter && osrmWalkAfter.length >= 2) {
+      coords = osrmWalkAfter;
+    } else if (
+      departure.walkAfterPolyline &&
+      departure.walkAfterPolyline.length >= 2 &&
+      haversineMeters(snappedTo, departure.walkAfterPolyline[0]) < 120 &&
+      haversineMeters(destPt, departure.walkAfterPolyline[departure.walkAfterPolyline.length - 1]) < 120
+    ) {
+      coords = departure.walkAfterPolyline;
+    }
+
+    if (coords.length >= 2) {
+      // Garantisce continuità matematica assoluta:
+      // Il primo punto coincide esattamente con la fermata di discesa (snappedTo),
+      // e l'ultimo punto coincide esattamente con la destinazione finale (destPt)
+      return [snappedTo, ...coords.slice(1, -1), destPt];
+    }
+
+    if (distFromBus > 20) {
+      return [snappedTo, destPt];
+    }
+    return [];
+  }, [departure, finalCoords, osrmWalkAfterCoordsById, snappedTo]);
 
   // Tratti a piedi di interscambio tra un mezzo e l'altro
   const transferWalks = useMemo<LatLngPoint[][]>(() => {
-    if (!departure || !isMultiLeg || !departure.legs) return [];
+    if (!departure || !isMultiLeg || !multiLegRoutes.length) return [];
     if (departure.transferWalkPolylines && departure.transferWalkPolylines.length > 0) {
-      return departure.transferWalkPolylines;
+      return departure.transferWalkPolylines.map((tw, idx) => {
+        if (tw.length >= 2 && multiLegRoutes[idx] && multiLegRoutes[idx + 1]) {
+          const res = [...tw];
+          const prevPoly = multiLegRoutes[idx].polyline;
+          const nextPoly = multiLegRoutes[idx + 1].polyline;
+          if (prevPoly.length > 0) res[0] = prevPoly[prevPoly.length - 1];
+          if (nextPoly.length > 0) res[res.length - 1] = nextPoly[0];
+          return res;
+        }
+        return tw;
+      });
     }
     const walks: LatLngPoint[][] = [];
-    for (let i = 0; i < departure.legs.length - 1; i++) {
-      const curTo = departure.legs[i].toStopCoords;
-      const nextFrom = departure.legs[i + 1].fromStopCoords;
+    for (let i = 0; i < multiLegRoutes.length - 1; i++) {
+      const prevPoly = multiLegRoutes[i].polyline;
+      const nextPoly = multiLegRoutes[i + 1].polyline;
+      const curTo = prevPoly.length > 0 ? prevPoly[prevPoly.length - 1] : null;
+      const nextFrom = nextPoly.length > 0 ? nextPoly[0] : null;
       if (curTo && nextFrom) {
-        const dist = Math.abs(curTo.lat - nextFrom.lat) + Math.abs(curTo.lng - nextFrom.lng);
+        const dist = Math.abs(curTo.latitude - nextFrom.latitude) + Math.abs(curTo.longitude - nextFrom.longitude);
         if (dist > 0.00005) {
-          walks.push([
-            { latitude: curTo.lat, longitude: curTo.lng },
-            { latitude: nextFrom.lat, longitude: nextFrom.lng },
-          ]);
+          walks.push([curTo, nextFrom]);
         }
       }
     }
     return walks;
-  }, [departure, isMultiLeg]);
+  }, [departure, isMultiLeg, multiLegRoutes]);
 
   const mapRegion = useMemo(() => {
     const allPts: LatLngPoint[] = [
@@ -341,27 +523,28 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
   // evita che i pallini risultino spropositati quando la mappa è vista da lontano
   const walkingStrokeProps = useMemo(() => {
     const delta = currentRegion?.latitudeDelta ?? mapRegion.latitudeDelta ?? 0.012;
+    const isIos = Platform.OS === 'ios';
     if (delta > 0.02) {
       return {
-        strokeWidth: 2,
-        lineDashPattern: [0.1, 6],
+        strokeWidth: 2.2,
+        lineDashPattern: isIos ? [2, 5] : [0.1, 6],
       };
     }
     if (delta > 0.01) {
       return {
-        strokeWidth: 2.6,
-        lineDashPattern: [0.1, 7],
+        strokeWidth: 2.8,
+        lineDashPattern: isIos ? [3, 6] : [0.1, 7],
       };
     }
     if (delta > 0.005) {
       return {
-        strokeWidth: 3.2,
-        lineDashPattern: [0.1, 9],
+        strokeWidth: 3.4,
+        lineDashPattern: isIos ? [3.5, 7] : [0.1, 9],
       };
     }
     return {
-      strokeWidth: 3.8,
-      lineDashPattern: [0.1, 11],
+      strokeWidth: 4,
+      lineDashPattern: isIos ? [4, 8] : [0.1, 11],
     };
   }, [currentRegion?.latitudeDelta, mapRegion.latitudeDelta]);
 
@@ -815,14 +998,38 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
               >
                 {/* Tratto a piedi iniziale (linea puntinata a cerchi ciano con scaling proporzionale) */}
                 {walkBeforeRouteCoords.length >= 2 && (
-                  <Polyline
-                    coordinates={walkBeforeRouteCoords}
-                    strokeColor="#06b6d4"
-                    strokeWidth={walkingStrokeProps.strokeWidth}
-                    lineCap="round"
-                    lineJoin="round"
-                    lineDashPattern={walkingStrokeProps.lineDashPattern}
-                  />
+                  <>
+                    <Polyline
+                      coordinates={walkBeforeRouteCoords}
+                      strokeColor="#06b6d4"
+                      strokeWidth={walkingStrokeProps.strokeWidth}
+                      lineCap="round"
+                      lineJoin="round"
+                      lineDashPattern={walkingStrokeProps.lineDashPattern}
+                    />
+                    <Marker
+                      coordinate={walkBeforeRouteCoords[0]}
+                      title="Punto di partenza"
+                      description={`${walkBeforeMins} min a piedi fino alla fermata ${departure.fromStop}`}
+                    >
+                      <View style={styles.markerWrapper}>
+                        <View
+                          style={[
+                            styles.markerHalo,
+                            { backgroundColor: 'rgba(6, 182, 212, 0.35)' },
+                          ]}
+                        />
+                        <View
+                          style={[
+                            styles.markerPin,
+                            { backgroundColor: '#0891b2' },
+                          ]}
+                        >
+                          <Ionicons name="walk" size={9} color="#ffffff" />
+                        </View>
+                      </View>
+                    </Marker>
+                  </>
                 )}
 
                 {/* ── Tracciati e Marker: Gestione Unificata Multi-Tratta (con Cambio) o Corsa Diretta ── */}
@@ -836,8 +1043,8 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                         { latitude: (ml.leg.fromStopCoords || fromCoords).lat, longitude: (ml.leg.fromStopCoords || fromCoords).lng },
                         { latitude: (ml.leg.toStopCoords || toCoords).lat, longitude: (ml.leg.toStopCoords || toCoords).lng },
                       ];
-                      const legSnapFrom = snapCoordinateToPolyline(ml.leg.fromStopCoords || fromCoords, legPolyline);
-                      const legSnapTo = snapCoordinateToPolyline(ml.leg.toStopCoords || toCoords, legPolyline);
+                      const legSnapFrom = legPolyline[0] || snapCoordinateToPolyline(ml.leg.fromStopCoords || fromCoords, legPolyline);
+                      const legSnapTo = legPolyline[legPolyline.length - 1] || snapCoordinateToPolyline(ml.leg.toStopCoords || toCoords, legPolyline);
 
                       return (
                         <React.Fragment key={`multi-leg-${mlIdx}`}>
@@ -1016,62 +1223,52 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                     })}
 
                     {/* Marker Fermata di Salita (agganciato alla linea) */}
-                    {(() => {
-                      const snappedFrom = snapCoordinateToPolyline(fromCoords, transitRouteCoords);
-                      return (
-                        <Marker
-                          coordinate={{
-                            latitude: snappedFrom.latitude,
-                            longitude: snappedFrom.longitude,
-                          }}
-                          title={`Salita: ${departure.fromStop}`}
-                          description={`Linea ${departure.line} (${displayDepTime}) • Dir. ${departure.headsign}`}
+                    <Marker
+                      coordinate={{
+                        latitude: snappedFrom.latitude,
+                        longitude: snappedFrom.longitude,
+                      }}
+                      title={`Salita: ${departure.fromStop}`}
+                      description={`Linea ${departure.line} (${displayDepTime}) • Dir. ${departure.headsign}`}
+                    >
+                      <View style={styles.markerWrapper}>
+                        <View
+                          style={[
+                            styles.markerHalo,
+                            { backgroundColor: `${lineColor}44` },
+                          ]}
+                        />
+                        <View
+                          style={[
+                            styles.markerPin,
+                            { backgroundColor: lineColor },
+                          ]}
                         >
-                          <View style={styles.markerWrapper}>
-                            <View
-                              style={[
-                                styles.markerHalo,
-                                { backgroundColor: `${lineColor}44` },
-                              ]}
-                            />
-                            <View
-                              style={[
-                                styles.markerPin,
-                                { backgroundColor: lineColor },
-                              ]}
-                            >
-                              <Ionicons
-                                name={isMetro ? 'subway' : 'bus'}
-                                size={9}
-                                color="#ffffff"
-                              />
-                            </View>
-                          </View>
-                        </Marker>
-                      );
-                    })()}
+                          <Ionicons
+                            name={isMetro ? 'subway' : 'bus'}
+                            size={9}
+                            color="#ffffff"
+                          />
+                        </View>
+                      </View>
+                    </Marker>
 
                     {/* Marker Fermata di Discesa (bandierina viola drasticamente ridotta e agganciata alla linea) */}
-                    {(() => {
-                      const snappedTo = snapCoordinateToPolyline(toCoords, transitRouteCoords);
-                      return (
-                        <Marker
-                          coordinate={{
-                            latitude: snappedTo.latitude,
-                            longitude: snappedTo.longitude,
-                          }}
-                          title={`Dove scendi: ${departure.toStop}`}
-                          description={`Arrivo mezzo ore ${alightingTimeDisplay}`}
-                        >
-                          <View style={styles.discesaFlagWrapper}>
-                            <View style={styles.discesaFlagHalo} />
-                            <View style={styles.discesaFlagPin}>
-                              <Ionicons name="flag" size={8.5} color="#ffffff" />
-                            </View>
-                          </View>
-                        </Marker>
-                      );
-                    })()}
+                    <Marker
+                      coordinate={{
+                        latitude: snappedTo.latitude,
+                        longitude: snappedTo.longitude,
+                      }}
+                      title={`Dove scendi: ${departure.toStop}`}
+                      description={`Arrivo mezzo ore ${alightingTimeDisplay}`}
+                    >
+                      <View style={styles.discesaFlagWrapper}>
+                        <View style={styles.discesaFlagHalo} />
+                        <View style={styles.discesaFlagPin}>
+                          <Ionicons name="flag" size={8.5} color="#ffffff" />
+                        </View>
+                      </View>
+                    </Marker>
                   </>
                 )}
 

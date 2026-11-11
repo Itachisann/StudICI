@@ -36,7 +36,7 @@ export function StartupCheckScreen({
 }: StartupCheckScreenProps) {
   const { theme } = useTheme();
   const [status, setStatus] = useState<'checking' | 'updating' | 'up_to_date' | 'blocked'>('checking');
-  const [statusMessage, setStatusMessage] = useState('Verifico aggiornamento orario');
+  const [statusMessage, setStatusMessage] = useState('Verifica orario');
   const [progressDetail, setProgressDetail] = useState('');
   const [blockingUpdate, setBlockingUpdate] = useState<AppUpdateInfo | null>(null);
 
@@ -378,7 +378,7 @@ export function StartupCheckScreen({
 
       {/* Footer Minimal iOS */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Verifica delle ultime modifiche</Text>
+        <Text style={styles.footerText}>Sapienza Università di Roma</Text>
       </View>
     </View>
   );
