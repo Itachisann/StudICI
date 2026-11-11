@@ -2,6 +2,8 @@ export interface StationInfo {
   name: string;
   code: string; // es. S08209 per Orte, S08217 per Roma Tiburtina
   shortName?: string;
+  lat?: number;
+  lng?: number;
 }
 
 export interface CommuterConfig {

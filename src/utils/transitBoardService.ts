@@ -7,6 +7,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { ROME_STATION_COORDINATES } from './transitRouter';
 import { resolveClassroom } from './classroomLocations';
 
+import {
+  pruneAnomalousLoopsAndSpikes,
+  resolveTransitRoadwayPolyline,
+  getTransitRoadwayPolylineSync,
+  detectActiveDetours,
+} from './transitRoadwayRouter';
+
+export {
+  pruneAnomalousLoopsAndSpikes,
+  resolveTransitRoadwayPolyline,
+  getTransitRoadwayPolylineSync,
+  detectActiveDetours,
+};
+
 export interface LatLngPoint {
   latitude: number;
   longitude: number;
@@ -54,6 +68,7 @@ export interface TransitDepartureItem {
   transfersCount: number;
   transferSummary?: string; // es. "Metro B ➔ Bus 71"
   legs?: TransitLegDetail[]; // Dettaglio unificato di ogni tratta della corsa (se con cambio)
+  initialOriginCoords?: { lat: number; lng: number };
   fromStopCoords?: { lat: number; lng: number };
   toStopCoords?: { lat: number; lng: number };
   finalDestCoords?: { lat: number; lng: number };
@@ -243,6 +258,168 @@ export function snapCoordinateToPolyline(
 }
 
 /**
+ * Rimuove punti duplicati o adiacenti a distanza trascurabile (< minDistanceMeters)
+ * per prevenire artefatti grafici, loop o rendering non fluidi su react-native-maps.
+ */
+export function deduplicateAdjacentPoints(
+  points: LatLngPoint[],
+  minDistanceMeters = 0.5
+): LatLngPoint[] {
+  if (!points || points.length <= 1) return points || [];
+  const result: LatLngPoint[] = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const prev = result[result.length - 1];
+    const curr = points[i];
+    if (haversineMeters(prev, curr) >= minDistanceMeters) {
+      result.push(curr);
+    }
+  }
+  return result;
+}
+
+/**
+ * Garantisce in modo generico per qualsiasi mezzo (bus, tram, metro, treno)
+ * e per qualsiasi linea o città una traiettoria continua al 100% tra:
+ * - Fermata di salita (fromPoint) contrassegnata dall'icona del mezzo
+ * - Fermate intermedie / waypoint successivi (intermediateStops)
+ * - Polilinea di base / tracciato stradale o su ferro (basePolyline)
+ * - Fermata di discesa (toPoint) contrassegnata dalla bandierina
+ *
+ * Elimina buchi, discontinuità visive o disallineamenti:
+ * 1. La polilinea inizia ESATTAMENTE al marker di salita (fromPoint).
+ * 2. Unisce in modo continuo i waypoint intermedi (es. ACEA, Verano, fermate intermedie).
+ * 3. Incorpora e segue la geometria stradale/ferroviaria verificata nella corsia corretta.
+ * 4. Termina ESATTAMENTE al marker di discesa (toPoint).
+ */
+/**
+ * Rimuove spike, inversioni a U anomale e salti indietro lungo la traiettoria,
+ * garantendo che il tracciato segua la viabilità in modo rigorosamente continuo e monodirezionale.
+ */
+export function filterPolylineReversals(
+  poly: LatLngPoint[]
+): LatLngPoint[] {
+  return pruneAnomalousLoopsAndSpikes(poly);
+}
+
+export function ensureContinuousTransitPolyline(
+  fromPoint?: LatLngPoint,
+  toPoint?: LatLngPoint,
+  intermediateStops?: (LatLngPoint | { lat: number; lng: number })[],
+  basePolyline?: LatLngPoint[]
+): LatLngPoint[] {
+  const normStops: LatLngPoint[] = (intermediateStops || [])
+    .map((s) => ('latitude' in s ? s : { latitude: s.lat, longitude: s.lng }))
+    .filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
+
+  const validFrom =
+    fromPoint && Number.isFinite(fromPoint.latitude) && Number.isFinite(fromPoint.longitude)
+      ? { latitude: fromPoint.latitude, longitude: fromPoint.longitude }
+      : undefined;
+
+  const validTo =
+    toPoint && Number.isFinite(toPoint.latitude) && Number.isFinite(toPoint.longitude)
+      ? { latitude: toPoint.latitude, longitude: toPoint.longitude }
+      : undefined;
+
+  const raw = (basePolyline || []).filter(
+    (p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude)
+  );
+
+  // Fallback: se non c'è una polilinea con almeno 2 punti, unisce linearmente salita -> fermate -> discesa
+  if (raw.length < 2) {
+    const pts: LatLngPoint[] = [];
+    if (validFrom) pts.push(validFrom);
+    pts.push(...normStops);
+    if (validTo) pts.push(validTo);
+    return deduplicateAdjacentPoints(pts, 0.5);
+  }
+
+  // Se mancano entrambi i punti di salita e discesa, ripulisce dai falsi loop e deduplica
+  if (!validFrom && !validTo) {
+    return filterPolylineReversals(raw);
+  }
+
+  const projectOnPolyline = (p: LatLngPoint, poly: LatLngPoint[]) => {
+    let bestProj = poly[0];
+    let bestDist = Infinity;
+    let bestParam = 0;
+    for (let i = 0; i < poly.length - 1; i++) {
+      const segA = poly[i];
+      const segB = poly[i + 1];
+      const dLat = segB.latitude - segA.latitude;
+      const dLng = segB.longitude - segA.longitude;
+      const lenSq = dLat * dLat + dLng * dLng;
+      let t = 0;
+      if (lenSq > 1e-12) {
+        t = Math.max(
+          0,
+          Math.min(
+            1,
+            ((p.latitude - segA.latitude) * dLat + (p.longitude - segA.longitude) * dLng) / lenSq
+          )
+        );
+      }
+      const proj = {
+        latitude: segA.latitude + t * dLat,
+        longitude: segA.longitude + t * dLng,
+      };
+      const d = haversineMeters(p, proj);
+      if (d < bestDist) {
+        bestDist = d;
+        bestProj = proj;
+        bestParam = i + t;
+      }
+    }
+    return { proj: bestProj, dist: bestDist, param: bestParam };
+  };
+
+  let activePoly = [...raw];
+  let fromProj = validFrom ? projectOnPolyline(validFrom, activePoly) : null;
+  let toProj = validTo ? projectOnPolyline(validTo, activePoly) : null;
+
+  // Inversione sicura solo se la polilinea grezza è orientata in senso marcatamente opposto
+  if (fromProj && toProj && fromProj.param > toProj.param + 0.8) {
+    activePoly.reverse();
+    fromProj = projectOnPolyline(validFrom!, activePoly);
+    toProj = projectOnPolyline(validTo!, activePoly);
+  }
+
+  const startParam = fromProj ? fromProj.param : 0;
+  const endParam = toProj ? toProj.param : activePoly.length - 1;
+
+  const startSeg = Math.floor(startParam);
+  const endSeg = Math.ceil(endParam);
+
+  const sliced: LatLngPoint[] = [];
+
+  // Punto di salita: aggancia la proiezione stradale
+  if (fromProj) {
+    sliced.push(fromProj.proj);
+  }
+
+  // Punti interni della sede stradale verificata
+  const firstInnerIdx = startSeg + 1;
+  const lastInnerIdx = Math.floor(endParam);
+  for (let i = firstInnerIdx; i <= lastInnerIdx && i < activePoly.length; i++) {
+    sliced.push(activePoly[i]);
+  }
+
+  // Punto di discesa: aggancia la proiezione stradale
+  if (toProj) {
+    sliced.push(toProj.proj);
+  }
+
+  if (sliced.length === 0) {
+    sliced.push(...activePoly.slice(Math.max(0, startSeg), Math.min(activePoly.length, endSeg + 1)));
+  }
+
+  // Il tragitto del mezzo inizia e termina rigorosamente sulla carreggiata stradale (banchina di salita e banchina di discesa),
+  // senza appendere le coordinate grezze della fermata che potrebbero cadere all'interno di fabbricati o cortili privati
+  const result: LatLngPoint[] = sliced.length > 0 ? sliced : activePoly;
+  return filterPolylineReversals(deduplicateAdjacentPoints(result, 0.5));
+}
+
+/**
  * Calcola in modo affidabile il minutaggio pedonale reale tra due coordinate geografiche
  * (oppure lungo una polilinea pedonale decodificata se disponibile).
  * Velocità pedonale media urbana con attraversamenti: 4.5 km/h = 75 metri/minuto,
@@ -301,37 +478,130 @@ export function calculateRealWalkMinutes(
  * all'interno del perimetro di fabbricati/edifici privati o cortili (es. lotto CUT a P.le delle Crociate).
  */
 export function snapStopToRoadway(
-  stopName?: string,
+  _stopName?: string,
   coords?: { lat: number; lng: number }
 ): { lat: number; lng: number } {
   if (!coords) return { lat: 41.90955, lng: 12.53038 };
-  const sNorm = (stopName || '').toLowerCase();
-
-  // Tiburtina / Crociate: banchina stradale ordinaria su Via Tiburtina / P.le delle Crociate
-  if (sNorm.includes('crociate')) {
-    if (coords.lat < 41.90795 && coords.lng > 12.5255) {
-      return { lat: 41.907907, lng: 12.525800 }; // Inbound (verso Stazione)
-    }
-    return { lat: 41.908035, lng: 12.525917 }; // Outbound (verso Verano/Castro)
-  }
-
-  // Tiburtina / Valerio Massimo: banchina laterale ordinaria (lato nord-ovest per andata, lato sud-est per ritorno)
-  if (sNorm.includes('valerio massimo')) {
-    if (coords.lat > 41.9060 || coords.lng > 12.5225) {
-      return { lat: 41.905772, lng: 12.522396 }; // Inbound (carreggiata sud-est verso Stazione)
-    }
-    return { lat: 41.905884, lng: 12.522221 }; // Outbound (carreggiata nord-ovest verso Castro/Verano)
-  }
-
-  // Tiburtina / Castro Laurenziano: banchina laterale sul marciapiede all'angolo con Via del Castro Laurenziano
-  if (sNorm.includes('castro laurenziano')) {
-    if (coords.lng > 12.52055) {
-      return { lat: 41.903813, lng: 12.520513 }; // Inbound (carreggiata sud-est verso Stazione)
-    }
-    return { lat: 41.903932, lng: 12.520330 }; // Outbound (carreggiata nord-ovest verso Castro/Verano)
-  }
-
   return coords;
+}
+
+/**
+ * Ottimizza la fermata del mezzo in modo 100% DINAMICO per garantire la MINIMA camminata a piedi possibile
+ * verso la destinazione (in andata) o dall'origine (nel ritorno).
+ * Esamina la fermata attuale e tutte le fermate fisiche servite dal mezzo lungo il tragitto (GTFS trip),
+ * selezionando la fermata che minimizza la distanza pedonale verso il punto target,
+ * valido per qualsiasi linea, operatore o città senza dati statici hardcoded.
+ */
+export function optimizeTransitStopForMinWalk(params: {
+  direction: 'to_campus' | 'to_station';
+  currentStopName: string;
+  currentStopCoords: { lat: number; lng: number };
+  targetCoords: { lat: number; lng: number }; // finalDestCoords (andata) o originCoords (ritorno)
+  intermediateStops: { name: string; lat: number; lng: number }[];
+  lineShort: string;
+  mode: string;
+  candidateTripStops?: { name: string; lat: number; lng: number }[];
+}): {
+  optimizedStopName: string;
+  optimizedStopCoords: { lat: number; lng: number };
+  optimizedIntermediateStops: { name: string; lat: number; lng: number }[];
+  didChange: boolean;
+} {
+  const {
+    currentStopName,
+    currentStopCoords,
+    targetCoords,
+    intermediateStops,
+    mode,
+    candidateTripStops,
+  } = params;
+
+  if (mode === 'subway' || mode === 'metro' || mode === 'rail') {
+    return {
+      optimizedStopName: currentStopName,
+      optimizedStopCoords: currentStopCoords,
+      optimizedIntermediateStops: intermediateStops,
+      didChange: false,
+    };
+  }
+
+  // Costruisce dinamicamente la lista di tutte le fermate fisiche candidate
+  const candidateStops: { name: string; lat: number; lng: number; source: 'current' | 'intermediate' | 'trip' }[] = [
+    { ...currentStopCoords, name: currentStopName, source: 'current' },
+  ];
+
+  for (const s of intermediateStops) {
+    if (s && typeof s.lat === 'number' && typeof s.lng === 'number') {
+      if (!candidateStops.some((c) => Math.abs(c.lat - s.lat) < 0.0001 && Math.abs(c.lng - s.lng) < 0.0001)) {
+        candidateStops.push({ ...s, source: 'intermediate' });
+      }
+    }
+  }
+
+  if (Array.isArray(candidateTripStops)) {
+    for (const s of candidateTripStops) {
+      if (s && typeof s.lat === 'number' && typeof s.lng === 'number') {
+        if (!candidateStops.some((c) => Math.abs(c.lat - s.lat) < 0.0001 && Math.abs(c.lng - s.lng) < 0.0001)) {
+          candidateStops.push({ ...s, source: 'trip' });
+        }
+      }
+    }
+  }
+
+  const currDist = haversineMeters(
+    { latitude: currentStopCoords.lat, longitude: currentStopCoords.lng },
+    { latitude: targetCoords.lat, longitude: targetCoords.lng }
+  );
+
+  let bestStop = candidateStops[0];
+  let bestDist = currDist;
+
+  for (const cand of candidateStops) {
+    const d = haversineMeters(
+      { latitude: cand.lat, longitude: cand.lng },
+      { latitude: targetCoords.lat, longitude: targetCoords.lng }
+    );
+    // Privilegia la fermata alternativa se accorcia sensibilmente la camminata (almeno 35 metri in meno)
+    if (d < bestDist - 35) {
+      bestDist = d;
+      bestStop = cand;
+    }
+  }
+
+  if (bestStop.source === 'current' || Math.abs(bestDist - currDist) < 35) {
+    return {
+      optimizedStopName: currentStopName,
+      optimizedStopCoords: currentStopCoords,
+      optimizedIntermediateStops: intermediateStops,
+      didChange: false,
+    };
+  }
+
+  // Ricostruisce la lista di fermate intermedie allineata alla nuova fermata scelta
+  let newIntermediates = [...intermediateStops];
+  if (bestStop.source === 'intermediate') {
+    const idx = newIntermediates.findIndex(
+      (s) => Math.abs(s.lat - bestStop.lat) < 0.0003 && Math.abs(s.lng - bestStop.lng) < 0.0003
+    );
+    if (idx >= 0) {
+      newIntermediates = newIntermediates.slice(0, idx);
+    }
+  } else if (bestStop.source === 'trip') {
+    if (!newIntermediates.some((s) => Math.abs(s.lat - currentStopCoords.lat) < 0.0003 && Math.abs(s.lng - currentStopCoords.lng) < 0.0003)) {
+      newIntermediates.push({
+        name: currentStopName,
+        lat: currentStopCoords.lat,
+        lng: currentStopCoords.lng,
+      });
+    }
+  }
+
+  return {
+    optimizedStopName: bestStop.name,
+    optimizedStopCoords: { lat: bestStop.lat, lng: bestStop.lng },
+    optimizedIntermediateStops: newIntermediates,
+    didChange: true,
+  };
 }
 
 /**
@@ -402,6 +672,13 @@ export function resolveOptimizedTransitPolyline(
   toCoords: { lat: number; lng: number },
   rawPolyline: LatLngPoint[]
 ): LatLngPoint[] {
+  // Se la nostra API o il feed dati ha già fornito la geometria ad alta risoluzione derivata da shapes.txt del dataset GTFS,
+  // ripuliscila da eventuali deviazioni anomale verso edifici privati/piazzali GTFS preservando tutte le curve stradali reali!
+  if (rawPolyline && rawPolyline.length >= 15) {
+    const cleaned = pruneAnomalousLoopsAndSpikes(rawPolyline);
+    return deduplicateAdjacentPoints(cleaned, 0.5);
+  }
+
   const fNorm = (fromName || '').toLowerCase();
   const tNorm = (toName || '').toLowerCase();
 
@@ -415,57 +692,43 @@ export function resolveOptimizedTransitPolyline(
       (tNorm.includes('mb') || tNorm.includes('staz') || tNorm.includes('fs'))) ||
     (toCoords.lat > 41.9080 && toCoords.lng > 12.5270);
 
-  const isToCastro = tNorm.includes('castro') || tNorm.includes('laurenziano');
-  const isFromCastro = fNorm.includes('castro') || fNorm.includes('laurenziano');
-  const isToVerano = tNorm.includes('verano');
-  const isFromVerano = fNorm.includes('verano');
-  const isToValerio = tNorm.includes('valerio') || tNorm.includes('massimo');
-  const isFromValerio = fNorm.includes('valerio') || fNorm.includes('massimo');
-  const isToCrociate = tNorm.includes('crociate');
-  const isFromCrociate = fNorm.includes('crociate');
+  const isSanLorenzoDest =
+    tNorm.includes('san lorenzo') ||
+    tNorm.includes('marrucini') ||
+    tNorm.includes('passamonti') ||
+    tNorm.includes('lollis') ||
+    (toCoords.lat < 41.9018 && toCoords.lat > 41.8950);
+
+  const isSanLorenzoOrigin =
+    fNorm.includes('san lorenzo') ||
+    fNorm.includes('marrucini') ||
+    fNorm.includes('passamonti') ||
+    fNorm.includes('lollis') ||
+    (fromCoords.lat < 41.9018 && fromCoords.lat > 41.8950);
+
+  const isToVerano = tNorm.includes('verano') || (toCoords.lat < 41.9036 && toCoords.lat >= 41.9018);
+  const isFromVerano = fNorm.includes('verano') || (fromCoords.lat < 41.9036 && fromCoords.lat >= 41.9018);
 
   // Corridoio Via Tiburtina: Andata (dalla Stazione Tiburtina verso sud-ovest)
   if (isTiburtinaOrigin || (fromCoords.lat > 41.9080 && fromCoords.lng > 12.5270)) {
+    if (isSanLorenzoDest) {
+      return TIBURTINA_OUTBOUND_TO_SAN_LORENZO;
+    }
     if (isToVerano) {
       return TIBURTINA_OUTBOUND_TO_VERANO;
     }
-    if (isToCastro || (toCoords.lat <= 41.9042 && toCoords.lng >= 12.5190 && toCoords.lng <= 12.5220)) {
-      return TIBURTINA_OUTBOUND_TO_CASTRO;
-    }
-    if (isToValerio) {
-      const idx = TIBURTINA_OUTBOUND_TO_CASTRO.findIndex(
-        (p) => Math.abs(p.latitude - 41.905884) < 0.0003 && Math.abs(p.longitude - 12.522221) < 0.0003
-      );
-      if (idx > 0) return TIBURTINA_OUTBOUND_TO_CASTRO.slice(0, idx + 1);
-    }
-    if (isToCrociate) {
-      const idx = TIBURTINA_OUTBOUND_TO_CASTRO.findIndex(
-        (p) => Math.abs(p.latitude - 41.908035) < 0.0003 && Math.abs(p.longitude - 12.525917) < 0.0003
-      );
-      if (idx > 0) return TIBURTINA_OUTBOUND_TO_CASTRO.slice(0, idx + 1);
-    }
+    return TIBURTINA_OUTBOUND_TO_CASTRO;
   }
 
   // Corridoio Via Tiburtina: Ritorno (verso la Stazione Tiburtina in direzione nord-est)
   if (isTiburtinaDestination || (toCoords.lat > 41.9080 && toCoords.lng > 12.5270)) {
+    if (isSanLorenzoOrigin) {
+      return TIBURTINA_INBOUND_FROM_SAN_LORENZO;
+    }
     if (isFromVerano) {
       return TIBURTINA_INBOUND_FROM_VERANO;
     }
-    if (isFromCastro || (fromCoords.lat <= 41.9042 && fromCoords.lng >= 12.5190 && fromCoords.lng <= 12.5220)) {
-      return TIBURTINA_INBOUND_FROM_CASTRO;
-    }
-    if (isFromValerio) {
-      const idx = TIBURTINA_INBOUND_FROM_CASTRO.findIndex(
-        (p) => Math.abs(p.latitude - 41.905772) < 0.0004 && Math.abs(p.longitude - 12.522396) < 0.0004
-      );
-      if (idx >= 0) return TIBURTINA_INBOUND_FROM_CASTRO.slice(idx);
-    }
-    if (isFromCrociate) {
-      const idx = TIBURTINA_INBOUND_FROM_CASTRO.findIndex(
-        (p) => Math.abs(p.latitude - 41.907907) < 0.0004 && Math.abs(p.longitude - 12.525800) < 0.0004
-      );
-      if (idx >= 0) return TIBURTINA_INBOUND_FROM_CASTRO.slice(idx);
-    }
+    return TIBURTINA_INBOUND_FROM_CASTRO;
   }
 
   // Corsa di passaggio che attraversa il corridoio di Via Tiburtina verso sud-ovest (es. linee generiche)
@@ -970,28 +1233,36 @@ export function findOptimalTransitDeparture(
       const cArr = getDestArrMins(curr);
       const bWalk = (best.walkBeforeMinutes || 0) + (best.walkAfterMinutes || 0);
       const cWalk = (curr.walkBeforeMinutes || 0) + (curr.walkAfterMinutes || 0);
+      const walkDiff = cWalk - bWalk; // negativo se curr ha una camminata a piedi inferiore
 
-      // Criterio 1: Arrivo a destinazione (se differisce di almeno 2 minuti, vince chi arriva prima)
+      // Criterio 1: MINOR TEMPO A PIEDI.
+      // Se entrambe le opzioni arrivano entro una finestra ravvicinata (<= 6 minuti di scarto sull'arrivo finale):
+      // la corsa che garantisce la minore camminata a piedi (almeno 2 minuti di cammino in meno) vince SEMPRE!
+      if (Math.abs(walkDiff) >= 2 && cArr > 0 && bArr > 0 && Math.abs(cArr - bArr) <= 6) {
+        return walkDiff < 0 ? curr : best;
+      }
+
+      // Criterio 2: Arrivo a destinazione (se differisce di oltre 6 minuti o con camminata simile, vince chi arriva prima)
       if (cArr > 0 && bArr > 0 && Math.abs(cArr - bArr) >= 2) {
         return cArr < bArr ? curr : best;
       }
 
-      // Criterio 2: A parità di arrivo (differenza <= 1 min), vicinanza fermata / minore camminata
-      if (Math.abs(cWalk - bWalk) >= 2) {
-        return cWalk < bWalk ? curr : best;
+      // Criterio 3: A parità di arrivo (differenza <= 1 min), vicinanza fermata / minore camminata
+      if (Math.abs(walkDiff) >= 2) {
+        return walkDiff < 0 ? curr : best;
       }
 
-      // Criterio 3: Minore durata complessiva / tempo effettivo a bordo
+      // Criterio 4: Minore durata complessiva / tempo effettivo a bordo
       if (curr.durationMinutes !== best.durationMinutes) {
         return curr.durationMinutes < best.durationMinutes ? curr : best;
       }
 
-      // Criterio 4: Corsa diretta (meno cambi)
+      // Criterio 5: Corsa diretta (meno cambi)
       if (curr.transfersCount !== best.transfersCount) {
         return curr.transfersCount < best.transfersCount ? curr : best;
       }
 
-      // Criterio 5: Meno attesa a vuoto alla fermata di salita
+      // Criterio 6: Meno attesa a vuoto alla fermata di salita
       return getDepMins(curr) > getDepMins(best) ? curr : best;
     }, list[0]);
   };
@@ -1016,7 +1287,7 @@ export function findOptimalTransitDeparture(
   };
 }
 
-function buildStraightPolyline(
+export function buildStraightPolyline(
   points: { lat: number; lng: number }[]
 ): LatLngPoint[] {
   return points.map((p) => ({ latitude: p.lat, longitude: p.lng }));
@@ -1086,6 +1357,120 @@ export const TIBURTINA_OUTBOUND_TO_VERANO: LatLngPoint[] = [
   { latitude: 41.902190, longitude: 12.518908 }, // Piazzale del Verano
 ];
 
+export const TIBURTINA_OUTBOUND_TO_SAN_LORENZO: LatLngPoint[] = [
+  { latitude: 41.909553, longitude: 12.530307 },
+  { latitude: 41.909665, longitude: 12.530232 },
+  { latitude: 41.909640, longitude: 12.530159 },
+  { latitude: 41.909615, longitude: 12.530086 },
+  { latitude: 41.909611, longitude: 12.530075 },
+  { latitude: 41.909591, longitude: 12.530017 },
+  { latitude: 41.909578, longitude: 12.529983 },
+  { latitude: 41.909564, longitude: 12.529942 },
+  { latitude: 41.909542, longitude: 12.529875 },
+  { latitude: 41.909517, longitude: 12.529801 },
+  { latitude: 41.909437, longitude: 12.529797 },
+  { latitude: 41.909370, longitude: 12.529782 },
+  { latitude: 41.909300, longitude: 12.529793 },
+  { latitude: 41.909253, longitude: 12.529806 },
+  { latitude: 41.909234, longitude: 12.529809 },
+  { latitude: 41.909212, longitude: 12.529809 },
+  { latitude: 41.909198, longitude: 12.529808 },
+  { latitude: 41.909182, longitude: 12.529804 },
+  { latitude: 41.909161, longitude: 12.529798 },
+  { latitude: 41.909137, longitude: 12.529788 },
+  { latitude: 41.909105, longitude: 12.529772 },
+  { latitude: 41.909073, longitude: 12.529747 },
+  { latitude: 41.909041, longitude: 12.529717 },
+  { latitude: 41.909014, longitude: 12.529686 },
+  { latitude: 41.908991, longitude: 12.529657 },
+  { latitude: 41.908965, longitude: 12.529622 },
+  { latitude: 41.908935, longitude: 12.529575 },
+  { latitude: 41.908912, longitude: 12.529525 },
+  { latitude: 41.908868, longitude: 12.529411 },
+  { latitude: 41.908732, longitude: 12.529037 },
+  { latitude: 41.908657, longitude: 12.528828 },
+  { latitude: 41.908614, longitude: 12.528696 },
+  { latitude: 41.908589, longitude: 12.528612 },
+  { latitude: 41.908581, longitude: 12.528575 },
+  { latitude: 41.908578, longitude: 12.528545 },
+  { latitude: 41.908575, longitude: 12.528520 },
+  { latitude: 41.908565, longitude: 12.528265 },
+  { latitude: 41.908547, longitude: 12.527958 },
+  { latitude: 41.908440, longitude: 12.527424 },
+  { latitude: 41.908415, longitude: 12.527295 },
+  { latitude: 41.908408, longitude: 12.527266 },
+  { latitude: 41.908398, longitude: 12.527231 },
+  { latitude: 41.908389, longitude: 12.527202 },
+  { latitude: 41.908371, longitude: 12.527146 },
+  { latitude: 41.908286, longitude: 12.526915 },
+  { latitude: 41.908224, longitude: 12.526632 },
+  { latitude: 41.908136, longitude: 12.526298 },
+  { latitude: 41.908097, longitude: 12.526148 },
+  { latitude: 41.908041, longitude: 12.525940 },
+  { latitude: 41.907993, longitude: 12.525765 },
+  { latitude: 41.907990, longitude: 12.525757 },
+  { latitude: 41.907983, longitude: 12.525729 },
+  { latitude: 41.907946, longitude: 12.525590 },
+  { latitude: 41.907874, longitude: 12.525336 },
+  { latitude: 41.907790, longitude: 12.525077 },
+  { latitude: 41.907718, longitude: 12.524874 },
+  { latitude: 41.907590, longitude: 12.524573 },
+  { latitude: 41.907440, longitude: 12.524293 },
+  { latitude: 41.907291, longitude: 12.524042 },
+  { latitude: 41.907090, longitude: 12.523751 },
+  { latitude: 41.907113, longitude: 12.523721 },
+  { latitude: 41.907150, longitude: 12.523672 },
+  { latitude: 41.907026, longitude: 12.523494 },
+  { latitude: 41.906890, longitude: 12.523314 },
+  { latitude: 41.906765, longitude: 12.523160 },
+  { latitude: 41.906630, longitude: 12.523004 },
+  { latitude: 41.906499, longitude: 12.522865 },
+  { latitude: 41.906370, longitude: 12.522728 },
+  { latitude: 41.905883, longitude: 12.522221 },
+  { latitude: 41.905799, longitude: 12.522133 },
+  { latitude: 41.905350, longitude: 12.521657 },
+  { latitude: 41.904698, longitude: 12.521016 },
+  { latitude: 41.904408, longitude: 12.520742 },
+  { latitude: 41.904052, longitude: 12.520436 },
+  { latitude: 41.903902, longitude: 12.520316 },
+  { latitude: 41.903859, longitude: 12.520286 },
+  { latitude: 41.903567, longitude: 12.520106 },
+  { latitude: 41.903499, longitude: 12.520036 },
+  { latitude: 41.903439, longitude: 12.519976 },
+  { latitude: 41.903396, longitude: 12.519936 },
+  { latitude: 41.903073, longitude: 12.519677 },
+  { latitude: 41.903050, longitude: 12.519656 },
+  { latitude: 41.903026, longitude: 12.519636 },
+  { latitude: 41.903013, longitude: 12.519621 },
+  { latitude: 41.902997, longitude: 12.519605 },
+  { latitude: 41.902931, longitude: 12.519541 },
+  { latitude: 41.902886, longitude: 12.519494 },
+  { latitude: 41.902815, longitude: 12.519401 },
+  { latitude: 41.902790, longitude: 12.519339 },
+  { latitude: 41.902781, longitude: 12.519318 },
+  { latitude: 41.902759, longitude: 12.519303 },
+  { latitude: 41.902599, longitude: 12.519200 },
+  { latitude: 41.902559, longitude: 12.519174 },
+  { latitude: 41.902449, longitude: 12.519092 },
+  { latitude: 41.902287, longitude: 12.518971 },
+  { latitude: 41.902194, longitude: 12.518901 },
+  { latitude: 41.902138, longitude: 12.518861 },
+  { latitude: 41.901985, longitude: 12.518752 },
+  { latitude: 41.901965, longitude: 12.518779 },
+  { latitude: 41.901954, longitude: 12.518800 },
+  { latitude: 41.901945, longitude: 12.518819 },
+  { latitude: 41.901830, longitude: 12.518728 },
+  { latitude: 41.901599, longitude: 12.518554 },
+  { latitude: 41.900829, longitude: 12.517968 },
+  { latitude: 41.900474, longitude: 12.517704 },
+  { latitude: 41.900188, longitude: 12.517461 },
+  { latitude: 41.900002, longitude: 12.517309 },
+  { latitude: 41.899908, longitude: 12.517233 },
+  { latitude: 41.899866, longitude: 12.517147 },
+  { latitude: 41.899726, longitude: 12.516874 },
+  { latitude: 41.899818, longitude: 12.516788 },
+];
+
 // Ritorno (Nord-Est verso Stazione Tiburtina):
 // Transito continuo sulla carreggiata laterale sud-est (Way 23036876 + 51081970 + 122080729 + 1448323550)
 export const TIBURTINA_INBOUND_FROM_CASTRO: LatLngPoint[] = [
@@ -1115,13 +1500,22 @@ export const TIBURTINA_INBOUND_FROM_CASTRO: LatLngPoint[] = [
   { latitude: 41.907636, longitude: 12.524942 },
   { latitude: 41.907700, longitude: 12.525112 },
   { latitude: 41.907842, longitude: 12.525546 },
-  // Fermata Tiburtina / Crociate (ritorno)
+  // Fermata Tiburtina / Crociate (ritorno su corsia laterale sud-est)
   { latitude: 41.907907, longitude: 12.525800 },
-  // Ingresso Piazzale Stazione Tiburtina
-  { latitude: 41.908147, longitude: 12.529594 },
+  // Immissione su Piazza delle Crociate e prosecuzione su Via della Stazione Tiburtina
+  { latitude: 41.908100, longitude: 12.526050 },
+  { latitude: 41.908220, longitude: 12.526250 },
+  { latitude: 41.908400, longitude: 12.526800 },
+  { latitude: 41.908480, longitude: 12.527450 },
+  { latitude: 41.908530, longitude: 12.528150 },
   { latitude: 41.908585, longitude: 12.528822 },
-  { latitude: 41.908850, longitude: 12.529473 },
+  { latitude: 41.908615, longitude: 12.528888 },
+  { latitude: 41.908703, longitude: 12.529090 },
+  { latitude: 41.908787, longitude: 12.529303 },
+  { latitude: 41.908970, longitude: 12.529677 },
   { latitude: 41.909290, longitude: 12.529830 },
+  { latitude: 41.909454, longitude: 12.529797 },
+  { latitude: 41.909650, longitude: 12.530050 },
   { latitude: 41.909550, longitude: 12.530377 }, // Piazzale Stazione Tiburtina
 ];
 
@@ -1133,29 +1527,101 @@ export const TIBURTINA_INBOUND_FROM_VERANO: LatLngPoint[] = [
   ...TIBURTINA_INBOUND_FROM_CASTRO,
 ];
 
-// Tracciato sotterraneo reale Metro B (Tiburtina FS <-> Policlinico via Bologna)
-const METRO_B_TIBURTINA_TO_POLICLINICO: LatLngPoint[] = [
-  { latitude: 41.91008, longitude: 12.53062 }, // Tiburtina FS
-  { latitude: 41.91120, longitude: 12.52720 },
-  { latitude: 41.91260, longitude: 12.52340 },
-  { latitude: 41.91340, longitude: 12.52080 }, // Stazione Bologna
-  { latitude: 41.91010, longitude: 12.51620 },
-  { latitude: 41.90720, longitude: 12.51310 },
-  { latitude: 41.90468, longitude: 12.51052 }, // Stazione Policlinico
+export const TIBURTINA_INBOUND_FROM_SAN_LORENZO: LatLngPoint[] = [
+  { latitude: 41.899818, longitude: 12.516788 },
+  { latitude: 41.899726, longitude: 12.516874 },
+  { latitude: 41.899866, longitude: 12.517147 },
+  { latitude: 41.899908, longitude: 12.517233 },
+  { latitude: 41.899935, longitude: 12.517274 },
+  { latitude: 41.899974, longitude: 12.517338 },
+  { latitude: 41.900018, longitude: 12.517407 },
+  { latitude: 41.900065, longitude: 12.517454 },
+  { latitude: 41.900155, longitude: 12.517535 },
+  { latitude: 41.900430, longitude: 12.517796 },
+  { latitude: 41.900920, longitude: 12.518248 },
+  { latitude: 41.901186, longitude: 12.518488 },
+  { latitude: 41.901503, longitude: 12.518753 },
+  { latitude: 41.901565, longitude: 12.518806 },
+  { latitude: 41.901674, longitude: 12.518895 },
+  { latitude: 41.901782, longitude: 12.518983 },
+  { latitude: 41.901954, longitude: 12.519112 },
+  { latitude: 41.902010, longitude: 12.519153 },
+  { latitude: 41.902209, longitude: 12.519292 },
+  { latitude: 41.902358, longitude: 12.519384 },
+  { latitude: 41.902451, longitude: 12.519498 },
+  { latitude: 41.902479, longitude: 12.519530 },
+  { latitude: 41.902516, longitude: 12.519568 },
+  { latitude: 41.902553, longitude: 12.519602 },
+  { latitude: 41.902604, longitude: 12.519646 },
+  { latitude: 41.902643, longitude: 12.519677 },
+  { latitude: 41.902887, longitude: 12.519853 },
+  { latitude: 41.902906, longitude: 12.519867 },
+  { latitude: 41.903284, longitude: 12.520153 },
+  { latitude: 41.903551, longitude: 12.520331 },
+  { latitude: 41.903813, longitude: 12.520513 },
+  { latitude: 41.904057, longitude: 12.520715 },
+  { latitude: 41.904215, longitude: 12.520850 },
+  { latitude: 41.904404, longitude: 12.521017 },
+  { latitude: 41.904600, longitude: 12.521198 },
+  { latitude: 41.904974, longitude: 12.521568 },
+  { latitude: 41.905291, longitude: 12.521894 },
+  { latitude: 41.905540, longitude: 12.522163 },
+  { latitude: 41.905772, longitude: 12.522396 },
+  { latitude: 41.905930, longitude: 12.522561 },
+  { latitude: 41.906220, longitude: 12.522871 },
+  { latitude: 41.906339, longitude: 12.522997 },
+  { latitude: 41.906539, longitude: 12.523211 },
+  { latitude: 41.906603, longitude: 12.523283 },
+  { latitude: 41.906668, longitude: 12.523357 },
+  { latitude: 41.906735, longitude: 12.523444 },
+  { latitude: 41.906798, longitude: 12.523527 },
+  { latitude: 41.907010, longitude: 12.523810 },
+  { latitude: 41.907029, longitude: 12.523835 },
+  { latitude: 41.907090, longitude: 12.523751 },
+  { latitude: 41.907291, longitude: 12.524042 },
+  { latitude: 41.907440, longitude: 12.524293 },
+  { latitude: 41.907590, longitude: 12.524573 },
+  { latitude: 41.907718, longitude: 12.524874 },
+  { latitude: 41.907790, longitude: 12.525077 },
+  { latitude: 41.907874, longitude: 12.525336 },
+  { latitude: 41.907946, longitude: 12.525590 },
+  { latitude: 41.907983, longitude: 12.525729 },
+  { latitude: 41.907990, longitude: 12.525757 },
+  { latitude: 41.907993, longitude: 12.525765 },
+  { latitude: 41.908041, longitude: 12.525940 },
+  { latitude: 41.908097, longitude: 12.526148 },
+  { latitude: 41.908136, longitude: 12.526298 },
+  { latitude: 41.908224, longitude: 12.526632 },
+  { latitude: 41.908219, longitude: 12.527001 },
+  { latitude: 41.908217, longitude: 12.527161 },
+  { latitude: 41.908216, longitude: 12.527199 },
+  { latitude: 41.908245, longitude: 12.527531 },
+  { latitude: 41.908273, longitude: 12.527716 },
+  { latitude: 41.908317, longitude: 12.527967 },
+  { latitude: 41.908369, longitude: 12.528223 },
+  { latitude: 41.908379, longitude: 12.528262 },
+  { latitude: 41.908388, longitude: 12.528299 },
+  { latitude: 41.908400, longitude: 12.528338 },
+  { latitude: 41.908411, longitude: 12.528375 },
+  { latitude: 41.908453, longitude: 12.528492 },
+  { latitude: 41.908599, longitude: 12.528862 },
+  { latitude: 41.908941, longitude: 12.529836 },
+  { latitude: 41.909058, longitude: 12.530155 },
+  { latitude: 41.909073, longitude: 12.530188 },
+  { latitude: 41.909099, longitude: 12.530257 },
+  { latitude: 41.909130, longitude: 12.530330 },
+  { latitude: 41.909158, longitude: 12.530400 },
+  { latitude: 41.909187, longitude: 12.530470 },
+  { latitude: 41.909214, longitude: 12.530534 },
+  { latitude: 41.909275, longitude: 12.530493 },
+  { latitude: 41.909530, longitude: 12.530323 },
 ];
-const METRO_B_POLICLINICO_TO_TIBURTINA: LatLngPoint[] = [...METRO_B_TIBURTINA_TO_POLICLINICO].reverse();
 
-const ROUTE_BUS_310_CASTRO_TO_POLICLINICO: LatLngPoint[] = [
-  { latitude: 41.903932, longitude: 12.520330 }, // Castro Laurenziano
-  { latitude: 41.904200, longitude: 12.518500 }, // Regina Elena / Università
-  { latitude: 41.904450, longitude: 12.514500 },
-  { latitude: 41.904680, longitude: 12.510520 }, // Policlinico
-];
-const ROUTE_BUS_310_POLICLINICO_TO_CASTRO: LatLngPoint[] = [
-  ...ROUTE_BUS_310_CASTRO_TO_POLICLINICO,
-].reverse();
-
-function getStaticFallbackDepartures(options: {
+/**
+ * Risultato tabellone dinamico vuoto per corse non attive o rete non raggiungibile.
+ * Nessuna corsa fittizia o hardcoded.
+ */
+export function getStaticFallbackDepartures(options: {
   stationName: string;
   destName: string;
   targetTime?: string;
@@ -1166,514 +1632,18 @@ function getStaticFallbackDepartures(options: {
   minDepartureTime?: string;
   isLiveContext?: boolean;
 }): TransitBoardResult {
-  const {
-    stationName,
-    destName,
-    targetTime,
-    direction = 'to_campus',
-    stationCoords,
-    targetCoords,
-    constraintTime,
-    minDepartureTime,
-    isLiveContext = false,
-  } = options;
-
-  const normSt = (stationName || '').toLowerCase();
-  const stCoords = stationCoords || resolveStationCoordinates(stationName);
-  const tgCoords = targetCoords || { lat: 41.90165, lng: 12.51985 };
-
-  const isFarFromRome =
-    Math.abs(stCoords.lat - 41.9028) > 0.25 || Math.abs(stCoords.lng - 12.4964) > 0.25;
-  if (isFarFromRome) {
-    return {
-      stationName,
-      destinationName: destName,
-      directLines: [],
-      departures: [],
-      optimalIndex: 0,
-      lastUpdated: new Date().toLocaleTimeString('it-IT', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }),
-      isLiveSource: false,
-    };
-  }
-
-  const now = new Date();
-  const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  let baseTotalMins = parseHHMMToMins(targetTime || nowStr);
-  if (baseTotalMins < 0) baseTotalMins = 8 * 60 + 10;
-
-  if (direction === 'to_campus' && minDepartureTime && !isLiveContext) {
-    const trainArrM = parseHHMMToMins(minDepartureTime);
-    if (trainArrM > 0) {
-      baseTotalMins = trainArrM + 2;
-    }
-  } else if (!isLiveContext && constraintTime) {
-    const deadlineM = parseHHMMToMins(constraintTime);
-    if (deadlineM > 0) {
-      baseTotalMins = deadlineM - 22;
-    }
-  }
-
-  let directLines: string[] = ['492', '71', '163', '448', 'Metro B'];
-  const departures: TransitDepartureItem[] = [];
-  const isToStation = direction === 'to_station';
-  const depHour = Math.floor((((baseTotalMins % 1440) + 1440) % 1440) / 60);
-  const isPeakHour = (depHour >= 7 && depHour <= 9) || (depHour >= 17 && depHour <= 19);
-
-  const buildItem = (
-    id: string,
-    line: string,
-    mode: 'bus' | 'metro' | 'tram' | 'rail',
-    headsign: string,
-    fromStop: string,
-    toStop: string,
-    offsetMins: number,
-    inVehicleMinutes: number,
-    fromStopCoords: { lat: number; lng: number },
-    toStopCoords: { lat: number; lng: number },
-    finalDestCoords: { lat: number; lng: number },
-    intermediateStops: { name: string; lat: number; lng: number }[],
-    crowdingLevel: 'low' | 'medium' | 'high',
-    customTransitPolyline?: LatLngPoint[],
-    customAlerts?: string[],
-    isDirect: boolean = true,
-    transfersCount: number = 0,
-    transferSummary?: string,
-    legs?: TransitLegDetail[],
-    transferWalkPolylines?: LatLngPoint[][]
-  ): TransitDepartureItem => {
-    const originCoords = isToStation ? tgCoords : stCoords;
-    const realWalkBefore = calculateRealWalkMinutes(originCoords, fromStopCoords);
-    const realWalkAfter = calculateRealWalkMinutes(toStopCoords, finalDestCoords);
-    const walkBeforeMinutes = realWalkBefore.minutes;
-    const walkAfterMinutes = realWalkAfter.minutes;
-
-    const depM = baseTotalMins + offsetMins;
-    const sched = minsToHHMM(depM);
-    const alightM = depM + inVehicleMinutes;
-    const alight = minsToHHMM(alightM);
-    const durationMinutes = Math.max(1, inVehicleMinutes + walkAfterMinutes);
-    const arr = minsToHHMM(depM + durationMinutes);
-
-    const transitPolyline =
-      customTransitPolyline && customTransitPolyline.length >= 2
-        ? customTransitPolyline
-        : buildStraightPolyline([
-            fromStopCoords,
-            ...intermediateStops.map((s) => ({ lat: s.lat, lng: s.lng })),
-            toStopCoords,
-          ]);
-    const walkAfterPolyline =
-      walkAfterMinutes > 0
-        ? buildStraightPolyline([toStopCoords, finalDestCoords])
-        : [];
-
-    return {
-      id,
-      line,
-      mode,
-      headsign,
-      fromStop,
-      toStop,
-      scheduledTime: sched,
-      estimatedTime: sched,
-      alightingTime: alight,
-      arrivalTime: arr,
-      delayMinutes: 0,
-      isLive: isLiveContext,
-      durationMinutes,
-      totalDoorToDoorMinutes: walkBeforeMinutes + durationMinutes,
-      inVehicleMinutes,
-      walkingMinutes: walkBeforeMinutes + walkAfterMinutes,
-      walkBeforeMinutes,
-      walkAfterMinutes,
-      statusType: isLiveContext ? 'on_time' : 'scheduled',
-      statusLabel: isLiveContext ? 'In orario' : 'Programmata',
-      alerts: customAlerts && customAlerts.length > 0 ? customAlerts : undefined,
-      isDirect,
-      transfersCount,
-      transferSummary,
-      legs,
-      transferWalkPolylines,
-      fromStopCoords,
-      toStopCoords,
-      finalDestCoords,
-      finalDestinationName: isToStation ? `Stazione ${stationName}` : destName,
-      intermediateStopsCount: intermediateStops.length + 1,
-      intermediateStopNames: intermediateStops.map((s) => s.name),
-      intermediateStopCoords: intermediateStops,
-      transitPolyline,
-      walkAfterPolyline,
-      crowdingLevel,
-      operator: mode === 'metro' ? 'ATAC Metro Roma' : 'ATAC Roma',
-    };
-  };
-
-    if (normSt.includes('tiburtina')) {
-    directLines = ['545', '649', '448', '71', '492', '163', 'Metro B'];
-    const tiburtinaBusCoords = { lat: 41.90955, lng: 12.53038 };
-    const tiburtinaMetroCoords = { lat: 41.91008, lng: 12.53062 };
-    const policlinicoMetroCoords = { lat: 41.90468, lng: 12.51052 };
-
-    const tiburtinaTramDetourAlert = [
-      'Cantiere nuova tranvia Verano-Tiburtina: transito su corsie laterali della viabilità ordinaria anziché sulla sede centrale; fermate attive su banchina laterale.',
-    ];
-    const line71DetourAlert = [
-      'Linea 71: percorso deviato su corsie laterali di Via Tiburtina e nodo Verano per cantieri della nuova tramvia.',
-    ];
-
-    // Fermate sulla viabilità laterale ordinaria nord-ovest (andata verso Castro Laurenziano / Verano)
-    const castroStopCoordsOutbound = { lat: 41.903932, lng: 12.520330 };
-    const veranoStopCoordsOutbound = { lat: 41.902190, lng: 12.518908 };
-    const viaTiburtinaIntermediateOutbound = [
-      { name: 'Tiburtina / Crociate', lat: 41.908035, lng: 12.525917 },
-      { name: 'Tiburtina / Valerio Massimo', lat: 41.905884, lng: 12.522221 },
-    ];
-
-    // Fermate sulla carreggiata laterale ordinaria sud-est (ritorno verso Stazione Tiburtina)
-    const castroStopCoordsInbound = { lat: 41.903813, lng: 12.520513 };
-    const veranoStopCoordsInbound = { lat: 41.902190, lng: 12.518908 };
-    const viaTiburtinaIntermediateInbound = [
-      { name: 'Tiburtina / Valerio Massimo', lat: 41.905772, lng: 12.522396 },
-      { name: 'Tiburtina / Crociate', lat: 41.907907, lng: 12.525800 },
-    ];
-
-    const isDestVerano = (destName || '').toLowerCase().includes('verano');
-    const targetAlightCoords = isDestVerano ? veranoStopCoordsOutbound : castroStopCoordsOutbound;
-    const targetAlightName = isDestVerano ? 'Verano' : 'Tiburtina / Castro Laurenziano';
-    const outboundBusCorridor = isDestVerano ? TIBURTINA_OUTBOUND_TO_VERANO : TIBURTINA_OUTBOUND_TO_CASTRO;
-    const inboundBusCorridor = isDestVerano ? TIBURTINA_INBOUND_FROM_VERANO : TIBURTINA_INBOUND_FROM_CASTRO;
-    const originBoardCoords = isDestVerano ? veranoStopCoordsInbound : castroStopCoordsInbound;
-    const originBoardName = isDestVerano ? 'Verano' : 'Tiburtina / Castro Laurenziano';
-
-    if (isToStation) {
-      departures.push(
-        buildItem(
-          'fb-ret-448',
-          '448',
-          'bus',
-          'Balsamo Crivelli (via Staz.ne Tiburtina)',
-          originBoardName,
-          'Staz.ne Tiburtina (MB)',
-          2,
-          5,
-          originBoardCoords,
-          tiburtinaBusCoords,
-          stCoords,
-          viaTiburtinaIntermediateInbound,
-          isPeakHour ? 'medium' : 'low',
-          inboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-ret-71',
-          '71',
-          'bus',
-          'Staz.ne Tiburtina (MB)',
-          originBoardName,
-          'Staz.ne Tiburtina (MB)',
-          5,
-          5,
-          originBoardCoords,
-          tiburtinaBusCoords,
-          stCoords,
-          viaTiburtinaIntermediateInbound,
-          isPeakHour ? 'medium' : 'low',
-          inboundBusCorridor,
-          line71DetourAlert
-        ),
-        buildItem(
-          'fb-ret-492',
-          '492',
-          'bus',
-          'Staz.ne Tiburtina (MB)',
-          originBoardName,
-          'Staz.ne Tiburtina (MB)',
-          8,
-          5,
-          originBoardCoords,
-          tiburtinaBusCoords,
-          stCoords,
-          viaTiburtinaIntermediateInbound,
-          isPeakHour ? 'medium' : 'low',
-          inboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-ret-163',
-          '163',
-          'bus',
-          'Rebibbia (via Staz.ne Tiburtina)',
-          originBoardName,
-          'Staz.ne Tiburtina (MB)',
-          11,
-          5,
-          originBoardCoords,
-          tiburtinaBusCoords,
-          stCoords,
-          viaTiburtinaIntermediateInbound,
-          isPeakHour ? 'medium' : 'low',
-          inboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-ret-mb',
-          'Metro B',
-          'metro',
-          'Rebibbia / Jonio',
-          'Policlinico (Metro B)',
-          'Tiburtina FS (Metro B)',
-          13,
-          4,
-          policlinicoMetroCoords,
-          tiburtinaMetroCoords,
-          stCoords,
-          [{ name: 'Bologna', lat: 41.9134, lng: 12.5208 }],
-          isPeakHour ? 'high' : 'medium',
-          METRO_B_POLICLINICO_TO_TIBURTINA
-        ),
-        buildItem(
-          'fb-ret-transfer-1',
-          '310 + Metro B',
-          'bus',
-          'Termini / Vescovio (cambio Policlinico)',
-          originBoardName,
-          'Tiburtina FS (Metro B)',
-          15,
-          7,
-          originBoardCoords,
-          tiburtinaMetroCoords,
-          stCoords,
-          [],
-          isPeakHour ? 'medium' : 'low',
-          undefined,
-          undefined,
-          false,
-          1,
-          'Bus 310 ➔ Metro B',
-          [
-            {
-              line: '310',
-              mode: 'bus',
-              headsign: 'Vescovio',
-              fromStop: originBoardName,
-              toStop: 'Policlinico (Metro B)',
-              durationMinutes: 3,
-              intermediateStopsCount: 1,
-              intermediateStopNames: ['Regina Elena / Università'],
-              fromStopCoords: originBoardCoords,
-              toStopCoords: { lat: 41.9042, lng: 12.5185 },
-              polyline: ROUTE_BUS_310_CASTRO_TO_POLICLINICO,
-            },
-            {
-              line: 'Metro B',
-              mode: 'metro',
-              headsign: 'Rebibbia / Jonio',
-              fromStop: 'Policlinico (Metro B)',
-              toStop: 'Tiburtina FS (Metro B)',
-              durationMinutes: 4,
-              intermediateStopsCount: 1,
-              intermediateStopNames: ['Bologna'],
-              fromStopCoords: policlinicoMetroCoords,
-              toStopCoords: tiburtinaMetroCoords,
-              polyline: METRO_B_POLICLINICO_TO_TIBURTINA,
-            },
-          ],
-          [
-            [
-              { latitude: 41.9042, longitude: 12.5185 },
-              { latitude: 41.90468, longitude: 12.51052 },
-            ],
-          ]
-        )
-      );
-    } else {
-      departures.push(
-        buildItem(
-          'fb-out-448',
-          '448',
-          'bus',
-          'Verano',
-          'Staz.ne Tiburtina (MB)',
-          targetAlightName,
-          2,
-          4,
-          tiburtinaBusCoords,
-          targetAlightCoords,
-          tgCoords,
-          viaTiburtinaIntermediateOutbound,
-          isPeakHour ? 'medium' : 'low',
-          outboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-out-71',
-          '71',
-          'bus',
-          'L.go Chigi',
-          'Staz.ne Tiburtina (MB)',
-          targetAlightName,
-          4,
-          4,
-          tiburtinaBusCoords,
-          targetAlightCoords,
-          tgCoords,
-          viaTiburtinaIntermediateOutbound,
-          isPeakHour ? 'medium' : 'low',
-          outboundBusCorridor,
-          line71DetourAlert
-        ),
-        buildItem(
-          'fb-out-492',
-          '492',
-          'bus',
-          'Staz.ne Metro Cipro (MA)',
-          'Staz.ne Tiburtina (MB)',
-          targetAlightName,
-          7,
-          4,
-          tiburtinaBusCoords,
-          targetAlightCoords,
-          tgCoords,
-          viaTiburtinaIntermediateOutbound,
-          isPeakHour ? 'medium' : 'low',
-          outboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-out-163',
-          '163',
-          'bus',
-          'Verano',
-          'Staz.ne Tiburtina (MB)',
-          targetAlightName,
-          9,
-          4,
-          tiburtinaBusCoords,
-          targetAlightCoords,
-          tgCoords,
-          viaTiburtinaIntermediateOutbound,
-          isPeakHour ? 'medium' : 'low',
-          outboundBusCorridor,
-          tiburtinaTramDetourAlert
-        ),
-        buildItem(
-          'fb-out-mb',
-          'Metro B',
-          'metro',
-          'Laurentina',
-          'Tiburtina FS (Metro B)',
-          'Policlinico (Metro B)',
-          12,
-          4,
-          tiburtinaMetroCoords,
-          policlinicoMetroCoords,
-          tgCoords,
-          [{ name: 'Bologna', lat: 41.9134, lng: 12.5208 }],
-          isPeakHour ? 'high' : 'medium',
-          METRO_B_TIBURTINA_TO_POLICLINICO
-        ),
-        buildItem(
-          'fb-out-transfer-1',
-          'Metro B + 310',
-          'metro',
-          'Laurentina (cambio Policlinico)',
-          'Tiburtina FS (Metro B)',
-          'Regina Elena / Castro Laurenziano',
-          14,
-          7,
-          tiburtinaMetroCoords,
-          { lat: 41.9042, lng: 12.5185 },
-          tgCoords,
-          [],
-          isPeakHour ? 'medium' : 'low',
-          METRO_B_TIBURTINA_TO_POLICLINICO,
-          undefined,
-          false,
-          1,
-          'Metro B ➔ Bus 310',
-          [
-            {
-              line: 'Metro B',
-              mode: 'metro',
-              headsign: 'Laurentina',
-              fromStop: 'Tiburtina FS (Metro B)',
-              toStop: 'Policlinico (Metro B)',
-              durationMinutes: 4,
-              intermediateStopsCount: 1,
-              intermediateStopNames: ['Bologna'],
-              fromStopCoords: tiburtinaMetroCoords,
-              toStopCoords: policlinicoMetroCoords,
-              polyline: METRO_B_TIBURTINA_TO_POLICLINICO,
-            },
-            {
-              line: '310',
-              mode: 'bus',
-              headsign: 'Termini (MA-MB-FS)',
-              fromStop: 'Policlinico (Metro B)',
-              toStop: 'Regina Elena / Castro Laurenziano',
-              durationMinutes: 3,
-              intermediateStopsCount: 1,
-              intermediateStopNames: ['Regina Elena / Università'],
-              fromStopCoords: { lat: 41.9042, lng: 12.5185 },
-              toStopCoords: tgCoords,
-              polyline: ROUTE_BUS_310_POLICLINICO_TO_CASTRO,
-            },
-          ],
-          [
-            [
-              { latitude: 41.90468, longitude: 12.51052 },
-              { latitude: 41.9042, longitude: 12.5185 },
-            ],
-          ]
-        )
-      );
-    }
-  } else {
-    directLines = ['310', '492', '71', 'Metro B'];
-    departures.push(
-      buildItem(
-        'fb-gen-1',
-        '492',
-        'bus',
-        isToStation ? `Staz.ne ${stationName}` : 'Staz.ne Metro Cipro (MA)',
-        isToStation ? 'Università / De Lollis' : `${stationName} (Capolinea Bus)`,
-        isToStation ? `${stationName} (Piazzale FS)` : 'Università / Castro Laurenziano',
-        3,
-        8,
-        isToStation ? tgCoords : stCoords,
-        isToStation ? stCoords : tgCoords,
-        isToStation ? stCoords : tgCoords,
-        [],
-        'low'
-      )
-    );
-  }
-
-  const { optimal, optimalIndex } = findOptimalTransitDeparture(departures, {
-    direction,
-    isLiveContext,
-    constraintTime,
-    minDepartureTime,
-    targetTime,
-  });
-
   return {
-    stationName,
-    destinationName: destName,
-    directLines,
-    departures,
-    optimalDeparture: optimal,
-    optimalIndex,
+    stationName: options.stationName,
+    destinationName: options.destName,
+    directLines: [],
+    departures: [],
+    optimalIndex: 0,
     lastUpdated: new Date().toLocaleTimeString('it-IT', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
     }),
-    isLiveSource: isLiveContext,
+    isLiveSource: false,
   };
 }
 
@@ -1920,34 +1890,19 @@ export async function getStationTransitBoard(options: {
       const itineraries: any[] = [...primaryItineraries, ...secondaryItineraries];
 
       if (itineraries.length === 0) {
-        const isFarFromRome =
-          Math.abs(originLat - 41.9028) > 0.25 || Math.abs(originLng - 12.4964) > 0.25;
-        if (isFarFromRome) {
-          return {
-            stationName,
-            destinationName: targetName,
-            directLines: [],
-            departures: [],
-            optimalIndex: 0,
-            lastUpdated: new Date().toLocaleTimeString('it-IT', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            }),
-            isLiveSource: false,
-          };
-        }
-        return getStaticFallbackDepartures({
+        return {
           stationName,
-          destName: targetName,
-          targetTime,
-          direction,
-          stationCoords: stCoords,
-          targetCoords: tgCoords,
-          constraintTime,
-          minDepartureTime,
-          isLiveContext,
-        });
+          destinationName: targetName,
+          directLines: [],
+          departures: [],
+          optimalIndex: 0,
+          lastUpdated: new Date().toLocaleTimeString('it-IT', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+          isLiveSource: false,
+        };
       }
 
       const pendingItems: {
@@ -1997,13 +1952,14 @@ export async function getStationTransitBoard(options: {
           primaryLeg.from?.lat && primaryLeg.from?.lon
             ? { lat: primaryLeg.from.lat, lng: primaryLeg.from.lon }
             : { lat: originLat, lng: originLng };
-        const fromStopCoords = snapStopToRoadway(primaryLeg.from?.name, rawFromCoords);
+        let fromStopCoords = snapStopToRoadway(primaryLeg.from?.name, rawFromCoords);
 
         const rawToCoords =
           lastTransitLeg.to?.lat && lastTransitLeg.to?.lon
             ? { lat: lastTransitLeg.to.lat, lng: lastTransitLeg.to.lon }
             : { lat: destLat, lng: destLng };
-        const toStopCoords = snapStopToRoadway(lastTransitLeg.to?.name, rawToCoords);
+        let toStopCoords = snapStopToRoadway(lastTransitLeg.to?.name, rawToCoords);
+        let toStopName = formatStopDisplayName(lastTransitLeg.to?.name || '');
 
         const finalDestCoords = { lat: destLat, lng: destLng };
         const originCoords = { lat: originLat, lng: originLng };
@@ -2011,7 +1967,7 @@ export async function getStationTransitBoard(options: {
         const rawIntermediate: any[] = Array.isArray(primaryLeg.intermediateStops)
           ? primaryLeg.intermediateStops
           : [];
-        const intermediateStopCoords = rawIntermediate
+        let intermediateStopCoords = rawIntermediate
           .filter((s) => s?.name && typeof s.lat === 'number' && typeof s.lon === 'number')
           .map((s) => {
             const snapped = snapStopToRoadway(s.name, { lat: s.lat, lng: s.lon });
@@ -2033,6 +1989,28 @@ export async function getStationTransitBoard(options: {
             intermediateStopNames = inferred.names;
           }
         }
+
+        // OTTIMIZZAZIONE GENERICA PER IL MINOR TEMPO A PIEDI:
+        // Si applica unicamente alle corse dirette (1 tratta transit):
+        // In ENTRAMBE le direzioni ('to_campus' e 'to_station'), la destinazione da raggiungere a piedi dal mezzo è finalDestCoords!
+        if (isDirect && transitLegs.length === 1) {
+          const optStop = optimizeTransitStopForMinWalk({
+            direction,
+            currentStopName: toStopName,
+            currentStopCoords: toStopCoords,
+            targetCoords: finalDestCoords,
+            intermediateStops: intermediateStopCoords,
+            lineShort,
+            mode,
+          });
+
+          if (optStop.didChange) {
+            toStopName = optStop.optimizedStopName;
+            toStopCoords = optStop.optimizedStopCoords;
+            intermediateStopCoords = optStop.optimizedIntermediateStops;
+            intermediateStopNames = intermediateStopCoords.map((s) => s.name);
+          }
+        }
         const intermediateStopsCount = intermediateStopNames.length + 1;
 
         // Decodifica le polilinee reali del mezzo e dei tratti a piedi
@@ -2044,13 +2022,42 @@ export async function getStationTransitBoard(options: {
           );
           rawTransitPolyline.push(...pts);
         }
-        const transitPolyline = resolveOptimizedTransitPolyline(
+        const smoothedRawTransit = rawTransitPolyline.length >= 3
+          ? pruneAnomalousLoopsAndSpikes(rawTransitPolyline)
+          : rawTransitPolyline;
+
+        const optimizedTransitPolyline = resolveOptimizedTransitPolyline(
           primaryLeg.from?.name || '',
           lastTransitLeg.to?.name || '',
           fromStopCoords,
           toStopCoords,
-          rawTransitPolyline
+          smoothedRawTransit
         );
+        const transitPolyline = ensureContinuousTransitPolyline(
+          { latitude: fromStopCoords.lat, longitude: fromStopCoords.lng },
+          { latitude: toStopCoords.lat, longitude: toStopCoords.lng },
+          intermediateStopCoords,
+          optimizedTransitPolyline
+        );
+
+        // Aggancio matematico generico delle coordinate di fermata alla carreggiata stradale:
+        // Sposta i marker da eventuali cortili/edifici privati (coordinate GTFS grezze) alla banchina del marciapiede stradale
+        if (transitPolyline.length >= 2) {
+          const snappedFrom = snapCoordinateToPolyline(fromStopCoords, transitPolyline, 150);
+          fromStopCoords = { lat: snappedFrom.latitude, lng: snappedFrom.longitude };
+
+          const snappedTo = snapCoordinateToPolyline(toStopCoords, transitPolyline, 150);
+          toStopCoords = { lat: snappedTo.latitude, lng: snappedTo.longitude };
+
+          intermediateStopCoords = intermediateStopCoords.map((s) => {
+            const snappedInt = snapCoordinateToPolyline({ lat: s.lat, lng: s.lng }, transitPolyline, 150);
+            return {
+              name: s.name,
+              lat: snappedInt.latitude,
+              lng: snappedInt.longitude,
+            };
+          });
+        }
 
         const walkBeforeLegs = legs.slice(0, firstTransitIdx);
         const walkBeforePolyline: LatLngPoint[] = [];
@@ -2234,20 +2241,45 @@ export async function getStationTransitBoard(options: {
             tl.legGeometry?.points,
             tl.legGeometry?.precision || 6
           );
+          const rawFrom = tl.from && typeof tl.from.lat === 'number' ? { lat: tl.from.lat, lng: tl.from.lon } : undefined;
+          const rawTo = tl.to && typeof tl.to.lat === 'number' ? { lat: tl.to.lat, lng: tl.to.lon } : undefined;
+          const cleanedLegPts = legPts.length >= 2 ? pruneAnomalousLoopsAndSpikes(legPts) : legPts;
+          const continuousLegPolyline = cleanedLegPts.length >= 2
+            ? ensureContinuousTransitPolyline(
+                rawFrom ? { latitude: rawFrom.lat, longitude: rawFrom.lng } : undefined,
+                rawTo ? { latitude: rawTo.lat, longitude: rawTo.lng } : undefined,
+                [],
+                cleanedLegPts
+              )
+            : undefined;
+
+          let snappedLegFrom = rawFrom;
+          let snappedLegTo = rawTo;
+          if (continuousLegPolyline && continuousLegPolyline.length >= 2) {
+            if (rawFrom) {
+              const sF = snapCoordinateToPolyline(rawFrom, continuousLegPolyline, 150);
+              snappedLegFrom = { lat: sF.latitude, lng: sF.longitude };
+            }
+            if (rawTo) {
+              const sT = snapCoordinateToPolyline(rawTo, continuousLegPolyline, 150);
+              snappedLegTo = { lat: sT.latitude, lng: sT.longitude };
+            }
+          }
+
           return {
             line: tlLine,
             mode: tlMode,
             headsign: formatStopDisplayName(tl.headsign || ''),
             fromStop: formatStopDisplayName(tl.from?.name || ''),
             toStop: formatStopDisplayName(tl.to?.name || ''),
-            fromStopCoords: tl.from && typeof tl.from.lat === 'number' ? { lat: tl.from.lat, lng: tl.from.lon } : undefined,
-            toStopCoords: tl.to && typeof tl.to.lat === 'number' ? { lat: tl.to.lat, lng: tl.to.lon } : undefined,
+            fromStopCoords: snappedLegFrom,
+            toStopCoords: snappedLegTo,
             departureTime: startM >= 0 ? minsToHHMM(startM) : undefined,
             arrivalTime: endM >= 0 ? minsToHHMM(endM) : undefined,
             durationMinutes: dur,
             intermediateStopsCount: intStops.length,
             intermediateStopNames: intStops.length > 0 ? intStops : undefined,
-            polyline: legPts.length >= 2 ? legPts : undefined,
+            polyline: continuousLegPolyline,
           };
         });
 
@@ -2290,9 +2322,11 @@ export async function getStationTransitBoard(options: {
             fromStop: formatStopDisplayName(
               primaryLeg.from?.name || (direction === 'to_station' ? targetName : stationName)
             ),
-            toStop: formatStopDisplayName(
-              lastTransitLeg.to?.name || (direction === 'to_station' ? stationName : targetName)
-            ),
+            toStop:
+              toStopName ||
+              formatStopDisplayName(
+                lastTransitLeg.to?.name || (direction === 'to_station' ? stationName : targetName)
+              ),
             scheduledTime: schedDep,
             estimatedTime: estDep,
             alightingTime: alightTime,
@@ -2312,6 +2346,7 @@ export async function getStationTransitBoard(options: {
             transfersCount: transitLegs.length - 1,
             transferSummary: !isDirect ? transferSummaryStr : undefined,
             legs: !isDirect ? transferLegDetails : undefined,
+            initialOriginCoords: originCoords,
             fromStopCoords,
             toStopCoords,
             finalDestCoords,
@@ -2336,36 +2371,19 @@ export async function getStationTransitBoard(options: {
       }
 
       if (pendingItems.length === 0) {
-        // Se la posizione di partenza è fuori Roma/in un'altra regione (> 25km dal centro di Roma),
-        // evita di mostrare il fallback statico fittizio dei bus urbani romani (71, 492, ecc.)
-        const isFarFromRome =
-          Math.abs(originLat - 41.9028) > 0.25 || Math.abs(originLng - 12.4964) > 0.25;
-        if (isFarFromRome) {
-          return {
-            stationName,
-            destinationName: targetName,
-            directLines: [],
-            departures: [],
-            optimalIndex: 0,
-            lastUpdated: new Date().toLocaleTimeString('it-IT', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            }),
-            isLiveSource: false,
-          };
-        }
-        return getStaticFallbackDepartures({
+        return {
           stationName,
-          destName: targetName,
-          targetTime,
-          direction,
-          stationCoords: stCoords,
-          targetCoords: tgCoords,
-          constraintTime,
-          minDepartureTime,
-          isLiveContext,
-        });
+          destinationName: targetName,
+          directLines: [],
+          departures: [],
+          optimalIndex: 0,
+          lastUpdated: new Date().toLocaleTimeString('it-IT', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+          isLiveSource: false,
+        };
       }
 
       // Trova la minima camminata a piedi a destinazione tra le opzioni disponibili
@@ -2417,9 +2435,17 @@ export async function getStationTransitBoard(options: {
       finalDepartures.sort((a, b) => {
         const aDep = parseHHMMToMins(a.estimatedTime);
         const bDep = parseHHMMToMins(b.estimatedTime);
+        const aWalk = (a.walkBeforeMinutes || 0) + (a.walkAfterMinutes || 0);
+        const bWalk = (b.walkBeforeMinutes || 0) + (b.walkAfterMinutes || 0);
+
+        // Se le partenze sono nella stessa fascia utile (entro 4 minuti di scarto), favorisci la corsa che garantisce minor tempo a piedi
+        if (Math.abs(aDep - bDep) <= 4 && Math.abs(aWalk - bWalk) >= 2) {
+          return aWalk - bWalk;
+        }
+
         if (Math.abs(aDep - bDep) <= 1) {
-          if (a.walkAfterMinutes !== b.walkAfterMinutes) {
-            return a.walkAfterMinutes - b.walkAfterMinutes;
+          if (aWalk !== bWalk) {
+            return aWalk - bWalk;
           }
           return a.durationMinutes - b.durationMinutes;
         }
@@ -2463,34 +2489,19 @@ export async function getStationTransitBoard(options: {
 
       return result;
     } catch {
-      const isFarFromRome =
-        Math.abs(originLat - 41.9028) > 0.25 || Math.abs(originLng - 12.4964) > 0.25;
-      if (isFarFromRome) {
-        return {
-          stationName,
-          destinationName: targetName,
-          directLines: [],
-          departures: [],
-          optimalIndex: 0,
-          lastUpdated: new Date().toLocaleTimeString('it-IT', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          }),
-          isLiveSource: false,
-        };
-      }
-      return getStaticFallbackDepartures({
+      return {
         stationName,
-        destName: targetName,
-        targetTime,
-        direction,
-        stationCoords: stCoords,
-        targetCoords: tgCoords,
-        constraintTime,
-        minDepartureTime,
-        isLiveContext,
-      });
+        destinationName: targetName,
+        directLines: [],
+        departures: [],
+        optimalIndex: 0,
+        lastUpdated: new Date().toLocaleTimeString('it-IT', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        isLiveSource: false,
+      };
     }
   };
 

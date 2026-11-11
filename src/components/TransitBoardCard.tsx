@@ -54,6 +54,9 @@ interface TransitBoardCardProps {
 
 export type ExpansionLevel = 'collapsed' | 'half_hour' | 'full';
 
+// In-memory cache per cambi istantanei (0ms) tra andata/ritorno e lezioni target
+const transitBoardMemoryCache = new Map<string, TransitBoardResult>();
+
 export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   stationName,
   stationCoords,
@@ -76,12 +79,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   );
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [detectedCity, setDetectedCity] = useState<string | null>(null);
+  const [detectedAddress, setDetectedAddress] = useState<string | null>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
 
   // Controllo preventivo: la logica live è attiva SOLO se il giorno selezionato nel selettore orizzontale corrisponde ad oggi
+  // E se il contesto non è forzato su programmato (es. lezioni in corso o già concluse per cui si mostrano le linee programmate)
   const isSelectedDayActiveToday = Boolean(isToday);
-  const canUseLive = isSelectedDayActiveToday;
+  const canUseLive = isSelectedDayActiveToday && (isLiveContext !== false);
 
   const [boardData, setBoardData] = useState<TransitBoardResult | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -105,6 +110,15 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         const cityName = g.city || g.subregion || g.district || g.region || g.name;
         if (cityName) {
           setDetectedCity(cityName);
+        }
+        const street = g.street || g.name;
+        const streetNum = g.streetNumber ? ` ${g.streetNumber}` : '';
+        if (street && cityName) {
+          setDetectedAddress(`${street}${streetNum} • ${cityName}`);
+        } else if (street) {
+          setDetectedAddress(`${street}${streetNum}`);
+        } else if (cityName) {
+          setDetectedAddress(cityName);
         }
       }
     } catch {
@@ -196,13 +210,12 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         setLocationError(null);
       } else {
         setOriginMode('current_location');
-        setBoardData(null); // Pulisce le corse precedenti per evitare di mostrare la vecchia origine
-        setUserCoords(null); // Resetta le coordinate in attesa del fix GPS reale
-        setDetectedCity(null);
-        acquireOrRefreshGpsLocation(false);
+        if (!userCoords) {
+          acquireOrRefreshGpsLocation(false);
+        }
       }
     },
-    [originMode, acquireOrRefreshGpsLocation]
+    [originMode, userCoords, acquireOrRefreshGpsLocation]
   );
 
   // Click sull'icona circolare di refresh del pannello "Mezzi":
@@ -240,7 +253,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     let qTargetName = targetName;
 
     if (isCurrentLoc && userCoords) {
-      const locLabel = detectedCity ? `La mia posizione (${detectedCity})` : 'La mia posizione';
+      const locLabel = detectedAddress || (detectedCity ? `Posizione (${detectedCity})` : 'La mia posizione');
       if (direction === 'to_station') {
         qTargetCoords = userCoords;
         qTargetName = locLabel;
@@ -252,6 +265,19 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
 
     const isManualForce = manualRefreshCount !== prevManualRefreshCountRef.current;
     prevManualRefreshCountRef.current = manualRefreshCount;
+
+    const cacheKey = `${direction}_${qStationName}_${qTargetName}_${canUseLive ? 'live' : (targetTime || 'now')}_${targetDate || ''}_${constraintTime || ''}_${minDepartureTime || ''}_${isCurrentLoc ? `${userCoords?.lat.toFixed(4)},${userCoords?.lng.toFixed(4)}` : 'default'}`;
+
+    if (!isManualForce && transitBoardMemoryCache.has(cacheKey)) {
+      const cached = transitBoardMemoryCache.get(cacheKey)!;
+      queueMicrotask(() => {
+        if (!isMounted) return;
+        setBoardData(cached);
+        setLoading(false);
+      });
+    } else {
+      setLoading(true);
+    }
 
     getStationTransitBoard({
       stationName: qStationName,
@@ -268,6 +294,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     })
       .then((data) => {
         if (!isMounted) return;
+        transitBoardMemoryCache.set(cacheKey, data);
         setBoardData(data);
         setLoading(false);
 
@@ -308,6 +335,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     originMode,
     userCoords,
     detectedCity,
+    detectedAddress,
     canUseLive,
     constraintTime,
     minDepartureTime,
@@ -557,91 +585,116 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* ── Barra grafica compatta per la scelta del punto di partenza (Stazione vs Posizione) ── */}
-      <View style={styles.originSwitchBar}>
+      {/* ── Selettore di Partenza Mezzi Unificato (Design Moderno & Intuitivo) ── */}
+      <View style={styles.unifiedOriginWrapper}>
+        <Text style={styles.unifiedOriginSectionLabel}>PARTENZA DA</Text>
         <TouchableOpacity
-          activeOpacity={0.75}
-          onPress={() => handleSelectOrigin('station_or_campus')}
+          activeOpacity={0.78}
+          onPress={() =>
+            handleSelectOrigin(
+              originMode === 'current_location' ? 'station_or_campus' : 'current_location'
+            )
+          }
           style={[
-            styles.originPillBtn,
-            originMode === 'station_or_campus' && [
-              styles.originPillBtnActive,
-              { borderColor: 'rgba(96, 165, 250, 0.45)' },
-            ],
+            styles.unifiedOriginCard,
+            originMode === 'current_location' && styles.unifiedOriginCardGps,
           ]}
+          accessibilityLabel={
+            originMode === 'current_location'
+              ? (direction === 'to_station' ? 'Passa a partenza da Sede' : 'Passa a partenza da Stazione')
+              : 'Passa a partenza da Posizione GPS'
+          }
         >
-          <Ionicons
-            name={direction === 'to_campus' ? 'train-outline' : 'school-outline'}
-            size={12}
-            color={originMode === 'station_or_campus' ? '#60a5fa' : '#94a3b8'}
-            style={{ marginRight: 5 }}
-          />
-          <Text
+          {/* Icona indicatore dello stato di partenza attivo */}
+          <View
             style={[
-              styles.originPillText,
-              originMode === 'station_or_campus' && styles.originPillTextActive,
+              styles.unifiedOriginIconBox,
+              originMode === 'current_location'
+                ? styles.unifiedOriginIconBoxGps
+                : styles.unifiedOriginIconBoxDefault,
             ]}
-            numberOfLines={1}
           >
-            {direction === 'to_station' ? 'Sede' : 'Stazione'}
-          </Text>
-        </TouchableOpacity>
+            {originMode === 'current_location' ? (
+              isLocating ? (
+                <ActivityIndicator size={13} color="#10b981" />
+              ) : (
+                <Ionicons name="locate" size={16} color="#10b981" />
+              )
+            ) : (
+              <Ionicons
+                name={direction === 'to_station' ? 'school' : 'train'}
+                size={16}
+                color="#60a5fa"
+              />
+            )}
+          </View>
 
-        <TouchableOpacity
-          activeOpacity={0.75}
-          onPress={() => handleSelectOrigin('current_location')}
-          style={[
-            styles.originPillBtn,
-            originMode === 'current_location' && [
-              styles.originPillBtnActive,
-              { borderColor: 'rgba(16, 185, 129, 0.45)' },
-            ],
-          ]}
-        >
-          {isLocating ? (
-            <ActivityIndicator size={11} color="#10b981" style={{ marginRight: 5 }} />
-          ) : (
-            <Ionicons
-              name="locate"
-              size={12}
-              color={originMode === 'current_location' ? '#10b981' : '#94a3b8'}
-              style={{ marginRight: 5 }}
-            />
-          )}
-          <Text
+          {/* Testi informativi a due righe: Luogo effettivo di partenza (Stazione o Via e Città) + Dettaglio (mai troncati) */}
+          <View style={styles.unifiedOriginTextCol}>
+            <Text
+              style={[
+                styles.unifiedOriginMainText,
+                originMode === 'current_location' && styles.unifiedOriginMainTextGps,
+              ]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {originMode === 'current_location'
+                ? (isLocating
+                    ? 'Rilevamento posizione...'
+                    : 'Posizione')
+                : direction === 'to_station'
+                ? (targetName || 'Sede universitaria')
+                : (stationName || 'Stazione ferroviaria')}
+            </Text>
+            <Text
+              style={[
+                styles.unifiedOriginSubText,
+                originMode === 'current_location' && styles.unifiedOriginSubTextGps,
+              ]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {originMode === 'current_location'
+                ? (isLocating
+                    ? 'Acquisizione GPS in corso'
+                    : detectedAddress || (detectedCity ? `Coordinate attive • ${detectedCity}` : 'Coordinate GPS attive'))
+                : direction === 'to_station'
+                ? 'Sede di partenza'
+                : 'Stazione ferroviaria'}
+            </Text>
+          </View>
+
+          {/* Pillola di switch compatta: rende evidente l'azione di cambio lasciando massimo spazio al testo */}
+          <View
             style={[
-              styles.originPillText,
-              originMode === 'current_location' && styles.originPillTextActive,
+              styles.compactSwitchPill,
+              originMode === 'current_location'
+                ? styles.compactSwitchPillToDefault
+                : styles.compactSwitchPillToGps,
             ]}
-            numberOfLines={1}
           >
-            {detectedCity ? `Posizione (${detectedCity})` : 'Posizione'}
-          </Text>
+            <Ionicons
+              name="swap-horizontal"
+              size={12}
+              color={originMode === 'current_location' ? '#60a5fa' : '#10b981'}
+              style={{ marginRight: 4 }}
+            />
+            <Text
+              style={[
+                styles.compactSwitchPillText,
+                originMode === 'current_location'
+                  ? styles.compactSwitchPillTextToDefault
+                  : styles.compactSwitchPillTextToGps,
+              ]}
+            >
+              {originMode === 'current_location'
+                ? (direction === 'to_station' ? 'Sede' : 'Stazione')
+                : 'GPS'}
+            </Text>
+          </View>
         </TouchableOpacity>
       </View>
-
-      {/* Indicatore visivo posizione GPS rilevata con nome del comune/località */}
-      {originMode === 'current_location' && !locationError && (
-        <View style={styles.gpsNoticeRow}>
-          {isLocating ? (
-            <ActivityIndicator size={11} color="#10b981" style={{ marginRight: 5 }} />
-          ) : (
-            <Ionicons
-              name="navigate"
-              size={12}
-              color="#10b981"
-              style={{ marginRight: 5 }}
-            />
-          )}
-          <Text style={styles.gpsNoticeText} numberOfLines={1}>
-            {isLocating
-              ? 'Rilevamento posizione GPS in corso...'
-              : detectedCity
-              ? `Partenza da: ${detectedCity} (GPS)`
-              : 'Partenza dalla tua posizione GPS'}
-          </Text>
-        </View>
-      )}
 
       {/* Segnalazione errore localizzazione */}
       {locationError && (
@@ -1062,55 +1115,101 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  originSwitchBar: {
-    flexDirection: 'row',
-    gap: 6,
+  unifiedOriginWrapper: {
     marginBottom: 10,
-    backgroundColor: '#0c0e14',
-    padding: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1e2230',
   },
-  originPillBtn: {
-    flex: 1,
+  unifiedOriginCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#0c0e14',
+    paddingVertical: 7.5,
+    paddingHorizontal: 9.5,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#1e2433',
+  },
+  unifiedOriginCardGps: {
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+  },
+  unifiedOriginIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
+    marginRight: 9,
+    flexShrink: 0,
+  },
+  unifiedOriginIconBoxDefault: {
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.28)',
+  },
+  unifiedOriginIconBoxGps: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  unifiedOriginTextCol: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  unifiedOriginSectionLabel: {
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    marginBottom: 5,
+    paddingLeft: 2,
+    textTransform: 'uppercase',
+  },
+  unifiedOriginMainText: {
+    color: '#f8fafc',
+    fontSize: 13.5,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  unifiedOriginMainTextGps: {
+    color: '#34d399',
+  },
+  unifiedOriginSubText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  unifiedOriginSubTextGps: {
+    color: '#6ee7b7',
+  },
+  compactSwitchPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4.5,
     paddingHorizontal: 8,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: 'transparent',
+    marginLeft: 8,
+    flexShrink: 0,
   },
-  originPillBtnActive: {
-    backgroundColor: '#1a2030',
+  compactSwitchPillToGps: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderColor: 'rgba(16, 185, 129, 0.35)',
   },
-  originPillText: {
-    color: '#94a3b8',
+  compactSwitchPillToDefault: {
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+  },
+  compactSwitchPillText: {
     fontSize: 11,
-    fontWeight: '600',
-  },
-  originPillTextActive: {
-    color: '#ffffff',
     fontWeight: '700',
   },
-  gpsNoticeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
+  compactSwitchPillTextToGps: {
+    color: '#10b981',
   },
-  gpsNoticeText: {
-    flex: 1,
-    color: '#6ee7b7',
-    fontSize: 10.5,
-    fontWeight: '600',
+  compactSwitchPillTextToDefault: {
+    color: '#60a5fa',
   },
   errorNoticeRow: {
     flexDirection: 'row',
