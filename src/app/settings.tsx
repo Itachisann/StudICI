@@ -1,4 +1,8 @@
-import { UNIFORM_MODAL_BG, UNIFORM_SCREEN_BG } from "@/constants/theme";
+import {
+  CARD_RADIUS,
+  UNIFORM_MODAL_BG,
+  UNIFORM_SCREEN_BG,
+} from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { MenuView } from "@expo/ui/community/menu";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,6 +24,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Keyboard,
   KeyboardAvoidingView,
   LayoutAnimation,
@@ -61,14 +66,38 @@ import {
   subscribeToAlarmChanges,
 } from "../utils/alarmSync";
 import {
-  DEFAULT_CALENDAR_TITLE,
+  CALENDAR_LESSONS_ALERT_OPTIONS,
+  CALENDAR_TRAINS_ALERT_OPTIONS,
+  CalendarAlertConfig,
+  CalendarAlertType,
+  CalendarType,
+  DEFAULT_LESSONS_CALENDAR_TITLE,
+  DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE,
+  DEFAULT_TRAIN_RETURN_CALENDAR_TITLE,
+  DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE,
   deleteStudICICalendar,
+  getCalendarAlertConfig,
   getCalendarAutoSync,
+  getCalendarColor,
+  getCalendarEnabled,
   getCalendarTitle,
   getLastCalendarSync,
+  getThemeCalendarDefaultColor,
+  getTrainSeparateReturn,
+  hasCustomCalendarColor,
+  isCalendarSyncActive,
+  pullExternalAppleCalendarChanges,
+  refreshAppleCalendarIfConfigured,
+  resetCalendarColorToTheme,
+  setCalendarAlertConfig,
   setCalendarAutoSync,
+  setCalendarEnabled,
   setCalendarTitle,
+  subscribeToCalendarConfigChanges,
+  switchTrainCalendarMode,
+  syncDualCalendarsToAppleCalendar,
   syncScheduleToAppleCalendar,
+  syncTrainsToAppleCalendar,
   updateAppleCalendarColor,
 } from "../utils/appleCalendar";
 import {
@@ -128,6 +157,7 @@ import {
   fetchAllCourseData,
   fetchDegrees,
   fetchScheduleData,
+  getCachedScheduleData,
   fetchTabs,
   getCachedTabs,
   ScheduleData,
@@ -256,6 +286,9 @@ function FileSourceSection({
 export default function ProfiloScreen() {
   const insets = useSafeAreaInsets();
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
+  const isNativeIos =
+    Platform.OS === "ios" &&
+    Constants.executionEnvironment !== ExecutionEnvironment.StoreClient;
   const [degreeName, setDegreeName] = useState<string>("");
   const [degreeClassName, setDegreeClassName] = useState<string>("");
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
@@ -267,6 +300,8 @@ export default function ProfiloScreen() {
   const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
     useState<Tab | null>(null);
   const [attendanceModalVisible, setAttendanceModalVisible] = useState(false);
+  const [showAllDashboardSubjects, setShowAllDashboardSubjects] =
+    useState(false);
   const [pastAttendanceModalVisible, setPastAttendanceModalVisible] =
     useState(false);
   const [pastAttendanceSchedule, setPastAttendanceSchedule] =
@@ -298,25 +333,188 @@ export default function ProfiloScreen() {
     number | null
   >(null);
   const [calendarModalVisible, setCalendarModalVisible] = useState(false);
-  const [calendarTitle, setCalendarTitleState] = useState(
-    DEFAULT_CALENDAR_TITLE,
+  const [activeCalendarTab, setActiveCalendarTab] =
+    useState<CalendarType>("lessons");
+
+  // Stato Calendario Lezioni
+  const [lessonsTitle, setLessonsTitle] = useState(
+    DEFAULT_LESSONS_CALENDAR_TITLE,
   );
-  const [calendarTitleInput, setCalendarTitleInput] = useState(
-    DEFAULT_CALENDAR_TITLE,
+  const [lessonsTitleInput, setLessonsTitleInput] = useState(
+    DEFAULT_LESSONS_CALENDAR_TITLE,
   );
+  const [isSavingLessonsTitle, setIsSavingLessonsTitle] = useState(false);
+  const [lessonsAutoSync, setLessonsAutoSync] = useState(false);
+  const [lessonsEnabled, setLessonsEnabled] = useState(true);
+  const [lessonsAlertConfig, setLessonsAlertConfig] =
+    useState<CalendarAlertConfig>({
+      alertType: "none",
+      customMinutes: 15,
+    });
+  const [lastLessonsSyncTime, setLastLessonsSyncTime] = useState<number | null>(
+    null,
+  );
+
+  // Stato Calendario Treni
+  const [trainsTitle, setTrainsTitle] = useState(
+    DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE,
+  );
+  const [trainsTitleInput, setTrainsTitleInput] = useState(
+    DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE,
+  );
+  const [isSavingTrainsTitle, setIsSavingTrainsTitle] = useState(false);
+  const [trainsAutoSync, setTrainsAutoSync] = useState(false);
+  const [trainsEnabled, setTrainsEnabled] = useState(true);
+  const [trainsAlertConfig, setTrainsAlertConfig] =
+    useState<CalendarAlertConfig>({
+      alertType: "none",
+      customMinutes: 15,
+    });
+  const [lastTrainsSyncTime, setLastTrainsSyncTime] = useState<number | null>(
+    null,
+  );
+
+  // Stato Calendario Treni Ritorno
+  const [trainsSeparateReturn, setTrainsSeparateReturn] = useState(false);
+  const [trainsReturnTitle, setTrainsReturnTitle] = useState(
+    DEFAULT_TRAIN_RETURN_CALENDAR_TITLE,
+  );
+  const [trainsReturnTitleInput, setTrainsReturnTitleInput] = useState(
+    DEFAULT_TRAIN_RETURN_CALENDAR_TITLE,
+  );
+  const [isSavingTrainsReturnTitle, setIsSavingTrainsReturnTitle] =
+    useState(false);
+
+  // Colori live dei calendari (tema coordinato o personalizzati da Apple Calendar)
+  const [lessonsColor, setLessonsColor] = useState(theme.primary);
+  const [trainsColor, setTrainsColor] = useState(
+    getThemeCalendarDefaultColor("trains", theme.primary),
+  );
+  const [trainsReturnColor, setTrainsReturnColor] = useState(
+    getThemeCalendarDefaultColor("trains_return", theme.primary),
+  );
+  const [lessonsHasCustomColor, setLessonsHasCustomColor] = useState(false);
+  const [trainsHasCustomColor, setTrainsHasCustomColor] = useState(false);
+  const [trainsReturnHasCustomColor, setTrainsReturnHasCustomColor] =
+    useState(false);
+
+  const themePrimaryRef = useRef(theme.primary);
+  useEffect(() => {
+    themePrimaryRef.current = theme.primary;
+  }, [theme.primary]);
+
   const calendarScrollRef = useRef<ScrollView>(null);
   const calendarModalVisibleRef = useRef(false);
   useEffect(() => {
     calendarModalVisibleRef.current = calendarModalVisible;
   }, [calendarModalVisible]);
 
+  const syncCalendarMetadataState = useCallback(
+    async (
+      primaryOverride?: string,
+      options?: { pullExternal?: boolean; syncInputs?: boolean },
+    ) => {
+      const basePrimary = primaryOverride || themePrimaryRef.current;
+      const shouldPull = options?.pullExternal ?? true;
+      const shouldSyncInputs = options?.syncInputs ?? false;
+
+      if (shouldPull) {
+        await pullExternalAppleCalendarChanges(basePrimary).catch(() => {});
+      }
+
+      const [
+        lTitle,
+        tSepRet,
+        tRetTitle,
+        lColor,
+        tColor,
+        tRetColor,
+        lCustom,
+        tCustom,
+        tRetCustom,
+        lEnabled,
+        tEnabled,
+        lAuto,
+        tAuto,
+        lastL,
+        lastT,
+      ] = await Promise.all([
+        getCalendarTitle("lessons"),
+        getTrainSeparateReturn(),
+        getCalendarTitle("trains_return"),
+        getCalendarColor("lessons", basePrimary),
+        getCalendarColor("trains", basePrimary),
+        getCalendarColor("trains_return", basePrimary),
+        hasCustomCalendarColor("lessons"),
+        hasCustomCalendarColor("trains"),
+        hasCustomCalendarColor("trains_return"),
+        getCalendarEnabled("lessons"),
+        getCalendarEnabled("trains"),
+        getCalendarAutoSync("lessons"),
+        getCalendarAutoSync("trains"),
+        getLastCalendarSync("lessons"),
+        getLastCalendarSync("trains"),
+      ]);
+      const resolvedTrainsTitle = await getCalendarTitle("trains", tSepRet);
+
+      setLessonsTitle(lTitle);
+      setTrainsTitle(resolvedTrainsTitle);
+      setTrainsSeparateReturn(tSepRet);
+      setTrainsReturnTitle(tRetTitle);
+      if (shouldSyncInputs || !calendarModalVisibleRef.current) {
+        setLessonsTitleInput(lTitle);
+        setTrainsTitleInput(resolvedTrainsTitle);
+        setTrainsReturnTitleInput(tRetTitle);
+      }
+
+      setLessonsColor(lColor);
+      setTrainsColor(tColor);
+      setTrainsReturnColor(tRetColor);
+      setLessonsHasCustomColor(lCustom);
+      setTrainsHasCustomColor(tCustom);
+      setTrainsReturnHasCustomColor(tRetCustom);
+      setLessonsEnabled(lEnabled);
+      setTrainsEnabled(tEnabled);
+      setLessonsAutoSync(lAuto);
+      setTrainsAutoSync(tAuto);
+      setLastLessonsSyncTime(lastL);
+      setLastTrainsSyncTime(lastT);
+      setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+    },
+    [],
+  );
+
+  // Riallinea solo i colori visualizzati in UI quando ThemeContext idrata/cambia tema
+  // senza sovrascrivere eventuali colori personalizzati scelti dall'utente su Apple Calendar.
   useEffect(() => {
-    if (theme.primary) {
-      updateAppleCalendarColor(theme.primary).catch(() => {});
-    }
-  }, [theme.primary]);
-  const [calendarAutoSync, setCalendarAutoSyncState] = useState(false);
-  const [isSavingCalendarTitle, setIsSavingCalendarTitle] = useState(false);
+    syncCalendarMetadataState(theme.primary, {
+      pullExternal: false,
+      syncInputs: false,
+    }).catch(() => {});
+  }, [theme.primary, syncCalendarMetadataState]);
+
+  // Quando l'utente torna in StudICI (es. dopo aver modificato titolo o colore in Apple Calendar)
+  // o riceve un aggiornamento esterno di configurazione, riallinea subito nomi e colori.
+  useEffect(() => {
+    const subAppState = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        syncCalendarMetadataState(undefined, {
+          pullExternal: true,
+          syncInputs: true,
+        }).catch(() => {});
+      }
+    });
+    const unsubscribeConfig = subscribeToCalendarConfigChanges(() => {
+      syncCalendarMetadataState(undefined, {
+        pullExternal: false,
+        syncInputs: false,
+      }).catch(() => {});
+    });
+    return () => {
+      subAppState.remove();
+      unsubscribeConfig();
+    };
+  }, [syncCalendarMetadataState]);
   const [isDeletingCalendar, setIsDeletingCalendar] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
@@ -483,41 +681,92 @@ export default function ProfiloScreen() {
       setAttendanceRecords(attList);
       setAttendanceStats(getAttendanceStats(attList));
 
-      // 4. Parametri Cloud e Pendolare letti istantaneamente dal disco locale
+      // 4. Allinea eventuali modifiche esterne fatte su Apple Calendar e leggi i parametri da disco
+      await pullExternalAppleCalendarChanges(themePrimaryRef.current).catch(
+        () => {},
+      );
+
       const [
         cloudId,
         lastCloud,
-        lastCal,
-        calTitle,
-        calAuto,
         icloudEnabled,
         commConfig,
         alarmCfg,
         student,
         docs,
         studentHiddenVal,
+        lastL,
+        lastT,
+        lTitle,
+        tSepRet,
+        tRetTitle,
+        lAuto,
+        tAuto,
+        lEnabled,
+        tEnabled,
+        lAlert,
+        tAlert,
+        lColor,
+        tColor,
+        tRetColor,
+        lCustomColor,
+        tCustomColor,
+        tRetCustomColor,
       ] = await Promise.all([
         getCloudSyncId(),
         getLastCloudSync(),
-        getLastCalendarSync(),
-        getCalendarTitle(),
-        getCalendarAutoSync(),
         getICloudAutoSyncEnabled(),
         getCommuterConfig(),
         getAlarmSettings(),
         getStudentInfo(),
         getSavedDocuments(),
         AsyncStorage.getItem("@studici_student_info_hidden"),
+        getLastCalendarSync("lessons"),
+        getLastCalendarSync("trains"),
+        getCalendarTitle("lessons"),
+        getTrainSeparateReturn(),
+        getCalendarTitle("trains_return"),
+        getCalendarAutoSync("lessons"),
+        getCalendarAutoSync("trains"),
+        getCalendarEnabled("lessons"),
+        getCalendarEnabled("trains"),
+        getCalendarAlertConfig("lessons"),
+        getCalendarAlertConfig("trains"),
+        getCalendarColor("lessons", themePrimaryRef.current),
+        getCalendarColor("trains", themePrimaryRef.current),
+        getCalendarColor("trains_return", themePrimaryRef.current),
+        hasCustomCalendarColor("lessons"),
+        hasCustomCalendarColor("trains"),
+        hasCustomCalendarColor("trains_return"),
       ]);
+
+      const resolvedTrainsTitle = await getCalendarTitle("trains", tSepRet);
 
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
-      setLastCalendarSyncTime(lastCal);
-      setCalendarTitleState(calTitle);
-      if (!calendarModalVisibleRef.current) {
-        setCalendarTitleInput(calTitle);
-      }
-      setCalendarAutoSyncState(calAuto);
+      setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+      setLastLessonsSyncTime(lastL);
+      setLastTrainsSyncTime(lastT);
+      setLessonsTitle(lTitle);
+      setLessonsTitleInput(lTitle);
+      setTrainsTitle(resolvedTrainsTitle);
+      setTrainsTitleInput(resolvedTrainsTitle);
+      setTrainsSeparateReturn(tSepRet);
+      setTrainsReturnTitle(tRetTitle);
+      setTrainsReturnTitleInput(tRetTitle);
+      setLessonsAutoSync(lAuto);
+      setTrainsAutoSync(tAuto);
+      setLessonsEnabled(lEnabled);
+      setTrainsEnabled(tEnabled);
+      setLessonsAlertConfig(lAlert);
+      setTrainsAlertConfig(tAlert);
+      setLessonsColor(lColor);
+      setTrainsColor(tColor);
+      setTrainsReturnColor(tRetColor);
+      setLessonsHasCustomColor(lCustomColor);
+      setTrainsHasCustomColor(tCustomColor);
+      setTrainsReturnHasCustomColor(tRetCustomColor);
+
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
       setAlarmSettings(alarmCfg);
@@ -1557,7 +1806,10 @@ export default function ProfiloScreen() {
 
             {/* Lista elegante Screen Time delle materie senza troncature */}
             <View style={styles.legendListContainer}>
-              {subjects.slice(0, 3).map((s, idx) => {
+              {(isModal || showAllDashboardSubjects
+                ? subjects
+                : subjects.slice(0, 3)
+              ).map((s, idx, arr) => {
                 const color = getSubjectColor(s.subject);
                 return (
                   <View key={s.subject}>
@@ -1573,22 +1825,46 @@ export default function ProfiloScreen() {
                         <Text style={styles.legendHoursUnit}>h</Text>
                       </Text>
                     </View>
-                    {idx < Math.min(subjects.length, 3) - 1 && (
+                    {idx < arr.length - 1 && (
                       <View style={styles.legendDivider} />
                     )}
                   </View>
                 );
               })}
 
-              {subjects.length > 3 && (
-                <View style={styles.legendMoreRow}>
+              {!isModal && subjects.length > 3 && (
+                <TouchableOpacity
+                  style={styles.legendMoreRow}
+                  activeOpacity={0.7}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setShowAllDashboardSubjects((prev) => !prev);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showAllDashboardSubjects
+                      ? "Mostra meno materie"
+                      : "Mostra tutte le materie"
+                  }
+                >
                   <Text style={styles.legendMoreText}>
-                    +{subjects.length - 3}{" "}
-                    {subjects.length - 3 === 1
-                      ? "altra materia"
-                      : "altre materie"}
+                    {showAllDashboardSubjects
+                      ? "Mostra meno"
+                      : `+${subjects.length - 3} ${
+                          subjects.length - 3 === 1
+                            ? "altra materia"
+                            : "altre materie"
+                        }`}
                   </Text>
-                </View>
+                  <Ionicons
+                    name={
+                      showAllDashboardSubjects ? "chevron-up" : "chevron-down"
+                    }
+                    size={11}
+                    color="#71717a"
+                    style={{ marginLeft: 4 }}
+                  />
+                </TouchableOpacity>
               )}
             </View>
           </View>
@@ -1631,7 +1907,428 @@ export default function ProfiloScreen() {
     }
   };
 
+  const openCalendarModal = () => {
+    setLessonsTitleInput(lessonsTitle);
+    setTrainsTitleInput(trainsTitle);
+    setTrainsReturnTitleInput(trainsReturnTitle);
+    calendarModalVisibleRef.current = true;
+    setCalendarModalVisible(true);
+    syncCalendarMetadataState(undefined, {
+      pullExternal: true,
+      syncInputs: true,
+    }).catch(() => {});
+  };
+
+  const handleSelectTheme = async (nextThemeId: string) => {
+    await setThemeId(nextThemeId);
+    const nextTheme = availableThemes.find((t) => t.id === nextThemeId);
+    if (nextTheme) {
+      await updateAppleCalendarColor(nextTheme.primary, true).catch(() => {});
+      await syncCalendarMetadataState(nextTheme.primary, {
+        pullExternal: false,
+        syncInputs: false,
+      }).catch(() => {});
+    }
+  };
+
+  const handleResetCalendarColor = async (target: CalendarType) => {
+    await resetCalendarColorToTheme(target, theme.primary);
+    await syncCalendarMetadataState(theme.primary, {
+      pullExternal: false,
+      syncInputs: false,
+    });
+  };
+
+  const handleSaveLessonsTitle = async () => {
+    const trimmed = lessonsTitleInput.trim();
+    if (!trimmed) {
+      Alert.alert(
+        "Nome non valido",
+        "Inserisci un nome valido per il calendario delle lezioni.",
+      );
+      return;
+    }
+    setIsSavingLessonsTitle(true);
+    try {
+      const res = await setCalendarTitle(trimmed, "lessons");
+      setLessonsTitle(trimmed);
+      setLessonsTitleInput(trimmed);
+      if (lessonsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert("Nome salvato", res.message);
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
+    } finally {
+      setIsSavingLessonsTitle(false);
+    }
+  };
+
+  const handleResetLessonsTitle = async () => {
+    setIsSavingLessonsTitle(true);
+    try {
+      await setCalendarTitle(DEFAULT_LESSONS_CALENDAR_TITLE, "lessons");
+      setLessonsTitle(DEFAULT_LESSONS_CALENDAR_TITLE);
+      setLessonsTitleInput(DEFAULT_LESSONS_CALENDAR_TITLE);
+      if (lessonsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert(
+        "Ripristinato",
+        "Nome del calendario lezioni ripristinato a quello predefinito.",
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Impossibile ripristinare il nome.",
+      );
+    } finally {
+      setIsSavingLessonsTitle(false);
+    }
+  };
+
+  const handleSaveTrainsTitle = async () => {
+    const trimmed = trainsTitleInput.trim();
+    if (!trimmed) {
+      Alert.alert(
+        "Nome non valido",
+        "Inserisci un nome valido per il calendario dei treni.",
+      );
+      return;
+    }
+    setIsSavingTrainsTitle(true);
+    try {
+      const res = await setCalendarTitle(trimmed, "trains");
+      setTrainsTitle(trimmed);
+      setTrainsTitleInput(trimmed);
+      if (trainsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert("Nome salvato", res.message);
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
+    } finally {
+      setIsSavingTrainsTitle(false);
+    }
+  };
+
+  const handleResetTrainsTitle = async () => {
+    setIsSavingTrainsTitle(true);
+    const targetDefault = trainsSeparateReturn
+      ? DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE
+      : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE;
+    try {
+      await setCalendarTitle(targetDefault, "trains");
+      setTrainsTitle(targetDefault);
+      setTrainsTitleInput(targetDefault);
+      if (trainsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert(
+        "Ripristinato",
+        `Nome del calendario treni ripristinato a "${targetDefault}".`,
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Impossibile ripristinare il nome.",
+      );
+    } finally {
+      setIsSavingTrainsTitle(false);
+    }
+  };
+
+  const handleSaveTrainsReturnTitle = async () => {
+    const trimmed = trainsReturnTitleInput.trim();
+    if (!trimmed) {
+      Alert.alert(
+        "Nome non valido",
+        "Inserisci un nome valido per il calendario dei treni di ritorno.",
+      );
+      return;
+    }
+    setIsSavingTrainsReturnTitle(true);
+    try {
+      const res = await setCalendarTitle(trimmed, "trains_return");
+      setTrainsReturnTitle(trimmed);
+      setTrainsReturnTitleInput(trimmed);
+      if (trainsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert("Nome salvato", res.message);
+    } catch (err: any) {
+      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
+    } finally {
+      setIsSavingTrainsReturnTitle(false);
+    }
+  };
+
+  const handleResetTrainsReturnTitle = async () => {
+    setIsSavingTrainsReturnTitle(true);
+    try {
+      await setCalendarTitle(
+        DEFAULT_TRAIN_RETURN_CALENDAR_TITLE,
+        "trains_return",
+      );
+      setTrainsReturnTitle(DEFAULT_TRAIN_RETURN_CALENDAR_TITLE);
+      setTrainsReturnTitleInput(DEFAULT_TRAIN_RETURN_CALENDAR_TITLE);
+      if (trainsAutoSync) {
+        refreshAppleCalendarIfConfigured(theme.primary).catch(() => {});
+      }
+      Alert.alert(
+        "Ripristinato",
+        `Nome del calendario treni ritorno ripristinato a "${DEFAULT_TRAIN_RETURN_CALENDAR_TITLE}".`,
+      );
+    } catch (err: any) {
+      Alert.alert(
+        "Errore",
+        err?.message || "Impossibile ripristinare il nome.",
+      );
+    } finally {
+      setIsSavingTrainsReturnTitle(false);
+    }
+  };
+
+  const handleToggleTrainsSeparateReturn = async (val: boolean) => {
+    if (isSyncingCalendar || isCalendarSyncActive()) return;
+    setTrainsSeparateReturn(val);
+
+    const prevTitle = trainsTitle.trim();
+    const isDefault =
+      !prevTitle ||
+      prevTitle === DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE ||
+      prevTitle === DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE ||
+      prevTitle === "StudICI - Treni & Viaggio" ||
+      prevTitle === "StudICI - Treni";
+
+    if (isDefault) {
+      const nextDefault = val
+        ? DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE
+        : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE;
+      setTrainsTitle(nextDefault);
+      setTrainsTitleInput(nextDefault);
+      await setCalendarTitle(nextDefault, "trains", undefined, val);
+    }
+
+    setIsSyncingCalendar(true);
+    try {
+      await switchTrainCalendarMode(val, theme.primary);
+      const [lastL, lastT] = await Promise.all([
+        getLastCalendarSync("lessons"),
+        getLastCalendarSync("trains"),
+      ]);
+      setLastLessonsSyncTime(lastL);
+      setLastTrainsSyncTime(lastT);
+      setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+    } catch (err) {
+      console.warn("Errore switch modalità treni:", err);
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  };
+
+  const hasAnyCalendarEnabled = lessonsEnabled || trainsEnabled;
+  const isCalendarSyncBtnDisabled =
+    !hasAnyCalendarEnabled || isSyncingCalendar || isDeletingCalendar;
+
+  const handleToggleCalendarEnabled = async (
+    target: CalendarType,
+    val: boolean,
+  ) => {
+    if (isSyncingCalendar || isCalendarSyncActive() || isDeletingCalendar) {
+      return;
+    }
+
+    const isLessons = target === "lessons";
+    if (isLessons) {
+      setLessonsEnabled(val);
+    } else {
+      setTrainsEnabled(val);
+    }
+    await setCalendarEnabled(val, target);
+
+    if (!val) {
+      if (isLessons && lessonsAutoSync) {
+        setLessonsAutoSync(false);
+        await setCalendarAutoSync(false, "lessons");
+      } else if (!isLessons && trainsAutoSync) {
+        setTrainsAutoSync(false);
+        await setCalendarAutoSync(false, "trains");
+      }
+
+      setIsDeletingCalendar(true);
+      try {
+        await deleteStudICICalendar(target);
+        const [lL, lT] = await Promise.all([
+          getLastCalendarSync("lessons"),
+          getLastCalendarSync("trains"),
+        ]);
+        setLastLessonsSyncTime(lL);
+        setLastTrainsSyncTime(lT);
+        setLastCalendarSyncTime(Math.max(lL || 0, lT || 0) || null);
+        await syncCalendarMetadataState(undefined, {
+          pullExternal: false,
+          syncInputs: false,
+        });
+      } catch (err) {
+        console.warn(`Errore rimozione calendario ${target}:`, err);
+      } finally {
+        setIsDeletingCalendar(false);
+      }
+    }
+  };
+
+  const handleToggleLessonsAutoSync = async (val: boolean) => {
+    if (isSyncingCalendar || isCalendarSyncActive()) return;
+    setLessonsAutoSync(val);
+    await setCalendarAutoSync(val, "lessons");
+    if (val && degreeUrl) {
+      const tabUrl = defaultTabUrl || availableTabs[0]?.url;
+      if (tabUrl) {
+        setIsSyncingCalendar(true);
+        try {
+          const sch =
+            (await getCachedScheduleData(tabUrl, degreeUrl)) ||
+            (await fetchScheduleData(tabUrl));
+          await syncScheduleToAppleCalendar(
+            sch,
+            courseMetadata.cleanCourseTitle,
+            defaultTabLabel,
+            undefined,
+            theme.primary,
+          );
+          const lSync = await getLastCalendarSync("lessons");
+          setLastLessonsSyncTime(lSync);
+          setLastCalendarSyncTime(
+            Math.max(lSync || 0, lastTrainsSyncTime || 0) || null,
+          );
+        } catch (e) {
+          console.warn("Errore auto-sync lezioni:", e);
+        } finally {
+          setIsSyncingCalendar(false);
+        }
+      }
+    }
+  };
+
+  const handleToggleTrainsAutoSync = async (val: boolean) => {
+    if (isSyncingCalendar || isCalendarSyncActive()) return;
+    setTrainsAutoSync(val);
+    await setCalendarAutoSync(val, "trains");
+    if (val && degreeUrl) {
+      const tabUrl = defaultTabUrl || availableTabs[0]?.url;
+      if (tabUrl) {
+        setIsSyncingCalendar(true);
+        try {
+          const sch =
+            (await getCachedScheduleData(tabUrl, degreeUrl)) ||
+            (await fetchScheduleData(tabUrl));
+          await syncTrainsToAppleCalendar(sch, undefined, theme.primary);
+          const tSync = await getLastCalendarSync("trains");
+          setLastTrainsSyncTime(tSync);
+          setLastCalendarSyncTime(
+            Math.max(lastLessonsSyncTime || 0, tSync || 0) || null,
+          );
+        } catch (e) {
+          console.warn("Errore auto-sync treni:", e);
+        } finally {
+          setIsSyncingCalendar(false);
+        }
+      }
+    }
+  };
+
+  const calendarRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const scheduleBackgroundCalendarRefresh = useCallback(
+    (primaryColor: string) => {
+      if (calendarRefreshTimerRef.current) {
+        clearTimeout(calendarRefreshTimerRef.current);
+      }
+      calendarRefreshTimerRef.current = setTimeout(() => {
+        calendarRefreshTimerRef.current = null;
+        refreshAppleCalendarIfConfigured(primaryColor).catch(() => {});
+      }, 700);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (calendarRefreshTimerRef.current) {
+        clearTimeout(calendarRefreshTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleSelectLessonsAlert = async (type: CalendarAlertType) => {
+    const nextCfg: CalendarAlertConfig = {
+      alertType: type,
+      customMinutes: lessonsAlertConfig.customMinutes,
+    };
+    setLessonsAlertConfig(nextCfg);
+    await setCalendarAlertConfig("lessons", nextCfg);
+    if (lessonsAutoSync) {
+      scheduleBackgroundCalendarRefresh(theme.primary);
+    }
+  };
+
+  const handleChangeLessonsCustomMinutes = async (minutes: number) => {
+    const nextCfg: CalendarAlertConfig = {
+      alertType: "custom",
+      customMinutes: minutes,
+    };
+    setLessonsAlertConfig(nextCfg);
+    await setCalendarAlertConfig("lessons", nextCfg);
+    if (lessonsAutoSync) {
+      scheduleBackgroundCalendarRefresh(theme.primary);
+    }
+  };
+
+  const handleSelectTrainsAlert = async (type: CalendarAlertType) => {
+    const nextCfg: CalendarAlertConfig = {
+      alertType: type,
+      customMinutes: trainsAlertConfig.customMinutes,
+    };
+    setTrainsAlertConfig(nextCfg);
+    await setCalendarAlertConfig("trains", nextCfg);
+    if (trainsAutoSync) {
+      scheduleBackgroundCalendarRefresh(theme.primary);
+    }
+  };
+
+  const handleChangeTrainsCustomMinutes = async (minutes: number) => {
+    const nextCfg: CalendarAlertConfig = {
+      alertType: "custom",
+      customMinutes: minutes,
+    };
+    setTrainsAlertConfig(nextCfg);
+    await setCalendarAlertConfig("trains", nextCfg);
+    if (trainsAutoSync) {
+      scheduleBackgroundCalendarRefresh(theme.primary);
+    }
+  };
+
   const handleSyncCalendar = async () => {
+    if (!hasAnyCalendarEnabled || isDeletingCalendar) return;
+    if (isSyncingCalendar) return;
+    if (calendarRefreshTimerRef.current) {
+      clearTimeout(calendarRefreshTimerRef.current);
+      calendarRefreshTimerRef.current = null;
+    }
+    if (isCalendarSyncActive()) {
+      setIsSyncingCalendar(true);
+      let attempts = 0;
+      while (isCalendarSyncActive() && attempts < 40) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (isCalendarSyncActive()) {
+        setIsSyncingCalendar(false);
+        return;
+      }
+    }
     if (!degreeUrl) {
       Alert.alert(
         "Nessun corso",
@@ -1650,19 +2347,28 @@ export default function ProfiloScreen() {
 
     setIsSyncingCalendar(true);
     try {
-      const schedule = await fetchScheduleData(tabUrl);
-      const res = await syncScheduleToAppleCalendar(
+      const schedule =
+        (await getCachedScheduleData(tabUrl, degreeUrl)) ||
+        (await fetchScheduleData(tabUrl));
+      const res = await syncDualCalendarsToAppleCalendar(
         schedule,
         courseMetadata.cleanCourseTitle,
         defaultTabLabel,
-        calendarTitle,
         theme.primary,
       );
+
+      const [lastL, lastT] = await Promise.all([
+        getLastCalendarSync("lessons"),
+        getLastCalendarSync("trains"),
+      ]);
+      setLastLessonsSyncTime(lastL);
+      setLastTrainsSyncTime(lastT);
+      setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+
       if (res.success) {
-        setLastCalendarSyncTime(await getLastCalendarSync());
         Alert.alert("Calendario Sincronizzato", res.message);
       } else {
-        Alert.alert("Errore Calendario", res.message);
+        Alert.alert("Attenzione", res.message);
       }
     } catch (err: any) {
       Alert.alert(
@@ -1672,86 +2378,6 @@ export default function ProfiloScreen() {
     } finally {
       setIsSyncingCalendar(false);
     }
-  };
-
-  const handleToggleCalendarAutoSync = async (val: boolean) => {
-    setCalendarAutoSyncState(val);
-    await setCalendarAutoSync(val);
-  };
-
-  const handleSaveCalendarTitle = async () => {
-    const trimmed = calendarTitleInput.trim();
-    if (!trimmed) {
-      Alert.alert(
-        "Nome non valido",
-        "Inserisci un nome valido per il calendario.",
-      );
-      return;
-    }
-    setIsSavingCalendarTitle(true);
-    try {
-      const res = await setCalendarTitle(trimmed);
-      setCalendarTitleState(trimmed);
-      setCalendarTitleInput(trimmed);
-      Alert.alert("Nome salvato", res.message);
-    } catch (err: any) {
-      Alert.alert("Errore", err?.message || "Impossibile aggiornare il nome.");
-    } finally {
-      setIsSavingCalendarTitle(false);
-    }
-  };
-
-  const handleResetCalendarTitle = async () => {
-    setIsSavingCalendarTitle(true);
-    try {
-      await setCalendarTitle(DEFAULT_CALENDAR_TITLE);
-      setCalendarTitleState(DEFAULT_CALENDAR_TITLE);
-      setCalendarTitleInput(DEFAULT_CALENDAR_TITLE);
-      Alert.alert(
-        "Ripristinato",
-        "Nome del calendario ripristinato a quello predefinito.",
-      );
-    } catch (err: any) {
-      Alert.alert(
-        "Errore",
-        err?.message || "Impossibile ripristinare il nome.",
-      );
-    } finally {
-      setIsSavingCalendarTitle(false);
-    }
-  };
-
-  const handleDeleteCalendar = () => {
-    Alert.alert(
-      "Rimuovi Calendario",
-      `Vuoi rimuovere il calendario "${calendarTitle}" e tutti i suoi eventi da Apple Calendar su questo dispositivo?`,
-      [
-        { text: "Annulla", style: "cancel" },
-        {
-          text: "Rimuovi",
-          style: "destructive",
-          onPress: async () => {
-            setIsDeletingCalendar(true);
-            try {
-              const res = await deleteStudICICalendar();
-              if (res.success) {
-                setLastCalendarSyncTime(null);
-                Alert.alert("Rimosso", res.message);
-              } else {
-                Alert.alert("Errore", res.message);
-              }
-            } catch (err: any) {
-              Alert.alert(
-                "Errore",
-                err?.message || "Impossibile rimuovere il calendario.",
-              );
-            } finally {
-              setIsDeletingCalendar(false);
-            }
-          },
-        },
-      ],
-    );
   };
 
   const handleExportSchedulePdf = async () => {
@@ -2502,7 +3128,7 @@ export default function ProfiloScreen() {
               actions={themeMenuActions}
               shouldOpenOnLongPress={false}
               onPressAction={({ nativeEvent }) => {
-                setThemeId(nativeEvent.event);
+                handleSelectTheme(nativeEvent.event);
               }}
               style={{ width: themeCardWidth }}
             >
@@ -2595,7 +3221,7 @@ export default function ProfiloScreen() {
                             },
                           ]}
                           activeOpacity={0.7}
-                          onPress={() => setThemeId(t.id)}
+                          onPress={() => handleSelectTheme(t.id)}
                         >
                           <View
                             style={[
@@ -2710,11 +3336,7 @@ export default function ProfiloScreen() {
           <TouchableOpacity
             style={styles.tableRow}
             activeOpacity={0.7}
-            onPress={() => {
-              setCalendarTitleInput(calendarTitle);
-              calendarModalVisibleRef.current = true;
-              setCalendarModalVisible(true);
-            }}
+            onPress={openCalendarModal}
           >
             <View
               style={[
@@ -2736,30 +3358,40 @@ export default function ProfiloScreen() {
               <Text style={styles.rowTitle}>Calendario Apple</Text>
               <Text style={styles.rowSubTitle}>
                 {lastCalendarSyncTime
-                  ? `${calendarAutoSync ? "Auto • " : ""}${formatSyncDate(lastCalendarSyncTime)}`
-                  : "Non ancora sincronizzato"}
+                  ? `${lessonsAutoSync || trainsAutoSync ? "Auto • " : ""}${formatSyncDate(lastCalendarSyncTime)}`
+                  : !hasAnyCalendarEnabled
+                    ? "Nessun calendario abilitato"
+                    : "Non ancora sincronizzato"}
               </Text>
             </View>
             <NativeActionButton
               label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
               onPress={handleSyncCalendar}
-              disabled={isSyncingCalendar}
-              variant="filled"
-              glow={true}
+              disabled={isCalendarSyncBtnDisabled}
+              variant={isCalendarSyncBtnDisabled ? "glass" : "filled"}
+              glow={!isCalendarSyncBtnDisabled}
               glowColor={theme.accent}
               accentColor={theme.primary}
               style={[
                 styles.inlineActionBtnCallstack,
-                {
-                  shadowColor: theme.accent,
-                  shadowOpacity: 0.35,
-                  shadowRadius: 5,
-                },
+                !isCalendarSyncBtnDisabled
+                  ? {
+                      shadowColor: theme.accent,
+                      shadowOpacity: 0.35,
+                      shadowRadius: 5,
+                    }
+                  : undefined,
               ]}
               pillStyle={{
                 height: 32,
                 borderRadius: 16,
                 paddingHorizontal: 13,
+                ...(isCalendarSyncBtnDisabled
+                  ? {
+                      backgroundColor: "#2c2c2e",
+                      borderColor: "rgba(255, 255, 255, 0.12)",
+                    }
+                  : {}),
               }}
               textStyle={styles.inlineActionBtnText}
             />
@@ -3221,7 +3853,10 @@ export default function ProfiloScreen() {
       {/* Modal Cambio Canale / Anno */}
       <NativeSheetModal
         visible={channelModalVisible}
-        onClose={() => setChannelModalVisible(false)}
+        onClose={() => {
+          setChannelModalVisible(false);
+          setSelectedTabForSpecifiche(null);
+        }}
         title="Specifiche"
         backgroundColor={UNIFORM_MODAL_BG}
         rightActions={[
@@ -3241,21 +3876,24 @@ export default function ProfiloScreen() {
         ]}
       >
         <View collapsable={false} style={styles.modalContainer}>
-          <DefaultTabPicker
-            tabs={availableTabs}
-            initialTabUrl={defaultTabUrl}
-            degreeName={degreeName}
-            title="Specifiche"
-            subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
-            confirmButtonText="Salva"
-            hideFooterButton={true}
-            onActiveTabChange={(tab) => {
-              setSelectedTabForSpecifiche(tab);
-            }}
-            onConfirm={async (tab) => {
-              await selectDefaultTab(tab);
-            }}
-          />
+          {channelModalVisible && (
+            <DefaultTabPicker
+              key={`${channelModalVisible}_${defaultTabUrl}`}
+              tabs={availableTabs}
+              initialTabUrl={defaultTabUrl}
+              degreeName={degreeName}
+              title="Specifiche"
+              subtitle="Scegli l'anno e il canale che frequenti. Verranno aperti in automatico ad ogni avvio"
+              confirmButtonText="Salva"
+              hideFooterButton={true}
+              onActiveTabChange={(tab) => {
+                setSelectedTabForSpecifiche(tab);
+              }}
+              onConfirm={async (tab) => {
+                await selectDefaultTab(tab);
+              }}
+            />
+          )}
         </View>
       </NativeSheetModal>
 
@@ -3347,7 +3985,7 @@ export default function ProfiloScreen() {
                       <SwipeToDeleteRow
                         key={item.id}
                         marginBottom={10}
-                        borderRadius={16}
+                        borderRadius={CARD_RADIUS.card}
                         onDelete={() => handleDeleteAttendanceDirect(item)}
                       >
                         <TouchableOpacity
@@ -3902,7 +4540,7 @@ export default function ProfiloScreen() {
               automaticallyAdjustKeyboardInsets={true}
               contentContainerStyle={{ paddingBottom: 140 }}
             >
-              {/* Box 1: Hero Card Calendario Apple */}
+              {/* Box 1: Hero Card Calendari Apple */}
               <View style={styles.cloudHeroCard}>
                 <View style={styles.cloudHeroTop}>
                   <View
@@ -3921,49 +4559,140 @@ export default function ProfiloScreen() {
                     <Ionicons name="calendar" size={26} color="#ffffff" />
                   </View>
                   <View style={{ flex: 1, marginLeft: 14 }}>
-                    <Text style={styles.cloudHeroTitle}>Calendario Apple</Text>
+                    <Text style={styles.cloudHeroTitle}>Calendari Apple</Text>
                     <Text style={styles.cloudHeroSub}>
-                      {lastCalendarSyncTime
-                        ? `Ultimo salvataggio: ${formatSyncDate(lastCalendarSyncTime)}`
-                        : "Nessun salvataggio recente"}
+                      {`Lezioni: ${
+                        lastLessonsSyncTime
+                          ? formatSyncDate(lastLessonsSyncTime)
+                          : "Non sincronizzato"
+                      } • Treni: ${
+                        lastTrainsSyncTime
+                          ? formatSyncDate(lastTrainsSyncTime)
+                          : "Non sincronizzato"
+                      }`}
                     </Text>
+                    {hasAnyCalendarEnabled && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          rowGap: 4,
+                          columnGap: 10,
+                          marginTop: 6,
+                        }}
+                      >
+                        {lessonsEnabled && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 5,
+                              flexShrink: 0,
+                              maxWidth: "100%",
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 4,
+                                backgroundColor: lessonsColor,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: "rgba(255, 255, 255, 0.35)",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                fontSize: 11.5,
+                                color: "#d4d4d8",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {lessonsTitle}
+                            </Text>
+                          </View>
+                        )}
+                        {trainsEnabled && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 5,
+                              flexShrink: 0,
+                              maxWidth: "100%",
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 4,
+                                backgroundColor: trainsColor,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: "rgba(255, 255, 255, 0.35)",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                fontSize: 11.5,
+                                color: "#d4d4d8",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {trainsTitle}
+                            </Text>
+                          </View>
+                        )}
+                        {trainsEnabled && trainsSeparateReturn && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 5,
+                              flexShrink: 0,
+                              maxWidth: "100%",
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 4,
+                                backgroundColor: trainsReturnColor,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: "rgba(255, 255, 255, 0.35)",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                fontSize: 11.5,
+                                color: "#d4d4d8",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {trainsReturnTitle}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
                   </View>
                 </View>
 
                 {/* Separatore */}
                 <View style={styles.separator} />
 
-                {/* Riga Switch Sincronizzazione Automatica */}
-                <View style={styles.cloudAutoSyncRow}>
-                  <View style={{ flex: 1, paddingRight: 10 }}>
-                    <Text style={styles.cloudAutoSyncTitle}>
-                      Sincronizzazione automatica
-                    </Text>
-                    <Text style={styles.cloudAutoSyncSub}>
-                      {
-                        "Aggiorna le lezioni su Apple Calendar ad ogni avvio se l'orario o le aule sono cambiate."
-                      }
-                    </Text>
-                  </View>
-                  <Switch
-                    value={calendarAutoSync}
-                    onValueChange={handleToggleCalendarAutoSync}
-                    trackColor={{ false: "#39393d", true: "#34c759" }}
-                    ios_backgroundColor="#39393d"
-                  />
-                </View>
-
-                {/* Separatore */}
-                <View style={styles.separator} />
-
-                {/* Azioni Principali: Tasto Sincronizza */}
+                {/* Azione Principale: Tasto Sincronizza Calendari */}
                 <View style={styles.cloudHeroActionRow}>
                   <NativeActionButton
-                    label={isSyncingCalendar ? "In corso..." : "Sincronizza"}
+                    label={
+                      isSyncingCalendar ? "In corso..." : "Sincronizza adesso"
+                    }
                     onPress={handleSyncCalendar}
-                    disabled={isSyncingCalendar}
-                    variant="filled"
-                    glow={true}
+                    disabled={isCalendarSyncBtnDisabled}
+                    variant={isCalendarSyncBtnDisabled ? "glass" : "filled"}
+                    glow={!isCalendarSyncBtnDisabled}
                     glowColor={theme.accent}
                     accentColor={theme.primary}
                     icon={
@@ -3978,222 +4707,1478 @@ export default function ProfiloScreen() {
                       width: "100%",
                       height: 44,
                       borderRadius: 22,
-                      shadowColor: theme.accent,
-                      shadowOpacity: 0.45,
-                      shadowRadius: 8,
+                      ...(!isCalendarSyncBtnDisabled
+                        ? {
+                            shadowColor: theme.accent,
+                            shadowOpacity: 0.45,
+                            shadowRadius: 8,
+                          }
+                        : {}),
                     }}
                     pillStyle={{
                       height: 44,
                       borderRadius: 22,
                       paddingHorizontal: 14,
+                      ...(isCalendarSyncBtnDisabled
+                        ? {
+                            backgroundColor: "#2c2c2e",
+                            borderColor: "rgba(255, 255, 255, 0.12)",
+                          }
+                        : {}),
                     }}
                     textStyle={styles.cloudPrimaryBtnPillText}
                   />
                 </View>
               </View>
 
-              {/* Box 2: Nome Calendario Personalizzato */}
-              <Text style={styles.sectionHeader}>Nome calendario</Text>
-              <View style={styles.groupedCard}>
-                <View style={{ padding: 16 }}>
-                  <Text
-                    style={{
-                      fontSize: 13,
-                      color: "#8e8e93",
-                      lineHeight: 18,
-                      marginBottom: 12,
+              {/* Segmented Control per dividere lezioni e treni (nel colore del tema) */}
+              <View style={styles.modalSegmentedContainer}>
+                {isNativeIos ? (
+                  <SegmentedControl
+                    key={`seg-calendar-${theme.primary}`}
+                    values={["Lezioni", "Treni"]}
+                    selectedIndex={activeCalendarTab === "lessons" ? 0 : 1}
+                    onChange={(event) => {
+                      const idx = event.nativeEvent.selectedSegmentIndex;
+                      setActiveCalendarTab(idx === 0 ? "lessons" : "trains");
                     }}
-                  >
-                    Personalizza il nome del calendario.
-                  </Text>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 10,
+                    appearance="dark"
+                    tintColor={theme.primary}
+                    fontStyle={{
+                      fontSize: 13.5,
+                      fontWeight: "600",
+                      color: "#a1a1aa",
                     }}
-                  >
-                    <View
-                      style={{
-                        flex: 1,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        backgroundColor: "#151516",
-                        borderRadius: 12,
-                        borderWidth: StyleSheet.hairlineWidth,
-                        borderColor: "rgba(255, 255, 255, 0.15)",
-                        paddingHorizontal: 12,
-                        height: 44,
-                      }}
-                    >
-                      <Ionicons
-                        name="pencil-outline"
-                        size={15}
-                        color="#71717a"
-                        style={{ marginRight: 8 }}
-                      />
-                      <TextInput
-                        style={{
-                          flex: 1,
-                          height: 44,
-                          color: "#ffffff",
-                          fontSize: 14,
-                          paddingVertical: 0,
-                        }}
-                        value={calendarTitleInput}
-                        onChangeText={setCalendarTitleInput}
-                        placeholder="Es. StudICI - Lezioni Sapienza"
-                        placeholderTextColor="#636366"
-                        autoCapitalize="sentences"
-                        autoCorrect={false}
-                        returnKeyType="done"
-                        onSubmitEditing={handleSaveCalendarTitle}
-                        onFocus={() => {
-                          setTimeout(() => {
-                            calendarScrollRef.current?.scrollTo({
-                              y: 200,
-                              animated: true,
-                            });
-                          }, 120);
-                        }}
-                      />
-                      {calendarTitleInput.length > 0 && (
-                        <TouchableOpacity
-                          onPress={() => setCalendarTitleInput("")}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          style={{ padding: 4 }}
-                        >
-                          <Ionicons
-                            name="close-circle"
-                            size={16}
-                            color="#71717a"
-                          />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <NativeActionButton
-                      label={isSavingCalendarTitle ? "..." : "Salva"}
-                      onPress={handleSaveCalendarTitle}
-                      disabled={
-                        !calendarTitleInput.trim() ||
-                        calendarTitleInput.trim() === calendarTitle ||
-                        isSavingCalendarTitle
-                      }
-                      variant={
-                        !calendarTitleInput.trim() ||
-                        calendarTitleInput.trim() === calendarTitle ||
-                        isSavingCalendarTitle
-                          ? "glass"
-                          : "filled"
-                      }
-                      glow={Boolean(
-                        calendarTitleInput.trim() &&
-                        calendarTitleInput.trim() !== calendarTitle &&
-                        !isSavingCalendarTitle,
-                      )}
-                      glowColor={theme.accent}
-                      accentColor={theme.primary}
-                      style={{
-                        height: 44,
-                        borderRadius: 22,
-                        minWidth: 104,
-                        flexShrink: 0,
-                        ...(calendarTitleInput.trim() &&
-                        calendarTitleInput.trim() !== calendarTitle &&
-                        !isSavingCalendarTitle
-                          ? {
-                              shadowColor: theme.accent,
-                              shadowOpacity: 0.45,
-                              shadowRadius: 8,
-                            }
-                          : {}),
-                      }}
-                      pillStyle={{
-                        height: 44,
-                        borderRadius: 22,
-                        paddingHorizontal: 16,
-                        ...(!calendarTitleInput.trim() ||
-                        calendarTitleInput.trim() === calendarTitle ||
-                        isSavingCalendarTitle
-                          ? {
-                              backgroundColor: "#2c2c2e",
-                              borderColor: "rgba(255, 255, 255, 0.12)",
-                            }
-                          : {}),
-                      }}
-                      textStyle={{
-                        color: "#ffffff",
-                        fontSize: 14,
-                        fontWeight: "600",
-                        letterSpacing: -0.2,
-                      }}
-                    />
-                  </View>
-                  {calendarTitle !== DEFAULT_CALENDAR_TITLE && (
+                    activeFontStyle={{
+                      fontSize: 13.5,
+                      fontWeight: "700",
+                      color: "#ffffff",
+                    }}
+                    style={styles.modalSegmentedControl}
+                  />
+                ) : (
+                  <View style={styles.calendarTabContainer}>
                     <TouchableOpacity
-                      style={{ marginTop: 12, alignSelf: "flex-start" }}
-                      activeOpacity={0.7}
-                      onPress={handleResetCalendarTitle}
+                      style={[
+                        styles.calendarTabBtn,
+                        activeCalendarTab === "lessons" && [
+                          styles.calendarTabBtnActive,
+                          {
+                            backgroundColor: theme.primary,
+                            shadowColor: theme.primary,
+                            shadowOpacity: 0.45,
+                            shadowRadius: 6,
+                          },
+                        ],
+                      ]}
+                      activeOpacity={0.8}
+                      onPress={() => setActiveCalendarTab("lessons")}
                     >
                       <Text
-                        style={{
-                          fontSize: 12.5,
-                          color: theme.accent,
-                          fontWeight: "500",
-                        }}
+                        style={[
+                          styles.calendarTabText,
+                          activeCalendarTab === "lessons" &&
+                            styles.calendarTabTextActive,
+                        ]}
                       >
-                        Ripristina nome predefinito
+                        Lezioni
                       </Text>
                     </TouchableOpacity>
-                  )}
-                </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.calendarTabBtn,
+                        activeCalendarTab === "trains" && [
+                          styles.calendarTabBtnActive,
+                          {
+                            backgroundColor: theme.primary,
+                            shadowColor: theme.primary,
+                            shadowOpacity: 0.45,
+                            shadowRadius: 6,
+                          },
+                        ],
+                      ]}
+                      activeOpacity={0.8}
+                      onPress={() => setActiveCalendarTab("trains")}
+                    >
+                      <Text
+                        style={[
+                          styles.calendarTabText,
+                          activeCalendarTab === "trains" &&
+                            styles.calendarTabTextActive,
+                        ]}
+                      >
+                        Treni
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
-              {/* Box 3: Gestione & Rimozione */}
-              <Text style={styles.sectionHeader}>GESTIONE</Text>
-              <View style={[styles.groupedCard, { marginBottom: 8 }]}>
-                <TouchableOpacity
-                  style={styles.tableRow}
-                  activeOpacity={0.7}
-                  onPress={handleDeleteCalendar}
-                  disabled={isDeletingCalendar}
-                >
-                  <View
-                    style={[
-                      styles.iconBox,
-                      {
-                        backgroundColor: "rgba(255, 69, 58, 0.12)",
-                        borderColor: "rgba(255, 69, 58, 0.25)",
-                      },
-                    ]}
-                  >
-                    {isDeletingCalendar ? (
-                      <ActivityIndicator size="small" color="#ff453a" />
-                    ) : (
-                      <Ionicons
-                        name="trash-outline"
-                        size={17}
-                        color="#ff453a"
+              {/* SCHEDA 1: LEZIONI */}
+              {activeCalendarTab === "lessons" && (
+                <>
+                  <Text style={styles.sectionHeader}>
+                    SINCRONIZZAZIONE LEZIONI
+                  </Text>
+                  <View style={styles.groupedCard}>
+                    {/* Switch Abilita */}
+                    <View style={styles.cloudAutoSyncRow}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={styles.cloudAutoSyncTitle}>
+                          Calendario Lezioni
+                        </Text>
+                        <Text style={styles.cloudAutoSyncSub}>
+                          Crea e sincronizza il calendario dedicato per tutte le
+                          lezioni.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={lessonsEnabled}
+                        onValueChange={(val) =>
+                          handleToggleCalendarEnabled("lessons", val)
+                        }
+                        disabled={isSyncingCalendar || isDeletingCalendar}
+                        trackColor={{ false: "#39393d", true: "#34c759" }}
+                        ios_backgroundColor="#39393d"
                       />
-                    )}
+                    </View>
+
+                    <View style={styles.separator} />
+
+                    {/* Switch Auto-Sync */}
+                    <View style={styles.cloudAutoSyncRow}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={styles.cloudAutoSyncTitle}>
+                          Sincronizzazione automatica
+                        </Text>
+                        <Text style={styles.cloudAutoSyncSub}>
+                          Aggiorna le lezioni su Apple Calendar ad ogni avvio se
+                          l&apos;orario, le aule o gli avvisi sono cambiati.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={lessonsAutoSync}
+                        onValueChange={handleToggleLessonsAutoSync}
+                        disabled={!lessonsEnabled}
+                        trackColor={{ false: "#39393d", true: "#34c759" }}
+                        ios_backgroundColor="#39393d"
+                      />
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.rowTitle, { color: "#ff453a" }]}>
-                      Rimuovi calendario da iOS
-                    </Text>
-                    <Text style={styles.rowSubTitle}>
-                      Elimina calendario dedicato
-                    </Text>
+
+                  {/* Nome Calendario Lezioni */}
+                  <Text style={styles.sectionHeader}>
+                    NOME CALENDARIO LEZIONI
+                  </Text>
+                  <View style={styles.groupedCard}>
+                    <View style={{ padding: 16 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          color: "#8e8e93",
+                          lineHeight: 18,
+                          marginBottom: 12,
+                        }}
+                      >
+                        Personalizza il titolo del calendario
+                      </Text>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <View
+                          style={{
+                            flex: 1,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            backgroundColor: "#151516",
+                            borderRadius: 12,
+                            borderWidth: StyleSheet.hairlineWidth,
+                            borderColor: "rgba(255, 255, 255, 0.15)",
+                            paddingHorizontal: 12,
+                            height: 44,
+                          }}
+                        >
+                          <View
+                            style={{
+                              width: 11,
+                              height: 11,
+                              borderRadius: 5.5,
+                              backgroundColor: lessonsColor,
+                              borderWidth: StyleSheet.hairlineWidth,
+                              borderColor: "rgba(255, 255, 255, 0.35)",
+                              marginRight: 8,
+                            }}
+                          />
+                          <TextInput
+                            style={{
+                              flex: 1,
+                              height: 44,
+                              color: "#ffffff",
+                              fontSize: 14,
+                              paddingVertical: 0,
+                            }}
+                            value={lessonsTitleInput}
+                            onChangeText={setLessonsTitleInput}
+                            placeholder={DEFAULT_LESSONS_CALENDAR_TITLE}
+                            placeholderTextColor="#636366"
+                            autoCapitalize="sentences"
+                            autoCorrect={false}
+                            returnKeyType="done"
+                            onSubmitEditing={handleSaveLessonsTitle}
+                            onFocus={() => {
+                              setTimeout(() => {
+                                calendarScrollRef.current?.scrollTo({
+                                  y: 160,
+                                  animated: true,
+                                });
+                              }, 120);
+                            }}
+                          />
+                          {lessonsTitleInput.length > 0 && (
+                            <TouchableOpacity
+                              onPress={() => setLessonsTitleInput("")}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              style={{ padding: 4 }}
+                            >
+                              <Ionicons
+                                name="close-circle"
+                                size={16}
+                                color="#71717a"
+                              />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+
+                        <NativeActionButton
+                          label={isSavingLessonsTitle ? "..." : "Salva"}
+                          onPress={handleSaveLessonsTitle}
+                          disabled={
+                            !lessonsTitleInput.trim() ||
+                            lessonsTitleInput.trim() === lessonsTitle ||
+                            isSavingLessonsTitle
+                          }
+                          variant={
+                            !lessonsTitleInput.trim() ||
+                            lessonsTitleInput.trim() === lessonsTitle ||
+                            isSavingLessonsTitle
+                              ? "glass"
+                              : "filled"
+                          }
+                          glow={Boolean(
+                            lessonsTitleInput.trim() &&
+                            lessonsTitleInput.trim() !== lessonsTitle &&
+                            !isSavingLessonsTitle,
+                          )}
+                          glowColor={theme.accent}
+                          accentColor={theme.primary}
+                          style={{
+                            height: 44,
+                            borderRadius: 22,
+                            minWidth: 92,
+                            flexShrink: 0,
+                            ...(lessonsTitleInput.trim() &&
+                            lessonsTitleInput.trim() !== lessonsTitle &&
+                            !isSavingLessonsTitle
+                              ? {
+                                  shadowColor: theme.accent,
+                                  shadowOpacity: 0.45,
+                                  shadowRadius: 8,
+                                }
+                              : {}),
+                          }}
+                          pillStyle={{
+                            height: 44,
+                            borderRadius: 22,
+                            paddingHorizontal: 16,
+                            ...(!lessonsTitleInput.trim() ||
+                            lessonsTitleInput.trim() === lessonsTitle ||
+                            isSavingLessonsTitle
+                              ? {
+                                  backgroundColor: "#2c2c2e",
+                                  borderColor: "rgba(255, 255, 255, 0.12)",
+                                }
+                              : {}),
+                          }}
+                          textStyle={{
+                            color: "#ffffff",
+                            fontSize: 14,
+                            fontWeight: "600",
+                            letterSpacing: -0.2,
+                          }}
+                        />
+                      </View>
+                      {(lessonsTitle !== DEFAULT_LESSONS_CALENDAR_TITLE ||
+                        lessonsHasCustomColor) && (
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: 16,
+                            marginTop: 12,
+                          }}
+                        >
+                          {lessonsTitle !== DEFAULT_LESSONS_CALENDAR_TITLE && (
+                            <TouchableOpacity
+                              activeOpacity={0.7}
+                              onPress={handleResetLessonsTitle}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 12.5,
+                                  color: theme.accent,
+                                  fontWeight: "500",
+                                }}
+                              >
+                                Ripristina nome predefinito
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          {lessonsHasCustomColor && (
+                            <TouchableOpacity
+                              activeOpacity={0.7}
+                              onPress={() =>
+                                handleResetCalendarColor("lessons")
+                              }
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 12.5,
+                                  color: theme.accent,
+                                  fontWeight: "500",
+                                }}
+                              >
+                                Ripristina colore tema
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
                   </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={15}
-                    color="#48484a"
-                    style={{ marginLeft: 6 }}
-                  />
-                </TouchableOpacity>
-              </View>
+
+                  {/* Avviso Notifica Lezioni */}
+                  <Text style={styles.sectionHeader}>AVVISO LEZIONI</Text>
+                  <View style={styles.groupedCard}>
+                    <View style={{ padding: 14 }}>
+                      <Text style={styles.alertCardSubtitle}>
+                        Scegli quando avvisarti
+                      </Text>
+                      <View style={{ gap: 8, marginTop: 10 }}>
+                        {CALENDAR_LESSONS_ALERT_OPTIONS.map((opt) => {
+                          const isSelected =
+                            lessonsAlertConfig.alertType === opt.type;
+                          return (
+                            <TouchableOpacity
+                              key={opt.type}
+                              activeOpacity={0.7}
+                              onPress={() => handleSelectLessonsAlert(opt.type)}
+                              style={[
+                                styles.alertOptionItem,
+                                isSelected && {
+                                  borderColor: theme.primary,
+                                  backgroundColor: "rgba(255, 255, 255, 0.08)",
+                                },
+                              ]}
+                            >
+                              <View
+                                style={[
+                                  styles.alertOptionIconBadge,
+                                  isSelected && {
+                                    backgroundColor: theme.primary,
+                                  },
+                                ]}
+                              >
+                                <Ionicons
+                                  name={opt.iconName as any}
+                                  size={16}
+                                  color={isSelected ? "#ffffff" : "#8e8e93"}
+                                />
+                              </View>
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text
+                                  style={[
+                                    styles.alertOptionLabel,
+                                    isSelected && {
+                                      color: "#ffffff",
+                                      fontWeight: "600",
+                                    },
+                                  ]}
+                                >
+                                  {opt.label}
+                                </Text>
+                                <Text style={styles.alertOptionDesc}>
+                                  {opt.description}
+                                </Text>
+                              </View>
+                              {isSelected && (
+                                <Ionicons
+                                  name="checkmark-circle"
+                                  size={20}
+                                  color={theme.primary}
+                                  style={{ marginLeft: 6 }}
+                                />
+                              )}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+
+                      {lessonsAlertConfig.alertType === "custom" && (
+                        <View style={styles.customAlertBox}>
+                          <Text style={styles.customAlertTitle}>
+                            Minuti di anticipo personalizzati:
+                          </Text>
+
+                          {/* Riga opzioni veloci con pill glowing stile Anticipo in aula */}
+                          <View style={styles.alertQuickRow}>
+                            {[5, 10, 15].map((mins) => {
+                              const isSelected =
+                                lessonsAlertConfig.customMinutes === mins;
+                              return (
+                                <TouchableOpacity
+                                  key={mins}
+                                  style={[
+                                    styles.alertQuickChip,
+                                    isSelected && [
+                                      styles.alertChipActive,
+                                      {
+                                        backgroundColor: `${theme.primary}25`,
+                                        borderColor: theme.primary,
+                                        shadowColor: theme.primary,
+                                      },
+                                    ],
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    handleChangeLessonsCustomMinutes(mins)
+                                  }
+                                >
+                                  <Ionicons
+                                    name={
+                                      isSelected
+                                        ? "checkmark-circle"
+                                        : "time-outline"
+                                    }
+                                    size={13}
+                                    color={
+                                      isSelected ? theme.accent : "#8e8e93"
+                                    }
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.alertChipText,
+                                      isSelected && [
+                                        styles.alertChipTextActive,
+                                        { color: theme.accent },
+                                      ],
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {mins} min
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                          <View style={styles.alertQuickRow}>
+                            {[30, 45, 60].map((mins) => {
+                              const isSelected =
+                                lessonsAlertConfig.customMinutes === mins;
+                              return (
+                                <TouchableOpacity
+                                  key={mins}
+                                  style={[
+                                    styles.alertQuickChip,
+                                    isSelected && [
+                                      styles.alertChipActive,
+                                      {
+                                        backgroundColor: `${theme.primary}25`,
+                                        borderColor: theme.primary,
+                                        shadowColor: theme.primary,
+                                      },
+                                    ],
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    handleChangeLessonsCustomMinutes(mins)
+                                  }
+                                >
+                                  <Ionicons
+                                    name={
+                                      isSelected
+                                        ? "checkmark-circle"
+                                        : "time-outline"
+                                    }
+                                    size={13}
+                                    color={
+                                      isSelected ? theme.accent : "#8e8e93"
+                                    }
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.alertChipText,
+                                      isSelected && [
+                                        styles.alertChipTextActive,
+                                        { color: theme.accent },
+                                      ],
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {mins} min
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+
+                          {/* Selettore di precisione centrato con glowing pill */}
+                          <View style={styles.alertStepperCenteredRow}>
+                            <TouchableOpacity
+                              style={[
+                                styles.alertStepperBtn,
+                                lessonsAlertConfig.customMinutes <= 1 && {
+                                  opacity: 0.35,
+                                },
+                              ]}
+                              disabled={lessonsAlertConfig.customMinutes <= 1}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={() =>
+                                handleChangeLessonsCustomMinutes(
+                                  Math.max(
+                                    1,
+                                    lessonsAlertConfig.customMinutes - 1,
+                                  ),
+                                )
+                              }
+                            >
+                              <Ionicons
+                                name="remove"
+                                size={17}
+                                color="#ffffff"
+                              />
+                            </TouchableOpacity>
+                            <View
+                              style={[
+                                styles.alertFineStepValuePill,
+                                {
+                                  borderColor: theme.primary,
+                                  backgroundColor: `${theme.primary}22`,
+                                  shadowColor: theme.primary,
+                                  shadowOffset: { width: 0, height: 0 },
+                                  shadowOpacity: 0.85,
+                                  shadowRadius: 8,
+                                  elevation: 4,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="time-outline"
+                                size={14}
+                                color={theme.accent}
+                                style={{ marginRight: 6 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.alertFineStepValueText,
+                                  { color: theme.accent },
+                                ]}
+                              >
+                                {`${lessonsAlertConfig.customMinutes} min prima`}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.alertStepperBtn}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={() =>
+                                handleChangeLessonsCustomMinutes(
+                                  lessonsAlertConfig.customMinutes + 1,
+                                )
+                              }
+                            >
+                              <Ionicons name="add" size={17} color="#ffffff" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </>
+              )}
+
+              {/* SCHEDA 2: TRENI */}
+              {activeCalendarTab === "trains" && (
+                <>
+                  <Text style={styles.sectionHeader}>
+                    SINCRONIZZAZIONE TRENI
+                  </Text>
+                  <View style={styles.groupedCard}>
+                    {/* Switch Abilita */}
+                    <View style={styles.cloudAutoSyncRow}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={styles.cloudAutoSyncTitle}>
+                          Calendario treni
+                        </Text>
+                        <Text style={styles.cloudAutoSyncSub}>
+                          Crea e sincronizza il calendario con i treni di andata
+                          e ritorno.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={trainsEnabled}
+                        onValueChange={(val) =>
+                          handleToggleCalendarEnabled("trains", val)
+                        }
+                        disabled={isSyncingCalendar || isDeletingCalendar}
+                        trackColor={{ false: "#39393d", true: "#34c759" }}
+                        ios_backgroundColor="#39393d"
+                      />
+                    </View>
+
+                    <View style={styles.separator} />
+
+                    {/* Switch Auto-Sync */}
+                    <View style={styles.cloudAutoSyncRow}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={styles.cloudAutoSyncTitle}>
+                          Sincronizzazione automatica
+                        </Text>
+                        <Text style={styles.cloudAutoSyncSub}>
+                          Ricalcola e aggiorna automaticamente i treni ad ogni
+                          cambio di orario, tragitto o avvisi.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={trainsAutoSync}
+                        onValueChange={handleToggleTrainsAutoSync}
+                        disabled={!trainsEnabled}
+                        trackColor={{ false: "#39393d", true: "#34c759" }}
+                        ios_backgroundColor="#39393d"
+                      />
+                    </View>
+
+                    <View style={styles.separator} />
+
+                    {/* Destinazione treni ritorno con Segmented UI */}
+                    <View
+                      style={{ paddingHorizontal: 16, paddingVertical: 14 }}
+                    >
+                      <Text style={styles.cloudAutoSyncTitle}>
+                        Gestione calendario
+                      </Text>
+                      <Text
+                        style={[styles.cloudAutoSyncSub, { marginBottom: 12 }]}
+                      >
+                        Scegli se raggruppare andata e ritorno nello stesso
+                        calendario o creare due calendari distinti.
+                      </Text>
+
+                      {isNativeIos ? (
+                        <SegmentedControl
+                          key={`seg-return-dest-${theme.primary}-${trainsSeparateReturn ? "sep" : "uni"}`}
+                          values={["Stesso calendario", "Calendario separato"]}
+                          selectedIndex={trainsSeparateReturn ? 1 : 0}
+                          onChange={(event) => {
+                            const idx = event.nativeEvent.selectedSegmentIndex;
+                            handleToggleTrainsSeparateReturn(idx === 1);
+                          }}
+                          appearance="dark"
+                          tintColor={theme.primary}
+                          fontStyle={{
+                            fontSize: 13,
+                            fontWeight: "600",
+                            color: "#a1a1aa",
+                          }}
+                          activeFontStyle={{
+                            fontSize: 13,
+                            fontWeight: "700",
+                            color: "#ffffff",
+                          }}
+                          style={{ height: 38, borderRadius: 10 }}
+                        />
+                      ) : (
+                        <View style={{ flexDirection: "row", gap: 10 }}>
+                          <TouchableOpacity
+                            style={[
+                              styles.alertQuickChip,
+                              !trainsSeparateReturn && [
+                                styles.alertChipActive,
+                                {
+                                  backgroundColor: `${theme.primary}25`,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
+                              ],
+                              {
+                                flex: 1,
+                                height: 42,
+                                justifyContent: "center",
+                                borderRadius: 12,
+                              },
+                            ]}
+                            activeOpacity={0.7}
+                            onPress={() =>
+                              handleToggleTrainsSeparateReturn(false)
+                            }
+                          >
+                            <Ionicons
+                              name={
+                                !trainsSeparateReturn
+                                  ? "checkmark-circle"
+                                  : "git-merge-outline"
+                              }
+                              size={15}
+                              color={
+                                !trainsSeparateReturn ? theme.accent : "#8e8e93"
+                              }
+                              style={{ marginRight: 6 }}
+                            />
+                            <Text
+                              style={[
+                                styles.alertChipText,
+                                !trainsSeparateReturn && [
+                                  styles.alertChipTextActive,
+                                  { color: theme.accent, fontWeight: "700" },
+                                ],
+                              ]}
+                              numberOfLines={1}
+                            >
+                              Stesso calendario
+                            </Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.alertQuickChip,
+                              trainsSeparateReturn && [
+                                styles.alertChipActive,
+                                {
+                                  backgroundColor: `${theme.primary}25`,
+                                  borderColor: theme.primary,
+                                  shadowColor: theme.primary,
+                                },
+                              ],
+                              {
+                                flex: 1,
+                                height: 42,
+                                justifyContent: "center",
+                                borderRadius: 12,
+                              },
+                            ]}
+                            activeOpacity={0.7}
+                            onPress={() =>
+                              handleToggleTrainsSeparateReturn(true)
+                            }
+                          >
+                            <Ionicons
+                              name={
+                                trainsSeparateReturn
+                                  ? "checkmark-circle"
+                                  : "copy-outline"
+                              }
+                              size={15}
+                              color={
+                                trainsSeparateReturn ? theme.accent : "#8e8e93"
+                              }
+                              style={{ marginRight: 6 }}
+                            />
+                            <Text
+                              style={[
+                                styles.alertChipText,
+                                trainsSeparateReturn && [
+                                  styles.alertChipTextActive,
+                                  { color: theme.accent, fontWeight: "700" },
+                                ],
+                              ]}
+                              numberOfLines={1}
+                            >
+                              Calendario separato
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* Nome Calendario Treni (Andata o Unificato) */}
+                  <Text style={styles.sectionHeader}>
+                    {trainsSeparateReturn
+                      ? "NOME CALENDARIO TRENI ANDATA"
+                      : "NOME CALENDARIO TRENI"}
+                  </Text>
+                  <View style={styles.groupedCard}>
+                    <View style={{ padding: 16 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          color: "#8e8e93",
+                          lineHeight: 18,
+                          marginBottom: 12,
+                        }}
+                      >
+                        {trainsSeparateReturn
+                          ? "Personalizza il titolo del calendario"
+                          : "Personalizza il titolo del calendario"}
+                      </Text>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <View
+                          style={{
+                            flex: 1,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            backgroundColor: "#151516",
+                            borderRadius: 12,
+                            borderWidth: StyleSheet.hairlineWidth,
+                            borderColor: "rgba(255, 255, 255, 0.15)",
+                            paddingHorizontal: 12,
+                            height: 44,
+                          }}
+                        >
+                          <View
+                            style={{
+                              width: 11,
+                              height: 11,
+                              borderRadius: 5.5,
+                              backgroundColor: trainsColor,
+                              borderWidth: StyleSheet.hairlineWidth,
+                              borderColor: "rgba(255, 255, 255, 0.35)",
+                              marginRight: 8,
+                            }}
+                          />
+                          <TextInput
+                            style={{
+                              flex: 1,
+                              height: 44,
+                              color: "#ffffff",
+                              fontSize: 14,
+                              paddingVertical: 0,
+                            }}
+                            value={trainsTitleInput}
+                            onChangeText={setTrainsTitleInput}
+                            placeholder={
+                              trainsSeparateReturn
+                                ? DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE
+                                : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE
+                            }
+                            placeholderTextColor="#636366"
+                            autoCapitalize="sentences"
+                            autoCorrect={false}
+                            returnKeyType="done"
+                            onSubmitEditing={handleSaveTrainsTitle}
+                            onFocus={() => {
+                              setTimeout(() => {
+                                calendarScrollRef.current?.scrollTo({
+                                  y: 160,
+                                  animated: true,
+                                });
+                              }, 120);
+                            }}
+                          />
+                          {trainsTitleInput.length > 0 && (
+                            <TouchableOpacity
+                              onPress={() => setTrainsTitleInput("")}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              style={{ padding: 4 }}
+                            >
+                              <Ionicons
+                                name="close-circle"
+                                size={16}
+                                color="#71717a"
+                              />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+
+                        <NativeActionButton
+                          label={isSavingTrainsTitle ? "..." : "Salva"}
+                          onPress={handleSaveTrainsTitle}
+                          disabled={
+                            !trainsTitleInput.trim() ||
+                            trainsTitleInput.trim() === trainsTitle ||
+                            isSavingTrainsTitle
+                          }
+                          variant={
+                            !trainsTitleInput.trim() ||
+                            trainsTitleInput.trim() === trainsTitle ||
+                            isSavingTrainsTitle
+                              ? "glass"
+                              : "filled"
+                          }
+                          glow={Boolean(
+                            trainsTitleInput.trim() &&
+                            trainsTitleInput.trim() !== trainsTitle &&
+                            !isSavingTrainsTitle,
+                          )}
+                          glowColor={theme.accent}
+                          accentColor={theme.primary}
+                          style={{
+                            height: 44,
+                            borderRadius: 22,
+                            minWidth: 92,
+                            flexShrink: 0,
+                            ...(trainsTitleInput.trim() &&
+                            trainsTitleInput.trim() !== trainsTitle &&
+                            !isSavingTrainsTitle
+                              ? {
+                                  shadowColor: theme.accent,
+                                  shadowOpacity: 0.45,
+                                  shadowRadius: 8,
+                                }
+                              : {}),
+                          }}
+                          pillStyle={{
+                            height: 44,
+                            borderRadius: 22,
+                            paddingHorizontal: 16,
+                            ...(!trainsTitleInput.trim() ||
+                            trainsTitleInput.trim() === trainsTitle ||
+                            isSavingTrainsTitle
+                              ? {
+                                  backgroundColor: "#2c2c2e",
+                                  borderColor: "rgba(255, 255, 255, 0.12)",
+                                }
+                              : {}),
+                          }}
+                          textStyle={{
+                            color: "#ffffff",
+                            fontSize: 14,
+                            fontWeight: "600",
+                            letterSpacing: -0.2,
+                          }}
+                        />
+                      </View>
+                      {(trainsTitle !==
+                        (trainsSeparateReturn
+                          ? DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE
+                          : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE) ||
+                        trainsHasCustomColor) && (
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: 16,
+                            marginTop: 12,
+                          }}
+                        >
+                          {trainsTitle !==
+                            (trainsSeparateReturn
+                              ? DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE
+                              : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE) && (
+                            <TouchableOpacity
+                              activeOpacity={0.7}
+                              onPress={handleResetTrainsTitle}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 12.5,
+                                  color: theme.accent,
+                                  fontWeight: "500",
+                                }}
+                              >
+                                Ripristina nome predefinito
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          {trainsHasCustomColor && (
+                            <TouchableOpacity
+                              activeOpacity={0.7}
+                              onPress={() => handleResetCalendarColor("trains")}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 12.5,
+                                  color: theme.accent,
+                                  fontWeight: "500",
+                                }}
+                              >
+                                Ripristina colore tema
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* Nome Calendario Treni Ritorno (se separato) */}
+                  {trainsSeparateReturn && (
+                    <>
+                      <Text style={styles.sectionHeader}>
+                        NOME CALENDARIO TRENI RITORNO
+                      </Text>
+                      <View style={styles.groupedCard}>
+                        <View style={{ padding: 16 }}>
+                          <Text
+                            style={{
+                              fontSize: 13,
+                              color: "#8e8e93",
+                              lineHeight: 18,
+                              marginBottom: 12,
+                            }}
+                          >
+                            Personalizza il titolo visibile per il calendario
+                            separato dei treni di ritorno.
+                          </Text>
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 10,
+                            }}
+                          >
+                            <View
+                              style={{
+                                flex: 1,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                backgroundColor: "#151516",
+                                borderRadius: 12,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: "rgba(255, 255, 255, 0.15)",
+                                paddingHorizontal: 12,
+                                height: 44,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: 11,
+                                  height: 11,
+                                  borderRadius: 5.5,
+                                  backgroundColor: trainsReturnColor,
+                                  borderWidth: StyleSheet.hairlineWidth,
+                                  borderColor: "rgba(255, 255, 255, 0.35)",
+                                  marginRight: 8,
+                                }}
+                              />
+                              <TextInput
+                                style={{
+                                  flex: 1,
+                                  height: 44,
+                                  color: "#ffffff",
+                                  fontSize: 14,
+                                  paddingVertical: 0,
+                                }}
+                                value={trainsReturnTitleInput}
+                                onChangeText={setTrainsReturnTitleInput}
+                                placeholder={
+                                  DEFAULT_TRAIN_RETURN_CALENDAR_TITLE
+                                }
+                                placeholderTextColor="#636366"
+                                autoCapitalize="sentences"
+                                autoCorrect={false}
+                                returnKeyType="done"
+                                onSubmitEditing={handleSaveTrainsReturnTitle}
+                                onFocus={() => {
+                                  setTimeout(() => {
+                                    calendarScrollRef.current?.scrollTo({
+                                      y: 220,
+                                      animated: true,
+                                    });
+                                  }, 120);
+                                }}
+                              />
+                              {trainsReturnTitleInput.length > 0 && (
+                                <TouchableOpacity
+                                  onPress={() => setTrainsReturnTitleInput("")}
+                                  hitSlop={{
+                                    top: 8,
+                                    bottom: 8,
+                                    left: 8,
+                                    right: 8,
+                                  }}
+                                  style={{ padding: 4 }}
+                                >
+                                  <Ionicons
+                                    name="close-circle"
+                                    size={16}
+                                    color="#71717a"
+                                  />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+
+                            <NativeActionButton
+                              label={
+                                isSavingTrainsReturnTitle ? "..." : "Salva"
+                              }
+                              onPress={handleSaveTrainsReturnTitle}
+                              disabled={
+                                !trainsReturnTitleInput.trim() ||
+                                trainsReturnTitleInput.trim() ===
+                                  trainsReturnTitle ||
+                                isSavingTrainsReturnTitle
+                              }
+                              variant={
+                                !trainsReturnTitleInput.trim() ||
+                                trainsReturnTitleInput.trim() ===
+                                  trainsReturnTitle ||
+                                isSavingTrainsReturnTitle
+                                  ? "glass"
+                                  : "filled"
+                              }
+                              glow={Boolean(
+                                trainsReturnTitleInput.trim() &&
+                                trainsReturnTitleInput.trim() !==
+                                  trainsReturnTitle &&
+                                !isSavingTrainsReturnTitle,
+                              )}
+                              glowColor={theme.accent}
+                              accentColor={theme.primary}
+                              style={{
+                                height: 44,
+                                borderRadius: 22,
+                                minWidth: 92,
+                                flexShrink: 0,
+                                ...(trainsReturnTitleInput.trim() &&
+                                trainsReturnTitleInput.trim() !==
+                                  trainsReturnTitle &&
+                                !isSavingTrainsReturnTitle
+                                  ? {
+                                      shadowColor: theme.accent,
+                                      shadowOpacity: 0.45,
+                                      shadowRadius: 8,
+                                    }
+                                  : {}),
+                              }}
+                              pillStyle={{
+                                height: 44,
+                                borderRadius: 22,
+                                paddingHorizontal: 16,
+                                ...(!trainsReturnTitleInput.trim() ||
+                                trainsReturnTitleInput.trim() ===
+                                  trainsReturnTitle ||
+                                isSavingTrainsReturnTitle
+                                  ? {
+                                      backgroundColor: "#2c2c2e",
+                                      borderColor: "rgba(255, 255, 255, 0.12)",
+                                    }
+                                  : {}),
+                              }}
+                              textStyle={{
+                                color: "#ffffff",
+                                fontSize: 14,
+                                fontWeight: "600",
+                                letterSpacing: -0.2,
+                              }}
+                            />
+                          </View>
+                          {(trainsReturnTitle !==
+                            DEFAULT_TRAIN_RETURN_CALENDAR_TITLE ||
+                            trainsReturnHasCustomColor) && (
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                flexWrap: "wrap",
+                                alignItems: "center",
+                                gap: 16,
+                                marginTop: 12,
+                              }}
+                            >
+                              {trainsReturnTitle !==
+                                DEFAULT_TRAIN_RETURN_CALENDAR_TITLE && (
+                                <TouchableOpacity
+                                  activeOpacity={0.7}
+                                  onPress={handleResetTrainsReturnTitle}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 12.5,
+                                      color: theme.accent,
+                                      fontWeight: "500",
+                                    }}
+                                  >
+                                    Ripristina nome predefinito
+                                  </Text>
+                                </TouchableOpacity>
+                              )}
+                              {trainsReturnHasCustomColor && (
+                                <TouchableOpacity
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    handleResetCalendarColor("trains_return")
+                                  }
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 12.5,
+                                      color: theme.accent,
+                                      fontWeight: "500",
+                                    }}
+                                  >
+                                    Ripristina colore tema
+                                  </Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                    </>
+                  )}
+
+                  {/* Avviso Notifica Treni */}
+                  <Text style={styles.sectionHeader}>AVVISO NATIVO TRENI</Text>
+                  <View style={styles.groupedCard}>
+                    <View style={{ padding: 14 }}>
+                      <Text style={styles.alertCardSubtitle}>
+                        Scegli quando avvisarti
+                      </Text>
+                      <View style={{ gap: 8, marginTop: 10 }}>
+                        {CALENDAR_TRAINS_ALERT_OPTIONS.map((opt) => {
+                          const isSelected =
+                            trainsAlertConfig.alertType === opt.type;
+                          return (
+                            <TouchableOpacity
+                              key={opt.type}
+                              activeOpacity={0.7}
+                              onPress={() => handleSelectTrainsAlert(opt.type)}
+                              style={[
+                                styles.alertOptionItem,
+                                isSelected && {
+                                  borderColor: theme.primary,
+                                  backgroundColor: "rgba(255, 255, 255, 0.08)",
+                                },
+                              ]}
+                            >
+                              <View
+                                style={[
+                                  styles.alertOptionIconBadge,
+                                  isSelected && {
+                                    backgroundColor: theme.primary,
+                                  },
+                                ]}
+                              >
+                                <Ionicons
+                                  name={opt.iconName as any}
+                                  size={16}
+                                  color={isSelected ? "#ffffff" : "#8e8e93"}
+                                />
+                              </View>
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text
+                                  style={[
+                                    styles.alertOptionLabel,
+                                    isSelected && {
+                                      color: "#ffffff",
+                                      fontWeight: "600",
+                                    },
+                                  ]}
+                                >
+                                  {opt.label}
+                                </Text>
+                                <Text style={styles.alertOptionDesc}>
+                                  {opt.description}
+                                </Text>
+                              </View>
+                              {isSelected && (
+                                <Ionicons
+                                  name="checkmark-circle"
+                                  size={20}
+                                  color={theme.primary}
+                                  style={{ marginLeft: 6 }}
+                                />
+                              )}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+
+                      {trainsAlertConfig.alertType === "custom" && (
+                        <View style={styles.customAlertBox}>
+                          <Text style={styles.customAlertTitle}>
+                            Minuti di anticipo personalizzati:
+                          </Text>
+
+                          {/* Riga opzioni veloci con pill glowing stile Anticipo in aula */}
+                          <View style={styles.alertQuickRow}>
+                            {[5, 10, 15].map((mins) => {
+                              const isSelected =
+                                trainsAlertConfig.customMinutes === mins;
+                              return (
+                                <TouchableOpacity
+                                  key={mins}
+                                  style={[
+                                    styles.alertQuickChip,
+                                    isSelected && [
+                                      styles.alertChipActive,
+                                      {
+                                        backgroundColor: `${theme.primary}25`,
+                                        borderColor: theme.primary,
+                                        shadowColor: theme.primary,
+                                      },
+                                    ],
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    handleChangeTrainsCustomMinutes(mins)
+                                  }
+                                >
+                                  <Ionicons
+                                    name={
+                                      isSelected
+                                        ? "checkmark-circle"
+                                        : "time-outline"
+                                    }
+                                    size={13}
+                                    color={
+                                      isSelected ? theme.accent : "#8e8e93"
+                                    }
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.alertChipText,
+                                      isSelected && [
+                                        styles.alertChipTextActive,
+                                        { color: theme.accent },
+                                      ],
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {mins} min
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                          <View style={styles.alertQuickRow}>
+                            {[30, 45, 60].map((mins) => {
+                              const isSelected =
+                                trainsAlertConfig.customMinutes === mins;
+                              return (
+                                <TouchableOpacity
+                                  key={mins}
+                                  style={[
+                                    styles.alertQuickChip,
+                                    isSelected && [
+                                      styles.alertChipActive,
+                                      {
+                                        backgroundColor: `${theme.primary}25`,
+                                        borderColor: theme.primary,
+                                        shadowColor: theme.primary,
+                                      },
+                                    ],
+                                  ]}
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    handleChangeTrainsCustomMinutes(mins)
+                                  }
+                                >
+                                  <Ionicons
+                                    name={
+                                      isSelected
+                                        ? "checkmark-circle"
+                                        : "time-outline"
+                                    }
+                                    size={13}
+                                    color={
+                                      isSelected ? theme.accent : "#8e8e93"
+                                    }
+                                    style={{ marginRight: 4 }}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.alertChipText,
+                                      isSelected && [
+                                        styles.alertChipTextActive,
+                                        { color: theme.accent },
+                                      ],
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {mins} min
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+
+                          {/* Selettore di precisione centrato con glowing pill */}
+                          <View style={styles.alertStepperCenteredRow}>
+                            <TouchableOpacity
+                              style={[
+                                styles.alertStepperBtn,
+                                trainsAlertConfig.customMinutes <= 1 && {
+                                  opacity: 0.35,
+                                },
+                              ]}
+                              disabled={trainsAlertConfig.customMinutes <= 1}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={() =>
+                                handleChangeTrainsCustomMinutes(
+                                  Math.max(
+                                    1,
+                                    trainsAlertConfig.customMinutes - 1,
+                                  ),
+                                )
+                              }
+                            >
+                              <Ionicons
+                                name="remove"
+                                size={17}
+                                color="#ffffff"
+                              />
+                            </TouchableOpacity>
+                            <View
+                              style={[
+                                styles.alertFineStepValuePill,
+                                {
+                                  borderColor: theme.primary,
+                                  backgroundColor: `${theme.primary}22`,
+                                  shadowColor: theme.primary,
+                                  shadowOffset: { width: 0, height: 0 },
+                                  shadowOpacity: 0.85,
+                                  shadowRadius: 8,
+                                  elevation: 4,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="time-outline"
+                                size={14}
+                                color={theme.accent}
+                                style={{ marginRight: 6 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.alertFineStepValueText,
+                                  { color: theme.accent },
+                                ]}
+                              >
+                                {`${trainsAlertConfig.customMinutes} min prima`}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.alertStepperBtn}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={() =>
+                                handleChangeTrainsCustomMinutes(
+                                  trainsAlertConfig.customMinutes + 1,
+                                )
+                              }
+                            >
+                              <Ionicons name="add" size={17} color="#ffffff" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </>
+              )}
             </ScrollView>
           </KeyboardAvoidingView>
         </View>
@@ -4357,7 +6342,7 @@ export default function ProfiloScreen() {
                   <SwipeToDeleteRow
                     key={doc.id}
                     marginBottom={10}
-                    borderRadius={14}
+                    borderRadius={CARD_RADIUS.card}
                     style={{ width: docCardWidth }}
                     onDelete={() => handleDeleteDocDirectly(doc.id, doc.title)}
                   >
@@ -4374,7 +6359,7 @@ export default function ProfiloScreen() {
                       onDelete={() =>
                         handleDeleteDocDirectly(doc.id, doc.title)
                       }
-                      style={{ width: docCardWidth, borderRadius: 14 }}
+                      style={{ width: docCardWidth, borderRadius: CARD_RADIUS.card }}
                     >
                       <TouchableOpacity
                         style={[styles.docItemCard, { width: docCardWidth }]}
@@ -5022,9 +7007,13 @@ export default function ProfiloScreen() {
           visible={commuterModalVisible}
           config={commuterConfig}
           onClose={() => setCommuterModalVisible(false)}
-          onSave={async (newCfg) => {
-            const saved = await saveCommuterConfig(newCfg);
-            setCommuterConfig(saved);
+          onSave={(newCfg) => {
+            const optimistic: CommuterConfig = { ...newCfg, enabled: true };
+            setCommuterConfig(optimistic);
+            saveCommuterConfig(optimistic)
+              .then((saved) => setCommuterConfig(saved))
+              .catch(() => {});
+            refreshAppleCalendarIfConfigured().catch(() => {});
           }}
         />
       )}
@@ -5074,7 +7063,7 @@ const styles = StyleSheet.create({
   /* Card stile profilo Apple ID */
   profileHeaderCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 16,
     flexDirection: "row",
     alignItems: "flex-start",
@@ -5147,7 +7136,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "#1c1c1e",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     paddingHorizontal: 14,
     paddingVertical: 10,
     marginHorizontal: 16,
@@ -5254,7 +7243,7 @@ const styles = StyleSheet.create({
   },
   batchCardContainer: {
     backgroundColor: "rgba(255, 255, 255, 0.04)",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255, 255, 255, 0.12)",
     padding: 12,
@@ -5347,7 +7336,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderWidth: StyleSheet.hairlineWidth,
@@ -5400,7 +7389,7 @@ const styles = StyleSheet.create({
   },
   modalCardGroup: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255, 255, 255, 0.1)",
     overflow: "hidden",
@@ -5468,7 +7457,7 @@ const styles = StyleSheet.create({
   },
   groupedCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -5591,7 +7580,7 @@ const styles = StyleSheet.create({
   modalItem: {
     backgroundColor: "#1c1c1e",
     padding: 14,
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
@@ -5662,7 +7651,7 @@ const styles = StyleSheet.create({
   /* ── Registro presenze Styles (iOS Dashboard Card & Metric Tiles) ── */
   attendanceDashboardCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.cardLarge,
     padding: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255, 255, 255, 0.1)",
@@ -5707,7 +7696,7 @@ const styles = StyleSheet.create({
   kpiTile: {
     flex: 1,
     backgroundColor: "rgba(255, 255, 255, 0.04)",
-    borderRadius: 13,
+    borderRadius: CARD_RADIUS.cardInner,
     paddingVertical: 10,
     paddingHorizontal: 8,
     borderWidth: StyleSheet.hairlineWidth,
@@ -5794,8 +7783,11 @@ const styles = StyleSheet.create({
     marginLeft: 15,
   },
   legendMoreRow: {
-    paddingTop: 6,
+    paddingTop: 8,
+    paddingBottom: 2,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
   },
   legendMoreText: {
     fontSize: 11,
@@ -5864,7 +7856,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#1c1c1e",
     padding: 12,
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
     marginBottom: 14,
@@ -5893,7 +7885,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 12,
     marginBottom: 10,
     borderWidth: 1,
@@ -5998,7 +7990,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "flex-end",
     paddingRight: 22,
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     height: "100%",
   },
   swipeDeleteContent: {
@@ -6080,7 +8072,7 @@ const styles = StyleSheet.create({
   },
   cloudStatusCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 20,
     alignItems: "center",
     marginBottom: 20,
@@ -6126,7 +8118,7 @@ const styles = StyleSheet.create({
   },
   devicesSection: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 16,
     marginBottom: 16,
     borderWidth: 0.5,
@@ -6184,7 +8176,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#2c2c2e",
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 12,
   },
   deviceIconCircle: {
@@ -6248,7 +8240,7 @@ const styles = StyleSheet.create({
   },
   unpairedNoticeBox: {
     backgroundColor: "rgba(245, 158, 11, 0.08)",
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 12,
     borderWidth: 1,
     borderColor: "rgba(245, 158, 11, 0.25)",
@@ -6272,7 +8264,7 @@ const styles = StyleSheet.create({
   },
   cloudHeroCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255, 255, 255, 0.08)",
     overflow: "hidden",
@@ -6482,7 +8474,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.04)",
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
-    borderRadius: 10,
+    borderRadius: CARD_RADIUS.cardInner,
     paddingVertical: 9,
     paddingHorizontal: 10,
     minWidth: "48%",
@@ -6512,5 +8504,151 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.4,
+  },
+  calendarTabContainer: {
+    flexDirection: "row",
+    backgroundColor: "#151516",
+    borderRadius: CARD_RADIUS.card,
+    padding: 3,
+    marginBottom: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+  },
+  calendarTabBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: CARD_RADIUS.cardInner,
+    gap: 7,
+  },
+  calendarTabBtnActive: {
+    backgroundColor: "#2c2c2e",
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  calendarTabText: {
+    fontSize: 13.5,
+    fontWeight: "500",
+    color: "#8e8e93",
+  },
+  calendarTabTextActive: {
+    color: "#ffffff",
+    fontWeight: "700",
+  },
+  alertCardSubtitle: {
+    fontSize: 13,
+    color: "#8e8e93",
+    lineHeight: 18,
+  },
+  alertOptionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: CARD_RADIUS.cardInner,
+    backgroundColor: "#151516",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  alertOptionIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#2c2c2e",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  alertOptionLabel: {
+    fontSize: 14,
+    color: "#e5e5ea",
+    fontWeight: "500",
+  },
+  alertOptionDesc: {
+    fontSize: 11.5,
+    color: "#8e8e93",
+    marginTop: 2,
+  },
+  customAlertBox: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255, 255, 255, 0.1)",
+  },
+  customAlertTitle: {
+    fontSize: 12.5,
+    color: "#8e8e93",
+    fontWeight: "600",
+    letterSpacing: -0.1,
+    marginBottom: 10,
+  },
+  alertQuickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    gap: 6,
+    marginBottom: 6,
+  },
+  alertQuickChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    paddingHorizontal: 4,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+  },
+  alertChipActive: {
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  alertChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8e8e93",
+  },
+  alertChipTextActive: {
+    fontWeight: "700",
+  },
+  alertStepperCenteredRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 10,
+    width: "100%",
+  },
+  alertStepperBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#2c2c2e",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  alertFineStepValuePill: {
+    paddingHorizontal: 16,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    minWidth: 140,
+  },
+  alertFineStepValueText: {
+    fontSize: 13.5,
+    fontWeight: "700",
   },
 });

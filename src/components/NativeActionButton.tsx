@@ -118,7 +118,15 @@ export const NativeActionButton: React.FC<NativeActionButtonProps> = ({
           effect={isFilled ? 'regular' : 'clear'}
           interactive={!disabled}
           colorScheme="dark"
-          tintColor={isFilled ? (disabled ? '#27272a' : accentColor) : (accentColor && accentColor !== '#822433' ? accentColor : undefined)}
+          tintColor={
+            isFilled
+              ? disabled
+                ? '#27272a'
+                : accentColor
+              : variant === 'outlined' && !disabled
+                ? accentColor
+                : undefined
+          }
           style={[
             StyleSheet.absoluteFill,
             styles.glassBorder,

@@ -27,7 +27,7 @@ import { hasDateInfo } from '../utils/aiParser';
 import { ClassroomModal } from '../components/ClassroomModal';
 import { YearChannelSelector } from '../components/YearChannelSelector';
 import { useTheme } from '@/context/ThemeContext';
-import { UNIFORM_SCREEN_BG, MAX_CONTENT_WIDTH } from '@/constants/theme';
+import { CARD_RADIUS, UNIFORM_SCREEN_BG, MAX_CONTENT_WIDTH } from '@/constants/theme';
 
 const SAPIENZA_RED = '#822433';
 
@@ -553,7 +553,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1c1c1e',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     paddingVertical: 9,
     paddingHorizontal: 12,
     borderWidth: 1,
@@ -595,7 +595,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 24,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     paddingVertical: 15,
     paddingHorizontal: 16,

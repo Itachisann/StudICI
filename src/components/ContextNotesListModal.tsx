@@ -12,7 +12,7 @@ import { NativeSheetModal } from './NativeSheetModal';
 import { SwipeToDeleteRow } from './SwipeToDeleteRow';
 import { NoteItemContextMenu } from './NoteItemContextMenu';
 import { useTheme } from '../context/ThemeContext';
-import { UNIFORM_MODAL_BG } from '../constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '../constants/theme';
 import {
   AppNote,
   deleteNote,
@@ -435,7 +435,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     padding: 13,
     borderWidth: 1,
@@ -485,7 +485,7 @@ const styles = StyleSheet.create({
   },
   noteCard: {
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     padding: 14,
     borderWidth: 1,

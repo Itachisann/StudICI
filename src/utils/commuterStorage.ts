@@ -1,9 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CommuterConfig } from '../types/commuter';
+import { CommuterConfig, TrainPreferences } from '../types/commuter';
 import { normalizeStationInfo } from './trenitaliaApi';
 import { getStationNavigationQuery } from './drivingRouter';
 
 const COMMUTER_CONFIG_KEY = 'studici_commuter_config_v1';
+
+export const DEFAULT_TRAIN_PREFERENCES: Required<TrainPreferences> = {
+  preferredTrains: {},
+  smartReturnEnabled: true,
+  maxEarlyLeaveMinutes: 15,
+  minReturnGainMinutes: 25,
+};
 
 export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
   enabled: false,
@@ -35,6 +42,7 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
   customDestinationName: 'Città Universitaria Sapienza',
   customDestinationAddress: 'Piazzale Aldo Moro 5, 00185 Roma',
   includeIntercity: false,
+  trainPreferences: { ...DEFAULT_TRAIN_PREFERENCES },
 };
 
 export async function getCommuterConfig(): Promise<CommuterConfig> {
@@ -54,6 +62,10 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
       ...DEFAULT_COMMUTER_CONFIG,
       ...parsed,
       includeIntercity: Boolean(parsed.includeIntercity),
+      trainPreferences: {
+        ...DEFAULT_TRAIN_PREFERENCES,
+        ...(parsed.trainPreferences || {}),
+      },
       carLeg: {
         ...DEFAULT_COMMUTER_CONFIG.carLeg,
         ...(parsed.carLeg || {}),
@@ -119,6 +131,11 @@ export async function saveCommuterConfig(
       transitLeg: {
         ...current.transitLeg,
         ...(config.transitLeg || {}),
+      },
+      trainPreferences: {
+        ...DEFAULT_TRAIN_PREFERENCES,
+        ...(current.trainPreferences || {}),
+        ...(config.trainPreferences || {}),
       },
     };
     await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));

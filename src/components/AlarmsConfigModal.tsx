@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
-import { UNIFORM_MODAL_BG } from '@/constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '@/constants/theme';
 import { NativeSheetModal } from './NativeSheetModal';
 import {
   AlarmSettings,
@@ -404,7 +404,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#1c1c1e',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 16,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.07)',
@@ -463,7 +463,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 10,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     backgroundColor: '#27272a',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
@@ -492,7 +492,7 @@ const styles = StyleSheet.create({
   stepperBtn: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     backgroundColor: '#27272a',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
@@ -502,7 +502,7 @@ const styles = StyleSheet.create({
   stepperValueBox: {
     flex: 1,
     height: 40,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -585,7 +585,7 @@ const styles = StyleSheet.create({
   infoBanner: {
     marginTop: 14,
     backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     padding: 13,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',

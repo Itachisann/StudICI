@@ -93,6 +93,513 @@ function extractDateFromTitle(title: string, fallbackIso: string): { startIso: s
   return { startIso: defaultIso, endIso: defaultIso };
 }
 
+export interface ParsedDisruptionSchedule {
+  startDateIso: string;
+  endDateIso: string;
+  startHour: number;
+  startMinute: number;
+  endHour?: number;
+  endMinute?: number;
+  durationHours?: number;
+  hasExplicitRange: boolean;
+  hasStartTimeOnly: boolean;
+  hasTimeWindow: boolean;
+  isFullDay: boolean;
+  isNocturnal: boolean;
+}
+
+export interface DailyDisruptionWindow {
+  startMinuteOfDay: number;
+  endMinuteOfDay: number;
+  hasExplicitClockBounds: boolean;
+  schedule: ParsedDisruptionSchedule;
+}
+
+export interface TimeWindowMins {
+  startMins: number;
+  endMins: number;
+}
+
+function addDaysToIso(isoDate: string, days: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  if (!y || !m || !d) return isoDate;
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function formatClock(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function formatShortItDate(isoDate: string): string {
+  const parts = isoDate.split('-');
+  if (parts.length !== 3) return isoDate;
+  return `${parts[2]}/${parts[1]}`;
+}
+
+function resolveInlineDayMonthIso(
+  dayRaw: string,
+  monthRaw: string,
+  yearRaw: string | undefined,
+  refStartIso: string
+): string {
+  const d = dayRaw.padStart(2, '0');
+  const m = monthRaw.padStart(2, '0');
+  let yearNum = Number((refStartIso || '').slice(0, 4)) || new Date().getFullYear();
+
+  if (yearRaw) {
+    yearNum = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+  } else if (refStartIso) {
+    const refMonth = Number(refStartIso.slice(5, 7));
+    const parsedMonth = Number(m);
+    if (refMonth >= 11 && parsedMonth <= 2) {
+      yearNum += 1;
+    }
+  }
+
+  return `${yearNum}-${m}-${d}`;
+}
+
+function extractDurationHours(text: string): number | undefined {
+  const regex = /(\d{1,3})\s*(?:ore|ora|h\b)(?![:.]\d{2})/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const idx = match.index;
+    const prefix = text.slice(Math.max(0, idx - 12), idx).toLowerCase();
+    // Ignora riferimenti ad orari come "ore 21", "alle 16", "del 20"
+    if (/(?:ore|alle|dalle|fino\s+a(?:lle)?)\s*$/.test(prefix)) {
+      continue;
+    }
+    const hours = parseInt(match[1], 10);
+    if (!isNaN(hours) && hours > 0 && hours <= 168) {
+      return hours;
+    }
+  }
+  return undefined;
+}
+
+function selectRelevantModalitaClause(
+  text: string,
+  category?: DisruptionCategory
+): string {
+  if (!text.includes(';')) return text;
+  const parts = text
+    .split(';')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return text;
+
+  if (category === 'sciopero_treni') {
+    const railClause = parts.find((p) => /ferrovi|fs|trenitalia|rfi|rotai/i.test(p));
+    if (railClause) return railClause;
+  } else if (category === 'sciopero_tpl') {
+    const tplClause = parts.find((p) => /\btpl\b|pubblico locale|bus|metro|tram/i.test(p));
+    if (tplClause) return tplClause;
+  }
+  return parts[0];
+}
+
+/**
+ * Analizza date effettive, orari e durata di uno sciopero o evento di mobilità
+ * supportando fasce orarie su giorno singolo, multi-giorno (es. "23 ORE: DALLE 21.00 DEL 20/11 ALLE 20.00 DEL 21/11"),
+ * durata da ora di inizio (es. "4 ORE: DALLE 09.00") ed eventi intera giornata.
+ */
+export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptionSchedule {
+  const baseStartIso = event.startDate || new Date().toISOString().slice(0, 10);
+  const baseEndIso = event.endDate && event.endDate >= baseStartIso ? event.endDate : baseStartIso;
+
+  const mitNotes =
+    event.sourceName === 'Ministero dei Trasporti (MIT)'
+      ? selectRelevantModalitaClause(event.notes || '', event.category)
+      : event.notes || '';
+
+  const text =
+    event.sourceName === 'Ministero dei Trasporti (MIT)'
+      ? `${mitNotes} ${event.timeWindow || ''} ${event.title || ''}`
+      : `${event.timeWindow || ''} ${event.title || ''} ${mitNotes}`;
+  const lower = text.toLowerCase();
+
+  const isExplicitNight =
+    event.isNocturnal === true ||
+    lower.includes('chiusura notturna') ||
+    lower.includes('lavori notturni') ||
+    lower.includes('fascia oraria compresa tra le ore 22') ||
+    lower.includes('fascia oraria compresa tra le 22') ||
+    lower.includes('notturno') ||
+    lower.includes('notturna') ||
+    lower.includes('ore 22') ||
+    lower.includes('ore 23') ||
+    lower.includes('dalle 22') ||
+    lower.includes('dalle 23');
+
+  const durationHours = extractDurationHours(text);
+
+  // 1) Intervallo completo con eventuali date inline ("DALLE 21.00 DEL 20/11 ALLE 20.00 DEL 21/11" o "09:01 - 17:00")
+  const rangeRegex =
+    /(?:dalle\s*(?:ore\s*)?|tra\s*le\s*(?:ore\s*)?|in\s*orario\s*|ore\s*)?([01]?\d|2[0-4])[:.]([0-5]\d)(?:\s*(?:del|di|il)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?|\s*\((\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\))?\s*(?:alle\s*(?:ore\s*)?|fino\s*a(?:lle)?\s*(?:ore\s*)?|\/|-|–|—|e\s*(?:le\s*ore\s*)?)\s*([01]?\d|2[0-4])[:.]([0-5]\d)(?:\s*(?:del|di|il)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?|\s*\((\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\))?/i;
+
+  const rangeMatch = text.match(rangeRegex);
+  if (rangeMatch) {
+    const sH = parseInt(rangeMatch[1], 10);
+    const sM = parseInt(rangeMatch[2], 10);
+    const sDay = rangeMatch[3] || rangeMatch[6];
+    const sMonth = rangeMatch[4] || rangeMatch[7];
+    const sYear = rangeMatch[5] || rangeMatch[8];
+
+    const eH = parseInt(rangeMatch[9], 10);
+    const eM = parseInt(rangeMatch[10], 10);
+    const eDay = rangeMatch[11] || rangeMatch[14];
+    const eMonth = rangeMatch[12] || rangeMatch[15];
+    const eYear = rangeMatch[13] || rangeMatch[16];
+
+    const startDateIso =
+      sDay && sMonth ? resolveInlineDayMonthIso(sDay, sMonth, sYear, baseStartIso) : baseStartIso;
+    let endDateIso =
+      eDay && eMonth ? resolveInlineDayMonthIso(eDay, eMonth, eYear, startDateIso) : baseEndIso;
+
+    if (endDateIso < startDateIso) {
+      endDateIso = startDateIso;
+    }
+
+    const startTotalMins = sH * 60 + sM;
+    const endTotalMins = eH === 24 ? 1440 : eH * 60 + eM;
+
+    if (startDateIso === endDateIso && endTotalMins < startTotalMins) {
+      endDateIso = addDaysToIso(startDateIso, 1);
+    }
+
+    const isFullDayBounds =
+      (startTotalMins <= 1 && endTotalMins >= 1439 && startDateIso === endDateIso) ||
+      (durationHours === 24 && startTotalMins === 0 && endTotalMins >= 1439);
+
+    const spansMultiDayDaytime =
+      startDateIso !== endDateIso && (endTotalMins > 8 * 60 || addDaysToIso(startDateIso, 1) < endDateIso);
+
+    const isNocturnal =
+      event.category === 'sciopero_treni'
+        ? false
+        : isExplicitNight ||
+          (!spansMultiDayDaytime &&
+            ((startDateIso === endDateIso && sH >= 21) || (sH >= 20 && eH <= 7)));
+
+    return {
+      startDateIso,
+      endDateIso,
+      startHour: sH,
+      startMinute: sM,
+      endHour: eH === 24 ? 24 : eH,
+      endMinute: eH === 24 ? 0 : eM,
+      durationHours,
+      hasExplicitRange: true,
+      hasStartTimeOnly: false,
+      hasTimeWindow: true,
+      isFullDay: isFullDayBounds,
+      isNocturnal,
+    };
+  }
+
+  // 2) Solo orario di inizio ("dalle 21:00", "4 ORE: DALLE 09.00", "alle ore 16:00")
+  const singleStartMatch = text.match(
+    /(?:dalle\s*(?:ore\s*)?|a\s*partire\s*dalle\s*(?:ore\s*)?|alle\s*(?:ore\s*)?|inizio\s*(?:ore\s*)?|ore\s*)([01]?\d|2[0-4])[:.]([0-5]\d)(?:\s*(?:del|di|il)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?)?/i
+  );
+
+  if (singleStartMatch) {
+    const sH = parseInt(singleStartMatch[1], 10);
+    const sM = parseInt(singleStartMatch[2], 10);
+    const sDay = singleStartMatch[3];
+    const sMonth = singleStartMatch[4];
+    const sYear = singleStartMatch[5];
+
+    const startDateIso =
+      sDay && sMonth ? resolveInlineDayMonthIso(sDay, sMonth, sYear, baseStartIso) : baseStartIso;
+
+    // Se è presente sia ora d'inizio che durata in ore (es. "4 ORE: DALLE 09.00" o "23 ORE: DALLE 21.00")
+    if (durationHours !== undefined) {
+      const totalEnd = sH * 60 + sM + durationHours * 60;
+      const modDay = totalEnd % 1440;
+      const dayOffset = modDay === 0 && totalEnd > 0 ? totalEnd / 1440 - 1 : Math.floor(totalEnd / 1440);
+      const eH = modDay === 0 && totalEnd > 0 ? 24 : Math.floor(modDay / 60);
+      const eM = modDay === 0 && totalEnd > 0 ? 0 : modDay % 60;
+      const endDateIso = addDaysToIso(startDateIso, dayOffset);
+      const isFullDayBounds = startDateIso === endDateIso && sH === 0 && sM <= 1 && eH === 24;
+      const spansMultiDayDaytime = startDateIso !== endDateIso && eH > 8;
+
+      return {
+        startDateIso,
+        endDateIso,
+        startHour: sH,
+        startMinute: sM,
+        endHour: eH,
+        endMinute: eM,
+        durationHours,
+        hasExplicitRange: true,
+        hasStartTimeOnly: false,
+        hasTimeWindow: true,
+        isFullDay: isFullDayBounds,
+        isNocturnal:
+          event.category === 'sciopero_treni'
+            ? false
+            : isExplicitNight || (!spansMultiDayDaytime && sH >= 21),
+      };
+    }
+
+    const endDateIso = baseEndIso >= startDateIso ? baseEndIso : startDateIso;
+    return {
+      startDateIso,
+      endDateIso,
+      startHour: sH,
+      startMinute: sM,
+      durationHours,
+      hasExplicitRange: false,
+      hasStartTimeOnly: true,
+      hasTimeWindow: true,
+      isFullDay: false,
+      isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight || sH >= 21,
+    };
+  }
+
+  // 3) Solo orario di fine ("fino alle 20:00")
+  const finoMatch = text.match(
+    /fino\s*a(?:lle)?\s*(?:ore\s*)?([01]?\d|2[0-4])[:.]([0-5]\d)(?:\s*(?:del|di|il)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?)?/i
+  );
+  if (finoMatch) {
+    const eH = parseInt(finoMatch[1], 10);
+    const eM = parseInt(finoMatch[2], 10);
+    const eDay = finoMatch[3];
+    const eMonth = finoMatch[4];
+    const eYear = finoMatch[5];
+    const endDateIso =
+      eDay && eMonth ? resolveInlineDayMonthIso(eDay, eMonth, eYear, baseStartIso) : baseEndIso;
+
+    return {
+      startDateIso: baseStartIso,
+      endDateIso: endDateIso >= baseStartIso ? endDateIso : baseStartIso,
+      startHour: 0,
+      startMinute: 0,
+      endHour: eH === 24 ? 24 : eH,
+      endMinute: eH === 24 ? 0 : eM,
+      durationHours,
+      hasExplicitRange: true,
+      hasStartTimeOnly: false,
+      hasTimeWindow: true,
+      isFullDay: false,
+      isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight,
+    };
+  }
+
+  // 4) Intera giornata / nessun orario orologio specifico
+  return {
+    startDateIso: baseStartIso,
+    endDateIso: baseEndIso,
+    startHour: 0,
+    startMinute: 0,
+    endHour: 24,
+    endMinute: 0,
+    durationHours,
+    hasExplicitRange: false,
+    hasStartTimeOnly: false,
+    hasTimeWindow: false,
+    isFullDay: true,
+    isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight,
+  };
+}
+
+/**
+ * Calcola la finestra oraria effettiva (in minuti 0..1440) in cui l'evento è attivo
+ * nella specifica data `targetDateIso`. Ritorna `null` se l'evento non è attivo in quella data.
+ */
+export function getDisruptionActiveWindowForDate(
+  event: DisruptionEvent,
+  targetDateIso: string,
+  fallbackSingleStartDurationMins?: number
+): DailyDisruptionWindow | null {
+  if (!targetDateIso) return null;
+  const schedule = parseDisruptionSchedule(event);
+
+  if (targetDateIso < schedule.startDateIso || targetDateIso > schedule.endDateIso) {
+    return null;
+  }
+
+  if (schedule.isFullDay || (!schedule.hasExplicitRange && !schedule.hasStartTimeOnly)) {
+    return {
+      startMinuteOfDay: 0,
+      endMinuteOfDay: 1440,
+      hasExplicitClockBounds: false,
+      schedule,
+    };
+  }
+
+  const startMins = Math.min(1440, schedule.startHour * 60 + schedule.startMinute);
+  const rawEndMins =
+    schedule.endHour !== undefined
+      ? Math.min(1440, schedule.endHour * 60 + (schedule.endMinute || 0))
+      : undefined;
+
+  if (schedule.startDateIso === schedule.endDateIso) {
+    let endMinuteOfDay = 1440;
+    if (rawEndMins !== undefined) {
+      endMinuteOfDay = rawEndMins;
+    } else if (fallbackSingleStartDurationMins !== undefined) {
+      endMinuteOfDay = Math.min(1440, startMins + fallbackSingleStartDurationMins);
+    }
+
+    if (endMinuteOfDay <= startMins) {
+      return null;
+    }
+
+    return {
+      startMinuteOfDay: startMins,
+      endMinuteOfDay,
+      hasExplicitClockBounds: true,
+      schedule,
+    };
+  }
+
+  // Multi-giorno: inizio -> fine attraverso una o più mezzenotti
+  if (targetDateIso === schedule.startDateIso) {
+    if (startMins >= 1440) return null;
+    return {
+      startMinuteOfDay: startMins,
+      endMinuteOfDay: 1440,
+      hasExplicitClockBounds: true,
+      schedule,
+    };
+  }
+
+  if (targetDateIso < schedule.endDateIso) {
+    return {
+      startMinuteOfDay: 0,
+      endMinuteOfDay: 1440,
+      hasExplicitClockBounds: true,
+      schedule,
+    };
+  }
+
+  // Ultimo giorno: attivo da 00:00 fino all'orario di termine (se 00:00 -> già terminato allo scoccare della mezzanotte)
+  const endMinuteOfDay = rawEndMins !== undefined ? rawEndMins : 1440;
+  if (endMinuteOfDay <= 0) {
+    return null;
+  }
+
+  return {
+    startMinuteOfDay: 0,
+    endMinuteOfDay,
+    hasExplicitClockBounds: rawEndMins !== undefined,
+    schedule,
+  };
+}
+
+/**
+ * Verifica se l'evento impatta una specifica finestra oraria (in minuti da mezzanotte) nella data indicata.
+ */
+export function doesDisruptionOverlapMinutesForDate(
+  event: DisruptionEvent,
+  targetDateIso: string,
+  windowStartMins: number,
+  windowEndMins: number,
+  fallbackSingleStartDurationMins?: number
+): boolean {
+  const activeWin = getDisruptionActiveWindowForDate(
+    event,
+    targetDateIso,
+    fallbackSingleStartDurationMins
+  );
+  if (!activeWin) return false;
+
+  return (
+    activeWin.startMinuteOfDay <= windowEndMins &&
+    activeWin.endMinuteOfDay >= windowStartMins
+  );
+}
+
+/**
+ * Restituisce la stringa leggibile completa di orari e durata per la scheda nel modale
+ * (senza troncamenti sulla dicitura MIT e compatibile anche con record già in cache).
+ */
+export function formatDisruptionModalTimeWindow(event: DisruptionEvent): string {
+  const schedule = parseDisruptionSchedule(event);
+  const startClock = formatClock(schedule.startHour, schedule.startMinute);
+  const endClock =
+    schedule.endHour !== undefined
+      ? formatClock(schedule.endHour, schedule.endMinute || 0)
+      : undefined;
+
+  if (schedule.isFullDay) {
+    const durStr = schedule.durationHours ? ` (${schedule.durationHours} ore)` : '';
+    return schedule.startDateIso !== schedule.endDateIso
+      ? `Intera prestazione (${formatShortItDate(schedule.startDateIso)} - ${formatShortItDate(schedule.endDateIso)})${durStr}`
+      : `Intera giornata (00:00 - 24:00)${durStr}`;
+  }
+
+  if (schedule.hasExplicitRange && endClock) {
+    const durStr = schedule.durationHours ? ` (${schedule.durationHours} ore)` : '';
+    if (schedule.startDateIso !== schedule.endDateIso) {
+      return `${startClock} (${formatShortItDate(schedule.startDateIso)}) - ${endClock} (${formatShortItDate(schedule.endDateIso)})${durStr}`;
+    }
+    return `${startClock} - ${endClock}${durStr}`;
+  }
+
+  if (schedule.hasStartTimeOnly) {
+    const durStr = schedule.durationHours ? ` (${schedule.durationHours} ore)` : '';
+    return `dalle ${startClock}${durStr}`;
+  }
+
+  return (event.timeWindow || '').trim();
+}
+
+/**
+ * Restituisce un riepilogo compatto su riga singola per il banner dello sciopero ferroviario
+ * nella schermata Viaggio/Orario, contestualizzato alla data selezionata.
+ */
+export function formatTrainStrikeBannerSummary(
+  event: DisruptionEvent,
+  targetDateIso?: string
+): string {
+  const scopeLabel =
+    (event.scope || '').trim() ||
+    event.title.replace(/^Sciopero\s*(Ferroviario)?\s*/i, '').replace(/[()]/g, '').trim() ||
+    'Treni';
+
+  const schedule = parseDisruptionSchedule(event);
+  const dailyWin = targetDateIso ? getDisruptionActiveWindowForDate(event, targetDateIso) : null;
+  let timeLabel = '';
+
+  if (schedule.isFullDay) {
+    timeLabel = schedule.durationHours === 24 ? 'Intera giornata (24h)' : 'Intera giornata';
+  } else if (dailyWin && targetDateIso) {
+    if (dailyWin.startMinuteOfDay === 0 && dailyWin.endMinuteOfDay === 1440) {
+      timeLabel = schedule.durationHours ? `Tutto il giorno (${schedule.durationHours}h)` : 'Tutto il giorno';
+    } else if (dailyWin.startMinuteOfDay > 0 && dailyWin.endMinuteOfDay === 1440 && schedule.startDateIso < schedule.endDateIso) {
+      const sH = Math.floor(dailyWin.startMinuteOfDay / 60);
+      const sM = dailyWin.startMinuteOfDay % 60;
+      timeLabel = schedule.durationHours
+        ? `dalle ${formatClock(sH, sM)} (${schedule.durationHours}h)`
+        : `dalle ${formatClock(sH, sM)}`;
+    } else if (dailyWin.startMinuteOfDay === 0 && dailyWin.endMinuteOfDay < 1440 && schedule.startDateIso < schedule.endDateIso) {
+      const eH = Math.floor(dailyWin.endMinuteOfDay / 60);
+      const eM = dailyWin.endMinuteOfDay % 60;
+      timeLabel = `fino alle ${formatClock(eH, eM)}`;
+    } else {
+      const sH = Math.floor(dailyWin.startMinuteOfDay / 60);
+      const sM = dailyWin.startMinuteOfDay % 60;
+      const eH = Math.floor(dailyWin.endMinuteOfDay / 60);
+      const eM = dailyWin.endMinuteOfDay % 60;
+      if (schedule.hasStartTimeOnly && dailyWin.endMinuteOfDay === 1440) {
+        timeLabel = `dalle ${formatClock(sH, sM)}`;
+      } else {
+        timeLabel = `${formatClock(sH, sM)} - ${formatClock(eH, eM)}`;
+      }
+    }
+  } else if (schedule.hasExplicitRange && schedule.endHour !== undefined) {
+    const base = `${formatClock(schedule.startHour, schedule.startMinute)} - ${formatClock(schedule.endHour, schedule.endMinute || 0)}`;
+    timeLabel = schedule.durationHours ? `${base} (${schedule.durationHours}h)` : base;
+  } else if (schedule.hasStartTimeOnly) {
+    timeLabel = `dalle ${formatClock(schedule.startHour, schedule.startMinute)}`;
+  }
+
+  return timeLabel ? `${scopeLabel} · ${timeLabel}` : scopeLabel;
+}
+
 /**
  * Recupera gli scioperi ufficiali dal feed RSS del Ministero dei Trasporti (MIT)
  */
@@ -154,20 +661,11 @@ async function fetchOfficialStrikes(): Promise<DisruptionEvent[]> {
         const affectedCompanies = categoryMatch ? categoryMatch[1].trim() : '';
         const unionsStr = unionsMatch ? unionsMatch[1].trim() : '';
 
-        // Estrai orario sintetico es. "dalle 09:01 alle 16:59"
-        let timeWindow = '';
-        const hoursMatch = modalitaStr.match(/dalle\s*([0-9]{1,2}[:.][0-9]{2})\s*alle\s*([0-9]{1,2}[:.][0-9]{2})/i);
-        if (hoursMatch) {
-          timeWindow = `${hoursMatch[1].replace('.', ':')} - ${hoursMatch[2].replace('.', ':')}`;
-        } else if (modalitaStr) {
-          timeWindow = modalitaStr.split(';')[0].slice(0, 40);
-        }
-
         const affectedModes: ('train' | 'transit' | 'walk')[] = isRail
           ? ['train']
           : ['transit'];
 
-        strikes.push({
+        const draftEvent: DisruptionEvent = {
           id: `mit-${startIso}-${i}`,
           title: `Sciopero ${sector} (${scope})`,
           category,
@@ -175,7 +673,7 @@ async function fetchOfficialStrikes(): Promise<DisruptionEvent[]> {
           startDate: startIso,
           endDate: endIso,
           formattedDateSpan: startDateRaw === endDateRaw ? startDateRaw : `${startDateRaw} - ${endDateRaw}`,
-          timeWindow,
+          timeWindow: '',
           scope,
           affectedModes,
           affectedCompanies,
@@ -183,7 +681,14 @@ async function fetchOfficialStrikes(): Promise<DisruptionEvent[]> {
           notes: modalitaStr,
           sourceName: 'Ministero dei Trasporti (MIT)',
           sourceUrl: 'https://scioperi.mit.gov.it/mit2/public/scioperi',
-        });
+        };
+
+        const parsedSchedule = parseDisruptionSchedule(draftEvent);
+        draftEvent.startDate = parsedSchedule.startDateIso;
+        draftEvent.endDate = parsedSchedule.endDateIso;
+        draftEvent.timeWindow = formatDisruptionModalTimeWindow(draftEvent);
+
+        strikes.push(draftEvent);
       }
     }
 
@@ -653,7 +1158,7 @@ export function getDisruptionsForDate(targetDate: Date, allEvents: DisruptionEve
   const d = String(targetDate.getDate()).padStart(2, '0');
   const targetIso = `${y}-${m}-${d}`;
 
-  return allEvents.filter((ev) => targetIso >= ev.startDate && targetIso <= ev.endDate);
+  return allEvents.filter((ev) => getDisruptionActiveWindowForDate(ev, targetIso) !== null);
 }
 
 /**
@@ -722,62 +1227,14 @@ export interface DisruptionTimeInfo {
  * Estrae gli orari precisi di inizio e fine dell'evento/manifestazione e rileva se è notturno
  */
 export function parseDisruptionTime(event: DisruptionEvent): DisruptionTimeInfo {
-  const text = `${event.timeWindow || ''} ${event.title || ''} ${event.notes || ''}`.toLowerCase();
-
-  // Riconoscimento esplicito di chiusure o eventi notturni
-  const isExplicitNight =
-    event.isNocturnal === true ||
-    text.includes('chiusura notturna') ||
-    text.includes('lavori notturni') ||
-    text.includes('fascia oraria compresa tra le ore 22') ||
-    text.includes('fascia oraria compresa tra le 22') ||
-    text.includes('notturno') ||
-    text.includes('notturna') ||
-    text.includes('ore 22') ||
-    text.includes('ore 23') ||
-    text.includes('dalle 22') ||
-    text.includes('dalle 23');
-
-  // Pattern intervallo: "22:00 - 06:00", "dalle 09:00 alle 16:00", "tra le ore 22:00 e le ore 06:00"
-  const rangeMatch = text.match(
-    /(?:dalle\s*ore\s*|in\s*orario\s*|tra\s*le\s*ore\s*|ore\s*)?([0-9]{1,2})[:.]([0-9]{2})\s*(?:alle\s*(?:ore\s*)?|\/|-|e\s*(?:le\s*ore\s*)?)\s*([0-9]{1,2})[:.]([0-9]{2})/i
-  );
-
-  if (rangeMatch) {
-    const sH = parseInt(rangeMatch[1], 10);
-    const sM = parseInt(rangeMatch[2], 10);
-    const eH = parseInt(rangeMatch[3], 10);
-    const eM = parseInt(rangeMatch[4], 10);
-    const nocturnal = isExplicitNight || sH >= 21 || (sH >= 20 && eH <= 7);
-    return {
-      startHour: sH,
-      startMinute: sM,
-      endHour: eH,
-      endMinute: eM,
-      isNocturnal: nocturnal,
-      hasTimeWindow: true,
-    };
-  }
-
-  // Pattern orario singolo: "dalle 16:00", "dalle ore 16:00", "alle ore 16:00"
-  const singleMatch = text.match(/(?:dalle\s*ore\s*|dalle\s*|alle\s*ore\s*|ore\s*)([0-9]{1,2})[:.]([0-9]{2})/i);
-  if (singleMatch) {
-    const sH = parseInt(singleMatch[1], 10);
-    const sM = parseInt(singleMatch[2], 10);
-    const nocturnal = isExplicitNight || sH >= 21;
-    return {
-      startHour: sH,
-      startMinute: sM,
-      isNocturnal: nocturnal,
-      hasTimeWindow: true,
-    };
-  }
-
+  const schedule = parseDisruptionSchedule(event);
   return {
-    startHour: 9,
-    startMinute: 0,
-    isNocturnal: isExplicitNight,
-    hasTimeWindow: false,
+    startHour: schedule.hasTimeWindow ? schedule.startHour : 9,
+    startMinute: schedule.hasTimeWindow ? schedule.startMinute : 0,
+    endHour: schedule.hasTimeWindow ? schedule.endHour : undefined,
+    endMinute: schedule.hasTimeWindow ? schedule.endMinute : undefined,
+    isNocturnal: schedule.isNocturnal,
+    hasTimeWindow: schedule.hasTimeWindow,
   };
 }
 
@@ -1020,29 +1477,41 @@ export function getDisruptionsImpactingLecture(
     return null;
   }
 
-  // 1. Cerca annunci attivi in quella specifica data (compresi annunci da DATA a DATA)
-  const activeEventsOnDate = allDisruptions.filter((ev) => {
-    return ev.startDate <= lectureDateIso && lectureDateIso <= ev.endDate;
-  });
+  // 1. Cerca annunci effettivamente attivi nella data della lezione (incluse fasce orarie multi-giorno)
+  const activeEventsOnDate = allDisruptions.filter(
+    (ev) => getDisruptionActiveWindowForDate(ev, lectureDateIso) !== null
+  );
 
   if (activeEventsOnDate.length === 0) return null;
 
-  // 2. Priorità 1: Sciopero treni impattante sulla tratta pendolare
+  // Parsing orari lezione (in minuti da mezzanotte)
+  const [lStartH, lStartM] = (lectureStartTime || '09:00').split(':').map(Number);
+  const [lEndH, lEndM] = (lectureEndTime || '11:00').split(':').map(Number);
+  const lectureStartMins = (lStartH || 9) * 60 + (lStartM || 0);
+  const lectureEndMins = (lEndH || 11) * 60 + (lEndM || 0);
+
+  // Finestra di percorrenza ferroviaria associata alla lezione (andata ~2h prima, rientro ~1h45m dopo)
+  const railCommuteStart = Math.max(0, lectureStartMins - 120);
+  const railCommuteEnd = Math.min(1440, lectureEndMins + 105);
+
+  // 2. Priorità 1: Sciopero treni impattante sulla tratta E compatibile con orari/durata nella data
   const trainStrike = activeEventsOnDate.find(
-    (ev) => ev.category === 'sciopero_treni' && isTrainStrikeImpactingCommuter(ev)
+    (ev) =>
+      ev.category === 'sciopero_treni' &&
+      isTrainStrikeImpactingCommuter(ev) &&
+      doesDisruptionOverlapMinutesForDate(ev, lectureDateIso, railCommuteStart, railCommuteEnd)
   );
 
   if (trainStrike) {
+    const compactWindow = formatTrainStrikeBannerSummary(trainStrike, lectureDateIso);
     return {
       id: trainStrike.id,
       badgeLabel: 'Impatta la tua tratta (Trenitalia / RFI / IC)',
       title: trainStrike.title,
       category: trainStrike.category,
       type: 'train',
-      timeWindow: trainStrike.timeWindow,
-      shortDesc: trainStrike.timeWindow
-        ? `Sciopero treni (${trainStrike.timeWindow})`
-        : 'Sciopero treni in programma',
+      timeWindow: formatDisruptionModalTimeWindow(trainStrike),
+      shortDesc: compactWindow ? `Sciopero treni · ${compactWindow}` : 'Sciopero treni in programma',
     };
   }
 
@@ -1053,15 +1522,15 @@ export function getDisruptionsImpactingLecture(
 
   if (urbanEvents.length === 0) return null;
 
-  // Parsing orari lezione (in minuti da mezzanotte)
-  const [lStartH, lStartM] = (lectureStartTime || '09:00').split(':').map(Number);
-  const [lEndH, lEndM] = (lectureEndTime || '11:00').split(':').map(Number);
-  const lectureStartMins = (lStartH || 9) * 60 + (lStartM || 0);
-  const lectureEndMins = (lEndH || 11) * 60 + (lEndM || 0);
+  // Finestra di mobilità urbana associata alla lezione:
+  // - Andata verso l'aula: 60 minuti prima dell'inizio
+  // - Rientro dall'aula: fino a 75 minuti dopo la fine lezione
+  const commuteWindowStart = Math.max(0, lectureStartMins - 60);
+  const commuteWindowEnd = Math.min(1440, lectureEndMins + 75);
 
   for (const ev of urbanEvents) {
-    const timeInfo = parseDisruptionTime(ev);
-    if (timeInfo.isNocturnal) continue;
+    const activeWin = getDisruptionActiveWindowForDate(ev, lectureDateIso, 180);
+    if (!activeWin || activeWin.schedule.isNocturnal) continue;
 
     const startP = ev.startDate.split('-');
     const endP = ev.endDate.split('-');
@@ -1070,44 +1539,17 @@ export function getDisruptionsImpactingLecture(
         ? ` · dal ${startP[2]}/${startP[1]} al ${endP[2]}/${endP[1]}`
         : '';
 
-    // Se l'annuncio non ha un orario orario esatto (es. cantiere/chiusura per l'intera giornata)
-    if (!timeInfo.hasTimeWindow) {
-      const cleanTitle = ev.title
-        .split(',')[0]
-        .replace(/^luned[ìi]|marted[ìi]|mercoled[ìi]|gioved[ìi]|venerd[ìi]|sabato|domenica/i, '')
-        .trim();
-      return {
-        id: ev.id,
-        badgeLabel: 'Impatta il tuo tragitto',
-        title: ev.title,
-        category: ev.category,
-        type: 'urban',
-        timeWindow: ev.timeWindow,
-        shortDesc: `${cleanTitle}${ev.timeWindow ? ` (${ev.timeWindow})` : ''}${dateSpanLabel}`,
-      };
-    }
-
-    const eventStartMins = timeInfo.startHour * 60 + timeInfo.startMinute;
-    const eventEndMins =
-      timeInfo.endHour !== undefined
-        ? timeInfo.endHour * 60 + timeInfo.endMinute!
-        : eventStartMins + 180; // stima 3h se non indicato il termine
-
-    // Finestra di mobilità associata alla lezione:
-    // - Andata verso l'aula: 60 minuti prima dell'inizio
-    // - Rientro dall'aula: fino a 75 minuti dopo la fine lezione
-    const commuteWindowStart = Math.max(0, lectureStartMins - 60);
-    const commuteWindowEnd = lectureEndMins + 75;
-
-    // C'è intersezione temporale tra la mobilità della lezione e l'evento?
     const overlaps =
-      eventStartMins <= commuteWindowEnd && eventEndMins >= commuteWindowStart;
+      !activeWin.hasExplicitClockBounds ||
+      (activeWin.startMinuteOfDay <= commuteWindowEnd &&
+        activeWin.endMinuteOfDay >= commuteWindowStart);
 
     if (overlaps) {
       const cleanTitle = ev.title
         .split(',')[0]
         .replace(/^luned[ìi]|marted[ìi]|mercoled[ìi]|gioved[ìi]|venerd[ìi]|sabato|domenica/i, '')
         .trim();
+      const modalWin = formatDisruptionModalTimeWindow(ev);
       return {
         id: ev.id,
         badgeLabel: 'Impatta il tuo tragitto',
@@ -1115,7 +1557,7 @@ export function getDisruptionsImpactingLecture(
         category: ev.category,
         type: 'urban',
         timeWindow: ev.timeWindow,
-        shortDesc: `${cleanTitle}${ev.timeWindow ? ` (${ev.timeWindow})` : ''}${dateSpanLabel}`,
+        shortDesc: `${cleanTitle}${modalWin ? ` (${modalWin})` : ''}${dateSpanLabel}`,
       };
     }
   }
@@ -1123,24 +1565,61 @@ export function getDisruptionsImpactingLecture(
   return null;
 }
 
-/**
- * Filtra gli scioperi treni pertinenti alla tratta del pendolare per la schermata Viaggio
- */
-export function getCommuterRelevantTrainStrikes(events: DisruptionEvent[]): DisruptionEvent[] {
-  return events.filter((ev) => ev.category === 'sciopero_treni' && isTrainStrikeImpactingCommuter(ev));
+function normalizeTimeWindowsArg(
+  windows?: TimeWindowMins | TimeWindowMins[]
+): TimeWindowMins[] {
+  if (!windows) return [];
+  return Array.isArray(windows) ? windows : [windows];
 }
 
 /**
- * Filtra le manifestazioni / blocchi pertinenti al percorso urbano del pendolare (a piedi o con mezzi)
+ * Filtra gli scioperi treni pertinenti alla tratta del pendolare per la schermata Viaggio,
+ * verificando anche l'effettiva sovrapposizione con orari, date e durata rispetto al viaggio selezionato.
+ */
+export function getCommuterRelevantTrainStrikes(
+  events: DisruptionEvent[],
+  targetDateIso?: string,
+  tripWindows?: TimeWindowMins | TimeWindowMins[]
+): DisruptionEvent[] {
+  const relevant = events.filter(
+    (ev) => ev.category === 'sciopero_treni' && isTrainStrikeImpactingCommuter(ev)
+  );
+  const windows = normalizeTimeWindowsArg(tripWindows);
+  if (!targetDateIso || windows.length === 0) {
+    return relevant;
+  }
+
+  return relevant.filter((ev) =>
+    windows.some((w) =>
+      doesDisruptionOverlapMinutesForDate(ev, targetDateIso, w.startMins, w.endMins)
+    )
+  );
+}
+
+/**
+ * Filtra le manifestazioni / blocchi pertinenti al percorso urbano del pendolare (a piedi o con mezzi),
+ * considerando opzionalmente la fascia oraria effettiva dello spostamento urbano.
  */
 export function getCommuterRelevantWalkDisruptions(
   events: DisruptionEvent[],
-  stationName?: string
+  stationName?: string,
+  targetDateIso?: string,
+  urbanWindows?: TimeWindowMins | TimeWindowMins[]
 ): DisruptionEvent[] {
-  return events.filter(
+  const relevant = events.filter(
     (ev) =>
       (ev.affectedModes.includes('walk') || ev.affectedModes.includes('transit')) &&
       isUrbanDisruptionImpactingCommuter(ev, stationName)
+  );
+  const windows = normalizeTimeWindowsArg(urbanWindows);
+  if (!targetDateIso || windows.length === 0) {
+    return relevant;
+  }
+
+  return relevant.filter((ev) =>
+    windows.some((w) =>
+      doesDisruptionOverlapMinutesForDate(ev, targetDateIso, w.startMins, w.endMins, 180)
+    )
   );
 }
 

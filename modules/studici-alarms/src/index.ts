@@ -1,5 +1,12 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
+export interface StructuredLocationEntry {
+  eventId: string;
+  title: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface StudICIAlarmsNativeModule {
   isAlarmKitSupported(): Promise<boolean>;
   requestAuthorization(): Promise<boolean>;
@@ -12,6 +19,7 @@ export interface StudICIAlarmsNativeModule {
     subtitle: string,
     tintColorHex: string
   ): Promise<{ id: string; engine: 'alarmkit' | 'usernotifications' }>;
+  attachStructuredLocations?(entries: StructuredLocationEntry[]): Promise<number>;
 }
 
 export const StudICIAlarms =

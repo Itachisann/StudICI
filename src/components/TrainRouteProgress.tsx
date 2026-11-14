@@ -8,7 +8,7 @@ import {
   LayoutChangeEvent,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { AppTheme } from "@/constants/theme";
+import { AppTheme, CARD_RADIUS, DEFAULT_THEME } from "@/constants/theme";
 import { LiveTrainInfo, LiveTrainStop } from "@/types/commuter";
 import {
   formatStationName,
@@ -39,7 +39,9 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
   commuterDepartureStationCode,
   commuterArrivalStationCode,
   isToday,
+  theme = DEFAULT_THEME,
 }) => {
+  const contrast = theme.routeContrast || DEFAULT_THEME.routeContrast;
   const [trackWidth, setTrackWidth] = useState<number>(0);
   const [badgeWidth, setBadgeWidth] = useState<number>(100);
 
@@ -183,6 +185,14 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       return true;
     }
 
+    // ViaggiaTreno non sempre registra la partenza reale delle primissime fermate:
+    // se fermate successive all'origine mostrano gia' un passaggio reale, il treno e' in viaggio.
+    const stops: LiveTrainStop[] = liveTrain.stops || [];
+    const anyStopBeyondOriginReal = stops.slice(1).some((s) => s.isPassed || s.isCurrent || !!s.actualTime);
+    if (anyStopBeyondOriginReal) {
+      return true;
+    }
+
     // Se l'API dichiara esplicitamente che il convoglio non è ancora partito
     if (liveTrain.isDeparted === false) {
       return false;
@@ -201,9 +211,6 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       return false;
     }
 
-    // ViaggiaTreno non sempre registra la partenza reale delle primissime fermate:
-    // il convoglio è partito se QUALSIASI fermata ha un passaggio reale registrato.
-    const stops: LiveTrainStop[] = liveTrain.stops || [];
     const anyStopReal = stops.some((s) => s.isPassed || s.isCurrent || !!s.actualTime);
     if (anyStopReal) {
       return true;
@@ -562,6 +569,8 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                   {
                     left: clampedDepBadgeX,
                     marginLeft: -halfBadge,
+                    backgroundColor: contrast.badgeBg,
+                    borderColor: contrast.badgeBorder,
                   },
                 ]}
                 onLayout={(e) => {
@@ -571,7 +580,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                   }
                 }}
               >
-                <View style={styles.boardingCalloutDot} />
+                <View style={[styles.boardingCalloutDot, { backgroundColor: contrast.accent }]} />
                 <Text style={styles.boardingCalloutStation}>{departureName}</Text>
               </View>
 
@@ -582,6 +591,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                   {
                     left: depPixelX,
                     marginLeft: -3.5,
+                    borderTopColor: contrast.arrow,
                   },
                 ]}
               />
@@ -616,8 +626,8 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
               {
                 left: depPixelX,
                 width: trackWidth - depPixelX,
-                backgroundColor: "rgba(56, 189, 248, 0.12)",
-                borderColor: "rgba(56, 189, 248, 0.35)",
+                backgroundColor: contrast.trackFill,
+                borderColor: contrast.trackBorder,
               },
             ]}
           />
@@ -739,7 +749,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                 styles.commuterBoardingDot,
                 {
                   borderColor:
-                    isTrainDeparted && trainProgress >= pDep ? trainLineColor : "#38bdf8",
+                    isTrainDeparted && trainProgress >= pDep ? trainLineColor : contrast.accent,
                 },
               ]}
             >
@@ -748,7 +758,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                   styles.commuterBoardingInnerDot,
                   {
                     backgroundColor:
-                      isTrainDeparted && trainProgress >= pDep ? trainLineColor : "#38bdf8",
+                      isTrainDeparted && trainProgress >= pDep ? trainLineColor : contrast.accent,
                   },
                 ]}
               />
@@ -801,8 +811,8 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                     }
                   : isAtCommuterDepartureStation
                   ? {
-                      backgroundColor: "#0284c7",
-                      borderColor: "#38bdf8",
+                      backgroundColor: contrast.solid,
+                      borderColor: contrast.accent,
                     }
                   : {
                       backgroundColor: trainLineColor,
@@ -822,15 +832,23 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       </View>
 
       {/* SEZIONE INFERIORE: Didascalie Stazioni ai Due Estremi (0% e 100%)
-          Se partenza coincide con origine: bel riquadro blu attorno alla stazione */}
+          Se partenza coincide con origine: badge ad alto contrasto attorno alla stazione */}
       <View style={styles.bottomStationsRow}>
         <View style={styles.stationColLeft}>
           <Text style={styles.stationRoleLabel}>
             {isOriginCommuter ? "Partenza" : "Origine"}
           </Text>
           {isOriginCommuter ? (
-            <View style={styles.originDepartureBadge}>
-              <View style={styles.boardingCalloutDot} />
+            <View
+              style={[
+                styles.originDepartureBadge,
+                {
+                  backgroundColor: contrast.badgeBg,
+                  borderColor: contrast.badgeBorder,
+                },
+              ]}
+            >
+              <View style={[styles.boardingCalloutDot, { backgroundColor: contrast.accent }]} />
               <Text style={styles.originDepartureBadgeText} numberOfLines={2}>
                 {departureName}
               </Text>
@@ -861,7 +879,7 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     paddingHorizontal: 8,
     backgroundColor: "rgba(255, 255, 255, 0.03)",
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.07)",
   },

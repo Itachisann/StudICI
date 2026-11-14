@@ -1647,11 +1647,43 @@ export function getStaticFallbackDepartures(options: {
   };
 }
 
-const transitBoardMemoryCache = new Map<
-  string,
-  { timestamp: number; data: TransitBoardResult }
->();
+interface CachedTransitBoardEntry {
+  timestamp: number;
+  data: TransitBoardResult;
+  baseKey: string;
+  isLiveContext: boolean;
+  rawConstraintMins: number;
+  rawMinDepMins: number;
+  minDepCoveredMins: number;
+  maxDepCoveredMins: number;
+}
+
+const transitBoardMemoryCache = new Map<string, CachedTransitBoardEntry>();
 const inFlightBoardRequests = new Map<string, Promise<TransitBoardResult>>();
+
+function buildBoardCacheEntry(
+  data: TransitBoardResult,
+  baseKey: string,
+  isLiveContext: boolean,
+  rawConstraintMins: number,
+  rawMinDepMins: number
+): CachedTransitBoardEntry {
+  const depMinsList = data.departures
+    .map((d) => parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime))
+    .filter((m) => m >= 0);
+  const minDepCoveredMins = depMinsList.length > 0 ? Math.min(...depMinsList) : -1;
+  const maxDepCoveredMins = depMinsList.length > 0 ? Math.max(...depMinsList) : -1;
+  return {
+    timestamp: Date.now(),
+    data,
+    baseKey,
+    isLiveContext,
+    rawConstraintMins,
+    rawMinDepMins,
+    minDepCoveredMins,
+    maxDepCoveredMins,
+  };
+}
 
 function inferCorridorIntermediateStops(
   fromName: string,
@@ -1766,12 +1798,101 @@ export async function getStationTransitBoard(options: {
   const destLng = direction === 'to_station' ? stCoords.lng : tgCoords.lng;
 
   const cacheKey = `${direction}|${originLat.toFixed(4)},${originLng.toFixed(4)}|${destLat.toFixed(4)},${destLng.toFixed(4)}|${targetDate || 'today'}|${targetTime || ''}|${constraintTime || ''}|${minDepartureTime || ''}|${isLiveContext ? 'live' : 'sched'}`;
+  const baseCacheKey = `${direction}|${originLat.toFixed(4)},${originLng.toFixed(4)}|${destLat.toFixed(4)},${destLng.toFixed(4)}|${targetDate || 'today'}|${isLiveContext ? 'live' : 'sched'}`;
+  const reqConstraintMins = parseHHMMToMins(constraintTime);
+  const reqMinDepMins = parseHHMMToMins(minDepartureTime);
+  const getCacheTtl = (entry: CachedTransitBoardEntry) =>
+    entry.isLiveContext ? 45000 : 600000;
 
   if (!forceRefresh) {
     const cached = transitBoardMemoryCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < 45000) {
+    if (cached && Date.now() - cached.timestamp < getCacheTtl(cached)) {
       return cached.data;
     }
+
+    // Riuso di una finestra temporale compatibile dalla cache (es. cambio verso treno adiacente)
+    for (const entry of transitBoardMemoryCache.values()) {
+      if (entry.baseKey !== baseCacheKey) continue;
+      if (Date.now() - entry.timestamp >= getCacheTtl(entry)) continue;
+      if (!entry.data.departures || entry.data.departures.length === 0) continue;
+      if (entry.minDepCoveredMins < 0 || entry.maxDepCoveredMins < 0) continue;
+
+      let windowCoversRequest = false;
+      if (direction === 'to_campus') {
+        const lowerBound =
+          entry.rawMinDepMins > 0 ? entry.rawMinDepMins : entry.minDepCoveredMins;
+        const coversStart =
+          reqMinDepMins <= 0 ||
+          (reqMinDepMins >= lowerBound && reqMinDepMins <= entry.maxDepCoveredMins - 10);
+        const coversEnd =
+          reqConstraintMins <= 0 ||
+          (entry.rawConstraintMins > 0 && entry.rawConstraintMins >= reqConstraintMins - 5) ||
+          entry.maxDepCoveredMins >= reqConstraintMins - 10;
+        windowCoversRequest = coversStart && coversEnd;
+      } else {
+        const upperBound =
+          entry.rawConstraintMins > 0 ? entry.rawConstraintMins : entry.maxDepCoveredMins;
+        const coversEnd =
+          reqConstraintMins > 0 &&
+          reqConstraintMins <= upperBound &&
+          reqConstraintMins >= entry.minDepCoveredMins + 15;
+        const coversStart =
+          reqMinDepMins <= 0 || reqMinDepMins >= entry.minDepCoveredMins - 2;
+        windowCoversRequest = coversEnd && coversStart;
+      }
+
+      if (!windowCoversRequest) continue;
+
+      let reusedDeps: TransitDepartureItem[] = entry.data.departures.map((d) => ({
+        ...d,
+        isSuggested: false,
+        isOptimal: false,
+      }));
+
+      if (direction === 'to_campus' && reqMinDepMins > 0) {
+        reusedDeps = reusedDeps.filter((d) => {
+          const depM = parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime);
+          return depM >= 0 && depM - (d.walkBeforeMinutes || 0) >= reqMinDepMins - 1;
+        });
+      } else if (direction === 'to_station' && reqConstraintMins > 0) {
+        const beforeTrain = reusedDeps.filter((d) => {
+          const arrM = parseHHMMToMins(d.arrivalTime);
+          if (arrM >= 0) return arrM <= reqConstraintMins + 2;
+          const depM = parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime);
+          return depM >= 0 && depM + d.durationMinutes <= reqConstraintMins + 2;
+        });
+        if (beforeTrain.length > 0) {
+          reusedDeps = beforeTrain;
+        }
+      }
+
+      if (reusedDeps.length === 0) continue;
+
+      const { optimal, optimalIndex } = findOptimalTransitDeparture(reusedDeps, {
+        direction,
+        isLiveContext,
+        constraintTime,
+        minDepartureTime,
+        targetTime,
+      });
+
+      const directSet = new Set<string>();
+      for (const d of reusedDeps) {
+        if (d.isDirect) directSet.add(d.line);
+      }
+      if (directSet.size === 0) {
+        reusedDeps.slice(0, 4).forEach((d) => directSet.add(d.line));
+      }
+
+      return {
+        ...entry.data,
+        directLines: Array.from(directSet),
+        departures: reusedDeps,
+        optimalDeparture: optimal,
+        optimalIndex,
+      };
+    }
+
     const inFlight = inFlightBoardRequests.get(cacheKey);
     if (inFlight) {
       return inFlight;
@@ -2482,10 +2603,20 @@ export async function getStationTransitBoard(options: {
         isLiveSource: isLiveContext,
       };
 
-      transitBoardMemoryCache.set(cacheKey, {
-        timestamp: Date.now(),
-        data: result,
-      });
+      if (transitBoardMemoryCache.size >= 40) {
+        const oldestKey = transitBoardMemoryCache.keys().next().value;
+        if (oldestKey) transitBoardMemoryCache.delete(oldestKey);
+      }
+      transitBoardMemoryCache.set(
+        cacheKey,
+        buildBoardCacheEntry(
+          result,
+          baseCacheKey,
+          isLiveContext,
+          reqConstraintMins,
+          reqMinDepMins
+        )
+      );
 
       return result;
     } catch {

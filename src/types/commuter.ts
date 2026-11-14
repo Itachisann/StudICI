@@ -1,9 +1,56 @@
+import type { TransitBoardResult } from '../utils/transitBoardService';
+
 export interface StationInfo {
   name: string;
   code: string; // es. S08209 per Orte, S08217 per Roma Tiburtina
   shortName?: string;
   lat?: number;
   lng?: number;
+}
+
+/**
+ * Treno preferito identificato dall'orario di partenza programmato dalla stazione del pendolare
+ * (HH:MM), non dal numero: Trenitalia può rinumerare le corse mantenendo gli stessi orari.
+ */
+export interface PreferredTrain {
+  departureTime: string;
+  arrivalTime?: string;
+  /** Solo informativo (ultimo numero/categoria noti, es. "RV 4110") */
+  label?: string;
+  /** Nome della lezione a cui è associata la preferenza (es. "Analisi Matematica I") */
+  subject?: string;
+  /** Aula della lezione associata */
+  room?: string;
+}
+
+export interface TrainPreferences {
+  /**
+   * Treni preferiti per singolo giorno della settimana e singola lezione, per direzione.
+   * Chiave: vedi `getTrainPreferenceKey` (direzione + giorno + orario lezione).
+   */
+  preferredTrains?: Record<string, PreferredTrain>;
+  /** Abilita l'analisi del consiglio di rientro anticipato */
+  smartReturnEnabled?: boolean;
+  /** Minuti massimi di fine lezione sacrificabili al ritorno (0 = disattivo) */
+  maxEarlyLeaveMinutes?: number;
+  /** Guadagno minimo reale sull'arrivo (in minuti) richiesto per consigliare l'uscita anticipata */
+  minReturnGainMinutes?: number;
+}
+
+export interface SmartReturnRecommendation {
+  trainNumber: string;
+  category: string;
+  departureTime: string;
+  arrivalTime: string;
+  lostLectureMinutes: number;
+  savedArrivalMinutes: number;
+  durationMinutes?: number;
+  standardTrainNumber: string;
+  standardDepartureTime: string;
+  standardArrivalTime: string;
+  smartHomeArrivalTime: string;
+  standardHomeArrivalTime: string;
+  isCurrentlySelected: boolean;
 }
 
 export interface CommuterConfig {
@@ -33,6 +80,7 @@ export interface CommuterConfig {
   customDestinationAddress?: string;
   customDestinationName?: string;
   includeIntercity?: boolean; // Se true, include anche i treni Intercity (IC) oltre a RV e Regionali
+  trainPreferences?: TrainPreferences;
 }
 
 export interface LiveTrainStop {
@@ -71,6 +119,7 @@ export interface LiveTrainInfo {
   departureDelayAtStation?: number;
   isArrivedAtDestination?: boolean;
   arrivalDelayAtStation?: number; // ritardo effettivo registrato specificamente alla partenza da questa stazione
+  canPredictEarlyArrival?: boolean; // true solo se in marcia nell'ultimo tratto (tra penultima e discesa) con anticipo o già arrivato
   isStoppedInStation?: boolean; // true se il treno è attualmente fermo in una stazione (arrivato ma non ancora partito)
   stoppedStationName?: string; // nome della stazione in cui il treno è fermo
   stoppedStationEstimatedDep?: string; // orario di partenza stimato (HH:MM) dalla stazione in cui è fermo
@@ -160,4 +209,9 @@ export interface CommuterItinerary {
     minutes: number;
     badgeText: string;
   };
+  smartReturnRecommendation?: SmartReturnRecommendation;
+  prefetchedTransitBoard?: TransitBoardResult;
+  transitLiveContext?: boolean;
+  transitConstraintTime?: string;
+  transitMinDepartureTime?: string;
 }

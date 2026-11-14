@@ -35,7 +35,7 @@ import {
   TIBURTINA_OUTBOUND_TO_SAN_LORENZO,
   TransitDepartureItem,
 } from '../utils/transitBoardService';
-import { AppTheme } from '@/constants/theme';
+import { AppTheme, CARD_RADIUS } from '@/constants/theme';
 
 export interface TransitDepartureModalProps {
   visible: boolean;
@@ -1853,7 +1853,7 @@ const styles = StyleSheet.create({
   },
   recommendedSection: {
     backgroundColor: '#161922',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     padding: 12,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -1877,7 +1877,7 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     backgroundColor: '#161922',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -1958,7 +1958,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#0e1017',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
@@ -2012,7 +2012,7 @@ const styles = StyleSheet.create({
   },
   mapSection: {
     backgroundColor: '#161922',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -2031,7 +2031,7 @@ const styles = StyleSheet.create({
   },
   mapCard: {
     height: 215,
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.cardInner,
     overflow: 'hidden',
     backgroundColor: '#0e1017',
     borderWidth: 1,
@@ -2167,7 +2167,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
   },
   navBtnGoogle: {
@@ -2187,7 +2187,7 @@ const styles = StyleSheet.create({
   },
   detailsSectionCard: {
     backgroundColor: '#161922',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -2230,7 +2230,7 @@ const styles = StyleSheet.create({
   },
   metricsCard: {
     backgroundColor: '#161922',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -2243,7 +2243,7 @@ const styles = StyleSheet.create({
   metricBox: {
     flex: 1,
     backgroundColor: '#0e1017',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 11,
     borderWidth: 1,
     borderColor: '#1e2330',
@@ -2274,7 +2274,7 @@ const styles = StyleSheet.create({
   },
   stopsTimelineBox: {
     backgroundColor: '#0e1017',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 12,
     borderWidth: 1,
     borderColor: '#1e2330',
@@ -2327,7 +2327,7 @@ const styles = StyleSheet.create({
   },
   unifiedLegBlock: {
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 10,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 10,
     marginVertical: 4,
     borderWidth: 1,
@@ -2379,7 +2379,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
   },
   crowdingLabel: {
@@ -2395,7 +2395,7 @@ const styles = StyleSheet.create({
   },
   alertsCard: {
     backgroundColor: '#161922',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: '#262b38',
@@ -2404,7 +2404,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    borderRadius: 10,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 10,
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.35)',
@@ -2430,7 +2430,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderRadius: 10,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 10,
     borderWidth: 1,
     borderColor: 'rgba(16, 185, 129, 0.25)',
@@ -2446,7 +2446,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    borderRadius: 10,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.35)',
     paddingHorizontal: 12,

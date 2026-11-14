@@ -1,6 +1,15 @@
 import ExpoModulesCore
 import Foundation
 import UserNotifications
+import EventKit
+import CoreLocation
+
+struct StructuredLocationEntry: Record {
+  @Field var eventId: String = ""
+  @Field var title: String = ""
+  @Field var latitude: Double = 0
+  @Field var longitude: Double = 0
+}
 
 #if canImport(AlarmKit)
 import AlarmKit
@@ -206,6 +215,60 @@ public class StudICIAlarmsModule: Module {
         "id": notifId,
         "engine": "usernotifications"
       ]
+    }
+
+    AsyncFunction("attachStructuredLocations") { (entries: [StructuredLocationEntry]) -> Int in
+      let status = EKEventStore.authorizationStatus(for: .event)
+      let authorized: Bool
+      if #available(iOS 17.0, *) {
+        authorized = (status == .fullAccess || status == .writeOnly)
+      } else {
+        authorized = (status == .authorized)
+      }
+      guard authorized else {
+        return 0
+      }
+
+      let eventStore = EKEventStore()
+      var updated = 0
+
+      for entry in entries {
+        guard !entry.eventId.isEmpty,
+              entry.latitude.isFinite,
+              entry.longitude.isFinite,
+              (entry.latitude != 0 || entry.longitude != 0),
+              let event = eventStore.calendarItem(withIdentifier: entry.eventId) as? EKEvent,
+              event.calendar.allowsContentModifications else {
+          continue
+        }
+
+        let locTitle = entry.title.isEmpty ? (event.location ?? "") : entry.title
+        let structured = EKStructuredLocation(title: locTitle)
+        structured.geoLocation = CLLocation(latitude: entry.latitude, longitude: entry.longitude)
+        structured.radius = 0
+
+        event.location = locTitle
+        event.structuredLocation = structured
+
+        let span: EKSpan = event.hasRecurrenceRules ? .futureEvents : .thisEvent
+        do {
+          try eventStore.save(event, span: span, commit: false)
+          updated += 1
+        } catch {
+          print("StudICIAlarms: attachStructuredLocation save error for \(entry.eventId): \(error)")
+        }
+      }
+
+      if updated > 0 {
+        do {
+          try eventStore.commit()
+        } catch {
+          print("StudICIAlarms: attachStructuredLocations commit error: \(error)")
+          return 0
+        }
+      }
+
+      return updated
     }
   }
 

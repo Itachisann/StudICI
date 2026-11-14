@@ -12,7 +12,7 @@ import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '../context/ThemeContext';
-import { UNIFORM_MODAL_BG } from '../constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '../constants/theme';
 import { ClassEvent, ScheduleData } from '../utils/scraper';
 import {
   ManualClassEvent,
@@ -21,9 +21,8 @@ import {
 } from '../utils/manualEvents';
 import {
   AttendanceRecord,
-  toggleAttendanceForDate,
-  batchSetAttendance,
-  BatchAttendanceItem,
+  saveAttendanceList,
+  calculateLessonDuration,
 } from '../utils/attendance';
 import {
   getSubjectColor,
@@ -120,7 +119,7 @@ function getLast7DaysRange(): { start: Date; end: Date } {
   return { start, end };
 }
 
-export function PastAttendanceModal({
+function PastAttendanceModalContent({
   visible,
   onClose,
   schedule,
@@ -130,6 +129,8 @@ export function PastAttendanceModal({
   tabUrl,
 }: PastAttendanceModalProps) {
   const { theme } = useTheme();
+  const [draftRecords, setDraftRecords] = useState<AttendanceRecord[]>(() => [...attendanceRecords]);
+  const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<SelectionMode>('single');
 
   // Modalità Singola: default ieri
@@ -212,14 +213,14 @@ export function PastAttendanceModal({
     return rangeDays.filter((d) => d.classes.length > 0);
   }, [rangeDays]);
 
-  // Statistiche presenze dell'intervallo
+  // Statistiche presenze dell'intervallo basate sullo stato bozza (draftRecords)
   const { totalRangeClasses, attendedRangeClasses } = useMemo(() => {
     let total = 0;
     let attended = 0;
     rangeDays.forEach((day) => {
       day.classes.forEach((cls) => {
         total++;
-        const isPres = attendanceRecords.some(
+        const isPres = draftRecords.some(
           (r) =>
             r.date === day.dateStr &&
             r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
@@ -229,29 +230,53 @@ export function PastAttendanceModal({
       });
     });
     return { totalRangeClasses: total, attendedRangeClasses: attended };
-  }, [rangeDays, attendanceRecords]);
+  }, [rangeDays, draftRecords]);
 
-  // Toggle presenza
-  const handleToggle = async (
+  // Toggle presenza in memoria (bozza locale fino al tocco del tick di salvataggio)
+  const handleToggle = useCallback((
     cls: ClassEvent,
     dateStr: string,
     displayDate: string,
     dayIndex: number,
     dayName: string
   ) => {
-    try {
-      await toggleAttendanceForDate(
-        dateStr,
+    const isPres = draftRecords.some(
+      (r) =>
+        r.date === dateStr &&
+        r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
+        r.startTime === cls.startTime
+    );
+    if (isPres) {
+      setDraftRecords((prev) =>
+        prev.filter(
+          (r) =>
+            !(
+              r.date === dateStr &&
+              r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
+              r.startTime === cls.startTime
+            )
+        )
+      );
+    } else {
+      const duration = calculateLessonDuration(cls.startTime, cls.endTime, cls.duration);
+      const newRecord: AttendanceRecord = {
+        id: `${dateStr}_${cls.subject}_${cls.startTime}`,
+        date: dateStr,
         displayDate,
         dayIndex,
         dayName,
-        cls,
-        degreeUrl || undefined
-      );
-    } catch (err) {
-      console.warn('Errore toggle presenza passata:', err);
+        subject: cls.subject,
+        room: cls.room,
+        teacher: cls.teacher,
+        startTime: cls.startTime,
+        endTime: cls.endTime,
+        duration,
+        isManual: cls.isManual || false,
+        timestamp: Date.now(),
+      };
+      setDraftRecords((prev) => [...prev, newRecord]);
     }
-  };
+  }, [draftRecords]);
 
   // Navigazione rapida data singola
   const handleOffsetSingleDays = (days: number) => {
@@ -285,31 +310,63 @@ export function PastAttendanceModal({
     }
   };
 
-  // Batch toggle tutte nel range simultaneamente in memoria e storage
-  const handleBatchToggleRange = async () => {
+  // Batch toggle tutte nel range in memoria (bozza locale)
+  const handleBatchToggleRange = useCallback(() => {
     const shouldMarkAll = attendedRangeClasses < totalRangeClasses;
-    const items: BatchAttendanceItem[] = [];
-
-    rangeDays.forEach((day) => {
-      day.classes.forEach((cls) => {
-        items.push({
-          dateStr: day.dateStr,
-          displayDate: day.displayDate,
-          dayIndex: day.dayIndex,
-          dayName: day.dayName,
-          cls,
+    setDraftRecords((prev) => {
+      const updated = [...prev];
+      rangeDays.forEach((day) => {
+        day.classes.forEach((cls) => {
+          const matchIdx = updated.findIndex(
+            (r) =>
+              r.date === day.dateStr &&
+              r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
+              r.startTime === cls.startTime
+          );
+          if (shouldMarkAll) {
+            if (matchIdx === -1) {
+              const duration = calculateLessonDuration(cls.startTime, cls.endTime, cls.duration);
+              updated.push({
+                id: `${day.dateStr}_${cls.subject}_${cls.startTime}`,
+                date: day.dateStr,
+                displayDate: day.displayDate,
+                dayIndex: day.dayIndex,
+                dayName: day.dayName,
+                subject: cls.subject,
+                room: cls.room,
+                teacher: cls.teacher,
+                startTime: cls.startTime,
+                endTime: cls.endTime,
+                duration,
+                isManual: cls.isManual || false,
+                timestamp: Date.now(),
+              });
+            }
+          } else {
+            if (matchIdx !== -1) {
+              updated.splice(matchIdx, 1);
+            }
+          }
         });
       });
+      return updated;
     });
+  }, [attendedRangeClasses, totalRangeClasses, rangeDays]);
 
-    if (items.length === 0) return;
-
+  // Salvataggio effettivo invocato ESCLUSIVAMENTE dal tasto tick in alto a destra
+  const handleSave = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
     try {
-      await batchSetAttendance(items, shouldMarkAll, degreeUrl || undefined);
+      await saveAttendanceList(draftRecords, degreeUrl || undefined);
+      onClose();
     } catch (err) {
-      console.warn('Errore batch toggle range:', err);
+      console.warn('Errore salvataggio presenze:', err);
+      onClose();
+    } finally {
+      setSaving(false);
     }
-  };
+  }, [saving, draftRecords, degreeUrl, onClose]);
 
   // Renderer comune per una card lezione con il colore deterministico della materia
   const renderClassCard = (
@@ -324,7 +381,7 @@ export function PastAttendanceModal({
       ? getManualSubjectColor(cls.subject)
       : getSubjectColor(cls.subject);
 
-    const isAttended = attendanceRecords.some(
+    const isAttended = draftRecords.some(
       (r) =>
         r.date === dateStr &&
         r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
@@ -444,9 +501,9 @@ export function PastAttendanceModal({
           sfSymbol: 'checkmark',
           tintColor: theme.primary,
           prominent: true,
-          accessibilityLabel: 'Fine',
-          dismissOnPress: true,
-          onPress: onClose,
+          disabled: saving,
+          accessibilityLabel: 'Salva',
+          onPress: handleSave,
         },
       ]}
     >
@@ -800,7 +857,7 @@ export function PastAttendanceModal({
             ) : (
               rangeDaysWithClasses.map((day) => {
                 const dayAttended = day.classes.filter((cls) =>
-                  attendanceRecords.some(
+                  draftRecords.some(
                     (r) =>
                       r.date === day.dateStr &&
                       r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
@@ -870,6 +927,11 @@ export function PastAttendanceModal({
   );
 }
 
+export function PastAttendanceModal(props: PastAttendanceModalProps) {
+  if (!props.visible) return null;
+  return <PastAttendanceModalContent {...props} />;
+}
+
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
@@ -891,7 +953,7 @@ const styles = StyleSheet.create({
   /* Card Sezione Data */
   pickerSectionCard: {
     backgroundColor: '#18181b',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 14,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.09)',
@@ -1092,7 +1154,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#18181b',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderWidth: 1,
@@ -1206,7 +1268,7 @@ const styles = StyleSheet.create({
   /* Empty State */
   emptyCard: {
     backgroundColor: '#18181b',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     padding: 22,
     alignItems: 'center',
     justifyContent: 'center',
