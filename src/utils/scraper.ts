@@ -818,6 +818,45 @@ export async function fetchScheduleData(
 }
 
 /**
+ * Legge l'orario più recente già presente nella cache locale AsyncStorage senza eseguire richieste di rete.
+ * Utile per sincronizzazioni calendario e preferenze in tempo reale.
+ */
+export async function getCachedScheduleData(
+  tabUrl?: string | null,
+  degreeUrl?: string | null
+): Promise<ScheduleData | null> {
+  try {
+    if (degreeUrl) {
+      const allRaw = await AsyncStorage.getItem(`allSchedules_v8_${degreeUrl}`);
+      if (allRaw) {
+        const parsedAll = JSON.parse(allRaw);
+        const schedulesMap = parsedAll?.schedules;
+        if (schedulesMap && typeof schedulesMap === 'object') {
+          if (tabUrl && schedulesMap[tabUrl]?.days?.length) {
+            return schedulesMap[tabUrl] as ScheduleData;
+          }
+          const firstValid = Object.values(schedulesMap).find(
+            (s: any) => s && Array.isArray(s.days) && s.days.length > 0
+          ) as ScheduleData | undefined;
+          if (firstValid) return firstValid;
+        }
+      }
+    }
+
+    if (tabUrl) {
+      const cachedRaw = await AsyncStorage.getItem(`scheduleCache_v8_${tabUrl}`);
+      if (cachedRaw) {
+        const parsed = JSON.parse(cachedRaw);
+        if (parsed?.data?.days?.length) {
+          return parsed.data as ScheduleData;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
  * Scarica TUTTI i canali, orari e aule di un corso di laurea in una sola operazione ("in un'unica botta").
  * Memorizza tutto in un'unica cache locale in modo che Orario e Aule non debbano mai più fare richieste di rete.
  */

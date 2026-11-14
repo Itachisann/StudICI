@@ -18,7 +18,7 @@ import {
   DateTimePicker,
   type DateTimePickerChangeEvent,
 } from '@expo/ui/community/datetime-picker';
-import { UNIFORM_MODAL_BG } from '../constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '../constants/theme';
 import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '../context/ThemeContext';
@@ -908,7 +908,7 @@ const styles = StyleSheet.create({
   typeSelectorRow: {
     flexDirection: 'row',
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     padding: 3,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
@@ -920,7 +920,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 8,
-    borderRadius: 11,
+    borderRadius: CARD_RADIUS.cardInner,
   },
   typeSelectorBtnActive: {
     shadowOffset: { width: 0, height: 1 },
@@ -954,7 +954,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     padding: 13,
     borderWidth: 1,
@@ -1002,7 +1002,7 @@ const styles = StyleSheet.create({
   /* Sezione Card Base (Stile Inset iOS) */
   cardSection: {
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
@@ -1172,7 +1172,7 @@ const styles = StyleSheet.create({
   previewNoticeCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     paddingHorizontal: 12,
     paddingVertical: 9,
     marginHorizontal: 14,

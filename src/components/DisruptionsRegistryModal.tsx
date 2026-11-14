@@ -1,6 +1,7 @@
-import { AppTheme } from "@/constants/theme";
+import { AppTheme, CARD_RADIUS } from "@/constants/theme";
 import { DisruptionCategory, DisruptionEvent } from "@/types/disruptions";
 import {
+  formatDisruptionModalTimeWindow,
   isTrainStrikeImpactingCommuter,
   isWalkDisruptionImpactingCommuter,
 } from "@/utils/disruptionsService";
@@ -169,8 +170,9 @@ export const DisruptionsRegistryModal: React.FC<
         setFilterMode("walk");
       }
     }
-  } else if (!visible && prevHighlightProp !== null) {
+  } else if (!visible && (prevHighlightProp !== null || highlightedId !== null)) {
     setPrevHighlightProp(null);
+    setHighlightedId(null);
   }
 
   const filteredDisruptions = useMemo(() => {
@@ -198,7 +200,7 @@ export const DisruptionsRegistryModal: React.FC<
     return list;
   }, [disruptions, onlyMyRoute, filterMode, activeStationName]);
 
-  // Gestione tocco da card esterna: scroll automatico ed estinzione evidenziazione neon
+  // Gestione tocco da card esterna: scroll automatico sull'annuncio evidenziato
   useEffect(() => {
     if (visible && highlightEventId) {
       const scrollTimer = setTimeout(() => {
@@ -214,13 +216,8 @@ export const DisruptionsRegistryModal: React.FC<
         }
       }, 420);
 
-      const clearTimer = setTimeout(() => {
-        setHighlightedId(null);
-      }, 3500);
-
       return () => {
         clearTimeout(scrollTimer);
-        clearTimeout(clearTimer);
       };
     }
   }, [visible, highlightEventId, filteredDisruptions]);
@@ -247,13 +244,7 @@ export const DisruptionsRegistryModal: React.FC<
         onPress={isLongNote ? () => toggleExpand(item.id) : undefined}
         style={[
           styles.cardContainer,
-          isHighlighted && [
-            styles.cardHighlighted,
-            {
-              borderColor: theme?.accent || theme?.primary || "#38bdf8",
-              shadowColor: theme?.accent || theme?.primary || "#38bdf8",
-            },
-          ],
+          isHighlighted && styles.cardHighlighted,
         ]}
       >
         {/* Intestazione Card: Badge Categoria + Data Formattata */}
@@ -368,20 +359,24 @@ export const DisruptionsRegistryModal: React.FC<
         <Text style={styles.cardTitle}>{item.title}</Text>
 
         {/* Orario / Fascia Oraria */}
-        {Boolean(item.timeWindow) && (
-          <View style={styles.infoRow}>
-            <Ionicons
-              name="time-outline"
-              size={13}
-              color="#f59e0b"
-              style={{ marginRight: 6, marginTop: 1 }}
-            />
-            <Text style={styles.infoRowText}>
-              <Text style={styles.infoRowLabel}>Orari / Durata: </Text>
-              {item.timeWindow}
-            </Text>
-          </View>
-        )}
+        {(() => {
+          const modalTimeText = formatDisruptionModalTimeWindow(item);
+          if (!modalTimeText) return null;
+          return (
+            <View style={styles.infoRow}>
+              <Ionicons
+                name="time-outline"
+                size={13}
+                color="#f59e0b"
+                style={{ marginRight: 6, marginTop: 1 }}
+              />
+              <Text style={styles.infoRowText}>
+                <Text style={styles.infoRowLabel}>Orari / Durata: </Text>
+                {modalTimeText}
+              </Text>
+            </View>
+          );
+        })()}
 
         {/* Categorie / Aziende Coinvolte */}
         {Boolean(item.affectedCompanies) && (
@@ -828,19 +823,21 @@ const styles = StyleSheet.create({
   },
   cardContainer: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
     padding: 14,
     marginBottom: 10,
   },
   cardHighlighted: {
-    borderWidth: 2,
-    backgroundColor: "rgba(56, 189, 248, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.72)",
+    backgroundColor: "rgba(239, 68, 68, 0.05)",
+    shadowColor: "#ef4444",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.95,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
   },
   cardHeader: {
     flexDirection: "row",

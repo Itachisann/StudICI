@@ -39,7 +39,7 @@ import {
 } from "@react-navigation/native";
 import { NativeActionButton } from "./NativeActionButton";
 import { NativeSheetModal } from "./NativeSheetModal";
-import { UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
+import { CARD_RADIUS, UNIFORM_SCREEN_BG, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { StudICILogo } from "./StudICILogo";
 import { StationInfo } from "../types/commuter";
 import { isValidSyncCode, linkDeviceWithCode } from "../utils/cloudSync";
@@ -1149,6 +1149,50 @@ function PostDownloadScreen() {
                       MARGINE DI SICUREZZA
                     </Text>
                     <View style={styles.timeBufferContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.zeroOptionChip,
+                          parkingBufferMinutes === 0 && [
+                            styles.chipActive,
+                            {
+                              backgroundColor: `${theme.primary}25`,
+                              borderColor: theme.primary,
+                              shadowColor: theme.primary,
+                            },
+                          ],
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() => setParkingBufferMinutes(0)}
+                      >
+                        <Ionicons
+                          name={
+                            parkingBufferMinutes === 0
+                              ? "checkmark-circle"
+                              : "time-outline"
+                          }
+                          size={13}
+                          color={
+                            parkingBufferMinutes === 0
+                              ? theme.accent
+                              : "#8e8e93"
+                          }
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[
+                            styles.chipText,
+                            parkingBufferMinutes === 0 && [
+                              styles.chipTextActive,
+                              { color: theme.accent },
+                            ],
+                            { fontSize: 12, fontWeight: "600" },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          Nessun margine
+                        </Text>
+                      </TouchableOpacity>
+
                       <View style={styles.timeQuickRow}>
                         {[5, 10, 15, 20].map((mins) => {
                           const isSel = parkingBufferMinutes === mins;
@@ -1160,7 +1204,7 @@ function PostDownloadScreen() {
                                 isSel && [
                                   styles.chipActive,
                                   {
-                                    backgroundColor: theme.bg,
+                                    backgroundColor: `${theme.primary}25`,
                                     borderColor: theme.primary,
                                     shadowColor: theme.primary,
                                   },
@@ -1174,13 +1218,16 @@ function PostDownloadScreen() {
                                   isSel ? "checkmark-circle" : "time-outline"
                                 }
                                 size={13}
-                                color={isSel ? "#ffffff" : "#8e8e93"}
+                                color={isSel ? theme.accent : "#8e8e93"}
                                 style={{ marginRight: 4 }}
                               />
                               <Text
                                 style={[
                                   styles.chipText,
-                                  isSel && styles.chipTextActive,
+                                  isSel && [
+                                    styles.chipTextActive,
+                                    { color: theme.accent },
+                                  ],
                                   { fontSize: 12 },
                                 ]}
                                 numberOfLines={1}
@@ -1195,11 +1242,15 @@ function PostDownloadScreen() {
                       {parkingBufferMinutes !== null && (
                         <View style={styles.timeStepperCenteredRow}>
                           <TouchableOpacity
-                            style={styles.fineStepPill}
+                            style={[
+                              styles.fineStepPill,
+                              parkingBufferMinutes === 0 && { opacity: 0.35 },
+                            ]}
+                            disabled={parkingBufferMinutes === 0}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={() =>
                               setParkingBufferMinutes((p: number | null) =>
-                                Math.max(1, (p ?? 10) - 1),
+                                Math.max(0, (p ?? 10) - 1),
                               )
                             }
                           >
@@ -1217,19 +1268,15 @@ function PostDownloadScreen() {
                               },
                             ]}
                           >
-                            <Ionicons
-                              name="time-outline"
-                              size={14}
-                              color={theme.accent}
-                              style={{ marginRight: 5 }}
-                            />
                             <Text
                               style={[
                                 styles.fineStepValueText,
                                 { color: theme.accent },
                               ]}
                             >
-                              {parkingBufferMinutes} min
+                              {parkingBufferMinutes === 0
+                                ? "Nessun margine"
+                                : `${parkingBufferMinutes} min`}
                             </Text>
                           </View>
                           <TouchableOpacity
@@ -1266,7 +1313,7 @@ function PostDownloadScreen() {
                           isSel && [
                             styles.chipActive,
                             {
-                              backgroundColor: theme.bg,
+                              backgroundColor: `${theme.primary}25`,
                               borderColor: theme.primary,
                               shadowColor: theme.primary,
                             },
@@ -1278,13 +1325,16 @@ function PostDownloadScreen() {
                         <Ionicons
                           name={isSel ? "checkmark-circle" : "train-outline"}
                           size={14}
-                          color={isSel ? "#ffffff" : "#8e8e93"}
+                          color={isSel ? theme.accent : "#8e8e93"}
                           style={{ marginRight: 5 }}
                         />
                         <Text
                           style={[
                             styles.chipText,
-                            isSel && styles.chipTextActive,
+                            isSel && [
+                              styles.chipTextActive,
+                              { color: theme.accent },
+                            ],
                           ]}
                           numberOfLines={1}
                           adjustsFontSizeToFit
@@ -1304,7 +1354,7 @@ function PostDownloadScreen() {
                         ? [
                             styles.chipActive,
                             {
-                              backgroundColor: theme.bg,
+                              backgroundColor: `${theme.primary}25`,
                               borderColor: theme.primary,
                               shadowColor: theme.primary,
                               borderStyle: "solid",
@@ -1323,16 +1373,14 @@ function PostDownloadScreen() {
                         isOtherDepartureSelected ? "checkmark-circle" : "search"
                       }
                       size={14}
-                      color={
-                        isOtherDepartureSelected ? "#ffffff" : theme.accent
-                      }
+                      color={theme.accent}
                       style={{ marginRight: 5 }}
                     />
                     <Text
                       style={[
                         styles.chipText,
                         isOtherDepartureSelected
-                          ? styles.chipTextActive
+                          ? [styles.chipTextActive, { color: theme.accent }]
                           : { color: theme.accent, fontWeight: "600" },
                       ]}
                       numberOfLines={1}
@@ -1363,7 +1411,7 @@ function PostDownloadScreen() {
                           isSel && [
                             styles.chipActive,
                             {
-                              backgroundColor: theme.bg,
+                              backgroundColor: `${theme.primary}25`,
                               borderColor: theme.primary,
                               shadowColor: theme.primary,
                             },
@@ -1375,13 +1423,16 @@ function PostDownloadScreen() {
                         <Ionicons
                           name={isSel ? "checkmark-circle" : "flag-outline"}
                           size={14}
-                          color={isSel ? "#ffffff" : "#8e8e93"}
+                          color={isSel ? theme.accent : "#8e8e93"}
                           style={{ marginRight: 5 }}
                         />
                         <Text
                           style={[
                             styles.chipText,
-                            isSel && styles.chipTextActive,
+                            isSel && [
+                              styles.chipTextActive,
+                              { color: theme.accent },
+                            ],
                           ]}
                           numberOfLines={1}
                           adjustsFontSizeToFit
@@ -1401,7 +1452,7 @@ function PostDownloadScreen() {
                         ? [
                             styles.chipActive,
                             {
-                              backgroundColor: theme.bg,
+                              backgroundColor: `${theme.primary}25`,
                               borderColor: theme.primary,
                               shadowColor: theme.primary,
                               borderStyle: "solid",
@@ -1420,14 +1471,14 @@ function PostDownloadScreen() {
                         isOtherArrivalSelected ? "checkmark-circle" : "search"
                       }
                       size={14}
-                      color={isOtherArrivalSelected ? "#ffffff" : theme.accent}
+                      color={theme.accent}
                       style={{ marginRight: 5 }}
                     />
                     <Text
                       style={[
                         styles.chipText,
                         isOtherArrivalSelected
-                          ? styles.chipTextActive
+                          ? [styles.chipTextActive, { color: theme.accent }]
                           : { color: theme.accent, fontWeight: "600" },
                       ]}
                       numberOfLines={1}
@@ -1620,6 +1671,46 @@ function PostDownloadScreen() {
               <View style={styles.pillSection}>
                 <Text style={styles.pillSectionLabel}>ANTICIPO IN AULA</Text>
                 <View style={styles.timeBufferContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.zeroOptionChip,
+                      bufferMinutes === 0 && [
+                        styles.chipActive,
+                        {
+                          backgroundColor: `${theme.primary}25`,
+                          borderColor: theme.primary,
+                          shadowColor: theme.primary,
+                        },
+                      ],
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => setBufferMinutes(0)}
+                  >
+                    <Ionicons
+                      name={
+                        bufferMinutes === 0
+                          ? "checkmark-circle"
+                          : "time-outline"
+                      }
+                      size={13}
+                      color={bufferMinutes === 0 ? theme.accent : "#8e8e93"}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.chipText,
+                        bufferMinutes === 0 && [
+                          styles.chipTextActive,
+                          { color: theme.accent },
+                        ],
+                        { fontSize: 12, fontWeight: "600" },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      Nessun anticipo
+                    </Text>
+                  </TouchableOpacity>
+
                   <View style={styles.timeQuickRow}>
                     {[5, 10, 15, 20].map((mins) => {
                       const isSel = bufferMinutes === mins;
@@ -1631,7 +1722,7 @@ function PostDownloadScreen() {
                             isSel && [
                               styles.chipActive,
                               {
-                                backgroundColor: theme.bg,
+                                backgroundColor: `${theme.primary}25`,
                                 borderColor: theme.primary,
                                 shadowColor: theme.primary,
                               },
@@ -1643,13 +1734,16 @@ function PostDownloadScreen() {
                           <Ionicons
                             name={isSel ? "checkmark-circle" : "time-outline"}
                             size={13}
-                            color={isSel ? "#ffffff" : "#8e8e93"}
+                            color={isSel ? theme.accent : "#8e8e93"}
                             style={{ marginRight: 4 }}
                           />
                           <Text
                             style={[
                               styles.chipText,
-                              isSel && styles.chipTextActive,
+                              isSel && [
+                                styles.chipTextActive,
+                                { color: theme.accent },
+                              ],
                               { fontSize: 12 },
                             ]}
                             numberOfLines={1}
@@ -1664,11 +1758,15 @@ function PostDownloadScreen() {
                   {bufferMinutes !== null && (
                     <View style={styles.timeStepperCenteredRow}>
                       <TouchableOpacity
-                        style={styles.fineStepPill}
+                        style={[
+                          styles.fineStepPill,
+                          bufferMinutes === 0 && { opacity: 0.35 },
+                        ]}
+                        disabled={bufferMinutes === 0}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         onPress={() =>
                           setBufferMinutes((b: number) =>
-                            Math.max(1, (b ?? 10) - 1),
+                            Math.max(0, (b ?? 10) - 1),
                           )
                         }
                       >
@@ -1686,19 +1784,15 @@ function PostDownloadScreen() {
                           },
                         ]}
                       >
-                        <Ionicons
-                          name="time-outline"
-                          size={14}
-                          color={theme.accent}
-                          style={{ marginRight: 5 }}
-                        />
                         <Text
                           style={[
                             styles.fineStepValueText,
                             { color: theme.accent },
                           ]}
                         >
-                          {bufferMinutes} min
+                          {bufferMinutes === 0
+                            ? "Nessun anticipo"
+                            : `${bufferMinutes} min`}
                         </Text>
                       </View>
                       <TouchableOpacity
@@ -2302,7 +2396,8 @@ export function OnboardingCourseSelector({
           carLeg: {
             ...DEFAULT_COMMUTER_CONFIG.carLeg,
             enabled: carMode === "yes",
-            parkingBufferMinutes: parkingBufferMinutes || 15,
+            parkingBufferMinutes:
+              parkingBufferMinutes !== null ? parkingBufferMinutes : 7,
             durationMinutes: drivingEstimate?.durationMinutes || 0,
             distanceKm: drivingEstimate
               ? drivingEstimate.distanceKm
@@ -2315,7 +2410,7 @@ export function OnboardingCourseSelector({
             ...DEFAULT_COMMUTER_CONFIG.transitLeg,
             preferredMode: urbanMode,
           },
-          bufferMinutes: bufferMinutes ?? 15,
+          bufferMinutes: bufferMinutes !== null ? bufferMinutes : 10,
         });
       }
 
@@ -2779,7 +2874,7 @@ const styles = StyleSheet.create({
   },
   syncCard: {
     padding: 24,
-    borderRadius: 22,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
     alignItems: "center",
   },
@@ -2876,7 +2971,7 @@ const styles = StyleSheet.create({
   modalItem: {
     backgroundColor: "#1c1c1e",
     padding: 14,
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
@@ -3106,6 +3201,19 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
   },
+  zeroOptionChip: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1c1c1e",
+    paddingHorizontal: 12,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    marginBottom: 8,
+  },
   timeQuickRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3167,7 +3275,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.03)",
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     padding: 14,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -3204,7 +3312,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 18,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.06)",
     backgroundColor: "rgba(255, 255, 255, 0.02)",
@@ -3237,7 +3345,7 @@ const styles = StyleSheet.create({
   suggestionsBox: {
     marginTop: 8,
     backgroundColor: "#18181b",
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
     borderColor: "#2c2c2e",
     overflow: "hidden",
@@ -3268,7 +3376,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
   },
   liveRoutePreviewTitle: {
@@ -3363,7 +3471,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.04)",
     padding: 13,
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.card,
     marginBottom: 8,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -3436,7 +3544,7 @@ const styles = StyleSheet.create({
   },
   setupModeCard: {
     backgroundColor: "#18181b",
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
     padding: 20,
     flexDirection: "row",
@@ -3478,7 +3586,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.08)",
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.12)",
     marginHorizontal: 16,
@@ -3498,7 +3606,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "#16171d",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderCurve: "continuous",
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
@@ -3522,7 +3630,7 @@ const styles = StyleSheet.create({
   urbanSelectorContainer: {
     flexDirection: "row",
     backgroundColor: "#121214",
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 3,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.06)",

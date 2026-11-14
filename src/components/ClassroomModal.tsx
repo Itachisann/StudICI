@@ -13,7 +13,7 @@ import {
 import MapView, { Marker } from "react-native-maps";
 import { ResolvedClassroom, openInMaps } from "../utils/classroomLocations";
 import { NativeSheetModal } from "./NativeSheetModal";
-import { UNIFORM_MODAL_BG } from "@/constants/theme";
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from "@/constants/theme";
 
 const SAPIENZA_RED = "#822433";
 
@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
   /* Map View Preview */
   mapCard: {
     height: 175,
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     overflow: "hidden",
     backgroundColor: "#121214",
     borderWidth: 1,
@@ -356,7 +356,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(24, 24, 27, 0.88)",
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.12)",
   },
@@ -417,7 +417,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     height: 52,
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     paddingHorizontal: 12,
     borderWidth: 1,
   },

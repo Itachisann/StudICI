@@ -18,7 +18,7 @@ import {
   TransitDepartureItem,
 } from '../utils/transitBoardService';
 import { TransitDepartureModal } from './TransitDepartureModal';
-import { AppTheme } from '@/constants/theme';
+import { AppTheme, CARD_RADIUS } from '@/constants/theme';
 
 export interface OptimalTransitTimingUpdate {
   startTime: string;
@@ -48,6 +48,8 @@ interface TransitBoardCardProps {
   minDepartureTime?: string;
   /** Timestamp sincronizzato con il ciclo di refresh ogni 60s della sezione treni */
   refreshTimestamp?: number;
+  /** Tabellone già risolto dal commuterOptimizer per azzerare la doppia chiamata iniziale */
+  prefetchedBoard?: TransitBoardResult;
   /** Callback per aggiornare dinamicamente l'orario e la durata sulla card esterna della tappa */
   onOptimalDepartureResolved?: (update: OptimalTransitTimingUpdate) => void;
 }
@@ -72,6 +74,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   constraintTime,
   minDepartureTime,
   refreshTimestamp,
+  prefetchedBoard,
   onOptimalDepartureResolved,
 }) => {
   const [originMode, setOriginMode] = useState<'station_or_campus' | 'current_location'>(
@@ -100,6 +103,9 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     useState<TransitDepartureItem | null>(null);
 
   const prevManualRefreshCountRef = useRef<number>(0);
+  const prevPrefetchedBoardRef = useRef<TransitBoardResult | undefined>(undefined);
+  const prevRefreshTimestampRef = useRef<number | undefined>(undefined);
+  const lastPrefetchedQueryKeyRef = useRef<string | null>(null);
 
   // Risoluzione asincrona del nome della località (es. Viterbo, Orte, Terni, Latina, Roma)
   const resolveLocationName = useCallback(async (lat: number, lng: number) => {
@@ -237,6 +243,11 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     setManualRefreshCount((k) => k + 1);
   }, [spinAnim, originMode, acquireOrRefreshGpsLocation]);
 
+  const stLat = stationCoords?.lat;
+  const stLng = stationCoords?.lng;
+  const tgLat = targetCoords?.lat;
+  const tgLng = targetCoords?.lng;
+
   // Caricamento tabellone mezzi sincronizzato anche con refreshTimestamp (ciclo 60s dei treni)
   useEffect(() => {
     let isMounted = true;
@@ -247,9 +258,11 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       return;
     }
 
-    let qStationCoords = stationCoords;
+    let qStationCoords =
+      stLat !== undefined && stLng !== undefined ? { lat: stLat, lng: stLng } : undefined;
     let qStationName = stationName;
-    let qTargetCoords = targetCoords;
+    let qTargetCoords =
+      tgLat !== undefined && tgLng !== undefined ? { lat: tgLat, lng: tgLng } : undefined;
     let qTargetName = targetName;
 
     if (isCurrentLoc && userCoords) {
@@ -267,6 +280,46 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     prevManualRefreshCountRef.current = manualRefreshCount;
 
     const cacheKey = `${direction}_${qStationName}_${qTargetName}_${canUseLive ? 'live' : (targetTime || 'now')}_${targetDate || ''}_${constraintTime || ''}_${minDepartureTime || ''}_${isCurrentLoc ? `${userCoords?.lat.toFixed(4)},${userCoords?.lng.toFixed(4)}` : 'default'}`;
+
+    const prevPrefetched = prevPrefetchedBoardRef.current;
+    const prevRefreshTs = prevRefreshTimestampRef.current;
+    const isTimerOnlyRefresh =
+      prevRefreshTs !== undefined &&
+      refreshTimestamp !== prevRefreshTs &&
+      prefetchedBoard === prevPrefetched;
+    prevRefreshTimestampRef.current = refreshTimestamp;
+
+    const currentQueryKey = `${direction}|${qStationName}|${qTargetName}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
+
+    const canConsumePrefetched = Boolean(
+      prefetchedBoard &&
+        !isCurrentLoc &&
+        !isManualForce &&
+        !isTimerOnlyRefresh &&
+        prefetchedBoard.stationName === qStationName &&
+        prefetchedBoard.destinationName === qTargetName &&
+        Boolean(prefetchedBoard.isLiveSource) === canUseLive &&
+        (prefetchedBoard !== prevPrefetched ||
+          lastPrefetchedQueryKeyRef.current === currentQueryKey)
+    );
+
+    if (canConsumePrefetched && prefetchedBoard) {
+      prevPrefetchedBoardRef.current = prefetchedBoard;
+      lastPrefetchedQueryKeyRef.current = currentQueryKey;
+      transitBoardMemoryCache.set(cacheKey, prefetchedBoard);
+      queueMicrotask(() => {
+        if (!isMounted) return;
+        setBoardData(prefetchedBoard);
+        setLoading(false);
+      });
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    if (prefetchedBoard && prefetchedBoard !== prevPrefetched) {
+      prevPrefetchedBoardRef.current = prefetchedBoard;
+    }
 
     if (!isManualForce && transitBoardMemoryCache.has(cacheKey)) {
       const cached = transitBoardMemoryCache.get(cacheKey)!;
@@ -326,8 +379,10 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     };
   }, [
     stationName,
-    stationCoords,
-    targetCoords,
+    stLat,
+    stLng,
+    tgLat,
+    tgLng,
     targetName,
     targetDate,
     targetTime,
@@ -340,6 +395,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     constraintTime,
     minDepartureTime,
     refreshTimestamp,
+    prefetchedBoard,
     manualRefreshCount,
     onOptimalDepartureResolved,
   ]);
@@ -1075,7 +1131,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
 const styles = StyleSheet.create({
   container: {
     marginVertical: 10,
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     padding: 12,
   },
@@ -1124,7 +1180,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0c0e14',
     paddingVertical: 7.5,
     paddingHorizontal: 9.5,
-    borderRadius: 11,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: '#1e2433',
   },
@@ -1296,7 +1352,7 @@ const styles = StyleSheet.create({
   },
   schematicCard: {
     backgroundColor: '#181b24',
-    borderRadius: 11,
+    borderRadius: CARD_RADIUS.cardInner,
     padding: 10,
     borderWidth: 1,
     borderColor: '#252a38',

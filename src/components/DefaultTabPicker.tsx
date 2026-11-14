@@ -10,7 +10,7 @@ import {
 import { Tab } from "../utils/scraper";
 import { parseTabHierarchy } from "./YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
-import { UNIFORM_MODAL_BG } from "@/constants/theme";
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { NativeActionButton } from "./NativeActionButton";
 
 const SAPIENZA_RED = "#822433";
@@ -412,7 +412,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     padding: 16,
     borderWidth: 1,
     borderColor: "#2c2c2e",

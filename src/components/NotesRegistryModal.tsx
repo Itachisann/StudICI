@@ -16,7 +16,7 @@ import { SwipeToDeleteRow } from './SwipeToDeleteRow';
 import { NoteItemContextMenu } from './NoteItemContextMenu';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '../context/ThemeContext';
-import { UNIFORM_MODAL_BG } from '../constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '../constants/theme';
 import {
   AppNote,
   deleteNote,
@@ -773,7 +773,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-around',
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     paddingVertical: 12,
     borderWidth: 1,
@@ -804,7 +804,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#16171d',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     borderCurve: 'continuous',
     paddingHorizontal: 12,
     paddingVertical: Platform.OS === 'ios' ? 8 : 4,
@@ -827,7 +827,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#16171d',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.cardInner,
     borderCurve: 'continuous',
     paddingHorizontal: 12,
     paddingVertical: 6.5,
@@ -853,7 +853,7 @@ const styles = StyleSheet.create({
   },
   noteCard: {
     backgroundColor: '#16171d',
-    borderRadius: 20,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     padding: 14,
     borderWidth: 1,
@@ -1047,7 +1047,7 @@ const styles = StyleSheet.create({
   },
   lessonGroupContainer: {
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 22,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderCurve: 'continuous',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.07)',
@@ -1085,7 +1085,7 @@ const styles = StyleSheet.create({
   },
   groupedNoteCard: {
     backgroundColor: '#16171d',
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.card,
     borderCurve: 'continuous',
     padding: 13,
     borderWidth: 1,

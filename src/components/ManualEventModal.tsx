@@ -22,7 +22,7 @@ import {
 import { NativeSheetModal } from './NativeSheetModal';
 import { NativeActionButton } from './NativeActionButton';
 import { useTheme } from '@/context/ThemeContext';
-import { UNIFORM_MODAL_BG } from '@/constants/theme';
+import { CARD_RADIUS, UNIFORM_MODAL_BG } from '@/constants/theme';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { CardContextMenu } from './CardContextMenu';
 import {
@@ -951,7 +951,7 @@ const styles = StyleSheet.create({
   },
   sectionCard: {
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
@@ -984,7 +984,7 @@ const styles = StyleSheet.create({
   daySegmentedBar: {
     width: '100%',
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 3,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.09)',
@@ -1001,7 +1001,7 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     height: 38,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1.5,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.7,
@@ -1012,7 +1012,7 @@ const styles = StyleSheet.create({
   daySegmentItem: {
     flex: 1,
     height: 38,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
@@ -1051,7 +1051,7 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 16,
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
@@ -1079,7 +1079,7 @@ const styles = StyleSheet.create({
   timeBox: {
     width: 110,
     height: 48,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     backgroundColor: '#242426',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.12)',
@@ -1179,7 +1179,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.14)',
     marginTop: 6,
@@ -1227,7 +1227,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.35)',
     paddingVertical: 8,

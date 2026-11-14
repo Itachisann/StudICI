@@ -41,6 +41,21 @@ export const UNIFORM_MODAL_BG = '#0d0e12';
  */
 export const MAX_CONTENT_WIDTH = 600;
 
+export interface ThemeWeekendPalette {
+  color: string;
+  bg: string;
+}
+
+export interface ThemeContrastPalette {
+  accent: string;
+  solid: string;
+  badgeBg: string;
+  badgeBorder: string;
+  arrow: string;
+  trackFill: string;
+  trackBorder: string;
+}
+
 export interface AppTheme {
   id: string;
   name: string;
@@ -52,7 +67,60 @@ export interface AppTheme {
   border: string;
   cardTint: string;
   tagBg: string;
+  weekend: ThemeWeekendPalette;
+  routeContrast: ThemeContrastPalette;
 }
+
+const WEEKEND_AMBER: ThemeWeekendPalette = {
+  color: '#f59e0b',
+  bg: 'rgba(245, 158, 11, 0.22)',
+};
+
+const WEEKEND_SKY: ThemeWeekendPalette = {
+  color: '#38bdf8',
+  bg: 'rgba(14, 165, 233, 0.22)',
+};
+
+// Palette complementari Caldo <-> Freddo ad alto contrasto per la rotta nella card Treno
+const CONTRAST_SKY: ThemeContrastPalette = {
+  accent: '#38bdf8',
+  solid: '#0284c7',
+  badgeBg: 'rgba(14, 165, 233, 0.16)',
+  badgeBorder: 'rgba(56, 189, 248, 0.4)',
+  arrow: 'rgba(56, 189, 248, 0.6)',
+  trackFill: 'rgba(56, 189, 248, 0.12)',
+  trackBorder: 'rgba(56, 189, 248, 0.35)',
+};
+
+const CONTRAST_CORAL: ThemeContrastPalette = {
+  accent: '#fb923c',
+  solid: '#ea580c',
+  badgeBg: 'rgba(251, 146, 60, 0.16)',
+  badgeBorder: 'rgba(251, 146, 60, 0.42)',
+  arrow: 'rgba(251, 146, 60, 0.62)',
+  trackFill: 'rgba(251, 146, 60, 0.12)',
+  trackBorder: 'rgba(251, 146, 60, 0.36)',
+};
+
+const CONTRAST_ROSE: ThemeContrastPalette = {
+  accent: '#f472b6',
+  solid: '#db2777',
+  badgeBg: 'rgba(244, 114, 182, 0.16)',
+  badgeBorder: 'rgba(244, 114, 182, 0.42)',
+  arrow: 'rgba(244, 114, 182, 0.62)',
+  trackFill: 'rgba(244, 114, 182, 0.12)',
+  trackBorder: 'rgba(244, 114, 182, 0.36)',
+};
+
+const CONTRAST_TEAL: ThemeContrastPalette = {
+  accent: '#2dd4bf',
+  solid: '#0d9488',
+  badgeBg: 'rgba(45, 212, 191, 0.16)',
+  badgeBorder: 'rgba(45, 212, 191, 0.42)',
+  arrow: 'rgba(45, 212, 191, 0.62)',
+  trackFill: 'rgba(45, 212, 191, 0.12)',
+  trackBorder: 'rgba(45, 212, 191, 0.36)',
+};
 
 export const APP_THEMES: Record<string, AppTheme> = {
   sapienza: {
@@ -66,6 +134,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(130, 36, 51, 0.4)',
     cardTint: 'rgba(130, 36, 51, 0.15)',
     tagBg: 'rgba(130, 36, 51, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_SKY,
   },
   cobalt: {
     id: 'cobalt',
@@ -78,6 +148,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(29, 78, 216, 0.4)',
     cardTint: 'rgba(29, 78, 216, 0.15)',
     tagBg: 'rgba(29, 78, 216, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_CORAL,
   },
   emerald: {
     id: 'emerald',
@@ -90,6 +162,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(5, 150, 105, 0.4)',
     cardTint: 'rgba(5, 150, 105, 0.15)',
     tagBg: 'rgba(5, 150, 105, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_ROSE,
   },
   purple: {
     id: 'purple',
@@ -102,6 +176,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(124, 58, 237, 0.4)',
     cardTint: 'rgba(124, 58, 237, 0.15)',
     tagBg: 'rgba(124, 58, 237, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_TEAL,
   },
   amber: {
     id: 'amber',
@@ -114,6 +190,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(217, 119, 6, 0.4)',
     cardTint: 'rgba(217, 119, 6, 0.15)',
     tagBg: 'rgba(217, 119, 6, 0.25)',
+    weekend: WEEKEND_SKY,
+    routeContrast: CONTRAST_SKY,
   },
   rose: {
     id: 'rose',
@@ -126,6 +204,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(190, 24, 93, 0.4)',
     cardTint: 'rgba(190, 24, 93, 0.15)',
     tagBg: 'rgba(190, 24, 93, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_SKY,
   },
   cyan: {
     id: 'cyan',
@@ -138,6 +218,8 @@ export const APP_THEMES: Record<string, AppTheme> = {
     border: 'rgba(2, 132, 199, 0.4)',
     cardTint: 'rgba(2, 132, 199, 0.15)',
     tagBg: 'rgba(2, 132, 199, 0.25)',
+    weekend: WEEKEND_AMBER,
+    routeContrast: CONTRAST_CORAL,
   },
 };
 
@@ -180,3 +262,15 @@ export const Spacing = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+/**
+ * Raggi di curvatura standardizzati a 3 livelli per card, contenitori e box interni:
+ * - cardLarge (20): card principali ampie, hero, empty state e contenitori primari
+ * - card (16): card compatte, liste raggruppate, banner e sezioni standard nei modali
+ * - cardInner (12): sotto-riquadri, KPI tile, chip compatti e banner annidati in una card
+ */
+export const CARD_RADIUS = {
+  cardLarge: 20,
+  card: 16,
+  cardInner: 12,
+} as const;

@@ -37,6 +37,7 @@ import { ContextNotesListModal } from "../components/ContextNotesListModal";
 import { YearChannelSelector } from "../components/YearChannelSelector";
 import { useTheme } from "@/context/ThemeContext";
 import {
+  CARD_RADIUS,
   UNIFORM_SCREEN_BG,
   UNIFORM_MODAL_BG,
   MAX_CONTENT_WIDTH,
@@ -1236,7 +1237,7 @@ export default function ScheduleScreen() {
         <SwipeToDeleteRow
           key={`swipe-${manualId}`}
           marginBottom={12}
-          borderRadius={18}
+          borderRadius={CARD_RADIUS.card}
           style={{ width: cardWidth }}
           onDelete={() => handleDeleteManualEvent(manualId)}
         >
@@ -1388,15 +1389,15 @@ export default function ScheduleScreen() {
                     width: sliderWidthAnim,
                     backgroundColor: weekendPillAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [theme.bg, "rgba(245, 158, 11, 0.22)"],
+                      outputRange: [theme.bg, theme.weekend.bg],
                     }),
                     borderColor: weekendPillAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [theme.primary, "#f59e0b"],
+                      outputRange: [theme.primary, theme.weekend.color],
                     }),
                     shadowColor: weekendPillAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [theme.primary, "#f59e0b"],
+                      outputRange: [theme.primary, theme.weekend.color],
                     }),
                   },
                 ]}
@@ -1968,7 +1969,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1c1c1e",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     paddingVertical: 9,
     paddingHorizontal: 12,
     borderWidth: 1,
@@ -2005,7 +2006,7 @@ const styles = StyleSheet.create({
   /* Info Banner Fluttuante iOS (con supporto accordion espandibile) */
   infoBanner: {
     backgroundColor: "rgba(255, 159, 10, 0.08)",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderWidth: 1,
@@ -2100,7 +2101,7 @@ const styles = StyleSheet.create({
   daySegmentedBar: {
     width: "100%",
     backgroundColor: "rgba(255, 255, 255, 0.05)",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     padding: 3,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.09)",
@@ -2117,7 +2118,7 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     height: 38,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     borderWidth: 1.5,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.7,
@@ -2128,7 +2129,7 @@ const styles = StyleSheet.create({
   daySegmentItem: {
     flex: 1,
     height: 38,
-    borderRadius: 12,
+    borderRadius: CARD_RADIUS.cardInner,
     alignItems: "center",
     justifyContent: "flex-start",
     paddingTop: 8,
@@ -2274,7 +2275,7 @@ const styles = StyleSheet.create({
   },
   weekendCard: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 22,
+    borderRadius: CARD_RADIUS.cardLarge,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
     paddingVertical: 32,
@@ -2325,7 +2326,7 @@ const styles = StyleSheet.create({
   classCard: {
     width: "100%",
     backgroundColor: "#1c1c1e",
-    borderRadius: 18,
+    borderRadius: CARD_RADIUS.card,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
@@ -2491,7 +2492,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: "#1c1c1e",
-    borderRadius: 26,
+    borderRadius: CARD_RADIUS.cardLarge,
     width: "100%",
     maxHeight: "82%",
     overflow: "hidden",
@@ -2554,7 +2555,7 @@ const styles = StyleSheet.create({
   modalAlertItem: {
     flexDirection: "row",
     backgroundColor: "#242426",
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     marginBottom: 12,
     overflow: "hidden",
     borderWidth: 1,
@@ -2578,7 +2579,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(130, 36, 51, 0.12)",
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginHorizontal: 16,
@@ -2612,7 +2613,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: 4,
     padding: 10,
-    borderRadius: 14,
+    borderRadius: CARD_RADIUS.card,
     borderWidth: 1,
     width: "100%",
   },
@@ -2653,7 +2654,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "flex-end",
     paddingRight: 22,
-    borderRadius: 16,
+    borderRadius: CARD_RADIUS.card,
     height: "100%",
   },
   swipeDeleteContent: {

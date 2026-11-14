@@ -2,14 +2,14 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.9.4",
+    "version": "1.9.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "74",
+      "buildNumber": "75",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "CFBundleDevelopmentRegion": "it",
