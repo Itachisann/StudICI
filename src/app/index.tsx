@@ -1,5 +1,14 @@
 import { CardContextMenu } from "../components/CardContextMenu";
+import {
+  AnimatedStrikethroughText,
+  useExcludedProgress,
+} from "../components/ExcludedLessonVisuals";
 import { SwipeToDeleteRow } from "../components/SwipeToDeleteRow";
+import Reanimated, {
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
@@ -73,8 +82,19 @@ import {
   getICloudAutoSyncEnabled,
   syncWithICloudStorage,
   subscribeToLiveSync,
+  notifyCourseConfigChanged,
 } from "../utils/cloudSync";
 import { triggerCalendarAutoSyncIfNeeded } from "../utils/appleCalendar";
+import { invalidateViaggioStartupSnapshot } from "../utils/commuterOptimizer";
+import { refreshCommuterAlarmsInBackground } from "../utils/alarmSync";
+import {
+  ExcludedLessonRecord,
+  buildExcludedIdSet,
+  getExcludedLessons,
+  isLessonExcluded,
+  subscribeToExcludedLessonsChanges,
+  toggleExcludedLesson,
+} from "../utils/excludedLessons";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -182,6 +202,292 @@ function AttendanceCheckmark() {
     >
       <Ionicons name="checkmark-circle" size={17} color="#38bdf8" />
     </Animated.View>
+  );
+}
+
+interface ScheduleClassCardProps {
+  cls: ClassEvent;
+  cardWidth: number;
+  accentColor: string;
+  isLive: boolean;
+  isAttended: boolean;
+  isExcluded: boolean;
+  lectureNotes: AppNote[];
+  disruptionAlert: ReturnType<typeof getDisruptionsImpactingLecture>;
+  theme: ReturnType<typeof useTheme>["theme"];
+  onEditManual: () => void;
+  onPressRoom: () => void;
+  onAddNote: () => void;
+  onOpenNotes: () => void;
+  onPressDisruption: () => void;
+}
+
+function ScheduleClassCard({
+  cls,
+  cardWidth,
+  accentColor,
+  isLive,
+  isAttended,
+  isExcluded,
+  lectureNotes,
+  disruptionAlert,
+  theme,
+  onEditManual,
+  onPressRoom,
+  onAddNote,
+  onOpenNotes,
+  onPressDisruption,
+}: ScheduleClassCardProps) {
+  const excludedProgress = useExcludedProgress(
+    isExcluded,
+    isNativeComponentAvailable ? 80 : 0,
+  );
+  const normalBg = isLive ? "#1a221c" : "#1c1c1e";
+  const normalBorder = isLive
+    ? "rgba(52, 199, 89, 0.45)"
+    : "rgba(255, 255, 255, 0.08)";
+
+  const animatedCardStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      excludedProgress.value,
+      [0, 1],
+      [normalBg, "#141519"],
+    ),
+    borderColor: interpolateColor(
+      excludedProgress.value,
+      [0, 1],
+      [normalBorder, "rgba(255, 255, 255, 0.055)"],
+    ),
+  }), [normalBg, normalBorder]);
+
+  const animatedDimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(excludedProgress.value, [0, 1], [1, 0.55]),
+  }));
+
+  const animatedAccentStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      excludedProgress.value,
+      [0, 1],
+      [accentColor, "#52525b"],
+    ),
+    opacity: interpolate(excludedProgress.value, [0, 1], [1, 0.55]),
+  }), [accentColor]);
+
+  return (
+    <Reanimated.View
+      style={[styles.classCard, { width: cardWidth }, animatedCardStyle]}
+    >
+      {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
+      <Reanimated.View style={[styles.timeColumn, animatedDimStyle]}>
+        <Text style={styles.timeStartText}>{cls.startTime}</Text>
+        <View style={styles.timeLineConnector}>
+          <Reanimated.View style={[styles.timeLineBar, animatedAccentStyle]} />
+          <View style={styles.durationBadge}>
+            <Text style={styles.durationBadgeText}>{cls.duration}h</Text>
+          </View>
+          <Reanimated.View style={[styles.timeLineBar, animatedAccentStyle]} />
+        </View>
+        <Text style={styles.timeEndText}>{cls.endTime}</Text>
+      </Reanimated.View>
+
+      {/* Barra di Accento Verticale Colorata stile Calendario */}
+      <Reanimated.View style={[styles.calendarAccentBar, animatedAccentStyle]} />
+
+      {/* Dettagli Lezione */}
+      <View style={styles.cardBody}>
+        <View style={styles.cardTitleRow}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            <AnimatedStrikethroughText
+              progress={excludedProgress}
+              normalColor="#ffffff"
+              excludedColor="#71717a"
+              strikeColor="rgba(142, 142, 148, 0.88)"
+              strikeThickness={2}
+              numberOfLines={2}
+              style={styles.subjectText}
+            >
+              {cls.subject?.toUpperCase() || ""}
+            </AnimatedStrikethroughText>
+            {cls.isManual && (
+              <Reanimated.View style={[{ marginTop: 4, alignSelf: "flex-start" }, animatedDimStyle]}>
+                <TouchableOpacity
+                  onPress={onEditManual}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                >
+                  <View style={styles.manualBadge}>
+                    <Ionicons
+                      name="pencil"
+                      size={10}
+                      color="#f59e0b"
+                      style={{ marginRight: 3 }}
+                    />
+                    <Text style={styles.manualBadgeText}>Manuale</Text>
+                  </View>
+                </TouchableOpacity>
+              </Reanimated.View>
+            )}
+          </View>
+          <View style={styles.badgesCluster}>
+            {/* Simbolo colorato distintivo della presenza */}
+            {isAttended && <AttendanceCheckmark />}
+            {isLive && !isExcluded && (
+              <View style={styles.liveBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>ORA</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Docente */}
+        {cls.teacher ? (
+          <Reanimated.View style={[styles.infoRow, animatedDimStyle]}>
+            <Ionicons name="person-outline" size={13} color="#8e8e93" />
+            <Text style={styles.teacherText} numberOfLines={1}>
+              {cls.teacher}
+            </Text>
+          </Reanimated.View>
+        ) : null}
+
+        {/* Badge Aula e Tasto Rapido Nota */}
+        <Reanimated.View
+          style={[
+            {
+              flexDirection: "row",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: 6,
+              marginTop: 3,
+            },
+            animatedDimStyle,
+          ]}
+        >
+          {cls.room ? (
+            <TouchableOpacity
+              style={[
+                styles.roomBadge,
+                {
+                  backgroundColor: theme.cardTint,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                  marginTop: 0,
+                },
+              ]}
+              onPress={onPressRoom}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="navigate" size={11.5} color={theme.accent} />
+              <Text
+                style={[styles.roomBadgeText, { color: theme.accent }]}
+                numberOfLines={1}
+              >
+                {cls.room}
+              </Text>
+              <Ionicons
+                name="chevron-forward"
+                size={11}
+                color={theme.accent}
+                style={{ marginLeft: 2, opacity: 0.8 }}
+              />
+            </TouchableOpacity>
+          ) : null}
+
+          {/* Icona circolare aggiungi nota (se non ci sono ancora note per questa lezione) */}
+          {lectureNotes.length === 0 && (
+            <TouchableOpacity
+              style={[
+                styles.lectureNoteCircleBadge,
+                {
+                  backgroundColor: "rgba(255, 255, 255, 0.04)",
+                  borderColor: "rgba(255, 255, 255, 0.08)",
+                },
+              ]}
+              onPress={onAddNote}
+              activeOpacity={0.7}
+              accessibilityLabel="Aggiungi nota per questa lezione"
+            >
+              <Ionicons name="create-outline" size={12} color="#94a3b8" />
+            </TouchableOpacity>
+          )}
+
+          {/* Cerchio color tema con icona nota se presenti note (senza scritta +1) */}
+          {lectureNotes.length > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.lectureNoteCircleBadge,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                },
+              ]}
+              activeOpacity={0.7}
+              onPress={onOpenNotes}
+              accessibilityLabel={`${lectureNotes.length} note per questa lezione`}
+            >
+              <Ionicons
+                name={
+                  lectureNotes.some((n) => n.reminderEnabled)
+                    ? "notifications"
+                    : "document-text"
+                }
+                size={12.5}
+                color={theme.accent}
+              />
+            </TouchableOpacity>
+          )}
+        </Reanimated.View>
+
+        {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
+        {disruptionAlert ? (
+          <Reanimated.View style={animatedDimStyle}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={[
+                styles.classDisruptionBanner,
+                disruptionAlert.type === "train"
+                  ? styles.classDisruptionBannerTrain
+                  : styles.classDisruptionBannerUrban,
+              ]}
+              onPress={onPressDisruption}
+            >
+              <View style={styles.classDisruptionHeaderRow}>
+                <Ionicons
+                  name={
+                    disruptionAlert.type === "train" ? "alert-circle" : "warning"
+                  }
+                  size={11.5}
+                  color={
+                    disruptionAlert.type === "train" ? "#ef4444" : "#f59e0b"
+                  }
+                  style={{ marginRight: 4 }}
+                />
+                <Text
+                  style={[
+                    styles.classDisruptionBadgeText,
+                    disruptionAlert.type === "train"
+                      ? styles.classDisruptionBadgeTextTrain
+                      : styles.classDisruptionBadgeTextUrban,
+                  ]}
+                >
+                  {disruptionAlert.badgeLabel}
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.classDisruptionDescText,
+                  disruptionAlert.type === "train"
+                    ? styles.classDisruptionDescTextTrain
+                    : styles.classDisruptionDescTextUrban,
+                ]}
+                numberOfLines={2}
+              >
+                {disruptionAlert.shortDesc}
+              </Text>
+            </TouchableOpacity>
+          </Reanimated.View>
+        ) : null}
+      </View>
+    </Reanimated.View>
   );
 }
 
@@ -344,6 +650,13 @@ export default function ScheduleScreen() {
   const [attendanceRecords, setAttendanceRecords] = useState<
     AttendanceRecord[]
   >([]);
+  const [excludedLessons, setExcludedLessons] = useState<
+    ExcludedLessonRecord[]
+  >([]);
+  const excludedSet = useMemo(
+    () => buildExcludedIdSet(excludedLessons),
+    [excludedLessons],
+  );
   const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [editingManualEvent, setEditingManualEvent] = useState<ManualClassEvent | null>(null);
@@ -529,6 +842,14 @@ export default function ScheduleScreen() {
     } catch {}
   }, []);
 
+  const loadExcludedLessons = useCallback(async (courseUrlParam?: string | null) => {
+    try {
+      const storedUrl = courseUrlParam !== undefined ? courseUrlParam : await AsyncStorage.getItem("selectedDegreeUrl");
+      const list = await getExcludedLessons(storedUrl || undefined);
+      setExcludedLessons(list);
+    } catch {}
+  }, []);
+
   const loadData = useCallback(
     async (force = false) => {
       try {
@@ -541,6 +862,7 @@ export default function ScheduleScreen() {
                 const recs = await getAttendanceRecords();
                 setAttendanceRecords(recs);
                 loadManualEvents();
+                loadExcludedLessons();
               }
             } catch {}
           }
@@ -574,6 +896,7 @@ export default function ScheduleScreen() {
         setDegreeUrl(storedUrl);
         loadManualEvents(storedUrl);
         loadAttendance(storedUrl);
+        loadExcludedLessons(storedUrl);
 
         if (
           tabsRef.current.length === 0 ||
@@ -594,8 +917,10 @@ export default function ScheduleScreen() {
             selectedTabRef.current &&
             fetchedTabs.find((t) => t.url === selectedTabRef.current?.url);
           const target =
+            (storedDefaultTab
+              ? fetchedTabs.find((t) => t.url === storedDefaultTab)
+              : undefined) ||
             currentActive ||
-            fetchedTabs.find((t) => t.url === storedDefaultTab) ||
             fetchedTabs[0];
 
           setSelectedTab(target);
@@ -619,7 +944,7 @@ export default function ScheduleScreen() {
         setLoading(false);
       }
     },
-    [loadManualEvents, loadAttendance, theme.primary],
+    [loadManualEvents, loadAttendance, loadExcludedLessons, theme.primary],
   );
 
   useFocusEffect(
@@ -637,7 +962,7 @@ export default function ScheduleScreen() {
     return unsub;
   }, [loadData]);
 
-  // Sincronizzazione istantanea in tempo reale tra tab per presenze e lezioni manuali
+  // Sincronizzazione istantanea in tempo reale tra tab per presenze, lezioni manuali e lezioni barrate
   useEffect(() => {
     const unsubAtt = subscribeToAttendanceChanges(() => {
       loadAttendance();
@@ -645,11 +970,51 @@ export default function ScheduleScreen() {
     const unsubMan = subscribeToManualEventsChanges(() => {
       loadManualEvents();
     });
+    const unsubExc = subscribeToExcludedLessonsChanges(() => {
+      loadExcludedLessons();
+    });
     return () => {
       unsubAtt();
       unsubMan();
+      unsubExc();
     };
-  }, [loadAttendance, loadManualEvents]);
+  }, [loadAttendance, loadManualEvents, loadExcludedLessons]);
+
+  const handleToggleExcludeLesson = useCallback(
+    async (cls: ClassEvent, dayIdx: number = selectedDay) => {
+      try {
+        const res = await toggleExcludedLesson(
+          dayIdx,
+          cls,
+          degreeUrl || undefined,
+          selectedTabRef.current?.url,
+        );
+        setExcludedLessons(res.records);
+        invalidateViaggioStartupSnapshot();
+        getICloudAutoSyncEnabled()
+          .then((enabled) => {
+            if (enabled) syncWithICloudStorage().catch(() => {});
+          })
+          .catch(() => {});
+        refreshCommuterAlarmsInBackground(true).catch(() => {});
+        if (schedule) {
+          AsyncStorage.getItem("selectedDegreeName")
+            .then((degName) => {
+              triggerCalendarAutoSyncIfNeeded(
+                schedule,
+                degName || "Corso di Laurea",
+                selectedTabRef.current?.name,
+                theme.primary,
+              ).catch(() => {});
+            })
+            .catch(() => {});
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [selectedDay, degreeUrl, schedule, theme.primary],
+  );
 
   const handleClassLongPress = useCallback(
     async (cls: ClassEvent, dayIdx: number = selectedDay) => {
@@ -729,10 +1094,20 @@ export default function ScheduleScreen() {
 
   const selectTab = async (tab: Tab) => {
     setSelectedTab(tab);
-    AsyncStorage.setItem("defaultTabUrl", tab.url).catch(() => {});
-    if (degreeUrl) {
-      AsyncStorage.setItem(`defaultTabUrl_${degreeUrl}`, tab.url).catch(() => {});
+    const nowTs = String(Date.now());
+    const pairs: [string, string][] = [["defaultTabUrl", tab.url]];
+    if (tab.name) {
+      pairs.push(["defaultTabLabel", tab.name]);
     }
+    if (degreeUrl) {
+      pairs.push([`defaultTabUrl_${degreeUrl}`, tab.url]);
+      pairs.push([`defaultTabUpdated_${degreeUrl}`, nowTs]);
+      if (tab.name) {
+        pairs.push([`defaultTabLabel_${degreeUrl}`, tab.name]);
+      }
+    }
+    await AsyncStorage.multiSet(pairs).catch(() => {});
+    notifyCourseConfigChanged();
     if (schedulesMap[tab.url]) {
       // Istantaneo da memoria: zero caricamento e zero rete!
       setSchedule(schedulesMap[tab.url]);
@@ -908,6 +1283,7 @@ export default function ScheduleScreen() {
       : getSubjectColor(cls.subject);
     const isLive = isCurrentClass(cls, dayIdx);
     const isAttended = checkIsAttended(cls, dayIdx);
+    const isExcluded = isLessonExcluded(dayIdx, cls, excludedSet);
     const { dateStr } = getDateForDayIndex(dayIdx);
     const lectureNotes = filterNotesForLesson(allNotes, cls.subject, cls.startTime, dateStr, dayIdx);
     const cleanRoom = cls.room
@@ -947,241 +1323,48 @@ export default function ScheduleScreen() {
     );
 
     const cardView = (
-      <View
-        style={[
-          styles.classCard,
-          { width: cardWidth },
-          isLive && styles.classCardLive,
-        ]}
-      >
-        {/* Colonna Orari a mo' di Calendario (Grande ed Evidente) */}
-        <View style={styles.timeColumn}>
-          <Text style={styles.timeStartText}>{cls.startTime}</Text>
-          <View style={styles.timeLineConnector}>
-            <View
-              style={[
-                styles.timeLineBar,
-                { backgroundColor: accentColor },
-              ]}
-            />
-            <View style={styles.durationBadge}>
-              <Text style={styles.durationBadgeText}>
-                {cls.duration}h
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.timeLineBar,
-                { backgroundColor: accentColor },
-              ]}
-            />
-          </View>
-          <Text style={styles.timeEndText}>{cls.endTime}</Text>
-        </View>
-
-        {/* Barra di Accento Verticale Colorata stile Calendario */}
-        <View
-          style={[
-            styles.calendarAccentBar,
-            { backgroundColor: accentColor },
-          ]}
-        />
-
-        {/* Dettagli Lezione */}
-        <View style={styles.cardBody}>
-          <View style={styles.cardTitleRow}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.subjectText} numberOfLines={2}>
-                {cls.subject?.toUpperCase()}
-              </Text>
-              {cls.isManual && (
-                <TouchableOpacity
-                  style={styles.manualBadgeRow}
-                  onPress={() => {
-                    const found = manualEvents.find((e) => e.id === cls.manualId);
-                    if (found) {
-                      setEditingManualEvent(found);
-                      setManualModalVisible(true);
-                    }
-                  }}
-                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                >
-                  <View style={styles.manualBadge}>
-                    <Ionicons name="pencil" size={10} color="#f59e0b" style={{ marginRight: 3 }} />
-                    <Text style={styles.manualBadgeText}>Manuale</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            </View>
-            <View style={styles.badgesCluster}>
-              {/* Simbolo colorato distintivo della presenza */}
-              {isAttended && <AttendanceCheckmark />}
-              {isLive && (
-                <View style={styles.liveBadge}>
-                  <View style={styles.liveDot} />
-                  <Text style={styles.liveText}>ORA</Text>
-                </View>
-              )}
-            </View>
-          </View>
-
-          {/* Docente */}
-          {cls.teacher ? (
-            <View style={styles.infoRow}>
-              <Ionicons
-                name="person-outline"
-                size={13}
-                color="#8e8e93"
-              />
-              <Text style={styles.teacherText} numberOfLines={1}>
-                {cls.teacher}
-              </Text>
-            </View>
-          ) : null}
-
-          {/* Badge Aula e Tasto Rapido Nota */}
-          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 3 }}>
-            {cls.room ? (
-              <TouchableOpacity
-                style={[
-                  styles.roomBadge,
-                  {
-                    backgroundColor: theme.cardTint,
-                    borderColor: theme.border,
-                    borderWidth: 1,
-                    marginTop: 0,
-                  },
-                ]}
-                onPress={() => handleRoomClick(cls)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="navigate" size={11.5} color={theme.accent} />
-                <Text
-                  style={[styles.roomBadgeText, { color: theme.accent }]}
-                  numberOfLines={1}
-                >
-                  {cls.room}
-                </Text>
-                <Ionicons
-                  name="chevron-forward"
-                  size={11}
-                  color={theme.accent}
-                  style={{ marginLeft: 2, opacity: 0.8 }}
-                />
-              </TouchableOpacity>
-            ) : null}
-
-            {/* Icona circolare aggiungi nota (se non ci sono ancora note per questa lezione) */}
-            {lectureNotes.length === 0 && (
-              <TouchableOpacity
-                style={[
-                  styles.lectureNoteCircleBadge,
-                  {
-                    backgroundColor: "rgba(255, 255, 255, 0.04)",
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                  },
-                ]}
-                onPress={() => {
-                  setEditingNote(null);
-                  setInitialNoteLesson({
-                    subject: cls.subject,
-                    room: cls.room,
-                    time: `${cls.startTime} - ${cls.endTime}`,
-                    teacher: cls.teacher,
-                    dayIndex: dayIdx,
-                    dayName: DAYS_FULL[dayIdx],
-                    dateStr,
-                  });
-                  setInitialNoteDay(null);
-                  setNoteModalVisible(true);
-                }}
-                activeOpacity={0.7}
-                accessibilityLabel="Aggiungi nota per questa lezione"
-              >
-                <Ionicons name="create-outline" size={12} color="#94a3b8" />
-              </TouchableOpacity>
-            )}
-
-            {/* Cerchio color tema con icona nota se presenti note (senza scritta +1) */}
-            {lectureNotes.length > 0 && (
-              <TouchableOpacity
-                style={[
-                  styles.lectureNoteCircleBadge,
-                  {
-                    backgroundColor: theme.subtle,
-                    borderColor: theme.border,
-                  },
-                ]}
-                activeOpacity={0.7}
-                onPress={handleOpenLectureNotes}
-                accessibilityLabel={`${lectureNotes.length} note per questa lezione`}
-              >
-                <Ionicons
-                  name={lectureNotes.some((n) => n.reminderEnabled) ? "notifications" : "document-text"}
-                  size={12.5}
-                  color={theme.accent}
-                />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
-          {disruptionAlert ? (
-            <TouchableOpacity
-              activeOpacity={0.8}
-              style={[
-                styles.classDisruptionBanner,
-                disruptionAlert.type === 'train'
-                  ? styles.classDisruptionBannerTrain
-                  : styles.classDisruptionBannerUrban,
-              ]}
-              onPress={() => {
-                setDisruptionsInitialFilter(
-                  disruptionAlert.type === 'train' ? 'train' : 'walk'
-                );
-                setSelectedDisruptionId(disruptionAlert.id);
-                setDisruptionsModalVisible(true);
-              }}
-            >
-              <View style={styles.classDisruptionHeaderRow}>
-                <Ionicons
-                  name={
-                    disruptionAlert.type === 'train'
-                      ? 'alert-circle'
-                      : 'warning'
-                  }
-                  size={11.5}
-                  color={
-                    disruptionAlert.type === 'train' ? '#ef4444' : '#f59e0b'
-                  }
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[
-                    styles.classDisruptionBadgeText,
-                    disruptionAlert.type === 'train'
-                      ? styles.classDisruptionBadgeTextTrain
-                      : styles.classDisruptionBadgeTextUrban,
-                  ]}
-                >
-                  {disruptionAlert.badgeLabel}
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.classDisruptionDescText,
-                  disruptionAlert.type === 'train'
-                    ? styles.classDisruptionDescTextTrain
-                    : styles.classDisruptionDescTextUrban,
-                ]}
-                numberOfLines={2}
-              >
-                {disruptionAlert.shortDesc}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </View>
+      <ScheduleClassCard
+        cls={cls}
+        cardWidth={cardWidth}
+        accentColor={accentColor}
+        isLive={isLive}
+        isAttended={isAttended}
+        isExcluded={isExcluded}
+        lectureNotes={lectureNotes}
+        disruptionAlert={disruptionAlert}
+        theme={theme}
+        onEditManual={() => {
+          const found = manualEvents.find((e) => e.id === cls.manualId);
+          if (found) {
+            setEditingManualEvent(found);
+            setManualModalVisible(true);
+          }
+        }}
+        onPressRoom={() => handleRoomClick(cls)}
+        onAddNote={() => {
+          setEditingNote(null);
+          setInitialNoteLesson({
+            subject: cls.subject,
+            room: cls.room,
+            time: `${cls.startTime} - ${cls.endTime}`,
+            teacher: cls.teacher,
+            dayIndex: dayIdx,
+            dayName: DAYS_FULL[dayIdx],
+            dateStr,
+          });
+          setInitialNoteDay(null);
+          setNoteModalVisible(true);
+        }}
+        onOpenNotes={handleOpenLectureNotes}
+        onPressDisruption={() => {
+          if (!disruptionAlert) return;
+          setDisruptionsInitialFilter(
+            disruptionAlert.type === "train" ? "train" : "walk"
+          );
+          setSelectedDisruptionId(disruptionAlert.id);
+          setDisruptionsModalVisible(true);
+        }}
+      />
     );
 
     const isManualRow = Boolean(cls.isManual && cls.manualId);
@@ -1192,6 +1375,7 @@ export default function ScheduleScreen() {
         title={cls.subject}
         isAttended={isAttended}
         isManual={isManualRow}
+        isExcluded={isExcluded}
         isNativeAvailable={isNativeComponentAvailable}
         style={[
           styles.cardMenuWrapper,
@@ -1199,6 +1383,7 @@ export default function ScheduleScreen() {
           isManualRow && { marginBottom: 0 },
         ]}
         onTogglePresence={() => handleClassLongPress(cls, dayIdx)}
+        onToggleExclude={() => handleToggleExcludeLesson(cls, dayIdx)}
         onAddOrViewNote={() => {
           if (lectureNotes.length > 0) {
             handleOpenLectureNotes();
@@ -1618,7 +1803,7 @@ export default function ScheduleScreen() {
                           </CardContextMenu>
                         )}
                       </View>
-                      <Text style={styles.dayHintText}>Tieni premuto per presenza</Text>
+                      <Text style={styles.dayHintText}>Tieni premuto per azioni</Text>
                     </View>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                       {/* Tasto rapido aggiungi nota al giorno */}

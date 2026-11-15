@@ -7,6 +7,18 @@ export interface StructuredLocationEntry {
   longitude: number;
 }
 
+export interface FreshEventCalendar {
+  id: string;
+  title: string;
+  allowsModifications: boolean;
+  color?: string;
+  source?: {
+    id?: string;
+    name?: string;
+    type?: string;
+  };
+}
+
 export interface StudICIAlarmsNativeModule {
   isAlarmKitSupported(): Promise<boolean>;
   requestAuthorization(): Promise<boolean>;
@@ -20,6 +32,12 @@ export interface StudICIAlarmsNativeModule {
     tintColorHex: string
   ): Promise<{ id: string; engine: 'alarmkit' | 'usernotifications' }>;
   attachStructuredLocations?(entries: StructuredLocationEntry[]): Promise<number>;
+  getFreshEventCalendars?(): Promise<FreshEventCalendar[]>;
+  updateEventCalendarMetadata?(
+    calendarId: string,
+    title: string | null,
+    colorHex: string | null
+  ): Promise<boolean>;
 }
 
 export const StudICIAlarms =

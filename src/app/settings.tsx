@@ -1,4 +1,5 @@
 import {
+  AppTheme,
   CARD_RADIUS,
   UNIFORM_MODAL_BG,
   UNIFORM_SCREEN_BG,
@@ -69,6 +70,7 @@ import {
   CALENDAR_LESSONS_ALERT_OPTIONS,
   CALENDAR_TRAINS_ALERT_OPTIONS,
   CalendarAlertConfig,
+  CalendarAlertOption,
   CalendarAlertType,
   CalendarType,
   DEFAULT_LESSONS_CALENDAR_TITLE,
@@ -122,9 +124,11 @@ import {
   isValidSyncCode,
   linkDeviceWithCode,
   notifyAppReset,
+  notifyCourseConfigChanged,
   PairedDevicesStatus,
   resetAppCloudAndStorage,
   restoreFromCloudBackup,
+  saveCourseDefaultTabPreference,
   setCustomCloudSyncId,
   setICloudAutoSyncEnabled,
   subscribeToLiveSync,
@@ -157,8 +161,8 @@ import {
   fetchAllCourseData,
   fetchDegrees,
   fetchScheduleData,
-  getCachedScheduleData,
   fetchTabs,
+  getCachedScheduleData,
   getCachedTabs,
   ScheduleData,
   Tab,
@@ -279,6 +283,232 @@ function FileSourceSection({
         </View>
         <Ionicons name="chevron-forward" size={16} color="#48484a" />
       </TouchableOpacity>
+    </>
+  );
+}
+
+const CUSTOM_ALERT_PRESET_ROWS: number[][] = [
+  [5, 10, 15],
+  [30, 45, 60],
+];
+
+interface CalendarAlertSectionProps {
+  sectionTitle: string;
+  footerText: string;
+  options: CalendarAlertOption[];
+  config: CalendarAlertConfig;
+  theme: AppTheme;
+  onSelectType: (type: CalendarAlertType) => void;
+  onChangeCustomMinutes: (minutes: number) => void;
+}
+
+function CalendarAlertSection({
+  sectionTitle,
+  footerText,
+  options,
+  config,
+  theme,
+  onSelectType,
+  onChangeCustomMinutes,
+}: CalendarAlertSectionProps) {
+  const selectedOption = options.find((opt) => opt.type === config.alertType);
+  const activeSummary =
+    config.alertType === "custom"
+      ? `${config.customMinutes} min prima`
+      : selectedOption?.label || "";
+
+  return (
+    <>
+      <View style={styles.sectionHeaderRow}>
+        <Text style={styles.sectionHeaderNoMargin}>{sectionTitle}</Text>
+        {!!activeSummary && (
+          <Text
+            style={[styles.alertHeaderSummary, { color: theme.accent }]}
+            numberOfLines={1}
+          >
+            {activeSummary}
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.groupedCard}>
+        {options.map((opt, idx) => {
+          const isSelected = config.alertType === opt.type;
+          const isLastOption = idx === options.length - 1;
+          return (
+            <Fragment key={opt.type}>
+              <TouchableOpacity
+                activeOpacity={0.68}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: isSelected }}
+                accessibilityLabel={`${opt.label}. ${opt.description}`}
+                onPress={() => {
+                  if (opt.type !== config.alertType) {
+                    LayoutAnimation.configureNext(
+                      LayoutAnimation.Presets.easeInEaseOut,
+                    );
+                  }
+                  onSelectType(opt.type);
+                }}
+                style={[
+                  styles.alertGroupedRow,
+                  isSelected && { backgroundColor: `${theme.primary}12` },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.iconBox,
+                    isSelected
+                      ? {
+                          backgroundColor: theme.subtle,
+                          borderColor: theme.border,
+                        }
+                      : styles.alertIconBoxMuted,
+                  ]}
+                >
+                  <Ionicons
+                    name={opt.iconName as any}
+                    size={17}
+                    color={isSelected ? theme.accent : "#8e8e93"}
+                  />
+                </View>
+
+                <View style={styles.alertRowTextWrap}>
+                  <Text
+                    style={[
+                      styles.alertRowTitle,
+                      isSelected && styles.alertRowTitleSelected,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                  <Text style={styles.alertRowSubtitle}>{opt.description}</Text>
+                </View>
+
+                {isSelected && (
+                  <Ionicons
+                    name="checkmark"
+                    size={19}
+                    color={theme.accent}
+                    style={{ marginLeft: 8 }}
+                  />
+                )}
+              </TouchableOpacity>
+
+              {!isLastOption && <View style={styles.alertInsetSeparator} />}
+            </Fragment>
+          );
+        })}
+
+        {config.alertType === "custom" && (
+          <View style={styles.alertCustomDrawer}>
+            <View style={styles.alertCustomHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.alertCustomHeading}>
+                  Anticipo personalizzato
+                </Text>
+                <Text style={styles.alertCustomSubheading}>
+                  Minuti di anticipo prima dell&apos;evento
+                </Text>
+              </View>
+            </View>
+
+            {CUSTOM_ALERT_PRESET_ROWS.map((rowMins) => (
+              <View key={rowMins.join("-")} style={styles.alertQuickRow}>
+                {rowMins.map((mins) => {
+                  const isSelected = config.customMinutes === mins;
+                  return (
+                    <TouchableOpacity
+                      key={mins}
+                      style={[
+                        styles.alertCustomChip,
+                        isSelected && [
+                          styles.alertChipActive,
+                          {
+                            backgroundColor: `${theme.primary}25`,
+                            borderColor: theme.primary,
+                            shadowColor: theme.primary,
+                          },
+                        ],
+                      ]}
+                      activeOpacity={0.7}
+                      onPress={() => onChangeCustomMinutes(mins)}
+                    >
+                      <Ionicons
+                        name={isSelected ? "checkmark-circle" : "time-outline"}
+                        size={13}
+                        color={isSelected ? theme.accent : "#8e8e93"}
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text
+                        style={[
+                          styles.alertChipText,
+                          isSelected && [
+                            styles.alertChipTextActive,
+                            { color: theme.accent },
+                          ],
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {mins} min
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
+
+            <View style={styles.alertCustomStepperRow}>
+              <TouchableOpacity
+                style={[
+                  styles.alertCustomStepperBtn,
+                  config.customMinutes <= 5 && { opacity: 0.35 },
+                ]}
+                disabled={config.customMinutes <= 5}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="Riduci minuti di anticipo"
+                onPress={() =>
+                  onChangeCustomMinutes(Math.max(5, config.customMinutes - 5))
+                }
+              >
+                <Ionicons name="remove" size={16} color="#ffffff" />
+              </TouchableOpacity>
+
+              <View
+                style={[
+                  styles.alertCustomValuePill,
+                  {
+                    borderColor: theme.primary,
+                    backgroundColor: `${theme.primary}22`,
+                    shadowColor: theme.primary,
+                  },
+                ]}
+              >
+                <Text
+                  style={[styles.alertCustomValueText, { color: theme.accent }]}
+                >
+                  {`${config.customMinutes} min prima`}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.alertCustomStepperBtn}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="Aumenta minuti di anticipo"
+                onPress={() => onChangeCustomMinutes(config.customMinutes + 5)}
+              >
+                <Ionicons name="add" size={16} color="#ffffff" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      <Text style={styles.sectionFooter}>{footerText}</Text>
     </>
   );
 }
@@ -730,7 +960,14 @@ export default function ProfiloScreen() {
       const storedUrl = storedMap["selectedDegreeUrl"] || null;
       const storedName = storedMap["selectedDegreeName"] || "";
       const storedClassName = storedMap["selectedDegreeClassName"] || "";
-      const storedDefaultTab = storedMap["defaultTabUrl"] || null;
+      const storedDefaultTab =
+        (storedUrl
+          ? await AsyncStorage.getItem(`defaultTabUrl_${storedUrl}`).catch(
+              () => null,
+            )
+          : null) ||
+        storedMap["defaultTabUrl"] ||
+        null;
       const studentHiddenVal = storedMap["@studici_student_info_hidden"];
 
       // Allinea eventuali modifiche esterne Apple Calendar senza bloccare la visualizzazione locale
@@ -1293,26 +1530,27 @@ export default function ProfiloScreen() {
           cachedData.tabs.length > 0
         ) {
           const tabs = cachedData.tabs;
-          // Recupera il canale precedentemente scelto per questo specifico corso
           const savedTabForDegree = await AsyncStorage.getItem(
             `defaultTabUrl_${degree.url}`,
           );
-          const activeTab =
-            savedTabForDegree && tabs.some((t) => t.url === savedTabForDegree)
-              ? savedTabForDegree
-              : tabs[0]?.url || null;
+          const activeTabObj =
+            (savedTabForDegree &&
+              tabs.find((t) => t.url === savedTabForDegree)) ||
+            tabs[0] ||
+            null;
+          const activeTab = activeTabObj?.url || null;
 
           // Salva istantaneamente i parametri del corso selezionato
-          const pairs: [string, string][] = [
+          await AsyncStorage.multiSet([
             ["selectedDegreeUrl", degree.url],
             ["selectedDegreeName", degree.name],
             ["selectedDegreeClassName", degree.className || ""],
-          ];
-          if (activeTab) {
-            pairs.push(["defaultTabUrl", activeTab]);
-            pairs.push([`defaultTabUrl_${degree.url}`, activeTab]);
-          }
-          await AsyncStorage.multiSet(pairs);
+          ]);
+          await saveCourseDefaultTabPreference(
+            degree.url,
+            activeTab,
+            activeTabObj?.name,
+          );
 
           setDegreeUrl(degree.url);
           setDegreeName(degree.name);
@@ -1360,13 +1598,18 @@ export default function ProfiloScreen() {
         await AsyncStorage.setItem("selectedDegreeClassName", degree.className);
       }
 
-      const firstTab = tabs && tabs[0] ? tabs[0].url : null;
-      if (firstTab) {
-        await AsyncStorage.setItem("defaultTabUrl", firstTab);
-        await AsyncStorage.setItem(`defaultTabUrl_${degree.url}`, firstTab);
-      } else {
-        await AsyncStorage.removeItem("defaultTabUrl");
-      }
+      const savedTabForDegree = await AsyncStorage.getItem(
+        `defaultTabUrl_${degree.url}`,
+      );
+      const firstTabObj =
+        (savedTabForDegree && tabs?.find((t) => t.url === savedTabForDegree)) ||
+        (tabs && tabs[0] ? tabs[0] : null);
+      const firstTab = firstTabObj ? firstTabObj.url : null;
+      await saveCourseDefaultTabPreference(
+        degree.url,
+        firstTab,
+        firstTabObj?.name,
+      );
 
       setDegreeUrl(degree.url);
       setDegreeName(degree.name);
@@ -1397,10 +1640,20 @@ export default function ProfiloScreen() {
 
   const selectDefaultTab = async (tab: Tab) => {
     setDefaultTabUrl(tab.url);
-    await AsyncStorage.setItem("defaultTabUrl", tab.url);
-    if (degreeUrl) {
-      await AsyncStorage.setItem(`defaultTabUrl_${degreeUrl}`, tab.url);
+    const nowTs = String(Date.now());
+    const pairs: [string, string][] = [["defaultTabUrl", tab.url]];
+    if (tab.name) {
+      pairs.push(["defaultTabLabel", tab.name]);
     }
+    if (degreeUrl) {
+      pairs.push([`defaultTabUrl_${degreeUrl}`, tab.url]);
+      pairs.push([`defaultTabUpdated_${degreeUrl}`, nowTs]);
+      if (tab.name) {
+        pairs.push([`defaultTabLabel_${degreeUrl}`, tab.name]);
+      }
+    }
+    await AsyncStorage.multiSet(pairs);
+    notifyCourseConfigChanged();
     setChannelModalVisible(false);
     refreshCommuterAlarmsInBackground(true).catch(() => {});
   };
@@ -2132,6 +2385,10 @@ export default function ProfiloScreen() {
       setLastLessonsSyncTime(lastL);
       setLastTrainsSyncTime(lastT);
       setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+      await syncCalendarMetadataState(theme.primary, {
+        pullExternal: false,
+        syncInputs: true,
+      });
     } catch (err) {
       console.warn("Errore switch modalità treni:", err);
     } finally {
@@ -2214,6 +2471,10 @@ export default function ProfiloScreen() {
           setLastCalendarSyncTime(
             Math.max(lSync || 0, lastTrainsSyncTime || 0) || null,
           );
+          await syncCalendarMetadataState(theme.primary, {
+            pullExternal: false,
+            syncInputs: true,
+          });
         } catch (e) {
           console.warn("Errore auto-sync lezioni:", e);
         } finally {
@@ -2241,6 +2502,10 @@ export default function ProfiloScreen() {
           setLastCalendarSyncTime(
             Math.max(lastLessonsSyncTime || 0, tSync || 0) || null,
           );
+          await syncCalendarMetadataState(theme.primary, {
+            pullExternal: false,
+            syncInputs: true,
+          });
         } catch (e) {
           console.warn("Errore auto-sync treni:", e);
         } finally {
@@ -2376,6 +2641,10 @@ export default function ProfiloScreen() {
       setLastLessonsSyncTime(lastL);
       setLastTrainsSyncTime(lastT);
       setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+      await syncCalendarMetadataState(theme.primary, {
+        pullExternal: false,
+        syncInputs: true,
+      });
 
       if (res.success) {
         Alert.alert("Calendario Sincronizzato", res.message);
@@ -4837,7 +5106,7 @@ export default function ProfiloScreen() {
                     <View style={styles.cloudAutoSyncRow}>
                       <View style={{ flex: 1, paddingRight: 10 }}>
                         <Text style={styles.cloudAutoSyncTitle}>
-                          Calendario Lezioni
+                          Calendario lezioni
                         </Text>
                         <Text style={styles.cloudAutoSyncSub}>
                           Crea e sincronizza il calendario dedicato per tutte le
@@ -5074,253 +5343,15 @@ export default function ProfiloScreen() {
                   </View>
 
                   {/* Avviso Notifica Lezioni */}
-                  <Text style={styles.sectionHeader}>AVVISO LEZIONI</Text>
-                  <View style={styles.groupedCard}>
-                    <View style={{ padding: 14 }}>
-                      <Text style={styles.alertCardSubtitle}>
-                        Scegli quando avvisarti
-                      </Text>
-                      <View style={{ gap: 8, marginTop: 10 }}>
-                        {CALENDAR_LESSONS_ALERT_OPTIONS.map((opt) => {
-                          const isSelected =
-                            lessonsAlertConfig.alertType === opt.type;
-                          return (
-                            <TouchableOpacity
-                              key={opt.type}
-                              activeOpacity={0.7}
-                              onPress={() => handleSelectLessonsAlert(opt.type)}
-                              style={[
-                                styles.alertOptionItem,
-                                isSelected && {
-                                  borderColor: theme.primary,
-                                  backgroundColor: "rgba(255, 255, 255, 0.08)",
-                                },
-                              ]}
-                            >
-                              <View
-                                style={[
-                                  styles.alertOptionIconBadge,
-                                  isSelected && {
-                                    backgroundColor: theme.primary,
-                                  },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={opt.iconName as any}
-                                  size={16}
-                                  color={isSelected ? "#ffffff" : "#8e8e93"}
-                                />
-                              </View>
-                              <View style={{ flex: 1, marginLeft: 12 }}>
-                                <Text
-                                  style={[
-                                    styles.alertOptionLabel,
-                                    isSelected && {
-                                      color: "#ffffff",
-                                      fontWeight: "600",
-                                    },
-                                  ]}
-                                >
-                                  {opt.label}
-                                </Text>
-                                <Text style={styles.alertOptionDesc}>
-                                  {opt.description}
-                                </Text>
-                              </View>
-                              {isSelected && (
-                                <Ionicons
-                                  name="checkmark-circle"
-                                  size={20}
-                                  color={theme.primary}
-                                  style={{ marginLeft: 6 }}
-                                />
-                              )}
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-
-                      {lessonsAlertConfig.alertType === "custom" && (
-                        <View style={styles.customAlertBox}>
-                          <Text style={styles.customAlertTitle}>
-                            Minuti di anticipo personalizzati:
-                          </Text>
-
-                          {/* Riga opzioni veloci con pill glowing stile Anticipo in aula */}
-                          <View style={styles.alertQuickRow}>
-                            {[5, 10, 15].map((mins) => {
-                              const isSelected =
-                                lessonsAlertConfig.customMinutes === mins;
-                              return (
-                                <TouchableOpacity
-                                  key={mins}
-                                  style={[
-                                    styles.alertQuickChip,
-                                    isSelected && [
-                                      styles.alertChipActive,
-                                      {
-                                        backgroundColor: `${theme.primary}25`,
-                                        borderColor: theme.primary,
-                                        shadowColor: theme.primary,
-                                      },
-                                    ],
-                                  ]}
-                                  activeOpacity={0.7}
-                                  onPress={() =>
-                                    handleChangeLessonsCustomMinutes(mins)
-                                  }
-                                >
-                                  <Ionicons
-                                    name={
-                                      isSelected
-                                        ? "checkmark-circle"
-                                        : "time-outline"
-                                    }
-                                    size={13}
-                                    color={
-                                      isSelected ? theme.accent : "#8e8e93"
-                                    }
-                                    style={{ marginRight: 4 }}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.alertChipText,
-                                      isSelected && [
-                                        styles.alertChipTextActive,
-                                        { color: theme.accent },
-                                      ],
-                                    ]}
-                                    numberOfLines={1}
-                                  >
-                                    {mins} min
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                          <View style={styles.alertQuickRow}>
-                            {[30, 45, 60].map((mins) => {
-                              const isSelected =
-                                lessonsAlertConfig.customMinutes === mins;
-                              return (
-                                <TouchableOpacity
-                                  key={mins}
-                                  style={[
-                                    styles.alertQuickChip,
-                                    isSelected && [
-                                      styles.alertChipActive,
-                                      {
-                                        backgroundColor: `${theme.primary}25`,
-                                        borderColor: theme.primary,
-                                        shadowColor: theme.primary,
-                                      },
-                                    ],
-                                  ]}
-                                  activeOpacity={0.7}
-                                  onPress={() =>
-                                    handleChangeLessonsCustomMinutes(mins)
-                                  }
-                                >
-                                  <Ionicons
-                                    name={
-                                      isSelected
-                                        ? "checkmark-circle"
-                                        : "time-outline"
-                                    }
-                                    size={13}
-                                    color={
-                                      isSelected ? theme.accent : "#8e8e93"
-                                    }
-                                    style={{ marginRight: 4 }}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.alertChipText,
-                                      isSelected && [
-                                        styles.alertChipTextActive,
-                                        { color: theme.accent },
-                                      ],
-                                    ]}
-                                    numberOfLines={1}
-                                  >
-                                    {mins} min
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-
-                          {/* Selettore di precisione centrato con glowing pill */}
-                          <View style={styles.alertStepperCenteredRow}>
-                            <TouchableOpacity
-                              style={[
-                                styles.alertStepperBtn,
-                                lessonsAlertConfig.customMinutes <= 1 && {
-                                  opacity: 0.35,
-                                },
-                              ]}
-                              disabled={lessonsAlertConfig.customMinutes <= 1}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              onPress={() =>
-                                handleChangeLessonsCustomMinutes(
-                                  Math.max(
-                                    1,
-                                    lessonsAlertConfig.customMinutes - 1,
-                                  ),
-                                )
-                              }
-                            >
-                              <Ionicons
-                                name="remove"
-                                size={17}
-                                color="#ffffff"
-                              />
-                            </TouchableOpacity>
-                            <View
-                              style={[
-                                styles.alertFineStepValuePill,
-                                {
-                                  borderColor: theme.primary,
-                                  backgroundColor: `${theme.primary}22`,
-                                  shadowColor: theme.primary,
-                                  shadowOffset: { width: 0, height: 0 },
-                                  shadowOpacity: 0.85,
-                                  shadowRadius: 8,
-                                  elevation: 4,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name="time-outline"
-                                size={14}
-                                color={theme.accent}
-                                style={{ marginRight: 6 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.alertFineStepValueText,
-                                  { color: theme.accent },
-                                ]}
-                              >
-                                {`${lessonsAlertConfig.customMinutes} min prima`}
-                              </Text>
-                            </View>
-                            <TouchableOpacity
-                              style={styles.alertStepperBtn}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              onPress={() =>
-                                handleChangeLessonsCustomMinutes(
-                                  lessonsAlertConfig.customMinutes + 1,
-                                )
-                              }
-                            >
-                              <Ionicons name="add" size={17} color="#ffffff" />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  </View>
+                  <CalendarAlertSection
+                    sectionTitle="AVVISO LEZIONI"
+                    footerText="Scegli quando ricevere l'avviso su Apple Calendar per ogni lezione sincronizzata."
+                    options={CALENDAR_LESSONS_ALERT_OPTIONS}
+                    config={lessonsAlertConfig}
+                    theme={theme}
+                    onSelectType={handleSelectLessonsAlert}
+                    onChangeCustomMinutes={handleChangeLessonsCustomMinutes}
+                  />
                 </>
               )}
 
@@ -5942,253 +5973,15 @@ export default function ProfiloScreen() {
                   )}
 
                   {/* Avviso Notifica Treni */}
-                  <Text style={styles.sectionHeader}>AVVISO NATIVO TRENI</Text>
-                  <View style={styles.groupedCard}>
-                    <View style={{ padding: 14 }}>
-                      <Text style={styles.alertCardSubtitle}>
-                        Scegli quando avvisarti
-                      </Text>
-                      <View style={{ gap: 8, marginTop: 10 }}>
-                        {CALENDAR_TRAINS_ALERT_OPTIONS.map((opt) => {
-                          const isSelected =
-                            trainsAlertConfig.alertType === opt.type;
-                          return (
-                            <TouchableOpacity
-                              key={opt.type}
-                              activeOpacity={0.7}
-                              onPress={() => handleSelectTrainsAlert(opt.type)}
-                              style={[
-                                styles.alertOptionItem,
-                                isSelected && {
-                                  borderColor: theme.primary,
-                                  backgroundColor: "rgba(255, 255, 255, 0.08)",
-                                },
-                              ]}
-                            >
-                              <View
-                                style={[
-                                  styles.alertOptionIconBadge,
-                                  isSelected && {
-                                    backgroundColor: theme.primary,
-                                  },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={opt.iconName as any}
-                                  size={16}
-                                  color={isSelected ? "#ffffff" : "#8e8e93"}
-                                />
-                              </View>
-                              <View style={{ flex: 1, marginLeft: 12 }}>
-                                <Text
-                                  style={[
-                                    styles.alertOptionLabel,
-                                    isSelected && {
-                                      color: "#ffffff",
-                                      fontWeight: "600",
-                                    },
-                                  ]}
-                                >
-                                  {opt.label}
-                                </Text>
-                                <Text style={styles.alertOptionDesc}>
-                                  {opt.description}
-                                </Text>
-                              </View>
-                              {isSelected && (
-                                <Ionicons
-                                  name="checkmark-circle"
-                                  size={20}
-                                  color={theme.primary}
-                                  style={{ marginLeft: 6 }}
-                                />
-                              )}
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-
-                      {trainsAlertConfig.alertType === "custom" && (
-                        <View style={styles.customAlertBox}>
-                          <Text style={styles.customAlertTitle}>
-                            Minuti di anticipo personalizzati:
-                          </Text>
-
-                          {/* Riga opzioni veloci con pill glowing stile Anticipo in aula */}
-                          <View style={styles.alertQuickRow}>
-                            {[5, 10, 15].map((mins) => {
-                              const isSelected =
-                                trainsAlertConfig.customMinutes === mins;
-                              return (
-                                <TouchableOpacity
-                                  key={mins}
-                                  style={[
-                                    styles.alertQuickChip,
-                                    isSelected && [
-                                      styles.alertChipActive,
-                                      {
-                                        backgroundColor: `${theme.primary}25`,
-                                        borderColor: theme.primary,
-                                        shadowColor: theme.primary,
-                                      },
-                                    ],
-                                  ]}
-                                  activeOpacity={0.7}
-                                  onPress={() =>
-                                    handleChangeTrainsCustomMinutes(mins)
-                                  }
-                                >
-                                  <Ionicons
-                                    name={
-                                      isSelected
-                                        ? "checkmark-circle"
-                                        : "time-outline"
-                                    }
-                                    size={13}
-                                    color={
-                                      isSelected ? theme.accent : "#8e8e93"
-                                    }
-                                    style={{ marginRight: 4 }}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.alertChipText,
-                                      isSelected && [
-                                        styles.alertChipTextActive,
-                                        { color: theme.accent },
-                                      ],
-                                    ]}
-                                    numberOfLines={1}
-                                  >
-                                    {mins} min
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                          <View style={styles.alertQuickRow}>
-                            {[30, 45, 60].map((mins) => {
-                              const isSelected =
-                                trainsAlertConfig.customMinutes === mins;
-                              return (
-                                <TouchableOpacity
-                                  key={mins}
-                                  style={[
-                                    styles.alertQuickChip,
-                                    isSelected && [
-                                      styles.alertChipActive,
-                                      {
-                                        backgroundColor: `${theme.primary}25`,
-                                        borderColor: theme.primary,
-                                        shadowColor: theme.primary,
-                                      },
-                                    ],
-                                  ]}
-                                  activeOpacity={0.7}
-                                  onPress={() =>
-                                    handleChangeTrainsCustomMinutes(mins)
-                                  }
-                                >
-                                  <Ionicons
-                                    name={
-                                      isSelected
-                                        ? "checkmark-circle"
-                                        : "time-outline"
-                                    }
-                                    size={13}
-                                    color={
-                                      isSelected ? theme.accent : "#8e8e93"
-                                    }
-                                    style={{ marginRight: 4 }}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.alertChipText,
-                                      isSelected && [
-                                        styles.alertChipTextActive,
-                                        { color: theme.accent },
-                                      ],
-                                    ]}
-                                    numberOfLines={1}
-                                  >
-                                    {mins} min
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-
-                          {/* Selettore di precisione centrato con glowing pill */}
-                          <View style={styles.alertStepperCenteredRow}>
-                            <TouchableOpacity
-                              style={[
-                                styles.alertStepperBtn,
-                                trainsAlertConfig.customMinutes <= 1 && {
-                                  opacity: 0.35,
-                                },
-                              ]}
-                              disabled={trainsAlertConfig.customMinutes <= 1}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              onPress={() =>
-                                handleChangeTrainsCustomMinutes(
-                                  Math.max(
-                                    1,
-                                    trainsAlertConfig.customMinutes - 1,
-                                  ),
-                                )
-                              }
-                            >
-                              <Ionicons
-                                name="remove"
-                                size={17}
-                                color="#ffffff"
-                              />
-                            </TouchableOpacity>
-                            <View
-                              style={[
-                                styles.alertFineStepValuePill,
-                                {
-                                  borderColor: theme.primary,
-                                  backgroundColor: `${theme.primary}22`,
-                                  shadowColor: theme.primary,
-                                  shadowOffset: { width: 0, height: 0 },
-                                  shadowOpacity: 0.85,
-                                  shadowRadius: 8,
-                                  elevation: 4,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name="time-outline"
-                                size={14}
-                                color={theme.accent}
-                                style={{ marginRight: 6 }}
-                              />
-                              <Text
-                                style={[
-                                  styles.alertFineStepValueText,
-                                  { color: theme.accent },
-                                ]}
-                              >
-                                {`${trainsAlertConfig.customMinutes} min prima`}
-                              </Text>
-                            </View>
-                            <TouchableOpacity
-                              style={styles.alertStepperBtn}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              onPress={() =>
-                                handleChangeTrainsCustomMinutes(
-                                  trainsAlertConfig.customMinutes + 1,
-                                )
-                              }
-                            >
-                              <Ionicons name="add" size={17} color="#ffffff" />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  </View>
+                  <CalendarAlertSection
+                    sectionTitle="AVVISO NATIVO TRENI"
+                    footerText="Scegli quando ricevere l'avviso nativo su Apple Calendar per i treni sincronizzati."
+                    options={CALENDAR_TRAINS_ALERT_OPTIONS}
+                    config={trainsAlertConfig}
+                    theme={theme}
+                    onSelectType={handleSelectTrainsAlert}
+                    onChangeCustomMinutes={handleChangeTrainsCustomMinutes}
+                  />
                 </>
               )}
             </ScrollView>
@@ -6371,7 +6164,10 @@ export default function ProfiloScreen() {
                       onDelete={() =>
                         handleDeleteDocDirectly(doc.id, doc.title)
                       }
-                      style={{ width: docCardWidth, borderRadius: CARD_RADIUS.card }}
+                      style={{
+                        width: docCardWidth,
+                        borderRadius: CARD_RADIUS.card,
+                      }}
                     >
                       <TouchableOpacity
                         style={[styles.docItemCard, { width: docCardWidth }]}
@@ -8553,50 +8349,73 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontWeight: "700",
   },
-  alertCardSubtitle: {
-    fontSize: 13,
-    color: "#8e8e93",
-    lineHeight: 18,
+  alertHeaderSummary: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    marginLeft: 10,
+    flexShrink: 1,
+    textAlign: "right",
   },
-  alertOptionItem: {
+  alertGroupedRow: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 12,
-    borderRadius: CARD_RADIUS.cardInner,
-    backgroundColor: "#151516",
-    borderWidth: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 54,
+  },
+  alertIconBoxMuted: {
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
     borderColor: "rgba(255, 255, 255, 0.08)",
   },
-  alertOptionIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: "#2c2c2e",
-    alignItems: "center",
-    justifyContent: "center",
+  alertRowTextWrap: {
+    flex: 1,
+    paddingRight: 8,
   },
-  alertOptionLabel: {
-    fontSize: 14,
+  alertRowTitle: {
+    fontSize: 15.5,
     color: "#e5e5ea",
     fontWeight: "500",
+    letterSpacing: -0.2,
   },
-  alertOptionDesc: {
-    fontSize: 11.5,
-    color: "#8e8e93",
-    marginTop: 2,
+  alertRowTitleSelected: {
+    color: "#ffffff",
+    fontWeight: "600",
   },
-  customAlertBox: {
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(255, 255, 255, 0.1)",
-  },
-  customAlertTitle: {
+  alertRowSubtitle: {
     fontSize: 12.5,
     color: "#8e8e93",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  alertInsetSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginLeft: 62,
+  },
+  alertCustomDrawer: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255, 255, 255, 0.1)",
+    backgroundColor: "rgba(255, 255, 255, 0.02)",
+  },
+  alertCustomHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  alertCustomHeading: {
+    fontSize: 13.5,
     fontWeight: "600",
-    letterSpacing: -0.1,
-    marginBottom: 10,
+    color: "#ffffff",
+    letterSpacing: -0.15,
+  },
+  alertCustomSubheading: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
   },
   alertQuickRow: {
     flexDirection: "row",
@@ -8618,6 +8437,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#2c2c2e",
   },
+  alertCustomChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#141416",
+    paddingHorizontal: 4,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
   alertChipActive: {
     borderWidth: 1.5,
     shadowOffset: { width: 0, height: 0 },
@@ -8633,34 +8464,40 @@ const styles = StyleSheet.create({
   alertChipTextActive: {
     fontWeight: "700",
   },
-  alertStepperCenteredRow: {
+  alertCustomStepperRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    marginTop: 10,
+    marginTop: 8,
     width: "100%",
   },
-  alertStepperBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "#2c2c2e",
+  alertCustomStepperBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#27272a",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
     justifyContent: "center",
     alignItems: "center",
   },
-  alertFineStepValuePill: {
+  alertCustomValuePill: {
     paddingHorizontal: 16,
-    height: 38,
-    borderRadius: 19,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1.5,
     justifyContent: "center",
     alignItems: "center",
     flexDirection: "row",
-    minWidth: 140,
+    minWidth: 136,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  alertFineStepValueText: {
-    fontSize: 13.5,
+  alertCustomValueText: {
+    fontSize: 13,
     fontWeight: "700",
   },
 });

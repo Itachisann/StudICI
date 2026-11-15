@@ -1576,7 +1576,7 @@ export function getDisruptionsImpactingLecture(
     const compactWindow = formatTrainStrikeBannerSummary(trainStrike, lectureDateIso);
     return {
       id: trainStrike.id,
-      badgeLabel: 'Impatta la tua tratta (Trenitalia / RFI / IC)',
+      badgeLabel: 'Impatta la tua tratta',
       title: trainStrike.title,
       category: trainStrike.category,
       type: 'train',

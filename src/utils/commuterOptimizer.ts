@@ -17,6 +17,13 @@ import {
   manualEventToClassEvent,
   isManualEventActiveOnDate,
 } from './manualEvents';
+import {
+  ExcludedLessonRecord,
+  buildExcludedIdSet,
+  getExcludedLessons,
+  isLessonExcluded,
+  jsDayToScheduleDayIndex,
+} from './excludedLessons';
 import { getDateForDayIndex } from './attendance';
 import { resolveClassroom, formatSapienzaAddress, SAPIENZA_BUILDINGS } from './classroomLocations';
 import { getOptimalRomeTransit } from './transitRouter';
@@ -145,6 +152,7 @@ export interface OptimizeOptions {
   forceRefresh?: boolean;
   ignoreCurrentTime?: boolean; // calcola l'orario programmato canonico senza filtrare rispetto all'ora attuale
   fastCalendarMode?: boolean; // salta chiamate ausiliarie (OSRM/ATAC) per sincronizzazione calendario veloce
+  excludedLessonIds?: Set<string> | string[]; // lezioni "barrate" escluse dal target standard
 }
 
 export interface DayLectureTarget {
@@ -238,9 +246,30 @@ export async function computeCommuterItinerary(
     forceRefresh = false,
     ignoreCurrentTime = false,
     fastCalendarMode = false,
+    excludedLessonIds,
   } = options;
   const isOutbound = direction === 'outbound';
   const dayClasses = getDayClassesForDate(scheduleData, targetDate, manualEvents);
+
+  let resolvedExcludedSet: Set<string>;
+  if (excludedLessonIds instanceof Set) {
+    resolvedExcludedSet = excludedLessonIds;
+  } else if (Array.isArray(excludedLessonIds)) {
+    resolvedExcludedSet = new Set(excludedLessonIds);
+  } else if (!selectedClass) {
+    const excludedRecords = await getExcludedLessons().catch(
+      () => [] as ExcludedLessonRecord[]
+    );
+    resolvedExcludedSet = buildExcludedIdSet(excludedRecords);
+  } else {
+    resolvedExcludedSet = new Set<string>();
+  }
+
+  const schedDayIdx = jsDayToScheduleDayIndex(targetDate.getDay());
+  const activeDayClasses =
+    resolvedExcludedSet.size > 0
+      ? dayClasses.filter((c) => !isLessonExcluded(schedDayIdx, c, resolvedExcludedSet))
+      : dayClasses;
 
   // 1. Individua la lezione target del giorno
   const targetLecture = findDayLecture(
@@ -250,7 +279,8 @@ export async function computeCommuterItinerary(
     manualHour,
     selectedClass,
     ignoreCurrentTime,
-    manualEvents
+    manualEvents,
+    resolvedExcludedSet
   );
 
   const isExplicitClass = Boolean(options.isExplicitClass);
@@ -265,7 +295,7 @@ export async function computeCommuterItinerary(
       selectedTrainNumber,
       forceRefresh,
       ignoreCurrentTime,
-      dayClasses,
+      activeDayClasses,
       isExplicitClass,
       fastCalendarMode,
       forcedPreferredTrain
@@ -293,7 +323,8 @@ function findDayLecture(
   manualHour?: string,
   explicitClass?: ClassEvent | null,
   ignoreCurrentTime = false,
-  manualEvents?: ManualClassEvent[]
+  manualEvents?: ManualClassEvent[],
+  excludedSet?: Set<string>
 ): DayLectureTarget | null {
   if (manualHour) {
     const resolved = resolveClassroom('Aula 1');
@@ -310,7 +341,7 @@ function findDayLecture(
     };
   }
 
-  // Se l'utente ha selezionato direttamente una lezione dall'interfaccia
+  // Se l'utente ha selezionato direttamente una lezione dall'interfaccia (anche se barrata)
   if (explicitClass) {
     return classEventToLectureTarget(explicitClass);
   }
@@ -323,7 +354,12 @@ function findDayLecture(
     return null;
   }
 
-  const dayClasses = getDayClassesForDate(scheduleData, targetDate, manualEvents);
+  const allDayClasses = getDayClassesForDate(scheduleData, targetDate, manualEvents);
+  const schedDayIdx = jsDayToScheduleDayIndex(dayIndex);
+  const dayClasses =
+    excludedSet && excludedSet.size > 0
+      ? allDayClasses.filter((c) => !isLessonExcluded(schedDayIdx, c, excludedSet))
+      : allDayClasses;
 
   if (dayClasses.length > 0) {
     let chosenClass: ClassEvent;
@@ -362,6 +398,11 @@ function findDayLecture(
     }
 
     return classEventToLectureTarget(chosenClass);
+  }
+
+  // Se la giornata ha lezioni ma tutte sono state barrate dall'utente, calcola solo i treni senza lezione fittizia
+  if (allDayClasses.length > 0) {
+    return null;
   }
 
   // Fallback se giornata libera o fine settimana
@@ -2191,6 +2232,7 @@ export function resolveViaggioTargetContext(params: {
   manuals: ManualClassEvent[];
   defaultTabUrl?: string | null;
   selectedClassIndex?: number | null;
+  excludedLessonIds?: Set<string> | string[];
 }): {
   targetDate: Date;
   targetClass: ClassEvent | null;
@@ -2204,6 +2246,7 @@ export function resolveViaggioTargetContext(params: {
     manuals,
     defaultTabUrl,
     selectedClassIndex = null,
+    excludedLessonIds,
   } = params;
 
   const targetDate = new Date();
@@ -2218,6 +2261,17 @@ export function resolveViaggioTargetContext(params: {
     manuals,
     defaultTabUrl
   );
+  const excludedSet =
+    excludedLessonIds instanceof Set
+      ? excludedLessonIds
+      : new Set(excludedLessonIds || []);
+  const schedDayIdx = jsDayToScheduleDayIndex(effDayIdx);
+  const activeDayClasses =
+    excludedSet.size > 0
+      ? currentDayClasses.filter(
+          (c) => !isLessonExcluded(schedDayIdx, c, excludedSet)
+        )
+      : currentDayClasses;
 
   const now = new Date();
   const isToday = now.getDay() === effDayIdx;
@@ -2230,7 +2284,7 @@ export function resolveViaggioTargetContext(params: {
   if (!isEffWeekend && currentDayClasses.length > 0) {
     if (isExplicitClass) {
       targetClass = currentDayClasses[selectedClassIndex!];
-    } else {
+    } else if (activeDayClasses.length > 0) {
       const approxTimeToStation = config?.carLeg?.enabled
         ? (config.carLeg.durationMinutes || 24) +
           (config.carLeg.parkingBufferMinutes ?? 7)
@@ -2239,7 +2293,7 @@ export function resolveViaggioTargetContext(params: {
         approxTimeToStation + 40 + (config?.transitLeg?.durationMinutes || 20);
 
       targetClass = resolveAutoTargetClass(
-        currentDayClasses,
+        activeDayClasses,
         isToday,
         direction,
         now,
@@ -2249,8 +2303,8 @@ export function resolveViaggioTargetContext(params: {
   }
 
   const lastClass =
-    currentDayClasses.length > 0
-      ? currentDayClasses[currentDayClasses.length - 1]
+    activeDayClasses.length > 0
+      ? activeDayClasses[activeDayClasses.length - 1]
       : null;
   const isAllClassesFinished = Boolean(
     isToday &&
@@ -2301,6 +2355,7 @@ export interface ViaggioStartupSnapshot {
   direction: 'outbound';
   config: CommuterConfig;
   manualEvents: ManualClassEvent[];
+  excludedLessons: ExcludedLessonRecord[];
   schedule: ScheduleData | null;
   defaultTabUrl: string | null;
   itinerary: CommuterItinerary | null;
@@ -2359,9 +2414,10 @@ export function prefetchViaggioStartupData(
     try {
       const disruptionsPromise = getDisruptions(false).catch(() => [] as DisruptionEvent[]);
 
-      const [configRes, manualsRes, storagePairsRes] = await Promise.allSettled([
+      const [configRes, manualsRes, excludedRes, storagePairsRes] = await Promise.allSettled([
         getCommuterConfig(),
-        getManualEvents(),
+        getManualEvents(degreeUrlHint || undefined),
+        getExcludedLessons(degreeUrlHint || undefined),
         AsyncStorage.multiGet(['selectedDegreeUrl', 'defaultTabUrl']),
       ]);
 
@@ -2373,9 +2429,15 @@ export function prefetchViaggioStartupData(
       const currentConfig = configRes.value;
       const currentManuals =
         manualsRes.status === 'fulfilled' ? manualsRes.value : [];
+      const currentExcluded =
+        excludedRes.status === 'fulfilled' ? excludedRes.value : [];
+      const currentExcludedSet = buildExcludedIdSet(currentExcluded);
       const pairs = storagePairsRes.status === 'fulfilled' ? storagePairsRes.value : [];
       const url = degreeUrlHint || pairs[0]?.[1] || null;
-      const defaultTabUrl = pairs[1]?.[1] || null;
+      const defaultTabUrl =
+        (url ? await AsyncStorage.getItem(`defaultTabUrl_${url}`).catch(() => null) : null) ||
+        pairs[1]?.[1] ||
+        null;
 
       let sched: ScheduleData | null = null;
       if (url) {
@@ -2409,6 +2471,7 @@ export function prefetchViaggioStartupData(
             manuals: currentManuals,
             defaultTabUrl,
             selectedClassIndex: null,
+            excludedLessonIds: currentExcludedSet,
           });
 
         try {
@@ -2422,6 +2485,7 @@ export function prefetchViaggioStartupData(
             isExplicitClass,
             selectedTrainOffset: 0,
             forceRefresh: false,
+            excludedLessonIds: currentExcludedSet,
           });
         } catch {
           itin = null;
@@ -2435,6 +2499,7 @@ export function prefetchViaggioStartupData(
         direction: 'outbound',
         config: currentConfig,
         manualEvents: currentManuals,
+        excludedLessons: currentExcluded,
         schedule: sched,
         defaultTabUrl,
         itinerary: itin,
