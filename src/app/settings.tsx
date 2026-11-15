@@ -295,6 +295,10 @@ export default function ProfiloScreen() {
   const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
   const [availableTabs, setAvailableTabs] = useState<Tab[]>([]);
   const [degrees, setDegrees] = useState<Degree[]>([]);
+  const degreesLengthRef = useRef<number>(0);
+  useEffect(() => {
+    degreesLengthRef.current = degrees.length;
+  }, [degrees.length]);
   const [courseModalVisible, setCourseModalVisible] = useState(false);
   const [channelModalVisible, setChannelModalVisible] = useState(false);
   const [selectedTabForSpecifiche, setSelectedTabForSpecifiche] =
@@ -647,46 +651,100 @@ export default function ProfiloScreen() {
     [availableThemes, themeId],
   );
 
+  const readAndApplyCalendarSettings = useCallback(async () => {
+    const [
+      lastL,
+      lastT,
+      lTitle,
+      tSepRet,
+      tRetTitle,
+      lAuto,
+      tAuto,
+      lEnabled,
+      tEnabled,
+      lAlert,
+      tAlert,
+      lColor,
+      tColor,
+      tRetColor,
+      lCustomColor,
+      tCustomColor,
+      tRetCustomColor,
+    ] = await Promise.all([
+      getLastCalendarSync("lessons"),
+      getLastCalendarSync("trains"),
+      getCalendarTitle("lessons"),
+      getTrainSeparateReturn(),
+      getCalendarTitle("trains_return"),
+      getCalendarAutoSync("lessons"),
+      getCalendarAutoSync("trains"),
+      getCalendarEnabled("lessons"),
+      getCalendarEnabled("trains"),
+      getCalendarAlertConfig("lessons"),
+      getCalendarAlertConfig("trains"),
+      getCalendarColor("lessons", themePrimaryRef.current),
+      getCalendarColor("trains", themePrimaryRef.current),
+      getCalendarColor("trains_return", themePrimaryRef.current),
+      hasCustomCalendarColor("lessons"),
+      hasCustomCalendarColor("trains"),
+      hasCustomCalendarColor("trains_return"),
+    ]);
+
+    const resolvedTrainsTitle = await getCalendarTitle("trains", tSepRet);
+
+    setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
+    setLastLessonsSyncTime(lastL);
+    setLastTrainsSyncTime(lastT);
+    setLessonsTitle(lTitle);
+    setLessonsTitleInput(lTitle);
+    setTrainsTitle(resolvedTrainsTitle);
+    setTrainsTitleInput(resolvedTrainsTitle);
+    setTrainsSeparateReturn(tSepRet);
+    setTrainsReturnTitle(tRetTitle);
+    setTrainsReturnTitleInput(tRetTitle);
+    setLessonsAutoSync(lAuto);
+    setTrainsAutoSync(tAuto);
+    setLessonsEnabled(lEnabled);
+    setTrainsEnabled(tEnabled);
+    setLessonsAlertConfig(lAlert);
+    setTrainsAlertConfig(tAlert);
+    setLessonsColor(lColor);
+    setTrainsColor(tColor);
+    setTrainsReturnColor(tRetColor);
+    setLessonsHasCustomColor(lCustomColor);
+    setTrainsHasCustomColor(tCustomColor);
+    setTrainsReturnHasCustomColor(tRetCustomColor);
+  }, []);
+
   const loadProfileData = useCallback(async () => {
     try {
-      // 1. Lettura istantanea da memoria locale (0ms latency, zero attese di rete)
+      // 1. Lettura iniziale e lancio parallelo di tutte le fonti locali da AsyncStorage (0 attese di rete)
       const storedPairs = await AsyncStorage.multiGet([
         "selectedDegreeUrl",
         "selectedDegreeName",
         "selectedDegreeClassName",
         "defaultTabUrl",
+        "@studici_student_info_hidden",
       ]);
       const storedMap = Object.fromEntries(storedPairs);
       const storedUrl = storedMap["selectedDegreeUrl"] || null;
       const storedName = storedMap["selectedDegreeName"] || "";
       const storedClassName = storedMap["selectedDegreeClassName"] || "";
       const storedDefaultTab = storedMap["defaultTabUrl"] || null;
+      const studentHiddenVal = storedMap["@studici_student_info_hidden"];
 
-      setDegreeUrl(storedUrl);
-      setDegreeName(storedName);
-      setDegreeClassName(storedClassName);
-      setDefaultTabUrl(storedDefaultTab);
-
-      // 2. Canali e Tab caricati istantaneamente dalla cache locale (il canale appare al primo frame!)
-      let localTabs: Tab[] = [];
-      if (storedUrl) {
-        localTabs = (await getCachedTabs(storedUrl)) || [];
-      }
-      if (localTabs.length > 0) {
-        setAvailableTabs(localTabs);
-      }
-
-      // 3. Presenze e statistiche immediate da disco
-      const attList = await getAttendanceRecords(storedUrl || undefined);
-      setAttendanceRecords(attList);
-      setAttendanceStats(getAttendanceStats(attList));
-
-      // 4. Allinea eventuali modifiche esterne fatte su Apple Calendar e leggi i parametri da disco
-      await pullExternalAppleCalendarChanges(themePrimaryRef.current).catch(
-        () => {},
-      );
+      // Allinea eventuali modifiche esterne Apple Calendar senza bloccare la visualizzazione locale
+      pullExternalAppleCalendarChanges(themePrimaryRef.current)
+        .then((res) => {
+          if (res?.updated) {
+            readAndApplyCalendarSettings().catch(() => {});
+          }
+        })
+        .catch(() => {});
 
       const [
+        localTabs,
+        attList,
         cloudId,
         lastCloud,
         icloudEnabled,
@@ -694,25 +752,10 @@ export default function ProfiloScreen() {
         alarmCfg,
         student,
         docs,
-        studentHiddenVal,
-        lastL,
-        lastT,
-        lTitle,
-        tSepRet,
-        tRetTitle,
-        lAuto,
-        tAuto,
-        lEnabled,
-        tEnabled,
-        lAlert,
-        tAlert,
-        lColor,
-        tColor,
-        tRetColor,
-        lCustomColor,
-        tCustomColor,
-        tRetCustomColor,
+        calReady,
       ] = await Promise.all([
+        storedUrl ? getCachedTabs(storedUrl) : Promise.resolve([]),
+        getAttendanceRecords(storedUrl || undefined),
         getCloudSyncId(),
         getLastCloudSync(),
         getICloudAutoSyncEnabled(),
@@ -720,64 +763,33 @@ export default function ProfiloScreen() {
         getAlarmSettings(),
         getStudentInfo(),
         getSavedDocuments(),
-        AsyncStorage.getItem("@studici_student_info_hidden"),
-        getLastCalendarSync("lessons"),
-        getLastCalendarSync("trains"),
-        getCalendarTitle("lessons"),
-        getTrainSeparateReturn(),
-        getCalendarTitle("trains_return"),
-        getCalendarAutoSync("lessons"),
-        getCalendarAutoSync("trains"),
-        getCalendarEnabled("lessons"),
-        getCalendarEnabled("trains"),
-        getCalendarAlertConfig("lessons"),
-        getCalendarAlertConfig("trains"),
-        getCalendarColor("lessons", themePrimaryRef.current),
-        getCalendarColor("trains", themePrimaryRef.current),
-        getCalendarColor("trains_return", themePrimaryRef.current),
-        hasCustomCalendarColor("lessons"),
-        hasCustomCalendarColor("trains"),
-        hasCustomCalendarColor("trains_return"),
+        readAndApplyCalendarSettings().then(() => true),
       ]);
 
-      const resolvedTrainsTitle = await getCalendarTitle("trains", tSepRet);
-
+      // Batch unico di aggiornamento UI per profilo, canali, presenze e impostazioni locali
+      setDegreeUrl(storedUrl);
+      setDegreeName(storedName);
+      setDegreeClassName(storedClassName);
+      setDefaultTabUrl(storedDefaultTab);
+      if (localTabs && localTabs.length > 0) {
+        setAvailableTabs(localTabs);
+      }
+      setAttendanceRecords(attList);
+      setAttendanceStats(getAttendanceStats(attList));
       setCloudSyncId(cloudId);
       setLastCloudSyncTime(lastCloud);
-      setLastCalendarSyncTime(Math.max(lastL || 0, lastT || 0) || null);
-      setLastLessonsSyncTime(lastL);
-      setLastTrainsSyncTime(lastT);
-      setLessonsTitle(lTitle);
-      setLessonsTitleInput(lTitle);
-      setTrainsTitle(resolvedTrainsTitle);
-      setTrainsTitleInput(resolvedTrainsTitle);
-      setTrainsSeparateReturn(tSepRet);
-      setTrainsReturnTitle(tRetTitle);
-      setTrainsReturnTitleInput(tRetTitle);
-      setLessonsAutoSync(lAuto);
-      setTrainsAutoSync(tAuto);
-      setLessonsEnabled(lEnabled);
-      setTrainsEnabled(tEnabled);
-      setLessonsAlertConfig(lAlert);
-      setTrainsAlertConfig(tAlert);
-      setLessonsColor(lColor);
-      setTrainsColor(tColor);
-      setTrainsReturnColor(tRetColor);
-      setLessonsHasCustomColor(lCustomColor);
-      setTrainsHasCustomColor(tCustomColor);
-      setTrainsReturnHasCustomColor(tRetCustomColor);
-
       setICloudAutoSync(icloudEnabled);
       setCommuterConfig(commConfig);
       setAlarmSettings(alarmCfg);
       setStudentInfo(student);
       setSavedDocs(docs);
-      uploadPendingFiles().catch(() => {});
-      if (studentHiddenVal !== null) {
+      if (studentHiddenVal !== null && studentHiddenVal !== undefined) {
         setIsStudentInfoHidden(studentHiddenVal === "true");
       }
+      void calReady;
+      uploadPendingFiles().catch(() => {});
 
-      // 5. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
+      // 2. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
       getPairedDevicesInfo()
         .then((pairs) => {
           if (pairs) setPairedDevices(pairs);
@@ -786,7 +798,7 @@ export default function ProfiloScreen() {
 
       ensureDeviceRegisteredInCloud().catch(() => {});
 
-      if (storedUrl && localTabs.length === 0) {
+      if (storedUrl && (!localTabs || localTabs.length === 0)) {
         fetchTabs(storedUrl)
           .then((tabs) => {
             if (tabs && tabs.length > 0) setAvailableTabs(tabs);
@@ -794,7 +806,7 @@ export default function ProfiloScreen() {
           .catch(() => {});
       }
 
-      if (degrees.length === 0) {
+      if (degreesLengthRef.current === 0) {
         fetchDegrees()
           .then((degList) => {
             if (degList && degList.length > 0) setDegrees(degList);
@@ -804,7 +816,7 @@ export default function ProfiloScreen() {
     } catch (e) {
       console.error("Errore caricamento profilo:", e);
     }
-  }, [degrees.length]);
+  }, [readAndApplyCalendarSettings]);
 
   useFocusEffect(
     useCallback(() => {

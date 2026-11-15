@@ -151,145 +151,26 @@ function extractReleaseVersion(release: any): string {
   return versionMatch ? versionMatch[1] : String(rawTag).replace(/^v/i, '').trim();
 }
 
+const UPDATE_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
+let cachedUpdateCheck: { timestamp: number; data: AppUpdateInfo } | null = null;
+let inFlightUpdateCheck: Promise<AppUpdateInfo> | null = null;
+
 /**
  * Controlla se è presente una nuova release su GitHub, verificando anche tutte le release
  * intermedie saltate dall'utente per determinare se almeno una di esse è bloccante.
  */
-export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
-  const currentVersion = Constants.expoConfig?.version || '1.7.7';
+export async function checkForAppUpdate(forceRefresh = false): Promise<AppUpdateInfo> {
+  if (!forceRefresh && cachedUpdateCheck && Date.now() - cachedUpdateCheck.timestamp < UPDATE_CHECK_CACHE_TTL_MS) {
+    return cachedUpdateCheck.data;
+  }
+  if (!forceRefresh && inFlightUpdateCheck) {
+    return inFlightUpdateCheck;
+  }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const runCheck = async (): Promise<AppUpdateInfo> => {
+    const currentVersion = Constants.expoConfig?.version || '1.7.7';
 
-    // Scarica le ultime release per poter controllare sia l'ultima versione sia eventuali versioni bloccanti intermedie saltate
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`, {
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'StudICI-App',
-      },
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      return {
-        hasUpdate: false,
-        latestVersion: currentVersion,
-        currentVersion,
-        releaseTitle: '',
-        releaseNotes: '',
-        htmlUrl: GITHUB_LATEST_RELEASE_URL,
-        ipaUrl: GITHUB_LATEST_IPA_URL,
-        updateType: 'patch',
-        isMajor: false,
-      };
-    }
-
-    const releasesData = await response.json();
-    const releasesList = Array.isArray(releasesData)
-      ? releasesData.filter((r: any) => !r?.draft && !r?.prerelease)
-      : releasesData
-      ? [releasesData]
-      : [];
-
-    if (releasesList.length === 0) {
-      return {
-        hasUpdate: false,
-        latestVersion: currentVersion,
-        currentVersion,
-        releaseTitle: '',
-        releaseNotes: '',
-        htmlUrl: GITHUB_LATEST_RELEASE_URL,
-        ipaUrl: GITHUB_LATEST_IPA_URL,
-        updateType: 'patch',
-        isMajor: false,
-      };
-    }
-
-    const release = releasesList[0];
-    const latestVersion = extractReleaseVersion(release);
-
-    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
-
-    // Raccoglie tutte le release tra currentVersion (esclusa) e latestVersion (inclusa)
-    const missedReleases = releasesList
-      .map((r: any) => ({
-        version: extractReleaseVersion(r),
-        body: r?.body || '',
-        name: r?.name || '',
-      }))
-      .filter(
-        (r) =>
-          Boolean(r.version) &&
-          compareVersions(r.version, currentVersion) > 0 &&
-          compareVersions(latestVersion, r.version) >= 0
-      );
-
-    // Trova l'asset IPA se presente tra gli asset caricati dell'ultima release
-    let ipaUrl = GITHUB_LATEST_IPA_URL;
-    if (Array.isArray(release.assets)) {
-      const ipaAsset = release.assets.find((a: any) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.ipa'));
-      if (ipaAsset?.browser_download_url) {
-        ipaUrl = ipaAsset.browser_download_url;
-      }
-    }
-
-    const releaseTitle = release.name || `StudICI v${latestVersion}`;
-    const releaseNotes = release.body || '';
-    const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
-
-    // Recupera il titolo reale del commit associato al rilascio anziché limitarsi alla stringa 'main'
-    let commitName: string | undefined;
-    try {
-      const commitRef = release.target_commitish || release.tag_name || 'main';
-      const commitRes = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/commits/${commitRef}`,
-        {
-          headers: {
-            Accept: 'application/vnd.github.v3+json',
-            'User-Agent': 'StudICI-App',
-          },
-        }
-      );
-      if (commitRes.ok) {
-        const commitData = await commitRes.json();
-        const rawMsg = commitData?.commit?.message || '';
-        const firstLine = rawMsg.split('\n')[0]?.trim();
-        if (firstLine) {
-          commitName = firstLine;
-        }
-      }
-    } catch {
-      // Fallback
-    }
-
-    const updateType = detectUpdateType(
-      latestVersion,
-      currentVersion,
-      releaseNotes,
-      releaseTitle,
-      missedReleases
-    );
-    const isMajor = hasUpdate && updateType === 'major';
-
-    return {
-      hasUpdate,
-      latestVersion,
-      currentVersion,
-      releaseTitle,
-      releaseNotes,
-      htmlUrl: release.html_url || GITHUB_LATEST_RELEASE_URL,
-      ipaUrl,
-      publishedAt: release.published_at,
-      targetCommitish,
-      commitName: commitName || releaseTitle || `v${latestVersion}`,
-      updateType,
-      isMajor,
-    };
-  } catch {
-    return {
+    const emptyResult: AppUpdateInfo = {
       hasUpdate: false,
       latestVersion: currentVersion,
       currentVersion,
@@ -300,7 +181,136 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       updateType: 'patch',
       isMajor: false,
     };
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      // Scarica le ultime release per poter controllare sia l'ultima versione sia eventuali versioni bloccanti intermedie saltate
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`, {
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'StudICI-App',
+        },
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return emptyResult;
+      }
+
+      const releasesData = await response.json();
+      const releasesList = Array.isArray(releasesData)
+        ? releasesData.filter((r: any) => !r?.draft && !r?.prerelease)
+        : releasesData
+        ? [releasesData]
+        : [];
+
+      if (releasesList.length === 0) {
+        return emptyResult;
+      }
+
+      const release = releasesList[0];
+      const latestVersion = extractReleaseVersion(release);
+
+      const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+
+      // Raccoglie tutte le release tra currentVersion (esclusa) e latestVersion (inclusa)
+      const missedReleases = releasesList
+        .map((r: any) => ({
+          version: extractReleaseVersion(r),
+          body: r?.body || '',
+          name: r?.name || '',
+        }))
+        .filter(
+          (r) =>
+            Boolean(r.version) &&
+            compareVersions(r.version, currentVersion) > 0 &&
+            compareVersions(latestVersion, r.version) >= 0
+        );
+
+      // Trova l'asset IPA se presente tra gli asset caricati dell'ultima release
+      let ipaUrl = GITHUB_LATEST_IPA_URL;
+      if (Array.isArray(release.assets)) {
+        const ipaAsset = release.assets.find((a: any) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.ipa'));
+        if (ipaAsset?.browser_download_url) {
+          ipaUrl = ipaAsset.browser_download_url;
+        }
+      }
+
+      const releaseTitle = release.name || `StudICI v${latestVersion}`;
+      const releaseNotes = release.body || '';
+      const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
+
+      // Recupera il titolo reale del commit associato al rilascio anziché limitarsi alla stringa 'main'
+      let commitName: string | undefined;
+      try {
+        const commitRef = release.target_commitish || release.tag_name || 'main';
+        const commitController = new AbortController();
+        const commitTimeoutId = setTimeout(() => commitController.abort(), 4500);
+        const commitRes = await fetch(
+          `https://api.github.com/repos/${GITHUB_REPO}/commits/${commitRef}`,
+          {
+            signal: commitController.signal,
+            headers: {
+              Accept: 'application/vnd.github.v3+json',
+              'User-Agent': 'StudICI-App',
+            },
+          }
+        );
+        clearTimeout(commitTimeoutId);
+        if (commitRes.ok) {
+          const commitData = await commitRes.json();
+          const rawMsg = commitData?.commit?.message || '';
+          const firstLine = rawMsg.split('\n')[0]?.trim();
+          if (firstLine) {
+            commitName = firstLine;
+          }
+        }
+      } catch {
+        // Fallback
+      }
+
+      const updateType = detectUpdateType(
+        latestVersion,
+        currentVersion,
+        releaseNotes,
+        releaseTitle,
+        missedReleases
+      );
+      const isMajor = hasUpdate && updateType === 'major';
+
+      const result: AppUpdateInfo = {
+        hasUpdate,
+        latestVersion,
+        currentVersion,
+        releaseTitle,
+        releaseNotes,
+        htmlUrl: release.html_url || GITHUB_LATEST_RELEASE_URL,
+        ipaUrl,
+        publishedAt: release.published_at,
+        targetCommitish,
+        commitName: commitName || releaseTitle || `v${latestVersion}`,
+        updateType,
+        isMajor,
+      };
+      cachedUpdateCheck = { timestamp: Date.now(), data: result };
+      return result;
+    } catch {
+      return emptyResult;
+    }
+  };
+
+  if (forceRefresh) {
+    return runCheck();
   }
+
+  inFlightUpdateCheck = runCheck().finally(() => {
+    inFlightUpdateCheck = null;
+  });
+  return inFlightUpdateCheck;
 }
 
 

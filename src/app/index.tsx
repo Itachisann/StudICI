@@ -546,9 +546,16 @@ export default function ScheduleScreen() {
           }
         }).catch(() => {});
 
-        const storedUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-        const storedDefaultTab = (storedUrl ? await AsyncStorage.getItem(`defaultTabUrl_${storedUrl}`) : null)
-          || (await AsyncStorage.getItem("defaultTabUrl"));
+        const storagePairs = await AsyncStorage.multiGet([
+          "selectedDegreeUrl",
+          "defaultTabUrl",
+        ]);
+        const storedUrl = storagePairs[0]?.[1] || null;
+        const fallbackDefaultTab = storagePairs[1]?.[1] || null;
+        const storedDefaultTab =
+          (storedUrl
+            ? await AsyncStorage.getItem(`defaultTabUrl_${storedUrl}`)
+            : null) || fallbackDefaultTab;
 
         if (!storedUrl) {
           setDegreeUrl(null);
@@ -618,21 +625,17 @@ export default function ScheduleScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData(false);
-      loadAttendance();
-      loadManualEvents();
-    }, [loadData, loadAttendance, loadManualEvents]),
+    }, [loadData]),
   );
 
   useEffect(() => {
     const unsub = subscribeToLiveSync((status, updated) => {
       if (updated) {
         loadData(false);
-        loadAttendance();
-        loadManualEvents();
       }
     });
     return unsub;
-  }, [loadData, loadAttendance, loadManualEvents]);
+  }, [loadData]);
 
   // Sincronizzazione istantanea in tempo reale tra tab per presenze e lezioni manuali
   useEffect(() => {

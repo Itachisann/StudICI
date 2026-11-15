@@ -95,6 +95,7 @@ export interface TransitBoardResult {
   optimalIndex: number;
   lastUpdated: string;
   isLiveSource: boolean;
+  fetchFailed?: boolean;
 }
 
 const CURATED_LINE_PALETTE = [
@@ -2631,7 +2632,8 @@ export async function getStationTransitBoard(options: {
           minute: '2-digit',
           second: '2-digit',
         }),
-        isLiveSource: false,
+        isLiveSource: isLiveContext,
+        fetchFailed: true,
       };
     }
   };

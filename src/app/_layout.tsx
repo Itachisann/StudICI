@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppState, Platform, StyleSheet, ActivityIndicator, Alert } from 'react-native';
-import { Tabs as ExpoTabs } from 'expo-router';
+import { Tabs as ExpoTabs, router } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -11,10 +12,20 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Linking from 'expo-linking';
 import { linkDeviceWithCode, subscribeToAppReset, subscribeToLiveSync } from '@/utils/cloudSync';
 import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
+import { prefetchViaggioStartupData } from '@/utils/commuterOptimizer';
+import { subscribeToCommuterChanges } from '@/utils/commuterStorage';
+import {
+  emitStrikeNotificationTap,
+  ensureStrikeNotificationHandler,
+  syncStrikeNotifications,
+} from '@/utils/strikeNotifications';
+import { DisruptionCategory } from '@/types/disruptions';
 import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector';
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
+
+ensureStrikeNotificationHandler();
 
 // In Expo Go i moduli nativi personalizzati non sono inclusi nel runtime condiviso.
 // Nell'IPA (standalone / development build su iOS), i native-bottom-tabs sono compilati e attivi.
@@ -132,20 +143,74 @@ function AppLayoutContent() {
     };
   }, []);
 
+  const handleStrikeNotificationResponse = useCallback(
+    (response: Notifications.NotificationResponse | null | undefined) => {
+      if (!response) return;
+      const data = response.notification.request.content.data as
+        | Record<string, unknown>
+        | undefined;
+      if (data?.type !== 'strike_alert') return;
+
+      emitStrikeNotificationTap({
+        eventId:
+          typeof data.strikeEventId === 'string' ? data.strikeEventId : null,
+        strikeKey:
+          typeof data.strikeKey === 'string' ? data.strikeKey : null,
+        strikeDateIso:
+          typeof data.strikeStartDate === 'string'
+            ? data.strikeStartDate
+            : null,
+        category:
+          typeof data.strikeCategory === 'string'
+            ? (data.strikeCategory as DisruptionCategory)
+            : null,
+      });
+
+      Notifications.clearLastNotificationResponseAsync().catch(() => {});
+      try {
+        router.navigate('/viaggio');
+      } catch {}
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!degreeUrl || !startupCheckDone) return;
-    // Aggiorna in background le sveglie native all'ingresso nell'app
+    // Aggiorna in background sveglie native, avvisi scioperi (-7g / -1g) e cache Viaggio
+    prefetchViaggioStartupData(degreeUrl).catch(() => {});
     refreshCommuterAlarmsInBackground().catch(() => {});
+    syncStrikeNotifications().catch(() => {});
+
+    try {
+      const lastResponse = Notifications.getLastNotificationResponse();
+      if (lastResponse) {
+        handleStrikeNotificationResponse(lastResponse);
+      }
+    } catch {}
+
+    const responseSub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        handleStrikeNotificationResponse(response);
+      },
+    );
+
+    const unsubCommuter = subscribeToCommuterChanges(() => {
+      syncStrikeNotifications().catch(() => {});
+    });
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
+        prefetchViaggioStartupData(degreeUrl).catch(() => {});
         refreshCommuterAlarmsInBackground().catch(() => {});
+        syncStrikeNotifications().catch(() => {});
       }
     });
     return () => {
       sub.remove();
+      responseSub.remove();
+      unsubCommuter();
     };
-  }, [degreeUrl, startupCheckDone]);
+  }, [degreeUrl, startupCheckDone, handleStrikeNotificationResponse]);
 
   if (!isReady) {
     return (

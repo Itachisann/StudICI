@@ -91,8 +91,47 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   const isSelectedDayActiveToday = Boolean(isToday);
   const canUseLive = isSelectedDayActiveToday && (isLiveContext !== false);
 
-  const [boardData, setBoardData] = useState<TransitBoardResult | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const isCurrentLocOrigin = originMode === 'current_location';
+  const gpsLocationLabel = isCurrentLocOrigin
+    ? detectedAddress || (detectedCity ? `Posizione (${detectedCity})` : 'La mia posizione')
+    : '';
+  const activeStationQueryName =
+    isCurrentLocOrigin && direction !== 'to_station' && userCoords
+      ? gpsLocationLabel
+      : stationName;
+  const activeTargetQueryName =
+    isCurrentLocOrigin && direction === 'to_station' && userCoords
+      ? gpsLocationLabel
+      : targetName;
+  const activeQueryKey = `${direction}|${activeStationQueryName}|${activeTargetQueryName}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
+
+  const prefetchedMatchesCurrent = Boolean(
+    prefetchedBoard &&
+      !isCurrentLocOrigin &&
+      prefetchedBoard.stationName === activeStationQueryName &&
+      prefetchedBoard.destinationName === activeTargetQueryName &&
+      Boolean(prefetchedBoard.isLiveSource) === canUseLive
+  );
+
+  const [fetchedBoardEntry, setFetchedBoardEntry] = useState<{
+    queryKey: string;
+    prefetchedSource: TransitBoardResult | undefined;
+    data: TransitBoardResult;
+  } | null>(null);
+  const [loading, setLoading] = useState<boolean>(
+    () => isCurrentLocOrigin || !prefetchedMatchesCurrent
+  );
+
+  const hasFetchedOverride = Boolean(
+    fetchedBoardEntry &&
+      fetchedBoardEntry.queryKey === activeQueryKey &&
+      (!prefetchedMatchesCurrent || fetchedBoardEntry.prefetchedSource === prefetchedBoard)
+  );
+  const boardData = hasFetchedOverride
+    ? fetchedBoardEntry!.data
+    : prefetchedMatchesCurrent
+      ? prefetchedBoard!
+      : fetchedBoardEntry?.data ?? null;
   const [selectedLineFilter, setSelectedLineFilter] = useState<string | null>(null);
   const [expansionLevel, setExpansionLevel] = useState<ExpansionLevel>('collapsed');
   const [manualRefreshCount, setManualRefreshCount] = useState<number>(0);
@@ -210,18 +249,20 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     (mode: 'station_or_campus' | 'current_location') => {
       if (mode === originMode) return;
       setExpansionLevel('collapsed');
-      setLoading(true);
       if (mode === 'station_or_campus') {
         setOriginMode('station_or_campus');
         setLocationError(null);
+        setLoading(!prefetchedMatchesCurrent);
       } else {
+        setFetchedBoardEntry(null);
+        setLoading(true);
         setOriginMode('current_location');
         if (!userCoords) {
           acquireOrRefreshGpsLocation(false);
         }
       }
     },
-    [originMode, userCoords, acquireOrRefreshGpsLocation]
+    [originMode, userCoords, acquireOrRefreshGpsLocation, prefetchedMatchesCurrent]
   );
 
   // Click sull'icona circolare di refresh del pannello "Mezzi":
@@ -309,7 +350,6 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       transitBoardMemoryCache.set(cacheKey, prefetchedBoard);
       queueMicrotask(() => {
         if (!isMounted) return;
-        setBoardData(prefetchedBoard);
         setLoading(false);
       });
       return () => {
@@ -325,11 +365,18 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       const cached = transitBoardMemoryCache.get(cacheKey)!;
       queueMicrotask(() => {
         if (!isMounted) return;
-        setBoardData(cached);
+        setFetchedBoardEntry({
+          queryKey: currentQueryKey,
+          prefetchedSource: prefetchedBoard,
+          data: cached,
+        });
         setLoading(false);
       });
     } else {
-      setLoading(true);
+      queueMicrotask(() => {
+        if (!isMounted) return;
+        setLoading(true);
+      });
     }
 
     getStationTransitBoard({
@@ -348,7 +395,11 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       .then((data) => {
         if (!isMounted) return;
         transitBoardMemoryCache.set(cacheKey, data);
-        setBoardData(data);
+        setFetchedBoardEntry({
+          queryKey: currentQueryKey,
+          prefetchedSource: prefetchedBoard,
+          data,
+        });
         setLoading(false);
 
         // Comunica sempre alla card esterna della tappa l'ultimo mezzo utile e la sua durata effettiva

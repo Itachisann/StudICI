@@ -45,6 +45,7 @@ import { StationInfo } from "../types/commuter";
 import { isValidSyncCode, linkDeviceWithCode } from "../utils/cloudSync";
 import {
   DEFAULT_COMMUTER_CONFIG,
+  DEFAULT_STRIKE_ALERTS,
   saveCommuterConfig,
 } from "../utils/commuterStorage";
 import { getDegreeClassTheme } from "../utils/degreeColors";
@@ -634,6 +635,10 @@ function PostDownloadScreen() {
     setIncludeIntercity,
     urbanMode,
     setUrbanMode,
+    notify7DaysBefore,
+    setNotify7DaysBefore,
+    notify1DayBefore,
+    setNotify1DayBefore,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -1808,6 +1813,52 @@ function PostDownloadScreen() {
                   )}
                 </View>
               </View>
+
+              {/* 6. Avvisi Scioperi */}
+              <View style={styles.pillSection}>
+                <Text style={styles.pillSectionLabel}>
+                  6. AVVISI SCIOPERI
+                </Text>
+                <View style={styles.strikeAlertsCard}>
+                  <Text style={styles.strikeAlertsDesc}>
+                    {Platform.OS === "ios"
+                      ? "Crea automaticamente promemoria nell'app Apple Promemoria per gli scioperi che impattano la tua tratta."
+                      : "Invia notifiche automatiche per gli scioperi che impattano la tua tratta."}
+                  </Text>
+                  <View style={styles.strikeAlertDivider} />
+                  <View style={styles.strikeAlertRow}>
+                    <Text style={styles.strikeAlertTitle}>
+                      Promemoria 7 giorni prima
+                    </Text>
+                    <Switch
+                      value={notify7DaysBefore}
+                      onValueChange={setNotify7DaysBefore}
+                      trackColor={{
+                        false: "#3f3f46",
+                        true: theme.primary,
+                      }}
+                      thumbColor="#ffffff"
+                      ios_backgroundColor="#3f3f46"
+                    />
+                  </View>
+                  <View style={styles.strikeAlertDivider} />
+                  <View style={styles.strikeAlertRow}>
+                    <Text style={styles.strikeAlertTitle}>
+                      Promemoria 1 giorno prima
+                    </Text>
+                    <Switch
+                      value={notify1DayBefore}
+                      onValueChange={setNotify1DayBefore}
+                      trackColor={{
+                        false: "#3f3f46",
+                        true: theme.primary,
+                      }}
+                      thumbColor="#ffffff"
+                      ios_backgroundColor="#3f3f46"
+                    />
+                  </View>
+                </View>
+              </View>
             </ScrollView>
           </View>
         </Animated.ScrollView>
@@ -2089,6 +2140,12 @@ export function OnboardingCourseSelector({
   const [bufferMinutes, setBufferMinutes] = useState<number | null>(null);
   const [includeIntercity, setIncludeIntercity] = useState<boolean>(false);
   const [urbanMode, setUrbanMode] = useState<"auto" | "walk">("auto");
+  const [notify7DaysBefore, setNotify7DaysBefore] = useState<boolean>(
+    DEFAULT_STRIKE_ALERTS.notify7DaysBefore,
+  );
+  const [notify1DayBefore, setNotify1DayBefore] = useState<boolean>(
+    DEFAULT_STRIKE_ALERTS.notify1DayBefore,
+  );
 
   const [stationPickerType, setStationPickerType] = useState<
     "departure" | "arrival" | null
@@ -2411,6 +2468,10 @@ export function OnboardingCourseSelector({
             preferredMode: urbanMode,
           },
           bufferMinutes: bufferMinutes !== null ? bufferMinutes : 10,
+          strikeAlerts: {
+            notify7DaysBefore,
+            notify1DayBefore,
+          },
         });
       }
 
@@ -2613,6 +2674,10 @@ export function OnboardingCourseSelector({
     setIncludeIntercity,
     urbanMode,
     setUrbanMode,
+    notify7DaysBefore,
+    setNotify7DaysBefore,
+    notify1DayBefore,
+    setNotify1DayBefore,
     isCommuterFormComplete,
     finalizeOnboarding,
     currentPage,
@@ -3624,6 +3689,38 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     color: "#8e8e93",
     fontWeight: "500",
+  },
+  strikeAlertsCard: {
+    backgroundColor: "#1c1c1e",
+    borderRadius: CARD_RADIUS.cardLarge,
+    borderWidth: 1,
+    borderColor: "#2c2c2e",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  strikeAlertsDesc: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#8e8e93",
+    fontWeight: "500",
+  },
+  strikeAlertDivider: {
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginVertical: 10,
+  },
+  strikeAlertRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 2,
+  },
+  strikeAlertTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#ffffff",
   },
 
   /* ── Urban Leg Selector (Fallback if non-iOS) ── */

@@ -1,7 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CommuterConfig, TrainPreferences } from '../types/commuter';
+import {
+  CommuterConfig,
+  StrikeAlertPreferences,
+  TrainPreferences,
+} from '../types/commuter';
 import { normalizeStationInfo } from './trenitaliaApi';
 import { getStationNavigationQuery } from './drivingRouter';
+import { deduplicatePreferredTrainsMap } from './preferredTrains';
 
 const COMMUTER_CONFIG_KEY = 'studici_commuter_config_v1';
 
@@ -10,6 +15,11 @@ export const DEFAULT_TRAIN_PREFERENCES: Required<TrainPreferences> = {
   smartReturnEnabled: true,
   maxEarlyLeaveMinutes: 15,
   minReturnGainMinutes: 25,
+};
+
+export const DEFAULT_STRIKE_ALERTS: StrikeAlertPreferences = {
+  notify7DaysBefore: true,
+  notify1DayBefore: true,
 };
 
 export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
@@ -43,9 +53,12 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
   customDestinationAddress: 'Piazzale Aldo Moro 5, 00185 Roma',
   includeIntercity: false,
   trainPreferences: { ...DEFAULT_TRAIN_PREFERENCES },
+  strikeAlerts: { ...DEFAULT_STRIKE_ALERTS },
 };
 
-export async function getCommuterConfig(): Promise<CommuterConfig> {
+let commuterStorageQueue: Promise<unknown> = Promise.resolve();
+
+async function readCommuterConfigFromStorage(): Promise<CommuterConfig> {
   try {
     const raw = await AsyncStorage.getItem(COMMUTER_CONFIG_KEY);
     if (!raw) return DEFAULT_COMMUTER_CONFIG;
@@ -65,6 +78,7 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
       trainPreferences: {
         ...DEFAULT_TRAIN_PREFERENCES,
         ...(parsed.trainPreferences || {}),
+        preferredTrains: deduplicatePreferredTrainsMap(parsed.trainPreferences?.preferredTrains),
       },
       carLeg: {
         ...DEFAULT_COMMUTER_CONFIG.carLeg,
@@ -77,10 +91,21 @@ export async function getCommuterConfig(): Promise<CommuterConfig> {
         ...DEFAULT_COMMUTER_CONFIG.transitLeg,
         ...(parsed.transitLeg || {}),
       },
+      strikeAlerts: {
+        ...DEFAULT_STRIKE_ALERTS,
+        ...(parsed.strikeAlerts || {}),
+      },
     };
   } catch {
     return DEFAULT_COMMUTER_CONFIG;
   }
+}
+
+export async function getCommuterConfig(): Promise<CommuterConfig> {
+  try {
+    await commuterStorageQueue;
+  } catch {}
+  return readCommuterConfigFromStorage();
 }
 
 export type CommuterChangeListener = (config: CommuterConfig) => void;
@@ -106,47 +131,61 @@ export function setCommuterChangeListener(
 export async function saveCommuterConfig(
   config: Partial<CommuterConfig>,
 ): Promise<CommuterConfig> {
-  try {
-    const current = await getCommuterConfig();
-    const depNormalized = normalizeStationInfo({
-      ...current.departureStation,
-      ...(config.departureStation || {}),
-    });
-    const arrNormalized = normalizeStationInfo({
-      ...current.arrivalStation,
-      ...(config.arrivalStation || {}),
-    });
-    const updated: CommuterConfig = {
-      ...current,
-      ...config,
-      carLeg: {
-        ...current.carLeg,
-        ...(config.carLeg || {}),
-        stationAddress: getStationNavigationQuery(
-          depNormalized.shortName || depNormalized.name,
-        ),
-      },
-      departureStation: depNormalized,
-      arrivalStation: arrNormalized,
-      transitLeg: {
-        ...current.transitLeg,
-        ...(config.transitLeg || {}),
-      },
-      trainPreferences: {
-        ...DEFAULT_TRAIN_PREFERENCES,
-        ...(current.trainPreferences || {}),
-        ...(config.trainPreferences || {}),
-      },
-    };
-    await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
-    for (const listener of commuterChangeListeners) {
+  const task = commuterStorageQueue
+    .catch(() => {})
+    .then(async () => {
       try {
-        listener(updated);
-      } catch {}
-    }
-    return updated;
-  } catch {
-    return DEFAULT_COMMUTER_CONFIG;
-  }
+        const current = await readCommuterConfigFromStorage();
+        const depNormalized = normalizeStationInfo({
+          ...current.departureStation,
+          ...(config.departureStation || {}),
+        });
+        const arrNormalized = normalizeStationInfo({
+          ...current.arrivalStation,
+          ...(config.arrivalStation || {}),
+        });
+        const updated: CommuterConfig = {
+          ...current,
+          ...config,
+          carLeg: {
+            ...current.carLeg,
+            ...(config.carLeg || {}),
+            stationAddress: getStationNavigationQuery(
+              depNormalized.shortName || depNormalized.name,
+            ),
+          },
+          departureStation: depNormalized,
+          arrivalStation: arrNormalized,
+          transitLeg: {
+            ...current.transitLeg,
+            ...(config.transitLeg || {}),
+          },
+          trainPreferences: {
+            ...DEFAULT_TRAIN_PREFERENCES,
+            ...(current.trainPreferences || {}),
+            ...(config.trainPreferences || {}),
+            preferredTrains: deduplicatePreferredTrainsMap(
+              config.trainPreferences?.preferredTrains ?? current.trainPreferences?.preferredTrains
+            ),
+          },
+          strikeAlerts: {
+            ...DEFAULT_STRIKE_ALERTS,
+            ...(current.strikeAlerts || {}),
+            ...(config.strikeAlerts || {}),
+          },
+        };
+        await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
+        for (const listener of commuterChangeListeners) {
+          try {
+            listener(updated);
+          } catch {}
+        }
+        return updated;
+      } catch {
+        return DEFAULT_COMMUTER_CONFIG;
+      }
+    });
+  commuterStorageQueue = task;
+  return task;
 }
 

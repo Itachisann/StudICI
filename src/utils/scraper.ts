@@ -604,9 +604,13 @@ export async function fetchScheduleData(
     mapText = memoryMapTextCache.get(baseSheetUrl) || '';
     if (!mapText) {
       try {
-        mapText = (await AsyncStorage.getItem(`courseMapText_${baseSheetUrl}`)) || '';
+        const pairs = await AsyncStorage.multiGet([
+          `courseMapText_${baseSheetUrl}`,
+          'selectedDegreeUrl',
+        ]);
+        mapText = pairs[0]?.[1] || '';
         if (!mapText) {
-          const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+          const storedUrl = pairs[1]?.[1];
           if (storedUrl) {
             mapText = memoryMapTextCache.get(storedUrl) || (await AsyncStorage.getItem(`courseMapText_${storedUrl}`)) || '';
           }
@@ -985,15 +989,23 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
     let hasRealChanges = false;
     let changeReason = '';
 
+    const fpKeys = parsed.tabs
+      .filter((tab: Tab) => Boolean(currentFps[tab.url]))
+      .map((tab: Tab) => `tabFingerprint_v8_${tab.url}`);
+    const storedFpEntries = fpKeys.length > 0 ? await AsyncStorage.multiGet(fpKeys) : [];
+    const storedFpMap = new Map(storedFpEntries);
+    const missingFpWrites: [string, string][] = [];
+
     for (const tab of parsed.tabs) {
       const liveFp = currentFps[tab.url];
       if (!liveFp) continue; // Tab non risposto in tempo: consideralo invariato per evitare falsi allarmi
 
-      const storedTabFp = await AsyncStorage.getItem(`tabFingerprint_v8_${tab.url}`);
+      const fpKey = `tabFingerprint_v8_${tab.url}`;
+      const storedTabFp = storedFpMap.get(fpKey);
 
       // Se non avevamo ancora memorizzato il fingerprint per questo canale, allinealo senza riscaricare
       if (!storedTabFp) {
-        await AsyncStorage.setItem(`tabFingerprint_v8_${tab.url}`, liveFp);
+        missingFpWrites.push([fpKey, liveFp]);
         continue;
       }
 
@@ -1002,6 +1014,10 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
         changeReason = `Rilevate modifiche per ${tab.name}`;
         break;
       }
+    }
+
+    if (missingFpWrites.length > 0) {
+      AsyncStorage.multiSet(missingFpWrites).catch(() => {});
     }
 
     if (hasRealChanges) {

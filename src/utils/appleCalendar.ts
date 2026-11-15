@@ -21,7 +21,17 @@ import {
 } from "./trenitaliaApi";
 import { resolveStationCalendarLocation, StationCalendarLocation } from "./drivingRouter";
 import { StudICIAlarms, StructuredLocationEntry } from "../../modules/studici-alarms/src";
-import { CommuterConfig, CommuterItinerary } from "../types/commuter";
+import { CommuterConfig, CommuterItinerary, LiveTrainInfo, PreferredTrain } from "../types/commuter";
+import {
+  calendarDayIndexToJsDay,
+  doesPreferredTrainMatchLiveTrain,
+  extractCleanTrainNumber,
+  extractTrainCategory,
+  getAllPreferredTrains,
+  getPreferredTrainsForDayDirection,
+  jsDayToCalendarDayIndex,
+  timeHHMMToMinutes,
+} from "./preferredTrains";
 
 async function attachStructuredLocationsIfSupported(
   entries: StructuredLocationEntry[],
@@ -327,10 +337,17 @@ function mergePendingRefreshOptions(opts: AppleCalendarRefreshOptions) {
     if (!pendingCalendarRefreshSlotKeys) pendingCalendarRefreshSlotKeys = new Set();
     for (const k of opts.onlySlotKeys) {
       pendingCalendarRefreshSlotKeys.add(k);
-      if (opts.precomputedItineraries?.[k]) {
-        if (!pendingCalendarPrecomputed) pendingCalendarPrecomputed = {};
-        pendingCalendarPrecomputed[k] = opts.precomputedItineraries[k];
-      } else if (pendingCalendarPrecomputed) {
+      let matchedUntagged = false;
+      if (opts.precomputedItineraries) {
+        for (const [preKey, preItin] of Object.entries(opts.precomputedItineraries)) {
+          if (preKey === k || preKey.startsWith(`${k}:`)) {
+            if (!pendingCalendarPrecomputed) pendingCalendarPrecomputed = {};
+            pendingCalendarPrecomputed[preKey] = preItin;
+            if (preKey === k) matchedUntagged = true;
+          }
+        }
+      }
+      if (!matchedUntagged && pendingCalendarPrecomputed) {
         delete pendingCalendarPrecomputed[k];
       }
     }
@@ -1394,7 +1411,7 @@ export function computeScheduleFingerprint(
  * Genera un'impronta (fingerprint) per rilevare se i treni o la configurazione pendolare
  * sono variati rispetto all'ultima sincronizzazione del calendario treni.
  */
-const TRAIN_FINGERPRINT_VERSION = 7;
+const TRAIN_FINGERPRINT_VERSION = 9;
 
 export function computeTrainFingerprint(
   schedule: ScheduleData,
@@ -1409,6 +1426,7 @@ export function computeTrainFingerprint(
 ): string {
   try {
     const tp = commuterConfig?.trainPreferences;
+    const normalizedPrefs = getAllPreferredTrains(tp);
     return JSON.stringify({
       v: TRAIN_FINGERPRINT_VERSION,
       t: calendarTitle,
@@ -1418,9 +1436,7 @@ export function computeTrainFingerprint(
       buf: commuterConfig?.bufferMinutes,
       tm: commuterConfig?.transitLeg?.preferredMode || "auto",
       ic: Boolean(commuterConfig?.includeIntercity),
-      pt: Object.entries(tp?.preferredTrains || {})
-        .map(([k, v]) => `${k}=${v?.departureTime}`)
-        .sort(),
+      pt: normalizedPrefs.map((p) => p.id),
       sr: tp?.smartReturnEnabled ?? true,
       mel: tp?.maxEarlyLeaveMinutes ?? 15,
       mrg: tp?.minReturnGainMinutes ?? 25,
@@ -1470,10 +1486,10 @@ function detectOnlyPreferredSlotsChanged(
     const dirty = new Set<string>();
 
     const parsePtSlot = (entry: string): string | null => {
-      const m = /^(outbound|return)_([1-5])_/.exec(entry);
+      const m = /^(outbound|return)_([0-6])_/.exec(entry);
       if (!m) return null;
-      const dayIdx = parseInt(m[2], 10) - 1;
-      if (dayIdx < 0 || dayIdx > 4) return null;
+      const jsDay = parseInt(m[2], 10);
+      const dayIdx = jsDayToCalendarDayIndex(jsDay);
       return `${dayIdx}_${m[1]}`;
     };
 
@@ -1853,6 +1869,12 @@ export async function syncScheduleToAppleCalendar(
               const [cH, cM] = (firstClass?.startTime || "08:30").split(":").map(Number);
               targetDate.setHours(cH || 8, cM || 30, 0, 0);
 
+              const dayJs = calendarDayIndexToJsDay(d);
+              const outboundPrefs = getPreferredTrainsForDayDirection(
+                commuterConfig,
+                "outbound",
+                dayJs,
+              );
               const itin = await computeCommuterItinerary({
                 config: commuterConfig,
                 scheduleData: schedule,
@@ -1860,6 +1882,8 @@ export async function syncScheduleToAppleCalendar(
                 targetDate,
                 selectedClass: firstClass,
                 selectedTrainOffset: 0,
+                forcedPreferredTrain:
+                  outboundPrefs.length === 1 ? outboundPrefs[0] : undefined,
                 ignoreCurrentTime: true,
                 fastCalendarMode: true,
               });
@@ -1870,7 +1894,16 @@ export async function syncScheduleToAppleCalendar(
                   homeDepTime: itin.departureTime,
                 });
                 if (syncOptions?.outOutboundItineraries && itin.liveTrain) {
-                  syncOptions.outOutboundItineraries[`${d}_outbound`] = itin;
+                  if (
+                    outboundPrefs.length === 1 &&
+                    doesPreferredTrainMatchLiveTrain(outboundPrefs[0], itin.liveTrain)
+                  ) {
+                    syncOptions.outOutboundItineraries[
+                      `${d}_outbound:${outboundPrefs[0].id}`
+                    ] = itin;
+                  } else if (outboundPrefs.length === 0) {
+                    syncOptions.outOutboundItineraries[`${d}_outbound`] = itin;
+                  }
                 }
               }
             }),
@@ -2269,6 +2302,7 @@ export async function syncTrainsToAppleCalendar(
     }
 
     let returnCalendarId: string | null = null;
+    let returnIsDefaultFallback = false;
     let returnActiveTitle = "";
     if (separateReturn) {
       returnActiveTitle = await getCalendarTitle("trains_return");
@@ -2282,6 +2316,7 @@ export async function syncTrainsToAppleCalendar(
         prefetchedCalendars: preCalendars.length > 0 ? preCalendars : undefined,
       });
       returnCalendarId = resReturn.calendarId;
+      returnIsDefaultFallback = resReturn.isDefaultFallback;
     } else {
       // Se usiamo il calendario unificato, eliminiamo interamente l'eventuale vecchio calendario di ritorno da iOS
       try {
@@ -2377,10 +2412,21 @@ export async function syncTrainsToAppleCalendar(
     const arrStationName =
       commuterConfig.arrivalStation.shortName || commuterConfig.arrivalStation.name;
 
+    type ComputedSlotItin = {
+      dir: "outbound" | "return";
+      slotKey: string;
+      itin: CommuterItinerary;
+    };
+
+    const targetCalForReturn =
+      separateReturn && returnCalendarId ? returnCalendarId : calendarId;
+
+    const getGroupKey = (slotKey: string) => slotKey.split(":")[0];
+
     const dayResults = await Promise.all(
-      [0, 1, 2, 3, 4].map(async (dayIdx) => {
-        const targetDayOfWeek = dayIdx + 1; // 1=LUN ... 5=VEN
-        let daysUntil = targetDayOfWeek - currentDayOfWeek;
+      [0, 1, 2, 3, 4, 5, 6].map(async (dayIdx) => {
+        const targetJsDay = calendarDayIndexToJsDay(dayIdx); // 1=LUN..5=VEN, 6=SAB, 0=DOM
+        let daysUntil = targetJsDay - currentDayOfWeek;
         if (daysUntil < 0) daysUntil += 7;
 
         const targetDate = new Date(now);
@@ -2409,7 +2455,24 @@ export async function syncTrainsToAppleCalendar(
           (c) => Boolean(c && c.startTime),
         );
 
-        if (allClasses.length === 0) return null;
+        const dayOutboundPrefs = getPreferredTrainsForDayDirection(
+          commuterConfig,
+          "outbound",
+          targetJsDay,
+        );
+        const dayReturnPrefs = getPreferredTrainsForDayDirection(
+          commuterConfig,
+          "return",
+          targetJsDay,
+        );
+
+        if (
+          allClasses.length === 0 &&
+          dayOutboundPrefs.length === 0 &&
+          dayReturnPrefs.length === 0
+        ) {
+          return null;
+        }
 
         allClasses.sort(
           (a, b) =>
@@ -2425,88 +2488,324 @@ export async function syncTrainsToAppleCalendar(
         );
         const lastLesson = byEndClasses[byEndClasses.length - 1];
 
-        const outboundQueryDate = new Date(queryBaseDate);
-        const [fH, fM] = (firstLesson.startTime || "08:30").split(":").map(Number);
-        outboundQueryDate.setHours(fH || 8, fM || 30, 0, 0);
+        const pickContextClassForPref = (
+          dir: "outbound" | "return",
+          pref: PreferredTrain,
+        ): ClassEvent | undefined => {
+          if (allClasses.length === 0) return undefined;
+          const targetRefMins =
+            dir === "outbound"
+              ? parseTimeToMinutes(pref.arrivalTime || pref.departureTime)
+              : parseTimeToMinutes(pref.departureTime);
+          let best = dir === "outbound" ? firstLesson : lastLesson;
+          let bestScore = Number.POSITIVE_INFINITY;
+          for (const cls of allClasses) {
+            const clsMins =
+              dir === "outbound"
+                ? parseTimeToMinutes(cls.startTime || "08:30")
+                : parseTimeToMinutes(cls.endTime || cls.startTime || "16:00");
+            const diff =
+              dir === "return"
+                ? targetRefMins >= clsMins
+                  ? targetRefMins - clsMins
+                  : clsMins - targetRefMins + 30
+                : clsMins >= targetRefMins
+                  ? clsMins - targetRefMins
+                  : targetRefMins - clsMins + 30;
+            if (diff < bestScore) {
+              bestScore = diff;
+              best = cls;
+            }
+          }
+          return best;
+        };
 
-        const returnQueryDate = new Date(queryBaseDate);
-        const [lH, lM] = (lastLesson.endTime || "16:00").split(":").map(Number);
-        returnQueryDate.setHours(lH || 16, lM || 0, 0, 0);
+        const formatMinutesHHMM = (totalMins: number): string => {
+          const norm = ((Math.round(totalMins) % 1440) + 1440) % 1440;
+          const hh = String(Math.floor(norm / 60)).padStart(2, "0");
+          const mm = String(norm % 60).padStart(2, "0");
+          return `${hh}:${mm}`;
+        };
 
-        const outboundSlotKey = `${dayIdx}_outbound`;
-        const returnSlotKey = `${dayIdx}_return`;
-        const targetCalForReturn =
-          separateReturn && returnCalendarId ? returnCalendarId : calendarId;
+        const buildFallbackItineraryForPref = (
+          dir: "outbound" | "return",
+          pref: PreferredTrain,
+          prefQueryDate: Date,
+          baselineItin?: CommuterItinerary | null,
+        ): CommuterItinerary | null => {
+          const depMins = timeHHMMToMinutes(pref.departureTime);
+          const arrMins = timeHHMMToMinutes(pref.arrivalTime);
+          if (depMins < 0 || arrMins < 0) return null;
+          const trainDurMins = Math.max(
+            1,
+            arrMins >= depMins ? arrMins - depMins : arrMins + 1440 - depMins,
+          );
+          const cleanNum = extractCleanTrainNumber(pref.trainNumber, pref.label);
+          const category =
+            pref.category || extractTrainCategory(pref.trainNumber, pref.label) || "REG";
+          const formattedTrainNum = cleanNum
+            ? `${category} ${cleanNum}`
+            : pref.label || pref.departureTime;
+          const fromStation = dir === "outbound" ? depStationName : arrStationName;
+          const toStation = dir === "outbound" ? arrStationName : depStationName;
+          const toStationMins = commuterConfig.carLeg?.enabled
+            ? (commuterConfig.carLeg.durationMinutes || 15) +
+              (commuterConfig.carLeg.parkingBufferMinutes ?? 5)
+            : 10;
+          const homeDepStr =
+            dir === "outbound"
+              ? formatMinutesHHMM(depMins - toStationMins)
+              : pref.departureTime;
 
-        const prevOutbound = prevMap[outboundSlotKey];
-        const canPreserveOutbound = Boolean(
-          dirtySlotKeys &&
-            !dirtySlotKeys.has(outboundSlotKey) &&
-            prevOutbound &&
-            prevOutbound.calendarId === calendarId &&
-            existingEventIds.has(prevOutbound.eventId),
-        );
+          const fallbackTrain: LiveTrainInfo = {
+            trainNumber: formattedTrainNum,
+            category,
+            destination: toStation,
+            originStationName: fromStation,
+            originStationCode:
+              dir === "outbound"
+                ? commuterConfig.departureStation.code
+                : commuterConfig.arrivalStation.code,
+            departureTimePlanned: pref.departureTime,
+            departureTimeActual: pref.departureTime,
+            departureMillis: prefQueryDate.getTime(),
+            arrivalTimePlanned: pref.arrivalTime,
+            arrivalTimeActual: pref.arrivalTime,
+            delayMinutes: 0,
+            statusDescription: "Programmato",
+            isLive: false,
+            durationMinutes: trainDurMins,
+            isFast: category === "RV" || category === "IC",
+          };
 
-        const prevReturn = prevMap[returnSlotKey];
-        const canPreserveReturn = Boolean(
-          dirtySlotKeys &&
-            !dirtySlotKeys.has(returnSlotKey) &&
-            prevReturn &&
-            prevReturn.calendarId === targetCalForReturn &&
-            existingEventIds.has(prevReturn.eventId),
-        );
+          return {
+            direction: dir,
+            targetDate: queryDateStr,
+            targetLecture: baselineItin?.targetLecture,
+            departureTime: homeDepStr,
+            arrivalTime: baselineItin?.arrivalTime || pref.arrivalTime || pref.departureTime,
+            totalDurationMinutes: toStationMins + trainDurMins,
+            legs: baselineItin?.legs || [],
+            liveTrain: fallbackTrain,
+            statusBadge: { text: "Programmato", color: "#888888" },
+            summaryMessage: "",
+          };
+        };
 
-        const preOutbound = syncOptions?.precomputedItineraries?.[outboundSlotKey];
-        const preReturn = syncOptions?.precomputedItineraries?.[returnSlotKey];
+        const computeDirectionSlots = async (
+          dir: "outbound" | "return",
+          dirPrefs: PreferredTrain[],
+        ): Promise<{
+          computed: ComputedSlotItin[];
+          preserved: { slotKey: string; entry: TrackedTrainEvent }[];
+          failedGroup: boolean;
+          expectedSlotKeys: string[];
+        }> => {
+          const groupKey = `${dayIdx}_${dir}`;
+          const targetCal = dir === "return" ? targetCalForReturn : calendarId;
 
-        const [outbound, returnItin] = await Promise.all([
-          canPreserveOutbound
-            ? Promise.resolve(null)
-            : preOutbound?.liveTrain
-              ? Promise.resolve(preOutbound)
-              : computeCommuterItinerary({
-                  config: commuterConfig,
-                  scheduleData: schedule,
-                  manualEvents: manualList,
-                  direction: "outbound",
-                  targetDate: outboundQueryDate,
-                  selectedClass: firstLesson,
-                  selectedTrainOffset: 0,
-                  ignoreCurrentTime: true,
-                  fastCalendarMode: true,
-                }).catch((outErr) => {
-                  console.warn("Errore generazione treno andata per calendario:", outErr);
+          const expectedSlotKeys =
+            dirPrefs.length > 0
+              ? dirPrefs.map((p) => `${groupKey}:${p.id}`)
+              : allClasses.length > 0
+                ? [groupKey]
+                : [];
+
+          if (expectedSlotKeys.length === 0) {
+            return { computed: [], preserved: [], failedGroup: false, expectedSlotKeys: [] };
+          }
+
+          const expectedSet = new Set(expectedSlotKeys);
+          const prevGroupEntries = Object.entries(prevMap).filter(
+            ([k]) => getGroupKey(k) === groupKey,
+          );
+
+          const canPreserve = Boolean(
+            dirtySlotKeys &&
+              !dirtySlotKeys.has(groupKey) &&
+              prevGroupEntries.length === expectedSlotKeys.length &&
+              prevGroupEntries.every(
+                ([k, entry]) =>
+                  expectedSet.has(k) &&
+                  entry.calendarId === targetCal &&
+                  existingEventIds.has(entry.eventId),
+              ),
+          );
+
+          if (canPreserve) {
+            return {
+              computed: [],
+              preserved: prevGroupEntries.map(([slotKey, entry]) => ({ slotKey, entry })),
+              failedGroup: false,
+              expectedSlotKeys,
+            };
+          }
+
+          if (dirPrefs.length > 0) {
+            let failed = false;
+            const results = await Promise.all(
+              dirPrefs.map(async (pref): Promise<ComputedSlotItin | null> => {
+                const slotKey = `${groupKey}:${pref.id}`;
+                const pre = syncOptions?.precomputedItineraries?.[slotKey];
+                if (pre?.liveTrain && doesPreferredTrainMatchLiveTrain(pref, pre.liveTrain)) {
+                  return { dir, slotKey, itin: pre };
+                }
+
+                const prefQueryDate = new Date(queryBaseDate);
+                const [pH, pM] = (pref.departureTime || "08:30").split(":").map(Number);
+                prefQueryDate.setHours(
+                  Number.isFinite(pH) ? pH : dir === "outbound" ? 8 : 16,
+                  Number.isFinite(pM) ? pM : 0,
+                  0,
+                  0,
+                );
+                const contextClass = pickContextClassForPref(dir, pref);
+                const prefConfig =
+                  pref.category === "IC" && !commuterConfig.includeIntercity
+                    ? { ...commuterConfig, includeIntercity: true }
+                    : commuterConfig;
+
+                try {
+                  let itin = await computeCommuterItinerary({
+                    config: prefConfig,
+                    scheduleData: schedule,
+                    manualEvents: manualList,
+                    direction: dir,
+                    targetDate: prefQueryDate,
+                    selectedClass: contextClass ?? null,
+                    selectedTrainOffset: 0,
+                    forcedPreferredTrain: pref,
+                    ignoreCurrentTime: true,
+                    fastCalendarMode: true,
+                  });
+                  if (
+                    !itin?.liveTrain ||
+                    !doesPreferredTrainMatchLiveTrain(pref, itin.liveTrain)
+                  ) {
+                    const liveRetryItin = await computeCommuterItinerary({
+                      config: prefConfig,
+                      scheduleData: schedule,
+                      manualEvents: manualList,
+                      direction: dir,
+                      targetDate: prefQueryDate,
+                      selectedClass: contextClass ?? null,
+                      selectedTrainOffset: 0,
+                      forcedPreferredTrain: pref,
+                      ignoreCurrentTime: true,
+                      fastCalendarMode: false,
+                    }).catch(() => null);
+                    if (
+                      liveRetryItin?.liveTrain &&
+                      doesPreferredTrainMatchLiveTrain(pref, liveRetryItin.liveTrain)
+                    ) {
+                      itin = liveRetryItin;
+                    }
+                  }
+                  if (itin?.liveTrain && doesPreferredTrainMatchLiveTrain(pref, itin.liveTrain)) {
+                    return { dir, slotKey, itin };
+                  }
+                  const syntheticItin = buildFallbackItineraryForPref(
+                    dir,
+                    pref,
+                    prefQueryDate,
+                    itin,
+                  );
+                  if (syntheticItin?.liveTrain) {
+                    return { dir, slotKey, itin: syntheticItin };
+                  }
+                  failed = true;
                   return null;
-                }),
-          canPreserveReturn
-            ? Promise.resolve(null)
-            : preReturn?.liveTrain
-              ? Promise.resolve(preReturn)
-              : computeCommuterItinerary({
-                  config: commuterConfig,
-                  scheduleData: schedule,
-                  manualEvents: manualList,
-                  direction: "return",
-                  targetDate: returnQueryDate,
-                  selectedClass: lastLesson,
-                  selectedTrainOffset: 0,
-                  ignoreCurrentTime: true,
-                  fastCalendarMode: true,
-                }).catch((retErr) => {
-                  console.warn("Errore generazione treno ritorno per calendario:", retErr);
+                } catch (err) {
+                  const syntheticItin = buildFallbackItineraryForPref(dir, pref, prefQueryDate);
+                  if (syntheticItin?.liveTrain) {
+                    return { dir, slotKey, itin: syntheticItin };
+                  }
+                  failed = true;
+                  console.warn(
+                    `Errore generazione treno preferito (${dir}, ${pref.departureTime}) per calendario:`,
+                    err,
+                  );
                   return null;
-                }),
+                }
+              }),
+            );
+            return {
+              computed: results.filter((r): r is ComputedSlotItin => Boolean(r)),
+              preserved: [],
+              failedGroup: failed,
+              expectedSlotKeys,
+            };
+          }
+
+          // Nessuna preferenza salvata per questa direzione: generazione automatica standard
+          const preAuto = syncOptions?.precomputedItineraries?.[groupKey];
+          if (preAuto?.liveTrain) {
+            return {
+              computed: [{ dir, slotKey: groupKey, itin: preAuto }],
+              preserved: [],
+              failedGroup: false,
+              expectedSlotKeys,
+            };
+          }
+
+          const lesson = dir === "outbound" ? firstLesson : lastLesson;
+          const timeStr =
+            dir === "outbound"
+              ? lesson?.startTime || "08:30"
+              : lesson?.endTime || lesson?.startTime || "16:00";
+          const autoQueryDate = new Date(queryBaseDate);
+          const [qH, qM] = timeStr.split(":").map(Number);
+          autoQueryDate.setHours(
+            Number.isFinite(qH) ? qH : dir === "outbound" ? 8 : 16,
+            Number.isFinite(qM) ? qM : 0,
+            0,
+            0,
+          );
+
+          try {
+            const itin = await computeCommuterItinerary({
+              config: commuterConfig,
+              scheduleData: schedule,
+              manualEvents: manualList,
+              direction: dir,
+              targetDate: autoQueryDate,
+              selectedClass: lesson,
+              selectedTrainOffset: 0,
+              ignoreCurrentTime: true,
+              fastCalendarMode: true,
+            });
+            if (itin?.liveTrain) {
+              return {
+                computed: [{ dir, slotKey: groupKey, itin }],
+                preserved: [],
+                failedGroup: false,
+                expectedSlotKeys,
+              };
+            }
+            return { computed: [], preserved: [], failedGroup: true, expectedSlotKeys };
+          } catch (err) {
+            console.warn(`Errore generazione treno ${dir} per calendario:`, err);
+            return { computed: [], preserved: [], failedGroup: true, expectedSlotKeys };
+          }
+        };
+
+        const [outboundRes, returnRes] = await Promise.all([
+          computeDirectionSlots("outbound", dayOutboundPrefs),
+          computeDirectionSlots("return", dayReturnPrefs),
         ]);
 
         return {
           dayIdx,
           targetDate,
           queryBaseDate,
-          outbound,
-          returnItin,
-          preservedOutbound: canPreserveOutbound ? prevOutbound : undefined,
-          preservedReturn: canPreserveReturn ? prevReturn : undefined,
-          hasClasses: true,
+          outbounds: outboundRes.computed,
+          returns: returnRes.computed,
+          preserved: [...outboundRes.preserved, ...returnRes.preserved],
+          expectedSlotKeys: [...outboundRes.expectedSlotKeys, ...returnRes.expectedSlotKeys],
+          failedGroupKeys: [
+            ...(outboundRes.failedGroup ? [`${dayIdx}_outbound`] : []),
+            ...(returnRes.failedGroup ? [`${dayIdx}_return`] : []),
+          ],
         };
       }),
     );
@@ -2526,8 +2825,9 @@ export async function syncTrainsToAppleCalendar(
     const platformTasks: (() => Promise<void>)[] = [];
     for (const dayRes of dayResults) {
       if (!dayRes) continue;
-      if (dayRes.outbound?.liveTrain) {
-        const t = dayRes.outbound.liveTrain;
+      for (const item of dayRes.outbounds) {
+        const t = item.itin.liveTrain;
+        if (!t) continue;
         const depTime = t.departureTimePlanned || t.departureTimeActual;
         if (depTime && !(t.platformPlanned || t.platformActual)) {
           platformTasks.push(async () => {
@@ -2541,8 +2841,9 @@ export async function syncTrainsToAppleCalendar(
           });
         }
       }
-      if (dayRes.returnItin?.liveTrain) {
-        const t = dayRes.returnItin.liveTrain;
+      for (const item of dayRes.returns) {
+        const t = item.itin.liveTrain;
+        if (!t) continue;
         const depTime = t.departureTimePlanned || t.departureTimeActual;
         if (depTime && !(t.platformPlanned || t.platformActual)) {
           const depCode = resolveRomeCode(
@@ -2596,10 +2897,12 @@ export async function syncTrainsToAppleCalendar(
       commuterConfig.arrivalStation.code,
     );
     for (const dayRes of dayResults) {
-      if (dayRes?.returnItin?.liveTrain) {
+      if (!dayRes) continue;
+      for (const item of dayRes.returns) {
+        if (!item.itin.liveTrain) continue;
         const retRomeName = getRomeStationName(
           commuterConfig,
-          dayRes.returnItin.liveTrain,
+          item.itin.liveTrain,
           "return",
         );
         if (retRomeName) {
@@ -2618,227 +2921,138 @@ export async function syncTrainsToAppleCalendar(
       slotKey: string;
       targetCalId: string;
       signature: string;
+      dedupSignature: string;
       details: NonNullable<Parameters<typeof Calendar.createEventAsync>[1]>;
       latitude?: number;
       longitude?: number;
     };
+
+    const buildTrainCalendarSlot = (
+      dayIdx: number,
+      targetDate: Date,
+      item: ComputedSlotItin,
+    ): DesiredTrainSlot | null => {
+      const t = item.itin.liveTrain;
+      if (!t) return null;
+      const depTime = t.departureTimePlanned || t.departureTimeActual;
+      const arrTime = t.arrivalTimePlanned || t.arrivalTimeActual;
+      if (!depTime || !arrTime) return null;
+
+      const [depH, depM] = depTime.split(":").map(Number);
+      const [arrH, arrM] = arrTime.split(":").map(Number);
+      if (isNaN(depH) || isNaN(depM) || isNaN(arrH) || isNaN(arrM)) return null;
+
+      const depMins = depH * 60 + depM;
+      const arrMins = arrH * 60 + arrM;
+      const trainDurationMins =
+        t.durationMinutes && t.durationMinutes > 0
+          ? t.durationMinutes
+          : arrMins >= depMins
+            ? arrMins - depMins
+            : arrMins + 1440 - depMins;
+
+      const startDate = new Date(targetDate);
+      startDate.setHours(depH, depM, 0, 0);
+      const endDate = new Date(startDate.getTime() + trainDurationMins * 60 * 1000);
+
+      const isReturn = item.dir === "return";
+      const fromStation = isReturn
+        ? getRomeStationName(commuterConfig, t, "return") || arrStationName
+        : depStationName;
+      const toStation = isReturn ? depStationName : arrStationName;
+      const depLoc = isReturn
+        ? stationCalLocMap.get(fromStation.trim().toUpperCase()) ||
+          stationCalLocMap.get(arrStationName.trim().toUpperCase())
+        : stationCalLocMap.get(depStationName.trim().toUpperCase());
+
+      const trainLabel = formatTrainLabel(t.category, t.trainNumber);
+      const eventTitle = `${trainLabel} • ${fromStation} → ${toStation}`;
+      const platform = t.platformPlanned || t.platformActual;
+
+      const notesParts = [
+        `Treno: ${trainLabel}`,
+        `Stazione: ${depLoc?.title || `Stazione ${fromStation}`}`,
+        `Tratta: ${fromStation} → ${toStation}`,
+        platform ? `Binario: ${platform}` : "",
+        `Tempo di percorrenza: ${trainDurationMins} min`,
+        !isReturn && item.itin.departureTime
+          ? `Partenza consigliata da casa: ${item.itin.departureTime}`
+          : "",
+        "StudICI • Treni",
+      ].filter(Boolean);
+
+      const eventStartMins = depH * 60 + depM;
+      const refDepMins = item.itin.departureTime
+        ? parseTimeToMinutes(item.itin.departureTime)
+        : undefined;
+
+      const alarms = computeAlarmOffsets({
+        alertType: alertConfig.alertType,
+        customMinutes: alertConfig.customMinutes,
+        eventStartTimeMinutes: eventStartMins,
+        referenceTimeMinutes: refDepMins,
+      });
+
+      const targetCal = isReturn ? targetCalForReturn : calendarId;
+      const notes = notesParts.join("\n");
+      const location = depLoc?.address || `Stazione di ${fromStation}, Italia`;
+      const details: Parameters<typeof Calendar.createEventAsync>[1] = {
+        title: eventTitle,
+        startDate,
+        endDate,
+        location,
+        notes,
+        timeZone: "Europe/Rome",
+        recurrenceRule: {
+          frequency: Calendar.Frequency.WEEKLY,
+          endDate: semesterEndDate,
+        },
+        alarms,
+      };
+      const signature = JSON.stringify({
+        cal: targetCal,
+        t: eventTitle,
+        d: dayIdx,
+        s: eventStartMins,
+        dur: trainDurationMins,
+        loc: location,
+        n: notes,
+        al: alarms,
+      });
+
+      return {
+        slotKey: item.slotKey,
+        targetCalId: targetCal,
+        signature,
+        dedupSignature: `${targetCal}|${dayIdx}|${eventStartMins}|${trainLabel}`,
+        details,
+        latitude: depLoc?.latitude,
+        longitude: depLoc?.longitude,
+      };
+    };
+
     const desiredSlots: DesiredTrainSlot[] = [];
+    const seenDesiredEvents = new Set<string>();
     const preservedSlots: { slotKey: string; entry: TrackedTrainEvent }[] = [];
-    const failedSlotKeys = new Set<string>();
+    const expectedAllSlotKeys = new Set<string>();
+    const failedGroupKeys = new Set<string>();
 
     for (const dayRes of dayResults) {
       if (!dayRes) continue;
-      const {
-        dayIdx,
-        targetDate,
-        outbound,
-        returnItin,
-        preservedOutbound,
-        preservedReturn,
-        hasClasses,
-      } = dayRes;
-      if (preservedOutbound) {
-        preservedSlots.push({
-          slotKey: `${dayIdx}_outbound`,
-          entry: preservedOutbound,
-        });
-      } else if (hasClasses && !outbound) {
-        failedSlotKeys.add(`${dayIdx}_outbound`);
+      for (const pSlot of dayRes.preserved) {
+        preservedSlots.push(pSlot);
       }
-      if (preservedReturn) {
-        preservedSlots.push({
-          slotKey: `${dayIdx}_return`,
-          entry: preservedReturn,
-        });
-      } else if (hasClasses && !returnItin) {
-        failedSlotKeys.add(`${dayIdx}_return`);
+      for (const ek of dayRes.expectedSlotKeys) {
+        expectedAllSlotKeys.add(ek);
       }
-
-      // 1. Treno di Andata (per raggiungere la prima lezione)
-      if (outbound && outbound.liveTrain) {
-        const t = outbound.liveTrain;
-        const depTime = t.departureTimePlanned || t.departureTimeActual;
-        const arrTime = t.arrivalTimePlanned || t.arrivalTimeActual;
-
-        if (depTime && arrTime) {
-          const [depH, depM] = depTime.split(":").map(Number);
-          const [arrH, arrM] = arrTime.split(":").map(Number);
-
-          if (!isNaN(depH) && !isNaN(depM) && !isNaN(arrH) && !isNaN(arrM)) {
-            const depMins = depH * 60 + depM;
-            const arrMins = arrH * 60 + arrM;
-            const trainDurationMins =
-              t.durationMinutes && t.durationMinutes > 0
-                ? t.durationMinutes
-                : arrMins >= depMins
-                  ? arrMins - depMins
-                  : arrMins + 1440 - depMins;
-
-            const startDate = new Date(targetDate);
-            startDate.setHours(depH, depM, 0, 0);
-
-            const endDate = new Date(startDate.getTime() + trainDurationMins * 60 * 1000);
-
-            const trainLabel = formatTrainLabel(t.category, t.trainNumber);
-            const eventTitle = `${trainLabel} • ${depStationName} → ${arrStationName}`;
-
-            const depLoc = stationCalLocMap.get(depStationName.trim().toUpperCase());
-            const outPlatform = t.platformPlanned || t.platformActual;
-            const notesParts = [
-              `Treno: ${trainLabel}`,
-              `Stazione: ${depLoc?.title || `Stazione ${depStationName}`}`,
-              `Tratta: ${depStationName} → ${arrStationName}`,
-              outPlatform ? `Binario: ${outPlatform}` : "",
-              `Tempo di percorrenza: ${trainDurationMins} min`,
-              outbound.departureTime
-                ? `Partenza consigliata da casa: ${outbound.departureTime}`
-                : "",
-              "StudICI • Treni",
-            ].filter(Boolean);
-
-            const eventStartMins = depH * 60 + depM;
-            const homeDepMins = outbound.departureTime
-              ? parseTimeToMinutes(outbound.departureTime)
-              : undefined;
-
-            const alarms = computeAlarmOffsets({
-              alertType: alertConfig.alertType,
-              customMinutes: alertConfig.customMinutes,
-              eventStartTimeMinutes: eventStartMins,
-              referenceTimeMinutes: homeDepMins,
-            });
-
-            const notes = notesParts.join("\n");
-            const location = depLoc?.address || `Stazione di ${depStationName}, Italia`;
-            const details: Parameters<typeof Calendar.createEventAsync>[1] = {
-              title: eventTitle,
-              startDate,
-              endDate,
-              location,
-              notes,
-              timeZone: "Europe/Rome",
-              recurrenceRule: {
-                frequency: Calendar.Frequency.WEEKLY,
-                endDate: semesterEndDate,
-              },
-              alarms,
-            };
-            const signature = JSON.stringify({
-              cal: calendarId,
-              t: eventTitle,
-              d: dayIdx,
-              s: eventStartMins,
-              dur: trainDurationMins,
-              loc: location,
-              n: notes,
-              al: alarms,
-            });
-            desiredSlots.push({
-              slotKey: `${dayIdx}_outbound`,
-              targetCalId: calendarId,
-              signature,
-              details,
-              latitude: depLoc?.latitude,
-              longitude: depLoc?.longitude,
-            });
-          }
-        }
+      for (const fg of dayRes.failedGroupKeys) {
+        failedGroupKeys.add(fg);
       }
-
-      // 2. Treno di Ritorno (al termine dell'ultima lezione)
-      if (returnItin && returnItin.liveTrain) {
-        const t = returnItin.liveTrain;
-        const depTime = t.departureTimePlanned || t.departureTimeActual;
-        const arrTime = t.arrivalTimePlanned || t.arrivalTimeActual;
-
-        if (depTime && arrTime) {
-          const [depH, depM] = depTime.split(":").map(Number);
-          const [arrH, arrM] = arrTime.split(":").map(Number);
-
-          if (!isNaN(depH) && !isNaN(depM) && !isNaN(arrH) && !isNaN(arrM)) {
-            const rDepMins = depH * 60 + depM;
-            const rArrMins = arrH * 60 + arrM;
-            const retDurationMins =
-              t.durationMinutes && t.durationMinutes > 0
-                ? t.durationMinutes
-                : rArrMins >= rDepMins
-                  ? rArrMins - rDepMins
-                  : rArrMins + 1440 - rDepMins;
-
-            const startDate = new Date(targetDate);
-            startDate.setHours(depH, depM, 0, 0);
-
-            const endDate = new Date(startDate.getTime() + retDurationMins * 60 * 1000);
-
-            const retDepStationName =
-              getRomeStationName(commuterConfig, t, "return") || arrStationName;
-            const retDepLoc =
-              stationCalLocMap.get(retDepStationName.trim().toUpperCase()) ||
-              stationCalLocMap.get(arrStationName.trim().toUpperCase());
-
-            const retTrainLabel = formatTrainLabel(t.category, t.trainNumber);
-            const eventTitle = `${retTrainLabel} • ${retDepStationName} → ${depStationName}`;
-
-            const retPlatform = t.platformPlanned || t.platformActual;
-            const notesParts = [
-              `Treno: ${retTrainLabel}`,
-              `Stazione: ${retDepLoc?.title || `Stazione ${retDepStationName}`}`,
-              `Tratta: ${retDepStationName} → ${depStationName}`,
-              retPlatform ? `Binario: ${retPlatform}` : "",
-              `Tempo di percorrenza: ${retDurationMins} min`,
-              "StudICI • Treni",
-            ].filter(Boolean);
-
-            const eventStartMins = depH * 60 + depM;
-            const stationDepMins = returnItin.departureTime
-              ? parseTimeToMinutes(returnItin.departureTime)
-              : undefined;
-
-            const alarms = computeAlarmOffsets({
-              alertType: alertConfig.alertType,
-              customMinutes: alertConfig.customMinutes,
-              eventStartTimeMinutes: eventStartMins,
-              referenceTimeMinutes: stationDepMins,
-            });
-
-            const targetCalIdForReturn =
-              separateReturn && returnCalendarId ? returnCalendarId : calendarId;
-
-            const notes = notesParts.join("\n");
-            const location =
-              retDepLoc?.address || `Stazione di ${retDepStationName}, Italia`;
-            const details: Parameters<typeof Calendar.createEventAsync>[1] = {
-              title: eventTitle,
-              startDate,
-              endDate,
-              location,
-              notes,
-              timeZone: "Europe/Rome",
-              recurrenceRule: {
-                frequency: Calendar.Frequency.WEEKLY,
-                endDate: semesterEndDate,
-              },
-              alarms,
-            };
-            const signature = JSON.stringify({
-              cal: targetCalIdForReturn,
-              t: eventTitle,
-              d: dayIdx,
-              s: eventStartMins,
-              dur: retDurationMins,
-              loc: location,
-              n: notes,
-              al: alarms,
-            });
-            desiredSlots.push({
-              slotKey: `${dayIdx}_return`,
-              targetCalId: targetCalIdForReturn,
-              signature,
-              details,
-              latitude: retDepLoc?.latitude,
-              longitude: retDepLoc?.longitude,
-            });
-          }
+      for (const item of [...dayRes.outbounds, ...dayRes.returns]) {
+        const slot = buildTrainCalendarSlot(dayRes.dayIdx, dayRes.targetDate, item);
+        if (slot && !seenDesiredEvents.has(slot.dedupSignature)) {
+          seenDesiredEvents.add(slot.dedupSignature);
+          desiredSlots.push(slot);
         }
       }
     }
@@ -2846,17 +3060,14 @@ export async function syncTrainsToAppleCalendar(
     // Sincronizzazione differenziale: mantiene invariati gli eventi non modificati ed elimina/ricrea solo i singoli eventi cambiati
     const nextMap: Record<string, TrackedTrainEvent> = {};
     const idsToDelete = new Set<string>();
+    const keptEventIds = new Set<string>();
     const slotsToCreate: DesiredTrainSlot[] = [];
-
-    if (Object.keys(prevMap).length === 0 && existingEventIds.size > 0) {
-      // Prima migrazione da calendario senza mappa: rimuovi eventuali vecchi eventi per evitare duplicati
-      for (const id of existingEventIds) idsToDelete.add(id);
-    }
 
     const desiredKeys = new Set<string>();
     for (const pSlot of preservedSlots) {
       desiredKeys.add(pSlot.slotKey);
       nextMap[pSlot.slotKey] = pSlot.entry;
+      if (pSlot.entry.eventId) keptEventIds.add(pSlot.entry.eventId);
     }
     for (const slot of desiredSlots) {
       desiredKeys.add(slot.slotKey);
@@ -2868,6 +3079,7 @@ export async function syncTrainsToAppleCalendar(
         prev.signature === slot.signature
       ) {
         nextMap[slot.slotKey] = prev;
+        keptEventIds.add(prev.eventId);
       } else {
         if (prev?.eventId && existingEventIds.has(prev.eventId)) {
           idsToDelete.add(prev.eventId);
@@ -2876,16 +3088,38 @@ export async function syncTrainsToAppleCalendar(
       }
     }
 
-    // Eventi presenti in precedenza ma non più previsti (preserva quelli con errore di rete transitorio)
+    // Eventi presenti in precedenza ma non più previsti: preserva solo quelli ancora attesi con errore transitorio
     for (const [oldKey, oldEntry] of Object.entries(prevMap)) {
-      if (failedSlotKeys.has(oldKey)) {
+      if (
+        expectedAllSlotKeys.has(oldKey) &&
+        failedGroupKeys.has(getGroupKey(oldKey))
+      ) {
         if (oldEntry?.eventId && existingEventIds.has(oldEntry.eventId)) {
           nextMap[oldKey] = oldEntry;
+          keptEventIds.add(oldEntry.eventId);
         }
         continue;
       }
       if (!desiredKeys.has(oldKey) && oldEntry?.eventId && existingEventIds.has(oldEntry.eventId)) {
         idsToDelete.add(oldEntry.eventId);
+      }
+    }
+
+    // Rimuove qualsiasi evento residuo o disallineato (es. vecchi treni standard sostituiti o UUID rigenerati da iCloud)
+    const dedicatedCalIds = new Set<string>();
+    if (!isDefaultFallback) dedicatedCalIds.add(calendarId);
+    if (returnCalendarId && !returnIsDefaultFallback) {
+      dedicatedCalIds.add(returnCalendarId);
+    }
+    for (const evt of existingEvents) {
+      if (!evt.id || keptEventIds.has(evt.id)) continue;
+      const inDedicatedCal = evt.calendarId
+        ? dedicatedCalIds.has(evt.calendarId)
+        : !isDefaultFallback;
+      const hasStudiciTrainNotes =
+        typeof evt.notes === "string" && evt.notes.includes("StudICI • Treni");
+      if (inDedicatedCal || hasStudiciTrainNotes) {
+        idsToDelete.add(evt.id);
       }
     }
 
