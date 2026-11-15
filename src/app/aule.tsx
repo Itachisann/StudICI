@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
   RefreshControl
@@ -236,19 +236,37 @@ export default function AuleScreen() {
   const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
   const insets = useSafeAreaInsets();
+  const degreeUrlRef = useRef<string | null>(null);
+  const selectedTabRef = useRef<Tab | null>(null);
+  const tabsLengthRef = useRef<number>(0);
+
+  useEffect(() => {
+    degreeUrlRef.current = degreeUrl;
+  }, [degreeUrl]);
+
+  useEffect(() => {
+    selectedTabRef.current = selectedTab;
+  }, [selectedTab]);
+
+  useEffect(() => {
+    tabsLengthRef.current = tabs.length;
+  }, [tabs.length]);
 
   const loadData = useCallback(async (force = false) => {
     try {
-      const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
-      const storedDefaultTab = await AsyncStorage.getItem('defaultTabUrl');
+      const storagePairs = await AsyncStorage.multiGet(['selectedDegreeUrl', 'defaultTabUrl']);
+      const storedUrl = storagePairs[0]?.[1] || null;
+      const storedDefaultTab = storagePairs[1]?.[1] || null;
 
       if (!storedUrl) {
+        degreeUrlRef.current = null;
         setDegreeUrl(null);
         setLoading(false);
         return;
       }
 
-      if (degreeUrl && storedUrl !== degreeUrl) {
+      const prevDegreeUrl = degreeUrlRef.current;
+      if (prevDegreeUrl && storedUrl !== prevDegreeUrl) {
         setTabs([]);
         setSelectedTab(null);
         setSchedulesMap({});
@@ -256,9 +274,10 @@ export default function AuleScreen() {
         setRoomEntries([]);
       }
 
+      degreeUrlRef.current = storedUrl;
       setDegreeUrl(storedUrl);
 
-      if (tabs.length === 0 || force || (degreeUrl && storedUrl !== degreeUrl)) {
+      if (tabsLengthRef.current === 0 || force || (prevDegreeUrl && storedUrl !== prevDegreeUrl)) {
         setLoading(true);
       }
 
@@ -273,12 +292,15 @@ export default function AuleScreen() {
       const { tabs: fetchedTabs, schedules } = courseData;
 
       if (fetchedTabs.length > 0) {
+        tabsLengthRef.current = fetchedTabs.length;
         setTabs(fetchedTabs);
         setSchedulesMap(schedules);
 
-        const currentActive = selectedTab && fetchedTabs.find(t => t.url === selectedTab.url);
+        const curSelected = selectedTabRef.current;
+        const currentActive = curSelected && fetchedTabs.find(t => t.url === curSelected.url);
         const target = currentActive || fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
 
+        selectedTabRef.current = target;
         setSelectedTab(target);
         if (schedules[target.url]) {
           setRoomEntries(extractRoomEntries(schedules[target.url], fetchedManual, target.url));
@@ -289,7 +311,7 @@ export default function AuleScreen() {
       console.error(e);
       setLoading(false);
     }
-  }, [degreeUrl, selectedTab, tabs.length]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

@@ -52,18 +52,31 @@ import {
   TransitBoardCard,
 } from "../components/TransitBoardCard";
 import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
-import { DisruptionEvent } from "../types/disruptions";
+import { DisruptionCategory, DisruptionEvent } from "../types/disruptions";
 import { refreshAppleCalendarIfConfigured } from "../utils/appleCalendar";
-import { getDateForDayIndex } from "../utils/attendance";
 import {
   computeCommuterItinerary,
+  getDayClassesForWeekday,
+  getInFlightStartupPrefetch,
   getRomeStationName,
-  getTrainPreferenceKey,
+  getWarmViaggioStartupSnapshot,
+  invalidateViaggioStartupSnapshot,
+  resolveAutoTargetClass as getAutoTargetClass,
+  resolveViaggioTargetContext,
 } from "../utils/commuterOptimizer";
 import {
   getCommuterConfig,
   saveCommuterConfig,
+  subscribeToCommuterChanges,
 } from "../utils/commuterStorage";
+import {
+  doesPreferredTrainMatchLiveTrain,
+  findMatchingPreferredTrain,
+  getPreferredTrainDiffSlotKeys,
+  getPreferredTrainsForDayDirection,
+  jsDayToCalendarDayIndex,
+  togglePreferredTrainInMap,
+} from "../utils/preferredTrains";
 import {
   formatTrainStrikeBannerSummary,
   getCommuterRelevantTrainStrikes,
@@ -75,10 +88,15 @@ import {
   TimeWindowMins,
 } from "../utils/disruptionsService";
 import {
+  computeStableStrikeKey,
+  consumePendingStrikeNotificationTap,
+  StrikeNotificationTapPayload,
+  subscribeToStrikeNotificationTap,
+  syncStrikeNotifications,
+} from "../utils/strikeNotifications";
+import {
   getManualEvents,
-  isManualEventActiveOnDate,
   ManualClassEvent,
-  manualEventToClassEvent,
   subscribeToManualEventsChanges,
 } from "../utils/manualEvents";
 import {
@@ -128,6 +146,94 @@ function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+const WALK_DISRUPTION_META: Record<
+  DisruptionCategory,
+  {
+    badgeLabel: string;
+    isStrike: boolean;
+    iconName: "warning" | "megaphone" | "alert-circle" | "construct";
+  }
+> = {
+  sciopero_treni: {
+    badgeLabel: "SCIOPERO TRENI",
+    isStrike: true,
+    iconName: "warning",
+  },
+  sciopero_tpl: {
+    badgeLabel: "SCIOPERO MEZZI",
+    isStrike: true,
+    iconName: "warning",
+  },
+  manifestazione: {
+    badgeLabel: "MANIFESTAZIONE",
+    isStrike: false,
+    iconName: "megaphone",
+  },
+  blocco_stradale: {
+    badgeLabel: "BLOCCO STRADALE",
+    isStrike: false,
+    iconName: "alert-circle",
+  },
+  cantiere_viabilita: {
+    badgeLabel: "VIABILITÀ",
+    isStrike: false,
+    iconName: "construct",
+  },
+  altro: {
+    badgeLabel: "ALLERTA TRAGITTO",
+    isStrike: false,
+    iconName: "warning",
+  },
+};
+
+function formatWalkDisruptionSummary(event: DisruptionEvent) {
+  const meta = WALK_DISRUPTION_META[event.category] || WALK_DISRUPTION_META.altro;
+  const timeInfo = parseDisruptionTime(event);
+
+  // Rimuove suffissi di data ridondanti per una lettura immediata a colpo d'occhio
+  const strippedTitle = event.title
+    .replace(
+      /,\s*(?:lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica)\s+\d+.*$/i,
+      "",
+    )
+    .trim();
+  const cleanTitle = strippedTitle.length > 0 ? strippedTitle : event.title.trim();
+
+  let description = cleanTitle;
+  if (timeInfo.hasTimeWindow) {
+    const hoursStr =
+      timeInfo.endHour !== undefined
+        ? `${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")} - ${timeInfo.endHour.toString().padStart(2, "0")}:${timeInfo.endMinute!.toString().padStart(2, "0")}`
+        : `dalle ${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")}`;
+    description = `${cleanTitle} (${hoursStr})`;
+  } else if (event.timeWindow) {
+    description = `${cleanTitle} (${event.timeWindow})`;
+  }
+
+  return {
+    badgeLabel: meta.badgeLabel,
+    description,
+    isStrike: meta.isStrike,
+    iconName: meta.iconName,
+    accentColor: meta.isStrike ? "#ef4444" : "#f59e0b",
+    bgColor: meta.isStrike
+      ? "rgba(239, 68, 68, 0.16)"
+      : "rgba(245, 158, 11, 0.14)",
+    borderColor: meta.isStrike
+      ? "rgba(239, 68, 68, 0.45)"
+      : "rgba(245, 158, 11, 0.42)",
+    badgeBgColor: meta.isStrike
+      ? "rgba(239, 68, 68, 0.26)"
+      : "rgba(245, 158, 11, 0.24)",
+    descColor: meta.isStrike ? "#fecaca" : "#fde68a",
+    modalFilter: (event.category === "sciopero_tpl" ||
+    (event.affectedModes.includes("transit") &&
+      !event.affectedModes.includes("walk"))
+      ? "transit"
+      : "walk") as "transit" | "walk",
+  };
 }
 
 interface WeekdayItem {
@@ -279,77 +385,55 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
   return <View style={cardStyle}>{cardContent}</View>;
 }
 
-function getAutoTargetClass(
-  classes: ClassEvent[],
-  isToday: boolean,
-  direction: "outbound" | "return",
-  now: Date = new Date(),
-  minTravelTimeToCampusMins?: number,
-): ClassEvent | null {
-  if (!classes || classes.length === 0) return null;
-
-  // Se non è oggi (es. domani, dopodomani o giorni futuri):
-  // All'andata seleziona sempre la prima lezione in programma del giorno; al ritorno l'ultima.
-  if (!isToday) {
-    return direction === "outbound" ? classes[0] : classes[classes.length - 1];
-  }
-
-  const nowMins = now.getHours() * 60 + now.getMinutes();
-
-  if (direction === "outbound") {
-    // Stima minima di percorrenza casa -> aula (auto + treno + trasporto urbano)
-    const minTravelMins = minTravelTimeToCampusMins ?? 50;
-
-    // Seleziona la prima lezione che non sia ancora terminata e il cui orario di fine
-    // sia sufficientemente nel futuro per permettere l'arrivo in aula prima del termine
-    const reachableClass = classes.find(
-      (c) => parseTimeToMinutes(c.endTime || "18:00") > nowMins + minTravelMins,
-    );
-    if (reachableClass) {
-      return reachableClass;
-    }
-
-    // Se nessuna lezione ha abbastanza tempo residuo, seleziona l'eventuale lezione in corso o l'ultima
-    const anyActive = classes.find(
-      (c) => parseTimeToMinutes(c.endTime || "18:00") > nowMins,
-    );
-    return anyActive || classes[classes.length - 1];
-  } else {
-    // Ritorno:
-    // Se c'è una lezione in corso o appena terminata prendi quella, altrimenti l'ultima del giorno
-    const activeClass = classes.find((c) => {
-      const s = parseTimeToMinutes(c.startTime || "08:30");
-      const e = parseTimeToMinutes(c.endTime || "18:00");
-      return s <= nowMins && e > nowMins;
-    });
-    const pastOrActive = [...classes]
-      .reverse()
-      .find((c) => parseTimeToMinutes(c.endTime || "18:00") <= nowMins + 30);
-    return activeClass || pastOrActive || classes[classes.length - 1];
-  }
-}
+const getDayClasses = getDayClassesForWeekday;
 
 export default function ViaggioScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(true);
+  const initialTodayDayIdx = new Date().getDay();
+  const initialStartupSeed = getWarmViaggioStartupSnapshot(
+    initialTodayDayIdx,
+    "outbound",
+  );
+  const [loading, setLoading] = useState(() => !initialStartupSeed);
   const [refreshing, setRefreshing] = useState(false);
-  const [config, setConfig] = useState<CommuterConfig | null>(null);
-  const [schedule, setSchedule] = useState<ScheduleData | null>(null);
-  const [itinerary, setItinerary] = useState<CommuterItinerary | null>(null);
+  const [config, setConfig] = useState<CommuterConfig | null>(
+    () => initialStartupSeed?.config ?? null,
+  );
+  const [schedule, setSchedule] = useState<ScheduleData | null>(
+    () => initialStartupSeed?.schedule ?? null,
+  );
+  const [itinerary, setItinerary] = useState<CommuterItinerary | null>(
+    () => initialStartupSeed?.itinerary ?? null,
+  );
   const [direction, setDirection] = useState<"outbound" | "return">("outbound");
-  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() => {
-    return new Date().getDay();
-  });
-  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
-  const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(null);
-  const activeDayIdxRef = useRef<number>(new Date().getDay());
+  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(
+    initialTodayDayIdx,
+  );
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>(
+    () => initialStartupSeed?.manualEvents ?? [],
+  );
+  const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(
+    () => initialStartupSeed?.defaultTabUrl ?? null,
+  );
+  const activeDayIdxRef = useRef<number>(initialTodayDayIdx);
   const activeClassIdxRef = useRef<number | null>(null);
   const directionRef = useRef<"outbound" | "return">("outbound");
-  const configCacheRef = useRef<CommuterConfig | null>(null);
+  const configCacheRef = useRef<CommuterConfig | null>(
+    initialStartupSeed?.config ?? null,
+  );
   const configMutationSeqRef = useRef<number>(0);
-  const scheduleCacheRef = useRef<ScheduleData | null>(null);
-  const manualsCacheRef = useRef<ManualClassEvent[] | null>(null);
+  const scheduleCacheRef = useRef<ScheduleData | null>(
+    initialStartupSeed?.schedule ?? null,
+  );
+  const hasLoadedScheduleRef = useRef<boolean>(Boolean(initialStartupSeed));
+  const defaultTabUrlRef = useRef<string | null>(
+    initialStartupSeed?.defaultTabUrl ?? null,
+  );
+  const manualsCacheRef = useRef<ManualClassEvent[] | null>(
+    initialStartupSeed?.manualEvents ?? null,
+  );
+  const initialSeedConsumedRef = useRef<boolean>(Boolean(initialStartupSeed));
   const loadRequestIdRef = useRef<number>(0);
   const calendarRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -376,10 +460,14 @@ export default function ViaggioScreen() {
     null,
   );
   const [configModalVisible, setConfigModalVisible] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(() =>
+    initialStartupSeed ? new Date(initialStartupSeed.timestamp) : new Date(),
+  );
 
   // Registro Manifestazioni, Scioperi e Interruzioni Viabilità
-  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
+  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>(
+    () => initialStartupSeed?.disruptions ?? [],
+  );
   const [disruptionsLoading, setDisruptionsLoading] = useState<boolean>(false);
   const [disruptionsModalVisible, setDisruptionsModalVisible] =
     useState<boolean>(false);
@@ -423,10 +511,18 @@ export default function ViaggioScreen() {
   const handleDayChangeRef = useRef<(dayIdx: number) => void>(() => {});
   const itinerariesCacheRef = useRef<
     Record<string | number, CommuterItinerary | null>
-  >({});
+  >(
+    initialStartupSeed?.itinerary
+      ? { [`outbound_${initialTodayDayIdx}_auto`]: initialStartupSeed.itinerary }
+      : {},
+  );
   const [itinerariesByDay, setItinerariesByDay] = useState<{
     [dayIdx: number]: CommuterItinerary | null;
-  }>({});
+  }>(() =>
+    initialStartupSeed?.itinerary
+      ? { [initialTodayDayIdx]: initialStartupSeed.itinerary }
+      : {},
+  );
 
   // Animazione fluida a scorrimento dello slider dei giorni della settimana (sincronizzato al pager)
   const segmentLayouts = useRef<{
@@ -595,6 +691,7 @@ export default function ViaggioScreen() {
     try {
       const list = await getDisruptions(force);
       setDisruptions(list);
+      syncStrikeNotifications(list, { promptIfNeeded: true }).catch(() => {});
     } catch {
       // silenzioso
     } finally {
@@ -627,47 +724,10 @@ export default function ViaggioScreen() {
     return res;
   }, [liveTrain, isSelectedDayToday, commuterStationName]);
 
-  // Helper per combinare lezioni ufficiali e lezioni manuali (solo feriali e con aula specificata)
-  const getDayClasses = useCallback(
-    (
-      jsDayIdx: number,
-      sched: ScheduleData | null,
-      manuals: ManualClassEvent[],
-      tabUrl?: string | null,
-    ) => {
-      // Nel fine settimana non ci sono lezioni in Viaggio
-      const isWeekendDay = jsDayIdx === 0 || jsDayIdx === 6;
-      if (isWeekendDay) return [];
-
-      const schedDayIdx = jsDayIdx - 1; // 1=LUN -> 0, ..., 5=VEN -> 4
-      const scraped =
-        sched?.days && sched.days[schedDayIdx]
-          ? [...sched.days[schedDayIdx]]
-          : [];
-      const { dateStr } = getDateForDayIndex(schedDayIdx);
-      const manualForDay = (manuals || [])
-        .filter(
-          (e) =>
-            e.dayIndex === schedDayIdx &&
-            Boolean(e.room && e.room.trim().length > 0) &&
-            (!e.tabUrl || !tabUrl || e.tabUrl === tabUrl) &&
-            isManualEventActiveOnDate(e, dateStr),
-        )
-        .map(manualEventToClassEvent);
-
-      return [...scraped, ...manualForDay].sort(
-        (a, b) =>
-          parseTimeToMinutes(a.startTime || "08:30") -
-          parseTimeToMinutes(b.startTime || "08:30"),
-      );
-    },
-    [],
-  );
-
   // Lezioni del giorno selezionato (ufficiali + manuali)
   const dayClasses = useMemo(() => {
     return getDayClasses(selectedDayIdx, schedule, manualEvents, defaultTabUrl);
-  }, [selectedDayIdx, schedule, manualEvents, defaultTabUrl, getDayClasses]);
+  }, [selectedDayIdx, schedule, manualEvents, defaultTabUrl]);
 
   // Lezione attualmente selezionata per il viaggio
   const activeSelectedClass = useMemo(() => {
@@ -825,6 +885,109 @@ export default function ViaggioScreen() {
     direction,
   ]);
 
+  const hasSelectedDayTrainStrike = currentTrainDisruptions.length > 0;
+  const hasSelectedDayTplStrike = currentWalkDisruptions.some(
+    (ev) => ev.category === "sciopero_tpl",
+  );
+  const hasSelectedDayStrike =
+    hasSelectedDayTrainStrike || hasSelectedDayTplStrike;
+  const hasSelectedDayWalkOnly =
+    !hasSelectedDayStrike && currentWalkDisruptions.length > 0;
+  const selectedDayAlertCount = hasSelectedDayStrike
+    ? currentTrainDisruptions.length +
+      currentWalkDisruptions.filter((ev) => ev.category === "sciopero_tpl")
+        .length
+    : currentWalkDisruptions.length;
+
+  const [strikePulseAnim] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    if (!hasSelectedDayStrike) {
+      strikePulseAnim.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(strikePulseAnim, {
+          toValue: 1,
+          duration: 1400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(strikePulseAnim, {
+          toValue: 0,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      strikePulseAnim.setValue(0);
+    };
+  }, [hasSelectedDayStrike, strikePulseAnim]);
+
+  const disruptionsRef = useRef<DisruptionEvent[]>(disruptions);
+  useEffect(() => {
+    disruptionsRef.current = disruptions;
+  }, [disruptions]);
+
+  const handleDayPressRef = useRef<(dayIdx: number) => void>(() => {});
+  const processStrikeNotificationTap = useCallback(
+    async (payload: StrikeNotificationTapPayload | null) => {
+      if (!payload) return;
+      if (payload.strikeDateIso) {
+        const refDate = new Date();
+        const matchingWeekday = WEEKDAYS.find((w) => {
+          const d = getWeekdayDate(w.dayIdx, refDate);
+          const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          return iso === payload.strikeDateIso;
+        });
+        if (matchingWeekday) {
+          handleDayPressRef.current(matchingWeekday.dayIdx);
+        }
+      }
+
+      let currentList = disruptionsRef.current;
+      if (currentList.length === 0) {
+        try {
+          currentList = await getDisruptions();
+          setDisruptions(currentList);
+        } catch {}
+      }
+
+      const matchedEvent =
+        currentList.find((ev) => ev.id === payload.eventId) ||
+        (payload.strikeKey
+          ? currentList.find(
+              (ev) => computeStableStrikeKey(ev) === payload.strikeKey,
+            )
+          : undefined);
+
+      handleOpenDisruptionsModal(
+        payload.category === "sciopero_treni" ? "train" : "all",
+        matchedEvent?.id || payload.eventId || null,
+      );
+    },
+    [handleOpenDisruptionsModal],
+  );
+
+  useEffect(() => {
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    const pending = consumePendingStrikeNotificationTap();
+    if (pending) {
+      pendingTimer = setTimeout(() => {
+        processStrikeNotificationTap(pending).catch(() => {});
+      }, 0);
+    }
+    const unsub = subscribeToStrikeNotificationTap((payload) => {
+      processStrikeNotificationTap(payload).catch(() => {});
+    });
+    return () => {
+      if (pendingTimer) clearTimeout(pendingTimer);
+      unsub();
+    };
+  }, [processStrikeNotificationTap]);
+
   const heroDelayMin = useMemo(() => {
     if (!isSelectedDayToday || !itinerary?.liveTrain) return 0;
     if (
@@ -901,6 +1064,29 @@ export default function ViaggioScreen() {
 
       const requestId = ++loadRequestIdRef.current;
 
+      const isDefaultInitialContext =
+        !isRefresh &&
+        effDir === "outbound" &&
+        effDayIdx === new Date().getDay() &&
+        effClassIdx === null &&
+        effTrainOffset === 0 &&
+        !effTrainNum;
+
+      if (isDefaultInitialContext && initialSeedConsumedRef.current) {
+        initialSeedConsumedRef.current = false;
+        const freshSeed = getWarmViaggioStartupSnapshot(effDayIdx, effDir);
+        if (
+          freshSeed &&
+          (freshSeed.config.enabled === false || freshSeed.itinerary !== null) &&
+          Date.now() - freshSeed.timestamp < 20000
+        ) {
+          syncStrikeNotifications(freshSeed.disruptions, {
+            promptIfNeeded: true,
+          }).catch(() => {});
+          return;
+        }
+      }
+
       if (!silent) {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -908,198 +1094,228 @@ export default function ViaggioScreen() {
 
       if (isRefresh) {
         clearTrenitaliaCache();
+        invalidateViaggioStartupSnapshot();
       }
 
       try {
-        let currentConfig: CommuterConfig;
-        if (!isRefresh && configCacheRef.current) {
-          currentConfig = configCacheRef.current;
-        } else {
-          currentConfig = await getCommuterConfig();
-          configCacheRef.current = currentConfig;
-        }
-        if (requestId !== loadRequestIdRef.current) return;
-        setConfig(currentConfig);
-
-        if (currentConfig.enabled === false) {
-          setItinerary(null);
-          setLoading(false);
-          setRefreshing(false);
-          return;
-        }
-
-        // Carica lezioni manuali salvate
-        let currentManuals: ManualClassEvent[] = [];
-        try {
-          if (!isRefresh && manualsCacheRef.current) {
-            currentManuals = manualsCacheRef.current;
-          } else {
-            currentManuals = await getManualEvents();
-            manualsCacheRef.current = currentManuals;
+        if (isDefaultInitialContext) {
+          const inFlightSeedPromise = getInFlightStartupPrefetch();
+          if (inFlightSeedPromise) {
+            const seed = await inFlightSeedPromise;
+            if (
+              requestId !== loadRequestIdRef.current ||
+              effDayIdx !== activeDayIdxRef.current
+            ) {
+              return;
+            }
+            if (seed && (seed.config.enabled === false || seed.itinerary !== null)) {
+              configCacheRef.current = seed.config;
+              manualsCacheRef.current = seed.manualEvents;
+              scheduleCacheRef.current = seed.schedule;
+              hasLoadedScheduleRef.current = true;
+              defaultTabUrlRef.current = seed.defaultTabUrl;
+              const cacheKey = `${effDir}_${effDayIdx}_auto`;
+              if (seed.itinerary) {
+                itinerariesCacheRef.current[cacheKey] = seed.itinerary;
+              }
+              setConfig(seed.config);
+              setManualEvents(seed.manualEvents);
+              setDefaultTabUrl(seed.defaultTabUrl);
+              setSchedule(seed.schedule);
+              setDisruptions(seed.disruptions);
+              setItinerary(seed.itinerary);
+              if (seed.itinerary) {
+                setItinerariesByDay((prev) => ({
+                  ...prev,
+                  [effDayIdx]: seed.itinerary,
+                }));
+              }
+              setLastUpdated(new Date(seed.timestamp));
+              syncStrikeNotifications(seed.disruptions, {
+                promptIfNeeded: true,
+              }).catch(() => {});
+              return;
+            }
           }
-          setManualEvents(currentManuals);
-        } catch (err) {
-          console.warn("Errore lettura manual events:", err);
         }
 
-        // Carica i dati dell'orario reale dal corso selezionato
-        let sched: ScheduleData | null = null;
-        let defaultTab: string | null = null;
-        try {
-          if (!isRefresh && scheduleCacheRef.current) {
-            sched = scheduleCacheRef.current;
-          } else {
-            const url = await AsyncStorage.getItem("selectedDegreeUrl");
-            defaultTab = await AsyncStorage.getItem("defaultTabUrl");
-            setDefaultTabUrl(defaultTab);
+        // Avvio in parallelo di tutte le fonti dati necessarie alla schermata Viaggio
+        const disruptionsPromise = getDisruptions(isRefresh).catch(
+          () => disruptionsRef.current,
+        );
+
+        const configPromise: Promise<CommuterConfig> =
+          !isRefresh && configCacheRef.current
+            ? Promise.resolve(configCacheRef.current)
+            : getCommuterConfig();
+
+        const manualsPromise: Promise<ManualClassEvent[]> =
+          !isRefresh && manualsCacheRef.current
+            ? Promise.resolve(manualsCacheRef.current)
+            : getManualEvents().catch(() => manualsCacheRef.current || []);
+
+        const schedulePromise: Promise<{
+          sched: ScheduleData | null;
+          defaultTab: string | null;
+        }> = (async () => {
+          if (!isRefresh && hasLoadedScheduleRef.current) {
+            return {
+              sched: scheduleCacheRef.current,
+              defaultTab: defaultTabUrlRef.current,
+            };
+          }
+          try {
+            const storagePairs = await AsyncStorage.multiGet([
+              "selectedDegreeUrl",
+              "defaultTabUrl",
+            ]);
+            const url = storagePairs[0]?.[1];
+            const nextDefaultTab = storagePairs[1]?.[1] || null;
+            let loadedSched: ScheduleData | null = null;
             if (url) {
               const courseData = await fetchAllCourseData(url);
               const activeTab =
-                courseData.tabs.find((t) => t.url === defaultTab) ||
+                courseData.tabs.find((t) => t.url === nextDefaultTab) ||
                 courseData.tabs[0];
               if (activeTab) {
-                // Indice per URL del tab (o per nome se fallback)
-                sched =
+                loadedSched =
                   courseData.schedules[activeTab.url] ||
                   courseData.schedules[activeTab.name] ||
                   null;
-
-                if (!sched) {
-                  sched = await fetchScheduleData(activeTab.url);
+                if (!loadedSched) {
+                  loadedSched = await fetchScheduleData(activeTab.url);
                 }
               }
-              scheduleCacheRef.current = sched;
             }
+            return { sched: loadedSched, defaultTab: nextDefaultTab };
+          } catch (err) {
+            console.warn("Errore lettura schedule corso:", err);
+            return {
+              sched: scheduleCacheRef.current,
+              defaultTab: defaultTabUrlRef.current,
+            };
           }
-        } catch (err) {
-          console.warn("Errore lettura schedule corso:", err);
-        }
+        })();
 
-        if (requestId !== loadRequestIdRef.current) return;
-        setSchedule(sched);
+        const [configRes, manualsRes, schedRes] = await Promise.allSettled([
+          configPromise,
+          manualsPromise,
+          schedulePromise,
+        ]);
 
-        // Calcola data target in base al giorno selezionato
-        const targetDate = new Date();
-        const currentDay = targetDate.getDay();
-        let diff = (effDayIdx - currentDay + 7) % 7;
-        targetDate.setDate(targetDate.getDate() + diff);
-
-        // Determina la lezione target per il calcolo (nessuna lezione nel weekend)
-        const isEffWeekend = effDayIdx === 0 || effDayIdx === 6;
-        const currentDayClasses = getDayClasses(
-          effDayIdx,
-          sched,
-          currentManuals,
-          defaultTab,
-        );
-
-        const now = new Date();
-        const isToday = now.getDay() === effDayIdx;
-        const nowMins = now.getHours() * 60 + now.getMinutes();
-
-        let targetClassForCalculation: ClassEvent | null = null;
-        const isExplicitClass =
-          effClassIdx !== null && Boolean(currentDayClasses[effClassIdx]);
-
-        if (!isEffWeekend && currentDayClasses.length > 0) {
-          if (isExplicitClass) {
-            targetClassForCalculation = currentDayClasses[effClassIdx!];
-          } else {
-            const approxTimeToStation = currentConfig?.carLeg?.enabled
-              ? (currentConfig.carLeg.durationMinutes || 24) +
-                (currentConfig.carLeg.parkingBufferMinutes ?? 7)
-              : 10;
-            const approxMinTravel =
-              approxTimeToStation +
-              40 +
-              (currentConfig?.transitLeg?.durationMinutes || 20);
-
-            targetClassForCalculation = getAutoTargetClass(
-              currentDayClasses,
-              isToday,
-              effDir,
-              now,
-              approxMinTravel,
-            );
-          }
-        }
-
-        const lastClass =
-          currentDayClasses.length > 0
-            ? currentDayClasses[currentDayClasses.length - 1]
-            : null;
-        const isAllClassesFinished = Boolean(
-          isToday &&
-          !isEffWeekend &&
-          lastClass &&
-          nowMins >= parseTimeToMinutes(lastClass.endTime || "18:00"),
-        );
-
-        const isTargetClassFinished = Boolean(
-          isToday &&
-          !isEffWeekend &&
-          targetClassForCalculation &&
-          (isAllClassesFinished ||
-            nowMins >=
-              parseTimeToMinutes(targetClassForCalculation.endTime || "18:00")),
-        );
-
-        const isTargetClassInProgress = Boolean(
-          isToday &&
-          !isEffWeekend &&
-          targetClassForCalculation &&
-          nowMins >=
-            parseTimeToMinutes(
-              targetClassForCalculation.startTime || "08:30",
-            ) &&
-          nowMins <
-            parseTimeToMinutes(targetClassForCalculation.endTime || "18:00"),
-        );
-
-        // Imposta l'orario del viaggio su targetDate per centrare la ricerca ViaggiaTreno
         if (
-          targetClassForCalculation &&
-          !isTargetClassFinished &&
-          !(effDir === "outbound" && isTargetClassInProgress)
+          requestId !== loadRequestIdRef.current ||
+          effDayIdx !== activeDayIdxRef.current
         ) {
-          const timeToUse =
-            effDir === "outbound"
-              ? targetClassForCalculation.startTime || "08:30"
-              : targetClassForCalculation.endTime || "16:00";
-          const [hh, mm] = timeToUse.split(":").map(Number);
-          targetDate.setHours(hh || 8, mm || 30, 0, 0);
-        } else {
-          if (isToday) {
-            targetDate.setHours(now.getHours(), now.getMinutes(), 0, 0);
-          } else {
-            targetDate.setHours(effDir === "outbound" ? 8 : 16, 30, 0, 0);
+          return;
+        }
+
+        if (configRes.status !== "fulfilled") {
+          throw configRes.reason;
+        }
+
+        const currentConfig = configRes.value;
+        const currentManuals =
+          manualsRes.status === "fulfilled"
+            ? manualsRes.value
+            : manualsCacheRef.current || [];
+        const { sched, defaultTab } =
+          schedRes.status === "fulfilled"
+            ? schedRes.value
+            : {
+                sched: scheduleCacheRef.current,
+                defaultTab: defaultTabUrlRef.current,
+              };
+
+        if (currentConfig.enabled === false) {
+          const resolvedDisruptions = await disruptionsPromise;
+          if (
+            requestId !== loadRequestIdRef.current ||
+            effDayIdx !== activeDayIdxRef.current
+          ) {
+            return;
           }
+          configCacheRef.current = currentConfig;
+          manualsCacheRef.current = currentManuals;
+          scheduleCacheRef.current = sched;
+          hasLoadedScheduleRef.current = true;
+          defaultTabUrlRef.current = defaultTab;
+          setConfig(currentConfig);
+          setManualEvents(currentManuals);
+          setDefaultTabUrl(defaultTab);
+          setSchedule(sched);
+          setDisruptions(resolvedDisruptions);
+          setItinerary(null);
+          return;
         }
 
-        const itin = await computeCommuterItinerary({
-          config: currentConfig,
-          scheduleData: sched,
-          manualEvents: currentManuals,
-          direction: effDir,
-          targetDate,
-          selectedClass: targetClassForCalculation,
-          isExplicitClass,
-          selectedTrainOffset: effTrainOffset,
-          selectedTrainNumber: effTrainNum || undefined,
-          forceRefresh: isRefresh,
-        });
+        const { targetDate, targetClass, isExplicitClass } =
+          resolveViaggioTargetContext({
+            effDayIdx,
+            direction: effDir,
+            config: currentConfig,
+            schedule: sched,
+            manuals: currentManuals,
+            defaultTabUrl: defaultTab,
+            selectedClassIndex: effClassIdx,
+          });
 
-        if (requestId !== loadRequestIdRef.current) return;
-        // Ignora il risultato se l'utente ha già switchato a un altro giorno
-        if (effDayIdx !== activeDayIdxRef.current) return;
+        const [itinRes, disruptionsRes] = await Promise.allSettled([
+          computeCommuterItinerary({
+            config: currentConfig,
+            scheduleData: sched,
+            manualEvents: currentManuals,
+            direction: effDir,
+            targetDate,
+            selectedClass: targetClass,
+            isExplicitClass,
+            selectedTrainOffset: effTrainOffset,
+            selectedTrainNumber: effTrainNum || undefined,
+            forceRefresh: isRefresh,
+          }),
+          disruptionsPromise,
+        ]);
 
-        const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
-        itinerariesCacheRef.current[cacheKey] = itin;
-        setItinerary(itin);
-        if (effClassIdx === null) {
-          setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
+        if (
+          requestId !== loadRequestIdRef.current ||
+          effDayIdx !== activeDayIdxRef.current
+        ) {
+          return;
         }
-        setLastUpdated(new Date());
+
+        const resolvedDisruptions =
+          disruptionsRes.status === "fulfilled"
+            ? disruptionsRes.value
+            : disruptionsRef.current;
+
+        // Commit atomico in un unico batch React: lezioni, hero card, treni, mezzi e scioperi compaiono insieme
+        configCacheRef.current = currentConfig;
+        manualsCacheRef.current = currentManuals;
+        scheduleCacheRef.current = sched;
+        hasLoadedScheduleRef.current = true;
+        defaultTabUrlRef.current = defaultTab;
+
+        setConfig(currentConfig);
+        setManualEvents(currentManuals);
+        setDefaultTabUrl(defaultTab);
+        setSchedule(sched);
+        setDisruptions(resolvedDisruptions);
+
+        if (itinRes.status === "fulfilled") {
+          const itin = itinRes.value;
+          const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
+          itinerariesCacheRef.current[cacheKey] = itin;
+          setItinerary(itin);
+          if (effClassIdx === null) {
+            setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
+          }
+          setLastUpdated(new Date());
+          syncStrikeNotifications(resolvedDisruptions, {
+            promptIfNeeded: true,
+          }).catch(() => {});
+        } else {
+          console.warn("Errore calcolo itinerario pendolare", itinRes.reason);
+        }
       } catch (err: any) {
         console.warn("Errore calcolo itinerario pendolare", err);
       } finally {
@@ -1117,14 +1333,17 @@ export default function ViaggioScreen() {
       selectedClassIndex,
       selectedTrainOffset,
       selectedTrainNumber,
-      getDayClasses,
     ],
   );
 
   useEffect(() => {
     const unsub = subscribeToManualEventsChanges(() => {
+      manualsCacheRef.current = null;
+      itinerariesCacheRef.current = {};
+      invalidateViaggioStartupSnapshot();
       getManualEvents()
         .then((evts) => {
+          manualsCacheRef.current = evts;
           setManualEvents(evts);
           loadData(true, true);
         })
@@ -1133,10 +1352,60 @@ export default function ViaggioScreen() {
     return () => unsub();
   }, [loadData]);
 
+  useEffect(() => {
+    const unsub = subscribeToCommuterChanges((nextCfg) => {
+      const prevCfg = configCacheRef.current;
+      if (prevCfg && JSON.stringify(prevCfg) === JSON.stringify(nextCfg)) {
+        return;
+      }
+
+      invalidateViaggioStartupSnapshot();
+      const prevPrefsJson = JSON.stringify(prevCfg?.trainPreferences || {});
+      const nextPrefsJson = JSON.stringify(nextCfg.trainPreferences || {});
+      const prefsChanged = prevPrefsJson !== nextPrefsJson;
+
+      configCacheRef.current = nextCfg;
+      setConfig(nextCfg);
+
+      if (prefsChanged) {
+        const diffSlots = getPreferredTrainDiffSlotKeys(
+          prevCfg?.trainPreferences?.preferredTrains,
+          nextCfg.trainPreferences?.preferredTrains,
+        );
+        const curDir = directionRef.current || direction;
+        const curDay = activeDayIdxRef.current;
+        const curCalSlot = `${jsDayToCalendarDayIndex(curDay)}_${curDir}`;
+
+        if (diffSlots.length > 0) {
+          for (const slot of diffSlots) {
+            const [calIdxStr, slotDir] = slot.split("_");
+            const calIdx = parseInt(calIdxStr || "", 10);
+            if (!Number.isNaN(calIdx) && slotDir) {
+              const jsDay = (calIdx + 1) % 7;
+              const prefPrefix = `${slotDir}_${jsDay}_`;
+              for (const cacheKey of Object.keys(itinerariesCacheRef.current)) {
+                if (cacheKey.startsWith(prefPrefix)) {
+                  delete itinerariesCacheRef.current[cacheKey];
+                }
+              }
+              delete itinerariesCacheRef.current[String(jsDay)];
+            }
+          }
+          if (diffSlots.includes(curCalSlot)) {
+            loadData(false, true);
+          }
+        } else {
+          itinerariesCacheRef.current = {};
+          loadData(false, true);
+        }
+      }
+    });
+    return () => unsub();
+  }, [loadData, direction]);
+
   useFocusEffect(
     useCallback(() => {
       loadData();
-      loadDisruptionsData();
       // Aggiornamento automatico sincronizzato di treni, ritardi e mezzi ogni minuto (60 secondi)
       const id = setInterval(() => {
         // Non interrompere il caricamento di un treno appena selezionato dall'utente
@@ -1155,7 +1424,7 @@ export default function ViaggioScreen() {
         clearInterval(id);
         appStateSub.remove();
       };
-    }, [loadData, loadDisruptionsData]),
+    }, [loadData]),
   );
 
   const handleDayChange = useCallback(
@@ -1231,6 +1500,10 @@ export default function ViaggioScreen() {
     }
   };
 
+  useEffect(() => {
+    handleDayPressRef.current = handleDayPress;
+  });
+
   const handleResetToToday = () => {
     const today = new Date().getDay();
     handleDayPress(today);
@@ -1249,6 +1522,7 @@ export default function ViaggioScreen() {
       setItinerary(cached);
       setLoading(false);
     } else {
+      setItinerary(null);
       setLoading(true);
     }
     loadData(false, Boolean(cached), {
@@ -1271,10 +1545,11 @@ export default function ViaggioScreen() {
     if (cached) {
       setItinerary(cached);
       setLoading(false);
-    } else if (!itinerary) {
+    } else {
+      setItinerary(null);
       setLoading(true);
     }
-    loadData(false, Boolean(cached || itinerary), {
+    loadData(false, Boolean(cached), {
       selectedClassIndex: idx,
       selectedTrainOffset: 0,
       selectedTrainNumber: null,
@@ -1505,9 +1780,14 @@ export default function ViaggioScreen() {
       ) {
         for (const k of opts.onlySlotKeys) {
           pendingCalDirtySlotsRef.current.add(k);
-          if (opts.precomputedItineraries?.[k]) {
-            pendingCalPrecomputedRef.current[k] =
-              opts.precomputedItineraries[k];
+          if (opts.precomputedItineraries) {
+            for (const [preKey, preItin] of Object.entries(
+              opts.precomputedItineraries,
+            )) {
+              if (preKey === k || preKey.startsWith(`${k}:`)) {
+                pendingCalPrecomputedRef.current[preKey] = preItin;
+              }
+            }
           }
         }
       } else {
@@ -1619,36 +1899,21 @@ export default function ViaggioScreen() {
       return;
     }
 
-    const prevMap = prevPrefs?.preferredTrains || {};
-    const nextMap = nextPrefs?.preferredTrains || {};
-    const dirtyPrefKeys = new Set<string>();
-    for (const k of Object.keys(prevMap)) {
-      if (prevMap[k]?.departureTime !== nextMap[k]?.departureTime) {
-        dirtyPrefKeys.add(k);
-      }
-    }
-    for (const k of Object.keys(nextMap)) {
-      if (prevMap[k]?.departureTime !== nextMap[k]?.departureTime) {
-        dirtyPrefKeys.add(k);
-      }
-    }
+    const calSlotKeys = getPreferredTrainDiffSlotKeys(
+      prevPrefs?.preferredTrains,
+      nextPrefs?.preferredTrains,
+    );
 
-    if (dirtyPrefKeys.size === 0) return;
+    if (calSlotKeys.length === 0) return;
 
     const affectedPrefixes = new Set<string>();
-    const calSlotKeys: string[] = [];
-    for (const k of dirtyPrefKeys) {
-      const parts = k.split("_");
-      const dir = parts[0];
-      const dayNum = parseInt(parts[1] || "", 10);
-      if (
-        (dir === "outbound" || dir === "return") &&
-        dayNum >= 1 &&
-        dayNum <= 5
-      ) {
-        affectedPrefixes.add(`${dir}_${dayNum}_`);
-        const slot = `${dayNum - 1}_${dir}`;
-        if (!calSlotKeys.includes(slot)) calSlotKeys.push(slot);
+    for (const slot of calSlotKeys) {
+      const [calIdxStr, dir] = slot.split("_");
+      const calIdx = parseInt(calIdxStr || "", 10);
+      if ((dir === "outbound" || dir === "return") && !Number.isNaN(calIdx)) {
+        const jsDay = (calIdx + 1) % 7;
+        affectedPrefixes.add(`${dir}_${jsDay}_`);
+        delete itinerariesCacheRef.current[String(jsDay)];
       }
     }
 
@@ -1671,49 +1936,39 @@ export default function ViaggioScreen() {
       });
     }
 
-    if (calSlotKeys.length > 0) {
-      scheduleCoalescedCalendarRefresh({
-        onlySlotKeys: calSlotKeys,
-        clearSlotPrecomputed: calSlotKeys,
-      });
-    } else {
-      scheduleCoalescedCalendarRefresh();
-    }
+    scheduleCoalescedCalendarRefresh({
+      onlySlotKeys: calSlotKeys,
+      clearSlotPrecomputed: calSlotKeys,
+    });
   };
 
+  const dayPreferredTrains = useMemo(
+    () => getPreferredTrainsForDayDirection(config, direction, selectedDayIdx),
+    [config, direction, selectedDayIdx],
+  );
+
   const isCurrentTrainPreferred = Boolean(
-    config &&
-    itinerary?.liveTrain?.departureTimePlanned &&
-    config.trainPreferences?.preferredTrains?.[
-      getTrainPreferenceKey(direction, selectedDayIdx, itinerary.targetLecture)
-    ]?.departureTime === itinerary.liveTrain.departureTimePlanned,
+    findMatchingPreferredTrain(
+      config,
+      direction,
+      selectedDayIdx,
+      itinerary?.liveTrain,
+    ),
   );
 
   const handleTogglePreferredTrain = () => {
     const baseConfig = configCacheRef.current || config;
     if (!baseConfig || !itinerary?.liveTrain) return;
     const t = itinerary.liveTrain;
-    const depTime = t.departureTimePlanned;
+    const depTime = t.departureTimePlanned || t.departureTimeActual;
     if (!depTime) return;
-    const key = getTrainPreferenceKey(
-      direction,
-      selectedDayIdx,
-      itinerary.targetLecture,
-    );
+
     const currentPrefs = baseConfig.trainPreferences?.preferredTrains || {};
-    const isPref = currentPrefs[key]?.departureTime === depTime;
-    const nextTrains = { ...currentPrefs };
-    if (isPref) {
-      delete nextTrains[key];
-    } else {
-      nextTrains[key] = {
-        departureTime: depTime,
-        arrivalTime: t.arrivalTimePlanned,
-        label: `${t.category} ${t.trainNumber.replace(/\D/g, "")}`,
-        subject: itinerary.targetLecture?.subject,
-        room: itinerary.targetLecture?.room,
-      };
-    }
+    const {
+      nextMap: nextTrains,
+      added,
+      entry,
+    } = togglePreferredTrainInMap(currentPrefs, direction, selectedDayIdx, t);
 
     const optimisticConfig: CommuterConfig = {
       ...baseConfig,
@@ -1734,16 +1989,15 @@ export default function ViaggioScreen() {
     }
     delete itinerariesCacheRef.current[String(selectedDayIdx)];
 
-    setSelectedTrainOffset(0);
-    setSelectedTrainNumber(null);
+    const calDayIdx = jsDayToCalendarDayIndex(selectedDayIdx);
+    const calSlotGroupKey = `${calDayIdx}_${direction}`;
+    const exactSlotKey = entry
+      ? `${calSlotGroupKey}:${entry.id}`
+      : calSlotGroupKey;
 
-    const calSlotKey =
-      selectedDayIdx >= 1 && selectedDayIdx <= 5
-        ? `${selectedDayIdx - 1}_${direction}`
-        : null;
-
-    if (!isPref) {
+    if (added) {
       // Stella appena attivata sul treno già visualizzato: nessun ricalcolo né spinner in UI
+      setSelectedTrainOffset(0);
       const currentCacheKey = `${direction}_${selectedDayIdx}_${activeClassIdxRef.current ?? "auto"}`;
       itinerariesCacheRef.current[currentCacheKey] = itinerary;
       itinerariesCacheRef.current[String(selectedDayIdx)] = itinerary;
@@ -1752,35 +2006,31 @@ export default function ViaggioScreen() {
         [selectedDayIdx]: itinerary,
       }));
 
-      const canPrecomputeForCal =
-        Boolean(calSlotKey) && new Date().getDay() !== selectedDayIdx;
-      scheduleCoalescedCalendarRefresh(
-        calSlotKey
-          ? {
-              onlySlotKeys: [calSlotKey],
-              precomputedItineraries: canPrecomputeForCal
-                ? { [calSlotKey]: itinerary }
-                : undefined,
-              clearSlotPrecomputed: canPrecomputeForCal
-                ? undefined
-                : [calSlotKey],
-            }
+      const canPrecomputeForCal = new Date().getDay() !== selectedDayIdx;
+      scheduleCoalescedCalendarRefresh({
+        onlySlotKeys: [calSlotGroupKey],
+        precomputedItineraries: canPrecomputeForCal
+          ? { [exactSlotKey]: itinerary }
           : undefined,
-      );
-    } else {
-      // Stella rimossa: aggiorna silenziosamente solo il giorno/direzione corrente riusando la cache GTFS
-      loadData(false, true, {
-        selectedTrainOffset: 0,
-        selectedTrainNumber: null,
+        clearSlotPrecomputed: canPrecomputeForCal
+          ? undefined
+          : [calSlotGroupKey, exactSlotKey],
       });
-      scheduleCoalescedCalendarRefresh(
-        calSlotKey
-          ? {
-              onlySlotKeys: [calSlotKey],
-              clearSlotPrecomputed: [calSlotKey],
-            }
-          : undefined,
-      );
+    } else {
+      // Stella rimossa: se il treno era auto-selezionato dalla preferenza (nessuna chip esplicita attiva),
+      // torna silenziosamente al treno consigliato standard; altrimenti mantieni il treno correntemente ispezionato.
+      if (!selectedTrainNumber) {
+        setSelectedTrainOffset(0);
+        setSelectedTrainNumber(null);
+        loadData(false, true, {
+          selectedTrainOffset: 0,
+          selectedTrainNumber: null,
+        });
+      }
+      scheduleCoalescedCalendarRefresh({
+        onlySlotKeys: [calSlotGroupKey],
+        clearSlotPrecomputed: [calSlotGroupKey, exactSlotKey],
+      });
     }
   };
 
@@ -2190,13 +2440,215 @@ export default function ViaggioScreen() {
     </View>
   );
 
+  const heroDisruptionBorderColor = hasSelectedDayStrike
+    ? "rgba(239, 68, 68, 0.55)"
+    : hasSelectedDayWalkOnly
+      ? "rgba(245, 158, 11, 0.50)"
+      : null;
+
+  const renderHeroDisruptionAlerts = (marginTop = 10) => {
+    if (
+      currentTrainDisruptions.length === 0 &&
+      currentWalkDisruptions.length === 0
+    ) {
+      return null;
+    }
+
+    const walkStrikes = currentWalkDisruptions.filter(
+      (e) => e.category === "sciopero_tpl",
+    );
+    const walkOthers = currentWalkDisruptions.filter(
+      (e) => e.category !== "sciopero_tpl",
+    );
+
+    const urbanAlerts: { event: DisruptionEvent; extraCount: number }[] = [];
+    if (walkStrikes.length > 0) {
+      urbanAlerts.push({
+        event: walkStrikes[0],
+        extraCount: walkStrikes.length - 1,
+      });
+    }
+    if (walkOthers.length > 0) {
+      urbanAlerts.push({
+        event: walkOthers[0],
+        extraCount: walkOthers.length - 1,
+      });
+    }
+
+    const primaryTrainStrike = currentTrainDisruptions[0] ?? null;
+    const trainExtraCount = Math.max(0, currentTrainDisruptions.length - 1);
+
+    return (
+      <View style={[styles.heroDisruptionStack, { marginTop }]}>
+        {primaryTrainStrike && (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() =>
+              handleOpenDisruptionsModal("train", primaryTrainStrike.id)
+            }
+            style={[
+              styles.heroDisruptionCard,
+              {
+                backgroundColor: "rgba(239, 68, 68, 0.16)",
+                borderColor: "rgba(239, 68, 68, 0.45)",
+              },
+            ]}
+          >
+            <View style={styles.heroDisruptionHeaderRow}>
+              <View
+                style={[
+                  styles.heroDisruptionBadge,
+                  { backgroundColor: "rgba(239, 68, 68, 0.26)" },
+                ]}
+              >
+                <Ionicons
+                  name="warning"
+                  size={11}
+                  color="#ef4444"
+                  style={{ marginRight: 4 }}
+                />
+                <Text
+                  style={[
+                    styles.heroDisruptionBadgeText,
+                    { color: "#ef4444" },
+                  ]}
+                >
+                  SCIOPERO TRENI
+                </Text>
+              </View>
+              {trainExtraCount > 0 && (
+                <View
+                  style={[
+                    styles.heroDisruptionExtraPill,
+                    { backgroundColor: "rgba(239, 68, 68, 0.22)" },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.heroDisruptionExtraText,
+                      { color: "#fca5a5" },
+                    ]}
+                  >
+                    +{trainExtraCount}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.heroDisruptionActionRow}>
+                <Text
+                  style={[
+                    styles.heroDisruptionActionText,
+                    { color: "#fca5a5" },
+                  ]}
+                >
+                  Dettagli
+                </Text>
+                <Ionicons name="chevron-forward" size={12} color="#fca5a5" />
+              </View>
+            </View>
+            <Text
+              style={[styles.heroDisruptionDesc, { color: "#fecaca" }]}
+              numberOfLines={2}
+            >
+              {formatTrainStrikeBannerSummary(
+                primaryTrainStrike,
+                selectedDateIso,
+              )}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {urbanAlerts.map(({ event, extraCount }) => {
+          const info = formatWalkDisruptionSummary(event);
+          return (
+            <TouchableOpacity
+              key={event.id}
+              activeOpacity={0.85}
+              onPress={() =>
+                handleOpenDisruptionsModal(info.modalFilter, event.id)
+              }
+              style={[
+                styles.heroDisruptionCard,
+                {
+                  backgroundColor: info.bgColor,
+                  borderColor: info.borderColor,
+                },
+              ]}
+            >
+              <View style={styles.heroDisruptionHeaderRow}>
+                <View
+                  style={[
+                    styles.heroDisruptionBadge,
+                    { backgroundColor: info.badgeBgColor },
+                  ]}
+                >
+                  <Ionicons
+                    name={info.iconName}
+                    size={11}
+                    color={info.accentColor}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.heroDisruptionBadgeText,
+                      { color: info.accentColor },
+                    ]}
+                  >
+                    {info.badgeLabel}
+                  </Text>
+                </View>
+                {extraCount > 0 && (
+                  <View
+                    style={[
+                      styles.heroDisruptionExtraPill,
+                      { backgroundColor: info.badgeBgColor },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.heroDisruptionExtraText,
+                        { color: info.descColor },
+                      ]}
+                    >
+                      +{extraCount}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.heroDisruptionActionRow}>
+                  <Text
+                    style={[
+                      styles.heroDisruptionActionText,
+                      { color: info.descColor },
+                    ]}
+                  >
+                    Dettagli
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={12}
+                    color={info.descColor}
+                  />
+                </View>
+              </View>
+              <Text
+                style={[styles.heroDisruptionDesc, { color: info.descColor }]}
+                numberOfLines={2}
+              >
+                {info.description}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
   const renderEmptyItinerary = () => (
     <View
       style={[
         styles.heroCard,
         {
           backgroundColor: theme.cardTint,
-          borderColor: theme.border,
+          borderColor: heroDisruptionBorderColor || theme.border,
           minHeight: 190,
           justifyContent: "center",
           alignItems: "center",
@@ -2222,6 +2674,7 @@ export default function ViaggioScreen() {
       >
         <Text style={styles.primaryBtnText}>Ricalcola</Text>
       </TouchableOpacity>
+      {renderHeroDisruptionAlerts(14)}
     </View>
   );
 
@@ -2478,43 +2931,99 @@ export default function ViaggioScreen() {
                     <Ionicons name="refresh" size={19} color="#fff" />
                   )}
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.headerIconBtn, { marginLeft: 8 }]}
-                  activeOpacity={0.7}
-                  onPress={() =>
-                    handleOpenDisruptionsModal(
-                      "all",
-                      currentTrainDisruptions[0]?.id ||
-                        currentWalkDisruptions[0]?.id ||
-                        null,
-                    )
-                  }
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Registro scioperi e manifestazioni"
-                >
-                  {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
-                    <CallstackLiquidGlass.LiquidGlassView
-                      effect="regular"
-                      colorScheme="dark"
-                      tintColor="rgba(255, 255, 255, 0.12)"
-                      style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
+                <View style={styles.headerAlertBtnWrapper}>
+                  {hasSelectedDayStrike && (
+                    <Animated.View
+                      pointerEvents="none"
+                      style={[
+                        styles.headerStrikePulseHalo,
+                        {
+                          opacity: strikePulseAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.55, 0],
+                          }),
+                          transform: [
+                            {
+                              scale: strikePulseAnim.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [1, 1.38],
+                              }),
+                            },
+                          ],
+                        },
+                      ]}
                     />
-                  ) : null}
-                  <Ionicons
-                    name="megaphone-outline"
-                    size={18}
-                    color={
-                      currentTrainDisruptions.length > 0 ||
-                      currentWalkDisruptions.length > 0
-                        ? "#f59e0b"
-                        : "#fff"
-                    }
-                  />
-                  {(currentTrainDisruptions.length > 0 ||
-                    currentWalkDisruptions.length > 0) && (
-                    <View style={styles.headerAlertDot} />
                   )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.headerIconBtn,
+                      hasSelectedDayStrike && styles.headerIconBtnStrike,
+                      hasSelectedDayWalkOnly && styles.headerIconBtnWalkAlert,
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() =>
+                      handleOpenDisruptionsModal(
+                        hasSelectedDayTrainStrike ? "train" : "all",
+                        currentTrainDisruptions[0]?.id ||
+                          currentWalkDisruptions[0]?.id ||
+                          null,
+                      )
+                    }
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityLabel="Registro scioperi e manifestazioni"
+                  >
+                    {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
+                      <CallstackLiquidGlass.LiquidGlassView
+                        effect="regular"
+                        colorScheme="dark"
+                        tintColor={
+                          hasSelectedDayStrike
+                            ? "rgba(239, 68, 68, 0.34)"
+                            : hasSelectedDayWalkOnly
+                              ? "rgba(245, 158, 11, 0.24)"
+                              : "rgba(255, 255, 255, 0.12)"
+                        }
+                        style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
+                      />
+                    ) : null}
+                    <Ionicons
+                      name={
+                        hasSelectedDayStrike || hasSelectedDayWalkOnly
+                          ? "megaphone"
+                          : "megaphone-outline"
+                      }
+                      size={
+                        hasSelectedDayStrike || hasSelectedDayWalkOnly ? 19 : 18
+                      }
+                      color={
+                        hasSelectedDayStrike
+                          ? "#ff453a"
+                          : hasSelectedDayWalkOnly
+                            ? "#f59e0b"
+                            : "#fff"
+                      }
+                    />
+                  </TouchableOpacity>
+                  {(hasSelectedDayStrike || hasSelectedDayWalkOnly) && (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.headerAlertBadge,
+                        {
+                          backgroundColor: hasSelectedDayWalkOnly
+                            ? "#f59e0b"
+                            : "#ef4444",
+                        },
+                      ]}
+                    >
+                      <Text style={styles.headerAlertBadgeText}>
+                        {selectedDayAlertCount > 1
+                          ? String(selectedDayAlertCount)
+                          : "!"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
                 <TouchableOpacity
                   style={[styles.headerIconBtn, { marginLeft: 8 }]}
                   activeOpacity={0.7}
@@ -2829,7 +3338,8 @@ export default function ViaggioScreen() {
                   >
                     {isCurrentDayPage ? (
                       <View>
-                        <View style={styles.lecturesSection}>
+                        {(config !== null || itinerary !== null || !loading) && (
+                          <View style={styles.lecturesSection}>
                           <View style={styles.sectionHeaderRow}>
                             <View
                               style={{
@@ -2932,6 +3442,7 @@ export default function ViaggioScreen() {
                             </ScrollView>
                           )}
                         </View>
+                        )}
 
                         {/* Corpo Principale Itinerario: se l'itinerario è già disponibile, lo renderizza direttamente azzerando sovrapposizioni e lampeggi con "Calcolo tempi..." */}
                         {!itinerary && loading ? (
@@ -2946,7 +3457,8 @@ export default function ViaggioScreen() {
                                 styles.heroCard,
                                 {
                                   backgroundColor: theme.cardTint,
-                                  borderColor: theme.border,
+                                  borderColor:
+                                    heroDisruptionBorderColor || theme.border,
                                 },
                               ]}
                             >
@@ -3094,6 +3606,8 @@ export default function ViaggioScreen() {
                                   </Text>
                                 </View>
                               </View>
+
+                              {renderHeroDisruptionAlerts(10)}
                             </View>
 
                             {/* Dettaglio Treno Regionale e Switcher Alternative (Tocca per aprire Trenitalia) */}
@@ -4346,6 +4860,13 @@ export default function ViaggioScreen() {
                                                 "",
                                               ),
                                           );
+                                          const isChipPreferred =
+                                            dayPreferredTrains.some((pref) =>
+                                              doesPreferredTrainMatchLiveTrain(
+                                                pref,
+                                                at,
+                                              ),
+                                            );
 
                                           return (
                                             <TouchableOpacity
@@ -4365,22 +4886,32 @@ export default function ViaggioScreen() {
                                                   !isCurrent && {
                                                     opacity: 0.55,
                                                   },
-                                                isSmartRecommended &&
+                                                isChipPreferred &&
                                                   !isCurrent && {
+                                                    borderColor:
+                                                      "rgba(251, 191, 36, 0.55)",
+                                                    backgroundColor:
+                                                      "rgba(245, 158, 11, 0.14)",
+                                                  },
+                                                isSmartRecommended &&
+                                                  !isCurrent &&
+                                                  !isChipPreferred && {
                                                     borderColor:
                                                       "rgba(245, 158, 11, 0.55)",
                                                     backgroundColor:
                                                       "rgba(245, 158, 11, 0.12)",
                                                   },
                                                 isStoppedRegular &&
-                                                  !isCurrent && {
+                                                  !isCurrent &&
+                                                  !isChipPreferred && {
                                                     borderColor:
                                                       "rgba(56, 189, 248, 0.45)",
                                                     backgroundColor:
                                                       "rgba(56, 189, 248, 0.1)",
                                                   },
                                                 isStoppedLate &&
-                                                  !isCurrent && {
+                                                  !isCurrent &&
+                                                  !isChipPreferred && {
                                                     borderColor:
                                                       "rgba(245, 158, 11, 0.45)",
                                                     backgroundColor:
@@ -4458,16 +4989,19 @@ export default function ViaggioScreen() {
                                                     !isCurrent && {
                                                       color: "#64748b",
                                                     },
-                                                  isSmartRecommended &&
+                                                  (isSmartRecommended ||
+                                                    isChipPreferred) &&
                                                     !isCurrent && {
-                                                      color: "#fcd34d",
+                                                      color: "#fde68a",
                                                     },
                                                   isStoppedRegular &&
-                                                    !isCurrent && {
+                                                    !isCurrent &&
+                                                    !isChipPreferred && {
                                                       color: "#38bdf8",
                                                     },
                                                   isStoppedLate &&
-                                                    !isCurrent && {
+                                                    !isCurrent &&
+                                                    !isChipPreferred && {
                                                       color: "#f59e0b",
                                                     },
                                                 ]}
@@ -4476,6 +5010,14 @@ export default function ViaggioScreen() {
                                                 {at.trainNumber} •{" "}
                                                 {at.departureTimePlanned}
                                               </Text>
+                                              {isChipPreferred && (
+                                                <Ionicons
+                                                  name="star"
+                                                  size={10.5}
+                                                  color="#fbbf24"
+                                                  style={{ marginLeft: 4 }}
+                                                />
+                                              )}
                                               {isSmartRecommended &&
                                                 smartRec && (
                                                   <View
@@ -4657,38 +5199,10 @@ export default function ViaggioScreen() {
                                             (() => {
                                               const activeDisruption =
                                                 currentWalkDisruptions[0];
-                                              const timeInfo =
-                                                parseDisruptionTime(
+                                              const info =
+                                                formatWalkDisruptionSummary(
                                                   activeDisruption,
                                                 );
-
-                                              // Rimuove suffissi di data ridondanti per una lettura immediata a colpo d'occhio
-                                              const cleanTitle =
-                                                activeDisruption.title
-                                                  .replace(
-                                                    /,\s*(?:lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica)\s+\d+.*$/i,
-                                                    "",
-                                                  )
-                                                  .trim();
-
-                                              let disruptionDesc = cleanTitle;
-                                              if (timeInfo.hasTimeWindow) {
-                                                const hoursStr =
-                                                  timeInfo.endHour !== undefined
-                                                    ? `${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")} - ${timeInfo.endHour.toString().padStart(2, "0")}:${timeInfo.endMinute!.toString().padStart(2, "0")}`
-                                                    : `dalle ${timeInfo.startHour.toString().padStart(2, "0")}:${timeInfo.startMinute.toString().padStart(2, "0")}`;
-                                                disruptionDesc = `${cleanTitle} (${hoursStr})`;
-                                              } else if (
-                                                activeDisruption.timeWindow
-                                              ) {
-                                                disruptionDesc = `${cleanTitle} (${activeDisruption.timeWindow})`;
-                                              }
-
-                                              const bannerColor = "#f59e0b";
-                                              const bannerBg =
-                                                "rgba(245, 158, 11, 0.10)";
-                                              const bannerBorder =
-                                                "rgba(245, 158, 11, 0.28)";
 
                                               return (
                                                 <TouchableOpacity
@@ -4704,8 +5218,10 @@ export default function ViaggioScreen() {
                                                   style={[
                                                     styles.walkDisruptionAlertBanner,
                                                     {
-                                                      backgroundColor: bannerBg,
-                                                      borderColor: bannerBorder,
+                                                      backgroundColor:
+                                                        info.bgColor,
+                                                      borderColor:
+                                                        info.borderColor,
                                                     },
                                                   ]}
                                                 >
@@ -4715,28 +5231,33 @@ export default function ViaggioScreen() {
                                                     }
                                                   >
                                                     <Ionicons
-                                                      name="warning"
+                                                      name={info.iconName}
                                                       size={13}
-                                                      color={bannerColor}
+                                                      color={info.accentColor}
                                                       style={{ marginRight: 5 }}
                                                     />
                                                     <Text
                                                       style={[
                                                         styles.walkDisruptionAlertTitle,
-                                                        { color: bannerColor },
+                                                        {
+                                                          color:
+                                                            info.accentColor,
+                                                        },
                                                       ]}
                                                     >
-                                                      Attenzione sul tuo
-                                                      tragitto
+                                                      {info.isStrike
+                                                        ? "Sciopero mezzi sul tuo tragitto"
+                                                        : "Attenzione sul tuo tragitto"}
                                                     </Text>
                                                   </View>
                                                   <Text
-                                                    style={
-                                                      styles.walkDisruptionAlertDesc
-                                                    }
+                                                    style={[
+                                                      styles.walkDisruptionAlertDesc,
+                                                      { color: info.descColor },
+                                                    ]}
                                                     numberOfLines={3}
                                                   >
-                                                    {disruptionDesc}
+                                                    {info.description}
                                                   </Text>
                                                 </TouchableOpacity>
                                               );
@@ -6580,14 +7101,53 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#ffffff",
   },
-  headerAlertDot: {
+  headerAlertBtnWrapper: {
+    marginLeft: 8,
+    position: "relative",
+    width: 36,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerStrikePulseHalo: {
     position: "absolute",
-    top: 6,
-    right: 6,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: "#f59e0b",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(239, 68, 68, 0.45)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.85)",
+  },
+  headerIconBtnStrike: {
+    backgroundColor: "rgba(239, 68, 68, 0.24)",
+    borderColor: "rgba(239, 68, 68, 0.9)",
+    borderWidth: 1.5,
+  },
+  headerIconBtnWalkAlert: {
+    backgroundColor: "rgba(245, 158, 11, 0.18)",
+    borderColor: "rgba(245, 158, 11, 0.75)",
+    borderWidth: 1.25,
+  },
+  headerAlertBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 4,
+    borderRadius: 8.5,
+    backgroundColor: "#ef4444",
+    borderWidth: 1.5,
+    borderColor: UNIFORM_SCREEN_BG,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerAlertBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 12,
+    includeFontPadding: false,
   },
   trainStrikeBanner: {
     flexDirection: "row",
@@ -6648,5 +7208,59 @@ const styles = StyleSheet.create({
     color: "#fde68a",
     fontSize: 12,
     lineHeight: 16,
+  },
+  heroDisruptionStack: {
+    width: "100%",
+    gap: 8,
+  },
+  heroDisruptionCard: {
+    width: "100%",
+    borderRadius: CARD_RADIUS.cardInner,
+    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  heroDisruptionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  heroDisruptionBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 5,
+    flexShrink: 0,
+  },
+  heroDisruptionBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.35,
+  },
+  heroDisruptionExtraPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    marginLeft: 6,
+  },
+  heroDisruptionExtraText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  heroDisruptionActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: "auto",
+    gap: 2,
+  },
+  heroDisruptionActionText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  heroDisruptionDesc: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    lineHeight: 17,
+    marginTop: 5,
   },
 });

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { StationInfo, LiveTrainInfo, LiveTrainStop } from '../types/commuter';
+import { StationInfo, LiveTrainInfo, LiveTrainStop, PreferredTrain } from '../types/commuter';
 import allStationsData from '../data/allStations.json';
+import { doesPreferredTrainMatchLiveTrain } from './preferredTrains';
 
 export const ALL_STATIONS: StationInfo[] = allStationsData as StationInfo[];
 
@@ -1165,7 +1166,10 @@ export interface OptimalTrainOptions {
   minDepartureMins?: number; // Orario minimo (in minuti da mezzanotte) di partenza del treno affinché sia prendibile dal viaggiatore
   ignoreCurrentTime?: boolean; // true per usare esclusivamente l'orario programmato ufficiale senza ritardi live né filtro sull'ora corrente
   includeIntercity?: boolean; // Se true, include anche i treni Intercity (IC) oltre a RV e Regionali
-  preferredDepartureTime?: string; // Treno preferito dall'utente, individuato dall'orario di partenza (HH:MM)
+  preferredDepartureTime?: string; // Legacy: treno preferito individuato solo dall'orario di partenza (HH:MM)
+  preferredTrain?: PreferredTrain; // Preferenza treno esplicita (override assoluto, es. da sync calendario)
+  preferredTrainsForDay?: PreferredTrain[]; // Preferenze giornaliere condivise (applicate se compatibili con targetTimeStr)
+  filterPreferredByTargetWindow?: boolean; // Se true (default con lezione), limita il match di preferredTrainsForDay alla finestra utile
   scheduledOnly?: boolean; // true per preferire il timetable GTFS programmato evitando chiamate ViaggiaTreno quando possibile (con fallback automatico se vuoto)
 }
 
@@ -1174,6 +1178,7 @@ export interface OptimalTrainResult {
   availableTrains: LiveTrainInfo[];
   selectedIndex: number;
   recommendedIndex: number;
+  matchedPreferred?: boolean;
 }
 
 /**
@@ -3445,6 +3450,9 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     ignoreCurrentTime = false,
     includeIntercity = false,
     preferredDepartureTime,
+    preferredTrain,
+    preferredTrainsForDay,
+    filterPreferredByTargetWindow = true,
     scheduledOnly = false,
   } = options;
 
@@ -3487,19 +3495,22 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       departureStation,
       arrivalStation,
       effectiveQueryDate,
-      includeIntercity,
+      includeIntercity || preferredTrain?.category === 'IC',
       forceRefresh
     );
-    if (fullDayTrains.length === 0) {
+    const missingPreferredInFullDay = preferredTrain
+      ? !fullDayTrains.some((t) => doesPreferredTrainMatchLiveTrain(preferredTrain, t))
+      : false;
+    if (fullDayTrains.length === 0 || missingPreferredInFullDay) {
       liveTrains = await fetchLiveTrenitaliaTimetable(
         departureStation.code,
         arrivalStation.code,
         effectiveQueryDate,
-        targetTimeStr,
+        preferredTrain?.departureTime || targetTimeStr,
         direction,
         forceRefresh,
         ignoreCurrentTime,
-        includeIntercity
+        includeIntercity || preferredTrain?.category === 'IC'
       );
     }
   } else {
@@ -3770,18 +3781,78 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     } else {
       recommendedIdx = Math.max(0, allTrains.length - 1);
     }
+  }
 
-    // Treno preferito dall'utente (match per orario di partenza): sovrascrive sempre la scelta consigliata se prendibile
-    if (preferredDepartureTime) {
-      const targetPrefMins = parseTimeToMinutes(preferredDepartureTime);
-      const prefIdx = allTrains.findIndex((t) => {
-        const depStr = t.departureTimePlanned || t.departureTimeActual || '';
-        const depMatch =
-          depStr === preferredDepartureTime ||
-          (targetPrefMins > 0 && parseTimeToMinutes(depStr) === targetPrefMins);
-        return depMatch && isTrainCatchable(t);
-      });
-      if (prefIdx !== -1) recommendedIdx = prefIdx;
+  // Preferenze treno utente (giornaliere condivise o esplicite):
+  // 1) preferredTrain (esplicita, es. evento calendario): override assoluto
+  // 2) preferredTrainsForDay: sovrascrive se prendibile e compatibile con targetMins (se filterPreferredByTargetWindow)
+  // 3) preferredDepartureTime: fallback legacy per solo orario di partenza
+  let matchedPreferred = false;
+  const preferredPool = preferredTrainsForDay ?? [];
+
+  if (preferredTrain) {
+    const catchableIdx = allTrains.findIndex(
+      (t) => doesPreferredTrainMatchLiveTrain(preferredTrain, t) && isTrainCatchable(t)
+    );
+    const anyIdx =
+      catchableIdx !== -1
+        ? catchableIdx
+        : allTrains.findIndex((t) => doesPreferredTrainMatchLiveTrain(preferredTrain, t));
+    if (anyIdx !== -1) {
+      recommendedIdx = anyIdx;
+      matchedPreferred = true;
+    }
+  } else if (preferredPool.length > 0) {
+    let bestIdx = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    allTrains.forEach((t, idx) => {
+      if (!isTrainCatchable(t)) return;
+      if (!preferredPool.some((pref) => doesPreferredTrainMatchLiveTrain(pref, t))) return;
+
+      const refMins = parseTimeToMinutes(
+        isOutbound
+          ? t.arrivalTimePlanned || t.arrivalTimeActual || ''
+          : t.departureTimePlanned || t.departureTimeActual || ''
+      );
+      if (refMins <= 0) return;
+
+      if (filterPreferredByTargetWindow) {
+        if (isOutbound) {
+          if (refMins < targetMins - 95 || refMins > targetMins + 25) return;
+        } else {
+          if (refMins < targetMins - 30 || refMins > targetMins + 120) return;
+        }
+      }
+
+      const penalty = isOutbound
+        ? refMins <= targetMins + 3
+          ? 0
+          : 100
+        : refMins >= targetMins
+          ? 0
+          : 100;
+      const score = penalty + Math.abs(refMins - targetMins);
+      if (score < bestScore) {
+        bestScore = score;
+        bestIdx = idx;
+      }
+    });
+    if (bestIdx !== -1) {
+      recommendedIdx = bestIdx;
+      matchedPreferred = true;
+    }
+  } else if (preferredDepartureTime) {
+    const targetPrefMins = parseTimeToMinutes(preferredDepartureTime);
+    const prefIdx = allTrains.findIndex((t) => {
+      const depStr = t.departureTimePlanned || t.departureTimeActual || '';
+      const depMatch =
+        depStr === preferredDepartureTime ||
+        (targetPrefMins > 0 && parseTimeToMinutes(depStr) === targetPrefMins);
+      return depMatch && isTrainCatchable(t);
+    });
+    if (prefIdx !== -1) {
+      recommendedIdx = prefIdx;
+      matchedPreferred = true;
     }
   }
 
@@ -3876,6 +3947,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     availableTrains,
     selectedIndex: selectedIndexSafe,
     recommendedIndex: Math.max(0, Math.min(Math.max(0, availableTrains.length - 1), recommendedIdx)),
+    matchedPreferred,
   };
 }
 

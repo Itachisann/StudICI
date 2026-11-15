@@ -9,24 +9,37 @@ export interface StationInfo {
 }
 
 /**
- * Treno preferito identificato dall'orario di partenza programmato dalla stazione del pendolare
- * (HH:MM), non dal numero: Trenitalia può rinumerare le corse mantenendo gli stessi orari.
+ * Treno preferito indicizzato a livello giornaliero: legato al giorno della settimana,
+ * alla direzione ("outbound" | "return") e all'identificativo univoco del treno
+ * (numero treno + orario di partenza programmato), condiviso tra tutte le lezioni della giornata.
  */
 export interface PreferredTrain {
+  /** Identificativo univoco giornaliero della preferenza */
+  id?: string;
+  /** Direzione associata alla preferenza */
+  direction?: 'outbound' | 'return';
+  /** Giorno della settimana JS (0 = Domenica, 1 = Lunedì ... 6 = Sabato) */
+  dayIndex?: number;
+  /** Numero del treno normalizzato (es. "4110") */
+  trainNumber?: string;
+  /** Categoria commerciale del treno (es. "RV", "REG", "IC") */
+  category?: string;
+  /** Orario di partenza programmato (HH:MM) */
   departureTime: string;
+  /** Orario di arrivo programmato (HH:MM) */
   arrivalTime?: string;
-  /** Solo informativo (ultimo numero/categoria noti, es. "RV 4110") */
+  /** Etichetta informativa (es. "RV 4110") */
   label?: string;
-  /** Nome della lezione a cui è associata la preferenza (es. "Analisi Matematica I") */
+  /** @deprecated Campo legacy non più usato per l'indicizzazione esclusiva per lezione */
   subject?: string;
-  /** Aula della lezione associata */
+  /** @deprecated Campo legacy non più usato per l'indicizzazione esclusiva per lezione */
   room?: string;
 }
 
 export interface TrainPreferences {
   /**
-   * Treni preferiti per singolo giorno della settimana e singola lezione, per direzione.
-   * Chiave: vedi `getTrainPreferenceKey` (direzione + giorno + orario lezione).
+   * Treni preferiti indicizzati a livello giornaliero (consentite più corse per direzione
+   * nello stesso giorno, deduplicate per treno). Vedi `src/utils/preferredTrains.ts`.
    */
   preferredTrains?: Record<string, PreferredTrain>;
   /** Abilita l'analisi del consiglio di rientro anticipato */
@@ -51,6 +64,13 @@ export interface SmartReturnRecommendation {
   smartHomeArrivalTime: string;
   standardHomeArrivalTime: string;
   isCurrentlySelected: boolean;
+}
+
+export interface StrikeAlertPreferences {
+  /** Crea promemoria/avviso 7 giorni prima dello sciopero (ore 09:00) */
+  notify7DaysBefore: boolean;
+  /** Crea promemoria/avviso 1 giorno prima dello sciopero (ore 09:00) */
+  notify1DayBefore: boolean;
 }
 
 export interface CommuterConfig {
@@ -81,6 +101,7 @@ export interface CommuterConfig {
   customDestinationName?: string;
   includeIntercity?: boolean; // Se true, include anche i treni Intercity (IC) oltre a RV e Regionali
   trainPreferences?: TrainPreferences;
+  strikeAlerts?: StrikeAlertPreferences;
 }
 
 export interface LiveTrainStop {

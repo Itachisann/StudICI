@@ -1,13 +1,19 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   CommuterConfig,
   CommuterItinerary,
   TripLeg,
   LiveTrainInfo,
+  PreferredTrain,
   SmartReturnRecommendation,
 } from '../types/commuter';
-import { ScheduleData, ClassEvent } from './scraper';
+import { DisruptionEvent } from '../types/disruptions';
+import { ScheduleData, ClassEvent, fetchAllCourseData, fetchScheduleData } from './scraper';
+import { getCommuterConfig } from './commuterStorage';
+import { getDisruptions } from './disruptionsService';
 import {
   ManualClassEvent,
+  getManualEvents,
   manualEventToClassEvent,
   isManualEventActiveOnDate,
 } from './manualEvents';
@@ -17,6 +23,10 @@ import { getOptimalRomeTransit } from './transitRouter';
 import { getStationTransitBoard, TransitBoardResult } from './transitBoardService';
 import { calculateDrivingEstimate, getStationNavigationQuery } from './drivingRouter';
 import {
+  doesPreferredTrainMatchLiveTrain,
+  getPreferredTrainsForDayDirection,
+} from './preferredTrains';
+import {
   findOptimalCommuterTrain,
   parseTimeToMinutes,
   minutesToTime,
@@ -24,8 +34,7 @@ import {
 } from './trenitaliaApi';
 
 /**
- * Chiave della preferenza treno: direzione + giorno della settimana + orario della lezione
- * (stabile di settimana in settimana). Senza lezione (es. weekend) usa "none".
+ * Chiave legacy della preferenza treno (mantenuta solo per compatibilità temporanea).
  */
 export function getTrainPreferenceKey(
   direction: 'outbound' | 'return',
@@ -38,17 +47,6 @@ export function getTrainPreferenceKey(
       : 'none';
   const dayIdx = typeof date === 'number' ? date : date.getDay();
   return `${direction}_${dayIdx}_${lectureKey}`;
-}
-
-function getPreferredTrainDeparture(
-  config: CommuterConfig,
-  direction: 'outbound' | 'return',
-  date: Date,
-  lecture?: { startTime?: string; endTime?: string } | null
-): string | undefined {
-  return config.trainPreferences?.preferredTrains?.[
-    getTrainPreferenceKey(direction, date, lecture)
-  ]?.departureTime;
 }
 
 /**
@@ -143,6 +141,7 @@ export interface OptimizeOptions {
   isExplicitClass?: boolean;
   selectedTrainOffset?: number; // -1 = treno prima, 0 = consigliato, +1 = treno dopo
   selectedTrainNumber?: string; // override selezione treno specifico
+  forcedPreferredTrain?: PreferredTrain; // override esplicito su singola preferenza giornaliera (es. sync calendario)
   forceRefresh?: boolean;
   ignoreCurrentTime?: boolean; // calcola l'orario programmato canonico senza filtrare rispetto all'ora attuale
   fastCalendarMode?: boolean; // salta chiamate ausiliarie (OSRM/ATAC) per sincronizzazione calendario veloce
@@ -235,6 +234,7 @@ export async function computeCommuterItinerary(
     selectedClass,
     selectedTrainOffset = 0,
     selectedTrainNumber,
+    forcedPreferredTrain,
     forceRefresh = false,
     ignoreCurrentTime = false,
     fastCalendarMode = false,
@@ -267,7 +267,8 @@ export async function computeCommuterItinerary(
       ignoreCurrentTime,
       dayClasses,
       isExplicitClass,
-      fastCalendarMode
+      fastCalendarMode,
+      forcedPreferredTrain
     );
   } else {
     return computeReturnItinerary(
@@ -278,7 +279,9 @@ export async function computeCommuterItinerary(
       selectedTrainNumber,
       forceRefresh,
       ignoreCurrentTime,
-      fastCalendarMode
+      fastCalendarMode,
+      forcedPreferredTrain,
+      isExplicitClass
     );
   }
 }
@@ -392,7 +395,8 @@ async function computeOutboundItinerary(
   ignoreCurrentTime = false,
   dayClasses: ClassEvent[] = [],
   isExplicitClass = false,
-  fastCalendarMode = false
+  fastCalendarMode = false,
+  forcedPreferredTrain?: PreferredTrain
 ): Promise<CommuterItinerary> {
   const bufferMins = config.bufferMinutes ?? 10;
 
@@ -447,9 +451,17 @@ async function computeOutboundItinerary(
       stationTargetArrivalMins = minTrainDepartureMins + 50;
     }
   } else {
-    // Weekend o viaggio stazione-stazione senza lezioni: calcola rispetto all'orario targetDate
+    // Weekend o viaggio stazione-stazione senza lezioni: calcola rispetto all'orario targetDate (o preferenza forzata)
+    const forcedArrMins =
+      forcedPreferredTrain?.arrivalTime
+        ? parseTimeToMinutes(forcedPreferredTrain.arrivalTime)
+        : forcedPreferredTrain?.departureTime
+          ? parseTimeToMinutes(forcedPreferredTrain.departureTime) + 45
+          : 0;
     const targetHourMins = targetDate.getHours() * 60 + targetDate.getMinutes();
-    if (isToday) {
+    if (forcedArrMins > 0) {
+      stationTargetArrivalMins = forcedArrMins;
+    } else if (isToday) {
       stationTargetArrivalMins = minTrainDepartureMins + 50;
     } else {
       stationTargetArrivalMins = targetHourMins > 0 ? targetHourMins + 50 : 9 * 60;
@@ -461,6 +473,10 @@ async function computeOutboundItinerary(
   const approxCarDepartureTimeStr = minutesToTime(
     Math.max(0, stationTargetArrivalMins - 50 - estimatedTimeToStation)
   );
+
+  const dayOutboundPrefs = forcedPreferredTrain
+    ? [forcedPreferredTrain]
+    : getPreferredTrainsForDayDirection(config, 'outbound', targetDate);
 
   // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
   const [optimalTrainResult, drivingEst] = await Promise.all([
@@ -476,7 +492,9 @@ async function computeOutboundItinerary(
       minDepartureMins: isToday ? minTrainDepartureMins : undefined,
       ignoreCurrentTime,
       includeIntercity: config.includeIntercity ?? false,
-      preferredDepartureTime: getPreferredTrainDeparture(config, 'outbound', targetDate, targetLecture),
+      preferredTrain: forcedPreferredTrain,
+      preferredTrainsForDay: forcedPreferredTrain ? undefined : dayOutboundPrefs,
+      filterPreferredByTargetWindow: Boolean(targetLecture && isExplicitClass),
       scheduledOnly: fastCalendarMode && ignoreCurrentTime,
     }),
     carEnabled && !fastCalendarMode
@@ -565,7 +583,9 @@ async function computeOutboundItinerary(
   };
 
   const hasPreferredOutbound = Boolean(
-    getPreferredTrainDeparture(config, 'outbound', targetDate, targetLecture)
+    forcedPreferredTrain ||
+      optimalTrainResult.matchedPreferred ||
+      dayOutboundPrefs.some((p) => doesPreferredTrainMatchLiveTrain(p, train))
   );
 
   // Selezione dinamica lezione target e treno ottimale:
@@ -885,7 +905,7 @@ async function computeOutboundItinerary(
     let actualClassroomArrivalMins = trainArrMins + activeTransitMins;
     let resolvedOutboundDirectLines: string[] = [];
 
-    if (!isWalkLeg && !fastCalendarMode) {
+    const resolveOutboundBoard = async (lecture: DayLectureTarget) => {
       try {
         const isTrainAlreadyArrived = Boolean(
           train.isArrivedAtDestination || train.trainStatusType === 'arrived'
@@ -895,26 +915,27 @@ async function computeOutboundItinerary(
             !isTrainAlreadyArrived &&
             Math.abs(trainArrMins - nowMins) <= 45
         );
-        const targetLabel = targetLecture.buildingName
-          ? `${targetLecture.buildingName} (${targetLecture.room})`
-          : targetLecture.room;
+        const targetLabel = lecture.buildingName
+          ? `${lecture.buildingName} (${lecture.room})`
+          : lecture.room;
         const boardData = await getStationTransitBoard({
           stationName: actualRomeStation,
           targetName: targetLabel,
           targetCoords:
-            targetLecture.latitude && targetLecture.longitude
-              ? { lat: targetLecture.latitude, lng: targetLecture.longitude }
+            lecture.latitude && lecture.longitude
+              ? { lat: lecture.latitude, lng: lecture.longitude }
               : undefined,
           targetDate: isTransitLive ? undefined : targetDateStr,
-          targetTime: isTransitLive ? 'now' : targetLecture.startTime,
+          targetTime: isTransitLive ? 'now' : lecture.startTime,
           direction: 'to_campus',
           isLiveContext: isTransitLive,
-          constraintTime: targetLecture.startTime,
+          constraintTime: lecture.startTime,
           minDepartureTime: outboundArrTime,
+          forceRefresh,
         });
         prefetchedOutboundBoard = boardData;
         resolvedOutboundLiveContext = isTransitLive;
-        resolvedOutboundConstraintTime = targetLecture.startTime;
+        resolvedOutboundConstraintTime = lecture.startTime;
         resolvedOutboundMinDepTime = outboundArrTime;
         resolvedOutboundDirectLines = boardData.directLines || [];
         const opt = boardData.optimalDeparture || boardData.departures[0];
@@ -932,6 +953,10 @@ async function computeOutboundItinerary(
       } catch {
         // Fallback silenzioso alla stima statica
       }
+    };
+
+    if (!isWalkLeg && !fastCalendarMode) {
+      await resolveOutboundBoard(targetLecture);
     }
 
     // Secondo controllo post-risoluzione del mezzo urbano reale: se l'orario esatto di arrivo in aula
@@ -955,6 +980,7 @@ async function computeOutboundItinerary(
         resolvedOutboundConstraintTime = undefined;
         resolvedOutboundMinDepTime = undefined;
         resolvedOutboundLiveContext = undefined;
+        resolvedOutboundDirectLines = [];
         if (roomChanged) {
           const recalculatedTransit = getOptimalRomeTransit({
             fromStationCode: config.arrivalStation.code,
@@ -974,7 +1000,12 @@ async function computeOutboundItinerary(
             activeTransitSolution = recalculatedTransit;
             activeTransitMins = recalculatedTransit.durationMinutes;
             isWalkLeg = activeTransitSolution.mode === 'walk';
+            transitDurMins = activeTransitMins;
+            actualClassroomArrivalMins = trainArrMins + activeTransitMins;
           }
+        }
+        if (!isWalkLeg && !fastCalendarMode) {
+          await resolveOutboundBoard(targetLecture);
         }
       }
     }
@@ -1164,7 +1195,9 @@ async function computeReturnItinerary(
   selectedTrainNumber?: string,
   forceRefresh = false,
   ignoreCurrentTime = false,
-  fastCalendarMode = false
+  fastCalendarMode = false,
+  forcedPreferredTrain?: PreferredTrain,
+  isExplicitClass = false
 ): Promise<CommuterItinerary> {
   const exitClassroomBuffer = 7; // minuti per uscire e raggiungere fermata
 
@@ -1206,9 +1239,19 @@ async function computeReturnItinerary(
       stationArrivalMins = lectureEndMins + exitClassroomBuffer + transitMins;
     }
   } else {
-    // Weekend o viaggio stazione-stazione: calcola rispetto all'orario targetDate
+    // Weekend o viaggio stazione-stazione: calcola rispetto all'orario targetDate (o preferenza forzata)
+    const forcedDepMins = forcedPreferredTrain?.departureTime
+      ? parseTimeToMinutes(forcedPreferredTrain.departureTime)
+      : 0;
     const targetHourMins = targetDate.getHours() * 60 + targetDate.getMinutes();
-    stationArrivalMins = isToday ? nowMins : (targetHourMins > 0 ? targetHourMins : 16 * 60);
+    stationArrivalMins =
+      forcedDepMins > 0
+        ? forcedDepMins
+        : isToday
+          ? nowMins
+          : targetHourMins > 0
+            ? targetHourMins
+            : 16 * 60;
   }
   const stationArrivalStr = minutesToTime(stationArrivalMins);
 
@@ -1216,6 +1259,10 @@ async function computeReturnItinerary(
   const carWalkBuffer = carEnabled ? 3 : 0; // recupero auto dal parcheggio (3 min dall'arrivo del treno alla partenza in auto)
   // Stima preliminare orario arrivo in stazione di rientro (~45m di treno)
   const approxReturnDrivingTimeStr = minutesToTime(stationArrivalMins + 45 + carWalkBuffer);
+
+  const dayReturnPrefs = forcedPreferredTrain
+    ? [forcedPreferredTrain]
+    : getPreferredTrainsForDayDirection(config, 'return', targetDate);
 
   // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
   const [optimalTrainResult, drivingEst] = await Promise.all([
@@ -1231,7 +1278,9 @@ async function computeReturnItinerary(
       minDepartureMins: isToday ? stationArrivalMins : undefined,
       ignoreCurrentTime,
       includeIntercity: config.includeIntercity ?? false,
-      preferredDepartureTime: getPreferredTrainDeparture(config, 'return', targetDate, targetLecture),
+      preferredTrain: forcedPreferredTrain,
+      preferredTrainsForDay: forcedPreferredTrain ? undefined : dayReturnPrefs,
+      filterPreferredByTargetWindow: Boolean(targetLecture && isExplicitClass),
       scheduledOnly: fastCalendarMode && ignoreCurrentTime,
     }),
     carEnabled && !fastCalendarMode
@@ -1255,17 +1304,16 @@ async function computeReturnItinerary(
       ? optimalTrainResult.recommendedIndex
       : selectedIndex;
 
-  const preferredReturnDep = getPreferredTrainDeparture(
-    config,
-    'return',
-    targetDate,
-    targetLecture
+  const hasMatchedPreferredReturn = Boolean(
+    forcedPreferredTrain ||
+      optimalTrainResult.matchedPreferred ||
+      dayReturnPrefs.some((p) => doesPreferredTrainMatchLiveTrain(p, train))
   );
 
   // Garanzia Assoluta: se è oggi e siamo nella selezione consigliata (offset 0, nessun treno esplicito e nessuna preferenza esplicita),
   // il treno non può MAI partire prima dell'orario in cui il viaggiatore giunge in stazione (stationArrivalMins).
   let resolvedStandardIdx = standardTrainIdxBase;
-  if (isToday || preferredReturnDep) {
+  if (isToday || hasMatchedPreferredReturn) {
     const stdTrain = availableTrains[resolvedStandardIdx] || train;
     const stdDep = parseTimeToMinutes(stdTrain.departureTimePlanned || stdTrain.departureTimeActual || '');
     if (stdDep < stationArrivalMins) {
@@ -1279,7 +1327,7 @@ async function computeReturnItinerary(
     }
   }
 
-  if (isToday && selectedTrainOffset === 0 && !selectedTrainNumber && !preferredReturnDep) {
+  if (isToday && selectedTrainOffset === 0 && !selectedTrainNumber && !hasMatchedPreferredReturn) {
     const currentTrainDep = parseTimeToMinutes(train.departureTimePlanned || train.departureTimeActual || '');
     if (currentTrainDep < stationArrivalMins && availableTrains[resolvedStandardIdx]) {
       train = availableTrains[resolvedStandardIdx];
@@ -1533,6 +1581,7 @@ async function computeReturnItinerary(
           isLiveContext: isTransitLive,
           constraintTime: computedConstraintTime,
           minDepartureTime: computedMinDepTime,
+          forceRefresh,
         });
         prefetchedReturnBoard = boardData;
         resolvedReturnLiveContext = isTransitLive;
@@ -2060,4 +2109,345 @@ async function computeReturnItinerary(
     transitConstraintTime: resolvedReturnConstraintTime,
     transitMinDepartureTime: resolvedReturnMinDepTime,
   };
+}
+
+/**
+ * Helper condiviso: combina lezioni ufficiali e manuali per un dato giorno JS (0=dom .. 6=sab)
+ */
+export function getDayClassesForWeekday(
+  jsDayIdx: number,
+  sched: ScheduleData | null,
+  manuals: ManualClassEvent[],
+  tabUrl?: string | null
+): ClassEvent[] {
+  const isWeekendDay = jsDayIdx === 0 || jsDayIdx === 6;
+  if (isWeekendDay) return [];
+
+  const schedDayIdx = jsDayIdx - 1;
+  const scraped =
+    sched?.days && sched.days[schedDayIdx] ? [...sched.days[schedDayIdx]] : [];
+  const { dateStr } = getDateForDayIndex(schedDayIdx);
+  const manualForDay = (manuals || [])
+    .filter(
+      (e) =>
+        e.dayIndex === schedDayIdx &&
+        Boolean(e.room && e.room.trim().length > 0) &&
+        (!e.tabUrl || !tabUrl || e.tabUrl === tabUrl) &&
+        isManualEventActiveOnDate(e, dateStr)
+    )
+    .map(manualEventToClassEvent);
+
+  return [...scraped, ...manualForDay].sort(
+    (a, b) =>
+      parseTimeToMinutes(a.startTime || '08:30') -
+      parseTimeToMinutes(b.startTime || '08:30')
+  );
+}
+
+export function resolveAutoTargetClass(
+  classes: ClassEvent[],
+  isToday: boolean,
+  direction: 'outbound' | 'return',
+  now: Date = new Date(),
+  minTravelTimeToCampusMins?: number
+): ClassEvent | null {
+  if (!classes || classes.length === 0) return null;
+  if (!isToday) {
+    return direction === 'outbound' ? classes[0] : classes[classes.length - 1];
+  }
+
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  if (direction === 'outbound') {
+    const minTravelMins = minTravelTimeToCampusMins ?? 50;
+    const reachableClass = classes.find(
+      (c) => parseTimeToMinutes(c.endTime || '18:00') > nowMins + minTravelMins
+    );
+    if (reachableClass) {
+      return reachableClass;
+    }
+    const anyActive = classes.find(
+      (c) => parseTimeToMinutes(c.endTime || '18:00') > nowMins
+    );
+    return anyActive || classes[classes.length - 1];
+  }
+
+  const activeClass = classes.find((c) => {
+    const s = parseTimeToMinutes(c.startTime || '08:30');
+    const e = parseTimeToMinutes(c.endTime || '18:00');
+    return s <= nowMins && e > nowMins;
+  });
+  const pastOrActive = [...classes]
+    .reverse()
+    .find((c) => parseTimeToMinutes(c.endTime || '18:00') <= nowMins + 30);
+  return activeClass || pastOrActive || classes[classes.length - 1];
+}
+
+export function resolveViaggioTargetContext(params: {
+  effDayIdx: number;
+  direction: 'outbound' | 'return';
+  config: CommuterConfig;
+  schedule: ScheduleData | null;
+  manuals: ManualClassEvent[];
+  defaultTabUrl?: string | null;
+  selectedClassIndex?: number | null;
+}): {
+  targetDate: Date;
+  targetClass: ClassEvent | null;
+  isExplicitClass: boolean;
+} {
+  const {
+    effDayIdx,
+    direction,
+    config,
+    schedule,
+    manuals,
+    defaultTabUrl,
+    selectedClassIndex = null,
+  } = params;
+
+  const targetDate = new Date();
+  const currentDay = targetDate.getDay();
+  const diff = (effDayIdx - currentDay + 7) % 7;
+  targetDate.setDate(targetDate.getDate() + diff);
+
+  const isEffWeekend = effDayIdx === 0 || effDayIdx === 6;
+  const currentDayClasses = getDayClassesForWeekday(
+    effDayIdx,
+    schedule,
+    manuals,
+    defaultTabUrl
+  );
+
+  const now = new Date();
+  const isToday = now.getDay() === effDayIdx;
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  let targetClass: ClassEvent | null = null;
+  const isExplicitClass =
+    selectedClassIndex !== null && Boolean(currentDayClasses[selectedClassIndex]);
+
+  if (!isEffWeekend && currentDayClasses.length > 0) {
+    if (isExplicitClass) {
+      targetClass = currentDayClasses[selectedClassIndex!];
+    } else {
+      const approxTimeToStation = config?.carLeg?.enabled
+        ? (config.carLeg.durationMinutes || 24) +
+          (config.carLeg.parkingBufferMinutes ?? 7)
+        : 10;
+      const approxMinTravel =
+        approxTimeToStation + 40 + (config?.transitLeg?.durationMinutes || 20);
+
+      targetClass = resolveAutoTargetClass(
+        currentDayClasses,
+        isToday,
+        direction,
+        now,
+        approxMinTravel
+      );
+    }
+  }
+
+  const lastClass =
+    currentDayClasses.length > 0
+      ? currentDayClasses[currentDayClasses.length - 1]
+      : null;
+  const isAllClassesFinished = Boolean(
+    isToday &&
+      !isEffWeekend &&
+      lastClass &&
+      nowMins >= parseTimeToMinutes(lastClass.endTime || '18:00')
+  );
+
+  const isTargetClassFinished = Boolean(
+    isToday &&
+      !isEffWeekend &&
+      targetClass &&
+      (isAllClassesFinished ||
+        nowMins >= parseTimeToMinutes(targetClass.endTime || '18:00'))
+  );
+
+  const isTargetClassInProgress = Boolean(
+    isToday &&
+      !isEffWeekend &&
+      targetClass &&
+      nowMins >= parseTimeToMinutes(targetClass.startTime || '08:30') &&
+      nowMins < parseTimeToMinutes(targetClass.endTime || '18:00')
+  );
+
+  if (
+    targetClass &&
+    !isTargetClassFinished &&
+    !(direction === 'outbound' && isTargetClassInProgress)
+  ) {
+    const timeToUse =
+      direction === 'outbound'
+        ? targetClass.startTime || '08:30'
+        : targetClass.endTime || '16:00';
+    const [hh, mm] = timeToUse.split(':').map(Number);
+    targetDate.setHours(hh || 8, mm || 30, 0, 0);
+  } else if (isToday) {
+    targetDate.setHours(now.getHours(), now.getMinutes(), 0, 0);
+  } else {
+    targetDate.setHours(direction === 'outbound' ? 8 : 16, 30, 0, 0);
+  }
+
+  return { targetDate, targetClass, isExplicitClass };
+}
+
+export interface ViaggioStartupSnapshot {
+  timestamp: number;
+  dayIdx: number;
+  direction: 'outbound';
+  config: CommuterConfig;
+  manualEvents: ManualClassEvent[];
+  schedule: ScheduleData | null;
+  defaultTabUrl: string | null;
+  itinerary: CommuterItinerary | null;
+  disruptions: DisruptionEvent[];
+}
+
+const STARTUP_SNAPSHOT_TTL_MS = 45000;
+let warmViaggioSnapshot: ViaggioStartupSnapshot | null = null;
+let inFlightStartupPrefetch: Promise<ViaggioStartupSnapshot | null> | null = null;
+
+export function invalidateViaggioStartupSnapshot(): void {
+  warmViaggioSnapshot = null;
+}
+
+export function getWarmViaggioStartupSnapshot(
+  dayIdx: number,
+  direction: 'outbound' | 'return'
+): ViaggioStartupSnapshot | null {
+  if (
+    warmViaggioSnapshot &&
+    warmViaggioSnapshot.dayIdx === dayIdx &&
+    warmViaggioSnapshot.direction === direction &&
+    Date.now() - warmViaggioSnapshot.timestamp < STARTUP_SNAPSHOT_TTL_MS
+  ) {
+    return warmViaggioSnapshot;
+  }
+  return null;
+}
+
+export function getInFlightStartupPrefetch(): Promise<ViaggioStartupSnapshot | null> | null {
+  return inFlightStartupPrefetch;
+}
+
+/**
+ * Prefetch selettivo all'avvio dell'app: avvia in parallelo e senza bloccare il boot
+ * il caricamento di configurazione Viaggio, orario, lezioni manuali, scioperi/manifestazioni
+ * e il calcolo iniziale dell'itinerario odierno di andata (inclusi treno, auto e mezzi).
+ */
+export function prefetchViaggioStartupData(
+  degreeUrlHint?: string | null
+): Promise<ViaggioStartupSnapshot | null> {
+  if (inFlightStartupPrefetch) {
+    return inFlightStartupPrefetch;
+  }
+
+  const todayIdx = new Date().getDay();
+  if (
+    warmViaggioSnapshot &&
+    warmViaggioSnapshot.dayIdx === todayIdx &&
+    Date.now() - warmViaggioSnapshot.timestamp < STARTUP_SNAPSHOT_TTL_MS
+  ) {
+    return Promise.resolve(warmViaggioSnapshot);
+  }
+
+  inFlightStartupPrefetch = (async (): Promise<ViaggioStartupSnapshot | null> => {
+    try {
+      const disruptionsPromise = getDisruptions(false).catch(() => [] as DisruptionEvent[]);
+
+      const [configRes, manualsRes, storagePairsRes] = await Promise.allSettled([
+        getCommuterConfig(),
+        getManualEvents(),
+        AsyncStorage.multiGet(['selectedDegreeUrl', 'defaultTabUrl']),
+      ]);
+
+      if (configRes.status !== 'fulfilled') {
+        await disruptionsPromise;
+        return null;
+      }
+
+      const currentConfig = configRes.value;
+      const currentManuals =
+        manualsRes.status === 'fulfilled' ? manualsRes.value : [];
+      const pairs = storagePairsRes.status === 'fulfilled' ? storagePairsRes.value : [];
+      const url = degreeUrlHint || pairs[0]?.[1] || null;
+      const defaultTabUrl = pairs[1]?.[1] || null;
+
+      let sched: ScheduleData | null = null;
+      if (url) {
+        try {
+          const courseData = await fetchAllCourseData(url);
+          const activeTab =
+            courseData.tabs.find((t) => t.url === defaultTabUrl) ||
+            courseData.tabs[0];
+          if (activeTab) {
+            sched =
+              courseData.schedules[activeTab.url] ||
+              courseData.schedules[activeTab.name] ||
+              null;
+            if (!sched) {
+              sched = await fetchScheduleData(activeTab.url);
+            }
+          }
+        } catch {
+          // Errore isolato lettura orario: prosegui con itinerario senza blocchi
+        }
+      }
+
+      let itin: CommuterItinerary | null = null;
+      if (currentConfig.enabled !== false) {
+        const { targetDate, targetClass, isExplicitClass } =
+          resolveViaggioTargetContext({
+            effDayIdx: todayIdx,
+            direction: 'outbound',
+            config: currentConfig,
+            schedule: sched,
+            manuals: currentManuals,
+            defaultTabUrl,
+            selectedClassIndex: null,
+          });
+
+        try {
+          itin = await computeCommuterItinerary({
+            config: currentConfig,
+            scheduleData: sched,
+            manualEvents: currentManuals,
+            direction: 'outbound',
+            targetDate,
+            selectedClass: targetClass,
+            isExplicitClass,
+            selectedTrainOffset: 0,
+            forceRefresh: false,
+          });
+        } catch {
+          itin = null;
+        }
+      }
+
+      const disruptions = await disruptionsPromise;
+      const snapshot: ViaggioStartupSnapshot = {
+        timestamp: Date.now(),
+        dayIdx: todayIdx,
+        direction: 'outbound',
+        config: currentConfig,
+        manualEvents: currentManuals,
+        schedule: sched,
+        defaultTabUrl,
+        itinerary: itin,
+        disruptions,
+      };
+      warmViaggioSnapshot = snapshot;
+      return snapshot;
+    } catch {
+      return null;
+    } finally {
+      inFlightStartupPrefetch = null;
+    }
+  })();
+
+  return inFlightStartupPrefetch;
 }

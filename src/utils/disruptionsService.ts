@@ -5,6 +5,24 @@ import { callGeminiJson } from './aiParser';
 const DISRUPTIONS_CACHE_KEY = '@studici_disruptions_cache';
 const DISRUPTIONS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minuti
 
+let memoryDisruptionsCache: { timestamp: number; data: DisruptionEvent[] } | null = null;
+let inFlightDisruptionsPromise: Promise<DisruptionEvent[]> | null = null;
+let inFlightForceDisruptionsPromise: Promise<DisruptionEvent[]> | null = null;
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 7500
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 const ITALIAN_MONTHS: Record<string, string> = {
   gennaio: '01',
   febbraio: '02',
@@ -603,16 +621,20 @@ export function formatTrainStrikeBannerSummary(
 /**
  * Recupera gli scioperi ufficiali dal feed RSS del Ministero dei Trasporti (MIT)
  */
-async function fetchOfficialStrikes(): Promise<DisruptionEvent[]> {
+async function fetchOfficialStrikes(): Promise<{ events: DisruptionEvent[]; ok: boolean }> {
   try {
-    const res = await fetch('https://scioperi.mit.gov.it/mit2/public/scioperi/rss', {
-      headers: {
-        Accept: 'application/rss+xml, application/xml, text/xml, */*',
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    const res = await fetchWithTimeout(
+      'https://scioperi.mit.gov.it/mit2/public/scioperi/rss',
+      {
+        headers: {
+          Accept: 'application/rss+xml, application/xml, text/xml, */*',
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        },
       },
-    });
-    if (!res.ok) return [];
+      7500
+    );
+    if (!res.ok) return { events: [], ok: false };
 
     const xml = await res.text();
     const items = xml.split('<item>').slice(1);
@@ -692,10 +714,10 @@ async function fetchOfficialStrikes(): Promise<DisruptionEvent[]> {
       }
     }
 
-    return strikes;
+    return { events: strikes, ok: true };
   } catch (err) {
     console.warn('[Disruptions] Errore fetch MIT RSS:', err);
-    return [];
+    return { events: [], ok: false };
   }
 }
 
@@ -707,13 +729,17 @@ async function fetchLuceverdeArticleDetail(id: string): Promise<{
   timeWindow?: string;
 } | null> {
   try {
-    const res = await fetch(`https://roma.luceverde.it/articles/${id}`, {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    const res = await fetchWithTimeout(
+      `https://roma.luceverde.it/articles/${id}`,
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        },
       },
-    });
+      5000
+    );
     if (!res.ok) return null;
 
     const html = await res.text();
@@ -770,20 +796,24 @@ async function fetchLuceverdeArticleDetail(id: string): Promise<{
 /**
  * Recupera le notizie di infomobilità e manifestazioni a Roma da Luceverde (Next.js data)
  */
-async function fetchRomeMobilityEvents(): Promise<DisruptionEvent[]> {
+async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; ok: boolean }> {
   try {
-    const res = await fetch('https://roma.luceverde.it/news', {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    const res = await fetchWithTimeout(
+      'https://roma.luceverde.it/news',
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        },
       },
-    });
-    if (!res.ok) return [];
+      7500
+    );
+    if (!res.ok) return { events: [], ok: false };
 
     const html = await res.text();
     const nextMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
-    if (!nextMatch) return [];
+    if (!nextMatch) return { events: [], ok: false };
 
     const nextData = JSON.parse(nextMatch[1]);
     const newsList: any[] = nextData?.props?.pageProps?.additionalData?.newsList || [];
@@ -949,10 +979,10 @@ async function fetchRomeMobilityEvents(): Promise<DisruptionEvent[]> {
     // Raffinamento intelligente date (da DATA a DATA) e orari con Gemini Flash Lite
     const aiEnrichedEvents = await enrichEventsWithGemini(detailedEvents);
 
-    return aiEnrichedEvents;
+    return { events: aiEnrichedEvents, ok: true };
   } catch (err) {
     console.warn('[Disruptions] Errore fetch Luceverde Roma:', err);
-    return [];
+    return { events: [], ok: false };
   }
 }
 
@@ -1063,73 +1093,113 @@ Rispondi rigorosamente SOLO con il JSON array valido nel formato:
 }
 
 /**
- * Ottiene la lista completa degli scioperi e delle manifestazioni (con cache locale di 30m)
+ * Ottiene la lista completa degli scioperi e delle manifestazioni (con cache RAM + locale di 30m e deduplicazione in-flight)
  */
 export async function getDisruptions(forceRefresh = false): Promise<DisruptionEvent[]> {
-  try {
-    if (!forceRefresh) {
+  if (!forceRefresh) {
+    if (memoryDisruptionsCache && Date.now() - memoryDisruptionsCache.timestamp < DISRUPTIONS_CACHE_TTL_MS) {
+      return memoryDisruptionsCache.data;
+    }
+    if (inFlightDisruptionsPromise) {
+      return inFlightDisruptionsPromise;
+    }
+  } else if (inFlightForceDisruptionsPromise) {
+    return inFlightForceDisruptionsPromise;
+  }
+
+  const runFetch = async (): Promise<DisruptionEvent[]> => {
+    let staleCacheData: DisruptionEvent[] | null = memoryDisruptionsCache?.data ?? null;
+
+    try {
       const cachedRaw = await AsyncStorage.getItem(DISRUPTIONS_CACHE_KEY);
       if (cachedRaw) {
         const cached = JSON.parse(cachedRaw);
-        if (cached && cached.timestamp && Date.now() - cached.timestamp < DISRUPTIONS_CACHE_TTL_MS) {
-          if (Array.isArray(cached.data)) {
+        if (cached && Array.isArray(cached.data)) {
+          staleCacheData = cached.data;
+          if (!forceRefresh && cached.timestamp && Date.now() - cached.timestamp < DISRUPTIONS_CACHE_TTL_MS) {
+            memoryDisruptionsCache = { timestamp: cached.timestamp, data: cached.data };
             return cached.data;
           }
         }
       }
+
+      const [strikesRes, mobilityRes] = await Promise.allSettled([
+        fetchOfficialStrikes(),
+        fetchRomeMobilityEvents(),
+      ]);
+
+      const strikesOutcome =
+        strikesRes.status === 'fulfilled' ? strikesRes.value : { events: [], ok: false };
+      const mobilityOutcome =
+        mobilityRes.status === 'fulfilled' ? mobilityRes.value : { events: [], ok: false };
+
+      // Se entrambe le sorgenti sono fallite, preserva la cache precedente invece di sovrascriverla con []
+      if (!strikesOutcome.ok && !mobilityOutcome.ok) {
+        return staleCacheData ?? [];
+      }
+
+      const combined = [...strikesOutcome.events, ...mobilityOutcome.events].map((ev) => {
+        const isTrainRelevant = ev.category === 'sciopero_treni' ? isTrainStrikeImpactingCommuter(ev) : false;
+        const isWalkRel = isWalkDisruptionImpactingCommuter(ev);
+        const isRelevant = isTrainRelevant || isWalkRel;
+        return {
+          ...ev,
+          isCommuterRelevant: isRelevant,
+          isWalkRelevant: isWalkRel,
+        };
+      });
+
+      const today = new Date();
+      const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      // Escludi eventi già interamente conclusi nel passato (endDate < todayIso)
+      const activeOrUpcoming = combined.filter((ev) => {
+        if (ev.endDate && ev.endDate < todayIso) {
+          return false;
+        }
+        return true;
+      });
+
+      // Ordina: prima gli eventi con data crescente, privilegiando quelli che impattano la tratta
+      activeOrUpcoming.sort((a, b) => {
+        if (a.startDate !== b.startDate) {
+          return a.startDate.localeCompare(b.startDate);
+        }
+        if (a.isCommuterRelevant && !b.isCommuterRelevant) return -1;
+        if (!a.isCommuterRelevant && b.isCommuterRelevant) return 1;
+        return 0;
+      });
+
+      const now = Date.now();
+      memoryDisruptionsCache = { timestamp: now, data: activeOrUpcoming };
+
+      // Salva in cache solo se almeno una fonte ha risposto correttamente
+      await AsyncStorage.setItem(
+        DISRUPTIONS_CACHE_KEY,
+        JSON.stringify({
+          timestamp: now,
+          data: activeOrUpcoming,
+        })
+      );
+
+      return activeOrUpcoming;
+    } catch (err) {
+      console.warn('[Disruptions] Errore getDisruptions:', err);
+      return staleCacheData ?? [];
     }
+  };
 
-    const [strikes, mobilityEvents] = await Promise.all([
-      fetchOfficialStrikes(),
-      fetchRomeMobilityEvents(),
-    ]);
-
-    const combined = [...strikes, ...mobilityEvents].map((ev) => {
-      const isTrainRelevant = ev.category === 'sciopero_treni' ? isTrainStrikeImpactingCommuter(ev) : false;
-      const isWalkRel = isWalkDisruptionImpactingCommuter(ev);
-      const isRelevant = isTrainRelevant || isWalkRel;
-      return {
-        ...ev,
-        isCommuterRelevant: isRelevant,
-        isWalkRelevant: isWalkRel,
-      };
+  if (forceRefresh) {
+    inFlightForceDisruptionsPromise = runFetch().finally(() => {
+      inFlightForceDisruptionsPromise = null;
     });
-
-    const today = new Date();
-    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    // Escludi eventi già interamente conclusi nel passato (endDate < todayIso)
-    const activeOrUpcoming = combined.filter((ev) => {
-      if (ev.endDate && ev.endDate < todayIso) {
-        return false;
-      }
-      return true;
-    });
-
-    // Ordina: prima gli eventi con data crescente, privilegiando quelli che impattano la tratta
-    activeOrUpcoming.sort((a, b) => {
-      if (a.startDate !== b.startDate) {
-        return a.startDate.localeCompare(b.startDate);
-      }
-      if (a.isCommuterRelevant && !b.isCommuterRelevant) return -1;
-      if (!a.isCommuterRelevant && b.isCommuterRelevant) return 1;
-      return 0;
-    });
-
-    // Salva in cache
-    await AsyncStorage.setItem(
-      DISRUPTIONS_CACHE_KEY,
-      JSON.stringify({
-        timestamp: Date.now(),
-        data: activeOrUpcoming,
-      })
-    );
-
-    return activeOrUpcoming;
-  } catch (err) {
-    console.warn('[Disruptions] Errore getDisruptions:', err);
-    return [];
+    return inFlightForceDisruptionsPromise;
   }
+
+  inFlightDisruptionsPromise = runFetch().finally(() => {
+    inFlightDisruptionsPromise = null;
+  });
+  return inFlightDisruptionsPromise;
 }
 
 /**

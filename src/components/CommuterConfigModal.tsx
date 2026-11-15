@@ -1,7 +1,6 @@
 import { CARD_RADIUS, UNIFORM_MODAL_BG } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import {
   DarkTheme,
@@ -32,7 +31,10 @@ import {
   StationInfo,
   TrainPreferences,
 } from "../types/commuter";
-import { DEFAULT_TRAIN_PREFERENCES } from "../utils/commuterStorage";
+import {
+  DEFAULT_STRIKE_ALERTS,
+  DEFAULT_TRAIN_PREFERENCES,
+} from "../utils/commuterStorage";
 import {
   calculateDrivingEstimate,
   DrivingEstimate,
@@ -40,8 +42,11 @@ import {
   PlaceSuggestion,
   searchPlaces,
 } from "../utils/drivingRouter";
-import { getManualEvents } from "../utils/manualEvents";
-import { fetchScheduleData, getCachedScheduleData } from "../utils/scraper";
+import {
+  deduplicatePreferredTrainsMap,
+  getAllPreferredTrains,
+  NormalizedPreferredTrain,
+} from "../utils/preferredTrains";
 import { ALL_STATIONS, searchStations } from "../utils/trenitaliaApi";
 import { SwipeToDeleteRow } from "./SwipeToDeleteRow";
 
@@ -125,7 +130,6 @@ interface CommuterModalContextType {
     type: "departure" | "arrival",
   ) => void;
   handleStationSearchChange: (text: string) => void;
-  resolvedPreferredLectures: Record<string, { subject: string; room?: string }>;
   persistTrainPreferencesImmediately: (next: TrainPreferences) => void;
 }
 
@@ -267,31 +271,6 @@ const WEEKDAY_NAMES_FULL = [
   "Sabato",
 ];
 
-function formatPreferredTrainKey(key: string): {
-  dayLabel: string;
-  dirLabel: string;
-  lectureLabel: string;
-  sortOrder: number;
-} {
-  const parts = key.split("_");
-  const dir = parts[0] === "return" ? "Ritorno" : "Andata";
-  const dayNum = parseInt(parts[1] || "1", 10);
-  const dayName = WEEKDAY_NAMES_FULL[dayNum] || `Giorno ${dayNum}`;
-  const lectureRaw = parts.slice(2).join("_");
-  const lectureLabel =
-    !lectureRaw || lectureRaw === "none"
-      ? "Nessuna lezione"
-      : `Lezione ${lectureRaw}`;
-  const normalizedDay = dayNum === 0 ? 7 : dayNum;
-  const dirOrder = parts[0] === "return" ? 1 : 0;
-  return {
-    dayLabel: dayName,
-    dirLabel: dir,
-    lectureLabel,
-    sortOrder: normalizedDay * 10 + dirOrder,
-  };
-}
-
 function TrainPreferencesSection({
   includeIntercity,
   onToggleIntercity,
@@ -314,7 +293,7 @@ function TrainPreferencesSection({
   const effectiveEarlyLeave = prefs.smartReturnEnabled
     ? prefs.maxEarlyLeaveMinutes
     : 0;
-  const preferredCount = Object.keys(prefs.preferredTrains || {}).length;
+  const preferredCount = getAllPreferredTrains(prefs).length;
 
   return (
     <View>
@@ -823,6 +802,10 @@ function CommuterConfigModalContent({
         ...DEFAULT_TRAIN_PREFERENCES,
         ...initTrainPreferences,
       },
+      strikeAlerts: {
+        ...DEFAULT_STRIKE_ALERTS,
+        ...(config?.strikeAlerts || {}),
+      },
       transitLeg: {
         ...config?.transitLeg,
         preferredMode: initUrbanMode,
@@ -868,6 +851,10 @@ function CommuterConfigModalContent({
     onSave({
       ...localConfig,
       enabled: true,
+      strikeAlerts: {
+        ...DEFAULT_STRIKE_ALERTS,
+        ...(localConfig.strikeAlerts || {}),
+      },
       carLeg: {
         ...localConfig.carLeg,
         durationMinutes: totalDuration,
@@ -898,84 +885,6 @@ function CommuterConfigModalContent({
   const sheetTitle = isUnconfigured
     ? "Configura viaggio"
     : "Impostazioni viaggio";
-
-  const [resolvedPreferredLectures, setResolvedPreferredLectures] = useState<
-    Record<string, { subject: string; room?: string }>
-  >({});
-
-  useEffect(() => {
-    const prefMap =
-      (isUnconfigured
-        ? initTrainPreferences?.preferredTrains
-        : localConfig.trainPreferences?.preferredTrains) || {};
-    const missing = Object.entries(prefMap).filter(
-      ([, pref]) => !pref?.subject?.trim(),
-    );
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const degreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-        const tabUrl =
-          (degreeUrl
-            ? await AsyncStorage.getItem(`defaultTabUrl_${degreeUrl}`)
-            : null) || (await AsyncStorage.getItem("defaultTabUrl"));
-        const [sched, manuals] = await Promise.all([
-          tabUrl
-            ? getCachedScheduleData(tabUrl, degreeUrl)
-                .then((cached) => cached || fetchScheduleData(tabUrl))
-                .catch(() => null)
-            : Promise.resolve(null),
-          getManualEvents(degreeUrl || undefined).catch(() => []),
-        ]);
-        if (cancelled) return;
-
-        const nextResolved: Record<string, { subject: string; room?: string }> = {};
-        for (const [key] of missing) {
-          const parts = key.split("_");
-          const dayNum = parseInt(parts[1] || "", 10);
-          const lectureRaw = parts.slice(2).join("_");
-          if (isNaN(dayNum) || dayNum < 1 || dayNum > 5 || !lectureRaw || lectureRaw === "none") {
-            continue;
-          }
-          const schedIdx = dayNum - 1;
-          const official = sched?.days?.[schedIdx] || [];
-          const manualForDay = (manuals || []).filter((m) => m.dayIndex === schedIdx);
-          const allForDay = [
-            ...official.map((c) => ({
-              startTime: c.startTime,
-              endTime: c.endTime,
-              subject: c.subject,
-              room: c.room,
-            })),
-            ...manualForDay.map((m) => ({
-              startTime: m.startTime,
-              endTime: m.endTime,
-              subject: m.subject,
-              room: m.room,
-            })),
-          ];
-          const match = allForDay.find(
-            (c) => `${c.startTime || ""}-${c.endTime || ""}` === lectureRaw,
-          );
-          if (match?.subject) {
-            nextResolved[key] = {
-              subject: match.subject,
-              room: match.room,
-            };
-          }
-        }
-        if (!cancelled && Object.keys(nextResolved).length > 0) {
-          setResolvedPreferredLectures(nextResolved);
-        }
-      } catch {}
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isUnconfigured, initTrainPreferences, localConfig.trainPreferences]);
 
   const latestConfigRef = useRef<CommuterConfig>(config);
   useEffect(() => {
@@ -1048,7 +957,6 @@ function CommuterConfigModalContent({
       getSelectedStationCode,
       handleSelectStation,
       handleStationSearchChange,
-      resolvedPreferredLectures,
       persistTrainPreferencesImmediately,
     }),
     [
@@ -1089,7 +997,6 @@ function CommuterConfigModalContent({
       getSelectedStationCode,
       handleSelectStation,
       handleStationSearchChange,
-      resolvedPreferredLectures,
       persistTrainPreferencesImmediately,
     ],
   );
@@ -3231,6 +3138,95 @@ function MainFormScreen() {
                 </View>
               </View>
             </View>
+
+            {/* 5. Promemoria Scioperi (-7 giorni e -1 giorno) */}
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <View
+                  style={[
+                    styles.cardHeaderBadge,
+                    { backgroundColor: "rgba(239, 68, 68, 0.16)" },
+                  ]}
+                >
+                  <Ionicons name="megaphone-outline" size={14} color="#ef4444" />
+                </View>
+                <Text style={styles.cardHeaderTitle}>AVVISI SCIOPERI</Text>
+              </View>
+
+              <Text style={[styles.switchDesc, { marginBottom: 14 }]}>
+                {Platform.OS === "ios"
+                  ? "Crea automaticamente promemoria nell'app Apple Promemoria per gli scioperi che impattano la tua tratta."
+                  : "Invia notifiche automatiche per gli scioperi che impattano la tua tratta."}
+              </Text>
+
+              <View style={styles.switchRow}>
+                <Text
+                  style={{
+                    flex: 1,
+                    paddingRight: 12,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    color: "#ffffff",
+                  }}
+                >
+                  Promemoria 7 giorni prima
+                </Text>
+                <Switch
+                  value={
+                    localConfig.strikeAlerts?.notify7DaysBefore ??
+                    DEFAULT_STRIKE_ALERTS.notify7DaysBefore
+                  }
+                  onValueChange={(val) =>
+                    setLocalConfig((prev) => ({
+                      ...prev,
+                      strikeAlerts: {
+                        ...DEFAULT_STRIKE_ALERTS,
+                        ...(prev.strikeAlerts || {}),
+                        notify7DaysBefore: val,
+                      },
+                    }))
+                  }
+                  trackColor={{ false: "#2c2c2e", true: theme.primary }}
+                  thumbColor="#ffffff"
+                  ios_backgroundColor="#2c2c2e"
+                />
+              </View>
+
+              <View style={[styles.cardDivider, { marginVertical: 14 }]} />
+
+              <View style={styles.switchRow}>
+                <Text
+                  style={{
+                    flex: 1,
+                    paddingRight: 12,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    color: "#ffffff",
+                  }}
+                >
+                  Promemoria 1 giorno prima
+                </Text>
+                <Switch
+                  value={
+                    localConfig.strikeAlerts?.notify1DayBefore ??
+                    DEFAULT_STRIKE_ALERTS.notify1DayBefore
+                  }
+                  onValueChange={(val) =>
+                    setLocalConfig((prev) => ({
+                      ...prev,
+                      strikeAlerts: {
+                        ...DEFAULT_STRIKE_ALERTS,
+                        ...(prev.strikeAlerts || {}),
+                        notify1DayBefore: val,
+                      },
+                    }))
+                  }
+                  trackColor={{ false: "#2c2c2e", true: theme.primary }}
+                  thumbColor="#ffffff"
+                  ios_backgroundColor="#2c2c2e"
+                />
+              </View>
+            </View>
           </ScrollView>
         )}
       </KeyboardAvoidingView>
@@ -3355,9 +3351,10 @@ function PreferredTrainsScreen({ navigation, route }: any) {
     theme,
     initTrainPreferences,
     setInitTrainPreferences,
+    initDepartureStation,
+    initArrivalStation,
     localConfig,
     setLocalConfig,
-    resolvedPreferredLectures,
     persistTrainPreferencesImmediately,
   } = useCommuterModal();
 
@@ -3372,37 +3369,29 @@ function PreferredTrainsScreen({ navigation, route }: any) {
     [sourcePrefs],
   );
 
-  const preferredEntries = useMemo(
-    () =>
-      Object.entries(currentPrefs.preferredTrains || {}).sort(
-        ([keyA], [keyB]) =>
-          formatPreferredTrainKey(keyA).sortOrder -
-          formatPreferredTrainKey(keyB).sortOrder,
-      ),
-    [currentPrefs.preferredTrains],
+  const preferredList = useMemo(
+    () => getAllPreferredTrains(currentPrefs),
+    [currentPrefs],
   );
-  const preferredCount = preferredEntries.length;
+  const preferredCount = preferredList.length;
 
   const groupedByDay = useMemo(() => {
     const groups: {
+      dayIndex: number;
       dayLabel: string;
-      items: {
-        key: string;
-        pref: NonNullable<TrainPreferences["preferredTrains"]>[string];
-        meta: ReturnType<typeof formatPreferredTrainKey>;
-      }[];
+      items: NormalizedPreferredTrain[];
     }[] = [];
-    for (const [key, pref] of preferredEntries) {
-      const meta = formatPreferredTrainKey(key);
-      let group = groups.find((g) => g.dayLabel === meta.dayLabel);
+    for (const pref of preferredList) {
+      const dayLabel = WEEKDAY_NAMES_FULL[pref.dayIndex] || `Giorno ${pref.dayIndex}`;
+      let group = groups.find((g) => g.dayIndex === pref.dayIndex);
       if (!group) {
-        group = { dayLabel: meta.dayLabel, items: [] };
+        group = { dayIndex: pref.dayIndex, dayLabel, items: [] };
         groups.push(group);
       }
-      group.items.push({ key, pref, meta });
+      group.items.push(pref);
     }
     return groups;
-  }, [preferredEntries]);
+  }, [preferredList]);
 
   const updatePrefs = useCallback(
     (next: TrainPreferences) => {
@@ -3425,18 +3414,29 @@ function PreferredTrainsScreen({ navigation, route }: any) {
   );
 
   const removePreference = useCallback(
-    (keyToRemove: string) => {
-      const next = {
-        ...(currentPrefs.preferredTrains || {}),
-      };
-      delete next[keyToRemove];
+    (prefId: string) => {
+      const normalizedMap = deduplicatePreferredTrainsMap(
+        currentPrefs.preferredTrains,
+      );
+      delete normalizedMap[prefId];
       updatePrefs({
         ...currentPrefs,
-        preferredTrains: next,
+        preferredTrains: deduplicatePreferredTrainsMap(normalizedMap),
       });
     },
     [currentPrefs, updatePrefs],
   );
+
+  const depStationName =
+    (mode === "init"
+      ? initDepartureStation?.shortName || initDepartureStation?.name
+      : localConfig.departureStation?.shortName ||
+        localConfig.departureStation?.name) || "Partenza";
+  const arrStationName =
+    (mode === "init"
+      ? initArrivalStation?.shortName || initArrivalStation?.name
+      : localConfig.arrivalStation?.shortName ||
+        localConfig.arrivalStation?.name) || "Arrivo";
 
   useEffect(() => {
     navigation.setOptions({
@@ -3504,30 +3504,21 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                 {group.dayLabel.toUpperCase()}
               </Text>
               <View>
-                {group.items.map(({ key, pref, meta }, idx) => {
-                  const isOutbound = meta.dirLabel === "Andata";
-                  const cleanLectureTime = meta.lectureLabel
-                    .replace(/^Lezione\s+/i, "")
-                    .trim();
-                  const resolved = resolvedPreferredLectures[key];
-                  const effectiveSubject =
-                    pref.subject?.trim() || resolved?.subject?.trim();
-                  const lectureTitle =
-                    effectiveSubject ||
-                    (cleanLectureTime === "Nessuna lezione" ||
-                    cleanLectureTime === "Senza lezione"
-                      ? "Nessuna lezione"
-                      : `Lezione ${cleanLectureTime}`);
-                  const lectureSub =
-                    cleanLectureTime === "Nessuna lezione" ||
-                    cleanLectureTime === "Senza lezione"
-                      ? "Giornata senza lezioni"
-                      : cleanLectureTime;
+                {group.items.map((pref, idx) => {
+                  const isOutbound = pref.direction === "outbound";
+                  const dirLabel = isOutbound ? "Andata" : "Ritorno";
+                  const trainTitle =
+                    pref.label?.trim() ||
+                    pref.trainNumber ||
+                    `Treno ${pref.departureTime}`;
+                  const routeLabel = isOutbound
+                    ? `${depStationName} → ${arrStationName}`
+                    : `${arrStationName} → ${depStationName}`;
 
                   return (
                     <SwipeToDeleteRow
-                      key={key}
-                      onDelete={() => removePreference(key)}
+                      key={pref.id}
+                      onDelete={() => removePreference(pref.id)}
                       marginBottom={idx < group.items.length - 1 ? 8 : 0}
                       borderRadius={16}
                     >
@@ -3560,7 +3551,7 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                                 { color: isOutbound ? theme.accent : "#38bdf8" },
                               ]}
                             >
-                              {meta.dirLabel}
+                              {dirLabel}
                             </Text>
                           </View>
 
@@ -3568,13 +3559,13 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                             style={styles.prefLectureSubject}
                             numberOfLines={1}
                           >
-                            {lectureTitle}
+                            {trainTitle}
                           </Text>
 
                           <TouchableOpacity
                             style={styles.prefDeleteBtn}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            onPress={() => removePreference(key)}
+                            onPress={() => removePreference(pref.id)}
                           >
                             <Ionicons
                               name="trash-outline"
@@ -3587,7 +3578,7 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                         <View style={styles.prefCardBottomRow}>
                           <View style={styles.prefLectureTimeWrap}>
                             <Ionicons
-                              name="school-outline"
+                              name="train-outline"
                               size={13}
                               color="#8e8e93"
                             />
@@ -3595,7 +3586,7 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                               style={styles.prefLectureTimeText}
                               numberOfLines={1}
                             >
-                              {lectureSub}
+                              {routeLabel}
                             </Text>
                           </View>
 
@@ -3607,11 +3598,6 @@ function PreferredTrainsScreen({ navigation, route }: any) {
                             {pref.arrivalTime && (
                               <Text style={styles.prefTrainMeta}>
                                 → {pref.arrivalTime}
-                              </Text>
-                            )}
-                            {pref.label && (
-                              <Text style={styles.prefTrainLabel}>
-                                • {pref.label}
                               </Text>
                             )}
                           </View>
@@ -4660,10 +4646,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#cbd5e1",
-  },
-  prefTrainLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#fbbf24",
   },
 });

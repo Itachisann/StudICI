@@ -18,6 +18,10 @@ import { StudICILogo } from './StudICILogo';
 import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
 import { refreshCommuterAlarmsInBackground } from '../utils/alarmSync';
 import {
+  invalidateViaggioStartupSnapshot,
+  prefetchViaggioStartupData,
+} from '../utils/commuterOptimizer';
+import {
   checkForAppUpdate,
   GITHUB_LATEST_RELEASE_URL,
   AppUpdateInfo,
@@ -111,6 +115,9 @@ export function StartupCheckScreen({
 
     async function runCheck() {
       try {
+        // Avvia subito in background il prefetch selettivo per scioperi e sezione Viaggio (non bloccante)
+        prefetchViaggioStartupData(degreeUrl).catch(() => {});
+
         // Controllo simultaneo di aggiornamenti app obbligatori e orario lezioni
         const [appUpdateRes, courseUpdateRes] = await Promise.allSettled([
           checkForAppUpdate(),
@@ -179,6 +186,8 @@ export function StartupCheckScreen({
             setProgressDetail(stepMsg);
           });
 
+          invalidateViaggioStartupSnapshot();
+          prefetchViaggioStartupData(degreeUrl).catch(() => {});
           refreshCommuterAlarmsInBackground(true).catch(() => {});
 
           setStatus('up_to_date');
