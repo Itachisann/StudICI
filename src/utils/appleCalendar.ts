@@ -8,6 +8,11 @@ import {
   isManualEventActiveOnDate,
   manualEventToClassEvent,
 } from "./manualEvents";
+import {
+  buildExcludedIdSet,
+  getExcludedLessons,
+  isLessonExcluded,
+} from "./excludedLessons";
 import { getCommuterConfig } from "./commuterStorage";
 import {
   computeCommuterItinerary,
@@ -21,6 +26,7 @@ import {
 } from "./trenitaliaApi";
 import { resolveStationCalendarLocation, StationCalendarLocation } from "./drivingRouter";
 import { StudICIAlarms, StructuredLocationEntry } from "../../modules/studici-alarms/src";
+import { APP_THEMES, DEFAULT_THEME } from "../constants/theme";
 import { CommuterConfig, CommuterItinerary, LiveTrainInfo, PreferredTrain } from "../types/commuter";
 import {
   calendarDayIndexToJsDay,
@@ -45,8 +51,9 @@ async function attachStructuredLocationsIfSupported(
   }
   try {
     await StudICIAlarms.attachStructuredLocations(entries);
-  } catch {
+  } catch (err) {
     // Best-effort: fallback su indirizzo testuale già impostato su Calendar.createEventAsync
+    console.warn("StudICI attachStructuredLocations warning:", err);
   }
 }
 
@@ -201,10 +208,169 @@ export function normalizeCalendarHex(color?: string | null): string | null {
   if (!color || typeof color !== "string") return null;
   const trimmed = color.trim().toLowerCase();
   if (!trimmed) return null;
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^#[0-9a-f]{3}$/.test(trimmed)) {
+    return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
+  }
   if (/^#[0-9a-f]{8}$/.test(trimmed)) {
     return trimmed.endsWith("ff") ? trimmed.slice(0, 7) : trimmed;
   }
-  return trimmed;
+  const rgbMatch = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(trimmed);
+  if (rgbMatch) {
+    const toHex = (n: string) =>
+      Math.min(255, Math.max(0, Number.parseInt(n, 10) || 0))
+        .toString(16)
+        .padStart(2, "0");
+    return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`;
+  }
+  return null;
+}
+
+const APP_THEME_STORAGE_KEY = "app_theme_color_id";
+
+async function resolveThemePrimaryHex(
+  themePrimaryFallback?: string,
+): Promise<string> {
+  const defaultHex = normalizeCalendarHex(DEFAULT_THEME.primary) || "#822433";
+  try {
+    const [storedThemeId, storedCalendarColor] = await Promise.all([
+      AsyncStorage.getItem(APP_THEME_STORAGE_KEY),
+      AsyncStorage.getItem(CALENDAR_COLOR_KEY),
+    ]);
+    const fromThemeId =
+      storedThemeId && APP_THEMES[storedThemeId]
+        ? normalizeCalendarHex(APP_THEMES[storedThemeId].primary)
+        : null;
+    const fromCalendarKey = normalizeCalendarHex(storedCalendarColor);
+    const fromFallback = normalizeCalendarHex(themePrimaryFallback);
+
+    // Se ThemeContext non si è ancora idratato al mount, passa DEFAULT_THEME.primary (#822433):
+    // in quel caso diamo priorità al tema reale salvato in AsyncStorage.
+    if (
+      fromFallback &&
+      (!fromThemeId || fromFallback === fromThemeId || fromFallback !== defaultHex)
+    ) {
+      return fromFallback;
+    }
+    return fromThemeId || fromCalendarKey || fromFallback || defaultHex;
+  } catch {
+    return normalizeCalendarHex(themePrimaryFallback) || defaultHex;
+  }
+}
+
+async function getFreshCalendarsSafe(): Promise<Calendar.Calendar[]> {
+  const [expoResult, nativeResult] = await Promise.allSettled([
+    Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT),
+    Platform.OS === "ios" &&
+    typeof StudICIAlarms?.getFreshEventCalendars === "function"
+      ? StudICIAlarms.getFreshEventCalendars()
+      : Promise.resolve(null),
+  ]);
+
+  const expoCalendars: Calendar.Calendar[] =
+    expoResult.status === "fulfilled" && Array.isArray(expoResult.value)
+      ? expoResult.value
+      : [];
+  const freshNative =
+    nativeResult.status === "fulfilled" && Array.isArray(nativeResult.value)
+      ? nativeResult.value
+      : null;
+
+  if (!freshNative || freshNative.length === 0) {
+    return expoCalendars;
+  }
+
+  const freshById = new Map(freshNative.map((c) => [c.id, c]));
+  const seenIds = new Set<string>();
+  const merged: Calendar.Calendar[] = expoCalendars.map((cal) => {
+    seenIds.add(cal.id);
+    const fresh = freshById.get(cal.id);
+    if (!fresh) return cal;
+    return {
+      ...cal,
+      title: fresh.title || cal.title,
+      color:
+        normalizeCalendarHex(fresh.color) ||
+        normalizeCalendarHex(cal.color) ||
+        cal.color,
+      allowsModifications: fresh.allowsModifications,
+    };
+  });
+
+  for (const fresh of freshNative) {
+    if (seenIds.has(fresh.id)) continue;
+    merged.push({
+      id: fresh.id,
+      title: fresh.title,
+      color: normalizeCalendarHex(fresh.color) || DEFAULT_THEME.primary,
+      allowsModifications: fresh.allowsModifications,
+      entityType: Calendar.EntityTypes.EVENT,
+      source: {
+        id: fresh.source?.id || "",
+        name: fresh.source?.name || "",
+        type: fresh.source?.type || "local",
+      },
+      allowedAvailabilities: [],
+    } as Calendar.Calendar);
+  }
+
+  return merged;
+}
+
+async function updateCalendarMetadataSafe(
+  cal: Calendar.Calendar,
+  updates: { title?: string; color?: string },
+): Promise<boolean> {
+  const nextTitle = updates.title?.trim() || cal.title;
+  const normalizedUpdateColor = updates.color
+    ? normalizeCalendarHex(updates.color)
+    : null;
+  const currentNormColor = normalizeCalendarHex(cal.color);
+
+  if (
+    Platform.OS === "ios" &&
+    typeof StudICIAlarms?.updateEventCalendarMetadata === "function"
+  ) {
+    try {
+      const updatedNatively = await StudICIAlarms.updateEventCalendarMetadata(
+        cal.id,
+        updates.title !== undefined ? nextTitle : null,
+        normalizedUpdateColor,
+      );
+      if (updatedNatively) {
+        return true;
+      }
+    } catch {}
+  }
+
+  try {
+    const storedThemeColor = await AsyncStorage.getItem(CALENDAR_COLOR_KEY).catch(
+      () => null,
+    );
+    const fallbackSafeColor =
+      normalizedUpdateColor ||
+      currentNormColor ||
+      normalizeCalendarHex(storedThemeColor) ||
+      normalizeCalendarHex(DEFAULT_THEME.primary) ||
+      "#822433";
+
+    const fullPayload: Partial<Calendar.Calendar> = {
+      ...cal,
+      title: nextTitle,
+      color: fallbackSafeColor,
+      allowsModifications: cal.allowsModifications ?? true,
+      allowedAvailabilities: Array.isArray(cal.allowedAvailabilities)
+        ? cal.allowedAvailabilities
+        : [],
+    };
+    await Calendar.updateCalendarAsync(cal.id, fullPayload);
+    return true;
+  } catch (err) {
+    console.warn("Errore aggiornamento metadati calendario:", err);
+    return false;
+  }
 }
 
 function blendHexTowardWhite(hex: string, factor: number): string {
@@ -250,16 +416,16 @@ export async function getCalendarColor(
   themePrimaryFallback?: string,
 ): Promise<string> {
   try {
-    const [custom, storedThemePrimary] = await Promise.all([
-      AsyncStorage.getItem(getCustomColorStorageKey(type)),
-      AsyncStorage.getItem(CALENDAR_COLOR_KEY),
-    ]);
+    const custom = await AsyncStorage.getItem(getCustomColorStorageKey(type));
     const normCustom = normalizeCalendarHex(custom);
     if (normCustom) return normCustom;
-    const basePrimary = themePrimaryFallback || storedThemePrimary || "#822433";
+    const basePrimary = await resolveThemePrimaryHex(themePrimaryFallback);
     return getThemeCalendarDefaultColor(type, basePrimary);
   } catch {
-    return getThemeCalendarDefaultColor(type, themePrimaryFallback || "#822433");
+    return getThemeCalendarDefaultColor(
+      type,
+      normalizeCalendarHex(themePrimaryFallback) || "#822433",
+    );
   }
 }
 
@@ -695,14 +861,13 @@ export async function setCalendarTitle(
     if (isAvailable) {
       const { status } = await Calendar.getCalendarPermissionsAsync();
       if (status === "granted") {
-        const calendars = await Calendar.getCalendarsAsync(
-          Calendar.EntityTypes.EVENT,
-        );
-        const storedId = await AsyncStorage.getItem(idKey);
-        let targetCal = storedId
-          ? calendars.find((c) => c.id === storedId && c.allowsModifications)
-          : null;
+        const calendars = await getFreshCalendarsSafe();
+        const isSeparate =
+          isSeparateParam !== undefined
+            ? isSeparateParam
+            : await getTrainSeparateReturn();
 
+        let targetCal = await findManagedAppleCalendar(calendars, type, isSeparate);
         if (!targetCal) {
           targetCal =
             calendars.find(
@@ -722,19 +887,11 @@ export async function setCalendarTitle(
 
         if (targetCal) {
           await AsyncStorage.setItem(idKey, targetCal.id);
-          const themeColor = await AsyncStorage.getItem(CALENDAR_COLOR_KEY);
-          const effectiveColor = await getCalendarColor(
-            type,
-            themeColor || undefined,
-          );
-          const updatePayload: any = {
-            ...targetCal,
+          const effectiveColor = await getCalendarColor(type);
+          await updateCalendarMetadataSafe(targetCal, {
             title: titleToSave,
-          };
-          if (effectiveColor) {
-            updatePayload.color = effectiveColor;
-          }
-          await Calendar.updateCalendarAsync(targetCal.id, updatePayload);
+            color: effectiveColor,
+          });
         }
       }
     }
@@ -890,23 +1047,44 @@ async function findManagedAppleCalendar(
     getCalendarTitle(type, isSeparate),
   ]);
 
-  const effectiveId = storedId || fallbackId;
-  if (effectiveId) {
-    const byId = calendars.find((c) => c.id === effectiveId && c.allowsModifications);
+  const candidateIds = [storedId, fallbackId].filter(
+    (v): v is string => Boolean(v && v.trim()),
+  );
+  for (const cid of candidateIds) {
+    const byId = calendars.find((c) => c.id === cid && c.allowsModifications);
     if (byId) return byId;
   }
 
-  const byInternalName = calendars.find(
-    (c) => c.allowsModifications && c.name && internalNames.includes(c.name),
-  );
+  const isICloudCal = (c: Calendar.Calendar) =>
+    Boolean(
+      c.source &&
+        (c.source.name?.toLowerCase().includes("icloud") ||
+          c.source.type === Calendar.SourceType.CALDAV),
+    );
+
+  const byInternalName = calendars
+    .filter((c) => c.allowsModifications && c.name && internalNames.includes(c.name))
+    .sort((a, b) => (isICloudCal(b) ? 1 : 0) - (isICloudCal(a) ? 1 : 0))[0];
   if (byInternalName) return byInternalName;
 
-  if (!effectiveId) {
-    const candidateTitles = new Set([savedTitle, ...defaultTitles].filter(Boolean));
-    const byTitle = calendars.find(
-      (c) => c.allowsModifications && c.title && candidateTitles.has(c.title),
-    );
-    if (byTitle) return byTitle;
+  const trimmedSaved = savedTitle?.trim();
+  const candidateTitles = new Set(
+    [trimmedSaved, ...defaultTitles].map((t) => t?.trim()).filter(Boolean),
+  );
+  const byTitleMatches = calendars.filter(
+    (c) =>
+      c.allowsModifications &&
+      c.title &&
+      candidateTitles.has(c.title.trim()),
+  );
+  if (byTitleMatches.length > 0) {
+    byTitleMatches.sort((a, b) => {
+      const aExactSaved = a.title?.trim() === trimmedSaved ? 2 : 0;
+      const bExactSaved = b.title?.trim() === trimmedSaved ? 2 : 0;
+      if (aExactSaved !== bExactSaved) return bExactSaved - aExactSaved;
+      return (isICloudCal(b) ? 1 : 0) - (isICloudCal(a) ? 1 : 0);
+    });
+    return byTitleMatches[0];
   }
 
   return null;
@@ -938,15 +1116,16 @@ async function _pullExternalChangesInternal(
   options?: { detectExternalDeletion?: boolean },
 ): Promise<{ updated: boolean }> {
   let updated = false;
+  if (!calendars || calendars.length === 0) {
+    return { updated: false };
+  }
   const detectExternalDeletion = options?.detectExternalDeletion ?? true;
   try {
-    const [separateReturn, storedThemePrimary, migratedTrainShade] = await Promise.all([
+    const [separateReturn, basePrimary, migratedTrainShade] = await Promise.all([
       getTrainSeparateReturn(),
-      AsyncStorage.getItem(CALENDAR_COLOR_KEY),
+      resolveThemePrimaryHex(themePrimaryFallback),
       AsyncStorage.getItem(CALENDAR_TRAIN_SHADE_MIGRATED_KEY),
     ]);
-    const basePrimary =
-      normalizeCalendarHex(themePrimaryFallback || storedThemePrimary) || "#822433";
 
     const activeTypes: CalendarType[] = separateReturn
       ? ["lessons", "trains", "trains_return"]
@@ -1057,12 +1236,9 @@ async function _pullExternalChangesInternal(
           calColor === basePrimary &&
           themeDefaultForType !== basePrimary
         ) {
-          try {
-            await Calendar.updateCalendarAsync(cal.id, {
-              ...cal,
-              color: themeDefaultForType,
-            });
-          } catch {}
+          await updateCalendarMetadataSafe(cal, {
+            color: themeDefaultForType,
+          });
           continue;
         }
 
@@ -1092,28 +1268,52 @@ async function _pullExternalChangesInternal(
   return { updated };
 }
 
+let inFlightExternalPullPromise: Promise<{ updated: boolean }> | null = null;
+
 export async function pullExternalAppleCalendarChanges(
   themePrimaryFallback?: string,
 ): Promise<{ updated: boolean }> {
-  if (isCalendarSyncInProgress) return { updated: false };
-  try {
-    const isAvailable = await Calendar.isAvailableAsync();
-    if (!isAvailable) return { updated: false };
-    const { status } = await Calendar.getCalendarPermissionsAsync();
-    if (status !== "granted") return { updated: false };
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    return await _pullExternalChangesInternal(calendars, themePrimaryFallback);
-  } catch {
-    return { updated: false };
+  if (inFlightExternalPullPromise) {
+    return inFlightExternalPullPromise;
   }
+
+  let currentPromise!: Promise<{ updated: boolean }>;
+  const runPull = async (): Promise<{ updated: boolean }> => {
+    try {
+      let waitedMs = 0;
+      while (isCalendarSyncInProgress && waitedMs < 3000) {
+        await new Promise((r) => setTimeout(r, 100));
+        waitedMs += 100;
+      }
+      if (isCalendarSyncInProgress) {
+        return { updated: false };
+      }
+
+      const isAvailable = await Calendar.isAvailableAsync();
+      if (!isAvailable) return { updated: false };
+      const { status } = await Calendar.getCalendarPermissionsAsync();
+      if (status !== "granted") return { updated: false };
+      const calendars = await getFreshCalendarsSafe();
+      return await _pullExternalChangesInternal(calendars, themePrimaryFallback);
+    } catch {
+      return { updated: false };
+    } finally {
+      if (inFlightExternalPullPromise === currentPromise) {
+        inFlightExternalPullPromise = null;
+      }
+    }
+  };
+
+  currentPromise = runPull();
+  inFlightExternalPullPromise = currentPromise;
+  return currentPromise;
 }
 
 export async function resetCalendarColorToTheme(
   type: CalendarType,
   themePrimaryColor?: string,
 ): Promise<string> {
-  const storedTheme = await AsyncStorage.getItem(CALENDAR_COLOR_KEY);
-  const basePrimary = themePrimaryColor || storedTheme || "#822433";
+  const basePrimary = await resolveThemePrimaryHex(themePrimaryColor);
   const targetColor = getThemeCalendarDefaultColor(type, basePrimary);
   await AsyncStorage.removeItem(getCustomColorStorageKey(type));
 
@@ -1123,11 +1323,10 @@ export async function resetCalendarColorToTheme(
       ? await Calendar.getCalendarPermissionsAsync()
       : { status: "denied" };
     if (isAvailable && status === "granted") {
-      const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+      const calendars = await getFreshCalendarsSafe();
       const cal = await findManagedAppleCalendar(calendars, type);
       if (cal && normalizeCalendarHex(cal.color) !== normalizeCalendarHex(targetColor)) {
-        await Calendar.updateCalendarAsync(cal.id, {
-          ...cal,
+        await updateCalendarMetadataSafe(cal, {
           color: targetColor,
         });
       }
@@ -1174,7 +1373,7 @@ export async function updateAppleCalendarColor(
       return;
     }
 
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const calendars = await getFreshCalendarsSafe();
     const separateReturn = await getTrainSeparateReturn();
 
     const targets: { type: CalendarType; color: string }[] = [
@@ -1206,12 +1405,9 @@ export async function updateAppleCalendarColor(
         cal &&
         normalizeCalendarHex(cal.color) !== normalizeCalendarHex(t.color)
       ) {
-        try {
-          await Calendar.updateCalendarAsync(cal.id, {
-            ...cal,
-            color: t.color,
-          });
-        } catch {}
+        await updateCalendarMetadataSafe(cal, {
+          color: t.color,
+        });
       }
     }
 
@@ -1241,7 +1437,7 @@ export async function deleteStudICICalendar(
       return { success: false, message: "Permessi calendario non concessi." };
     }
 
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const calendars = await getFreshCalendarsSafe();
 
     const deleteLessons = target === "lessons" || target === "all";
     const deleteTrains = target === "trains" || target === "all";
@@ -1382,6 +1578,7 @@ export function computeScheduleFingerprint(
   calendarTitle: string,
   alertType?: string,
   customMinutes?: number,
+  excludedIds?: string[],
 ): string {
   try {
     const daysData = (schedule?.days || []).map((day) =>
@@ -1401,6 +1598,7 @@ export function computeScheduleFingerprint(
       cm: customMinutes || 15,
       d: daysData,
       m: manualData,
+      ex: (excludedIds || []).slice().sort(),
     });
   } catch {
     return "";
@@ -1423,6 +1621,7 @@ export function computeTrainFingerprint(
   includeReturn?: boolean,
   separateReturn?: boolean,
   returnCalendarTitle?: string,
+  excludedIds?: string[],
 ): string {
   try {
     const tp = commuterConfig?.trainPreferences;
@@ -1447,6 +1646,7 @@ export function computeTrainFingerprint(
       retTitle: returnCalendarTitle || "",
       days: (schedule?.days || []).map((d) => (d || []).map((c) => `${c.startTime}-${c.endTime}`)),
       man: (manualEvents || []).map((m) => `${m.dayIndex}:${m.startTime}-${m.endTime}`),
+      ex: (excludedIds || []).slice().sort(),
     });
   } catch {
     return "";
@@ -1540,18 +1740,17 @@ async function getOrCreateNativeCalendar(options: {
     prefetchedCalendars,
   } = options;
   let storedId = await AsyncStorage.getItem(idStorageKey);
-  if (!storedId && fallbackIdStorageKeys && fallbackIdStorageKeys.length > 0) {
+  const fallbackIds: string[] = [];
+  if (fallbackIdStorageKeys && fallbackIdStorageKeys.length > 0) {
     for (const fbKey of fallbackIdStorageKeys) {
       const fbVal = await AsyncStorage.getItem(fbKey);
       if (fbVal) {
-        storedId = fbVal;
-        break;
+        fallbackIds.push(fbVal);
+        if (!storedId) storedId = fbVal;
       }
     }
   }
-  const calendars =
-    prefetchedCalendars ||
-    (await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT));
+  const calendars = prefetchedCalendars || (await getFreshCalendarsSafe());
 
   const isICloud = (c: Calendar.Calendar) =>
     Boolean(
@@ -1565,6 +1764,7 @@ async function getOrCreateNativeCalendar(options: {
     (c) =>
       c.allowsModifications &&
       (c.id === storedId ||
+        fallbackIds.includes(c.id) ||
         c.name === name ||
         c.title === activeTitle ||
         c.title === defaultTitle ||
@@ -1572,8 +1772,8 @@ async function getOrCreateNativeCalendar(options: {
   );
 
   allMatching.sort((a, b) => {
-    const aStored = a.id === storedId ? 2 : 0;
-    const bStored = b.id === storedId ? 2 : 0;
+    const aStored = a.id === storedId ? 3 : fallbackIds.includes(a.id) ? 2 : 0;
+    const bStored = b.id === storedId ? 3 : fallbackIds.includes(b.id) ? 2 : 0;
     if (aStored !== bStored) return bStored - aStored;
 
     const aName = a.name === name ? 1 : 0;
@@ -1603,20 +1803,17 @@ async function getOrCreateNativeCalendar(options: {
     const calendarId = existingCal.id;
     await AsyncStorage.setItem(idStorageKey, calendarId);
 
-    const needsUpdate: Partial<Calendar.Calendar> = {};
-    if (existingCal.title !== activeTitle) {
-      needsUpdate.title = activeTitle;
-    }
-    if (
-      activeColor &&
-      normalizeCalendarHex(existingCal.color) !== normalizeCalendarHex(activeColor)
-    ) {
-      needsUpdate.color = activeColor;
-    }
-    if (Object.keys(needsUpdate).length > 0) {
-      try {
-        await Calendar.updateCalendarAsync(existingCal.id, needsUpdate);
-      } catch {}
+    const needsTitle = Boolean(activeTitle && existingCal.title !== activeTitle);
+    const normExistingColor = normalizeCalendarHex(existingCal.color);
+    const normActiveColor = normalizeCalendarHex(activeColor);
+    const needsColor = Boolean(
+      normActiveColor && normExistingColor !== normActiveColor,
+    );
+    if (needsTitle || needsColor) {
+      await updateCalendarMetadataSafe(existingCal, {
+        title: needsTitle ? activeTitle : undefined,
+        color: needsColor ? normActiveColor || activeColor : undefined,
+      });
     }
 
     // Pulisci vecchi eventi del calendario per aggiornarli puliti senza duplicati (saltato in modalità diff incrementale)
@@ -1781,9 +1978,7 @@ export async function syncScheduleToAppleCalendar(
     }
     const preCalendars =
       syncOptions?.prefetchedCalendars ||
-      (await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT).catch(
-        () => [] as Calendar.Calendar[],
-      ));
+      (await getFreshCalendarsSafe().catch(() => [] as Calendar.Calendar[]));
     if (!syncOptions?.skipPullExternal && preCalendars.length > 0) {
       try {
         await _pullExternalChangesInternal(preCalendars, calendarColor, {
@@ -1823,6 +2018,10 @@ export async function syncScheduleToAppleCalendar(
     }
 
     const alertConfig = await getCalendarAlertConfig("lessons");
+    const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
+    const excludedRecords = await getExcludedLessons(storedDegreeUrl || undefined);
+    const excludedSet = buildExcludedIdSet(excludedRecords);
+    const excludedIds = Array.from(excludedSet).sort();
 
     // Pre-calcolo delle partenze treno/casa se l'utente ha impostato l'avviso su treno o casa
     const weekdayCommuteMap = new Map<
@@ -1845,7 +2044,9 @@ export async function syncScheduleToAppleCalendar(
           const curDayOfWeek = nowRef.getDay();
           await Promise.all(
             [0, 1, 2, 3, 4].map(async (d) => {
-              const dayClasses = schedule.days?.[d] || [];
+              const dayClasses = (schedule.days?.[d] || []).filter(
+                (c) => !isLessonExcluded(d, c, excludedSet),
+              );
               if (dayClasses.length === 0) return;
               const sortedClasses = [...dayClasses]
                 .filter((c) => Boolean(c && c.startTime))
@@ -1886,6 +2087,7 @@ export async function syncScheduleToAppleCalendar(
                   outboundPrefs.length === 1 ? outboundPrefs[0] : undefined,
                 ignoreCurrentTime: true,
                 fastCalendarMode: true,
+                excludedLessonIds: excludedSet,
               });
 
               if (itin) {
@@ -1935,6 +2137,7 @@ export async function syncScheduleToAppleCalendar(
 
       for (const cls of dayClasses) {
         if (!cls.startTime || !cls.endTime) continue;
+        if (isLessonExcluded(dayIdx, cls, excludedSet)) continue;
 
         const [startH, startM] = cls.startTime.split(":").map(Number);
         const [endH, endM] = cls.endTime.split(":").map(Number);
@@ -2006,11 +2209,11 @@ export async function syncScheduleToAppleCalendar(
     // Lezioni manuali
     let manualList: any[] = [];
     try {
-      const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
       manualList = await getManualEvents(storedDegreeUrl || undefined);
 
       for (const mEvent of manualList) {
         if (!mEvent.startTime || !mEvent.endTime) continue;
+        if (isLessonExcluded(mEvent.dayIndex, mEvent, excludedSet)) continue;
 
         const [startH, startM] = mEvent.startTime.split(":").map(Number);
         const [endH, endM] = mEvent.endTime.split(":").map(Number);
@@ -2105,7 +2308,10 @@ export async function syncScheduleToAppleCalendar(
             startDate,
             endDate,
             location:
-              mEvent.address || mEvent.room || "Sapienza Università di Roma",
+              mEvent.address ||
+              resolvedManual.address ||
+              mEvent.room ||
+              "Sapienza Università di Roma",
             notes: notesParts.join("\n"),
             timeZone: "Europe/Rome",
             ...(recurrenceRule ? { recurrenceRule } : {}),
@@ -2135,12 +2341,14 @@ export async function syncScheduleToAppleCalendar(
         );
         chunk.forEach((item, idx) => {
           const createdId = createdIds[idx];
-          if (createdId && item.latitude != null && item.longitude != null) {
+          const hasCoords = item.latitude != null && item.longitude != null;
+          const locText = item.details.location?.trim() || "";
+          if (createdId && (hasCoords || locText.length > 0)) {
             lessonStructuredEntries.push({
               eventId: createdId,
-              title: item.details.location || "",
-              latitude: item.latitude,
-              longitude: item.longitude,
+              title: locText,
+              latitude: item.latitude ?? 0,
+              longitude: item.longitude ?? 0,
             });
           }
         });
@@ -2171,6 +2379,7 @@ export async function syncScheduleToAppleCalendar(
       activeTitle,
       alertConfig.alertType,
       alertConfig.customMinutes,
+      excludedIds,
     );
     await AsyncStorage.setItem(CALENDAR_SCHEDULE_HASH_KEY, fingerprint);
 
@@ -2254,9 +2463,7 @@ export async function syncTrainsToAppleCalendar(
     await AsyncStorage.setItem(CALENDAR_TRAIN_SHADE_MIGRATED_KEY, "1");
     const preCalendars =
       syncOptions?.prefetchedCalendars ||
-      (await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT).catch(
-        () => [] as Calendar.Calendar[],
-      ));
+      (await getFreshCalendarsSafe().catch(() => [] as Calendar.Calendar[]));
     if (!syncOptions?.skipPullExternal && preCalendars.length > 0) {
       try {
         await _pullExternalChangesInternal(preCalendars, calendarColor, {
@@ -2337,9 +2544,17 @@ export async function syncTrainsToAppleCalendar(
 
     let manualList: any[] = [];
     let activeTabUrl: string | null = null;
+    let excludedSet = new Set<string>();
+    let excludedIds: string[] = [];
     try {
       const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-      manualList = await getManualEvents(storedDegreeUrl || undefined);
+      const [mList, excludedRecords] = await Promise.all([
+        getManualEvents(storedDegreeUrl || undefined),
+        getExcludedLessons(storedDegreeUrl || undefined),
+      ]);
+      manualList = mList;
+      excludedSet = buildExcludedIdSet(excludedRecords);
+      excludedIds = Array.from(excludedSet).sort();
       activeTabUrl =
         (storedDegreeUrl ? await AsyncStorage.getItem(`defaultTabUrl_${storedDegreeUrl}`) : null) ||
         (await AsyncStorage.getItem("defaultTabUrl"));
@@ -2392,6 +2607,7 @@ export async function syncTrainsToAppleCalendar(
       true,
       separateReturn,
       returnActiveTitle,
+      excludedIds,
     );
 
     let dirtySlotKeys: Set<string> | null = null;
@@ -2452,7 +2668,7 @@ export async function syncTrainsToAppleCalendar(
           })
           .map(manualEventToClassEvent);
         const allClasses = [...officialClasses, ...manualClasses].filter(
-          (c) => Boolean(c && c.startTime),
+          (c) => Boolean(c && c.startTime) && !isLessonExcluded(dayIdx, c, excludedSet),
         );
 
         const dayOutboundPrefs = getPreferredTrainsForDayDirection(
@@ -2677,6 +2893,7 @@ export async function syncTrainsToAppleCalendar(
                     forcedPreferredTrain: pref,
                     ignoreCurrentTime: true,
                     fastCalendarMode: true,
+                    excludedLessonIds: excludedSet,
                   });
                   if (
                     !itin?.liveTrain ||
@@ -2693,6 +2910,7 @@ export async function syncTrainsToAppleCalendar(
                       forcedPreferredTrain: pref,
                       ignoreCurrentTime: true,
                       fastCalendarMode: false,
+                      excludedLessonIds: excludedSet,
                     }).catch(() => null);
                     if (
                       liveRetryItin?.liveTrain &&
@@ -2773,6 +2991,7 @@ export async function syncTrainsToAppleCalendar(
               selectedTrainOffset: 0,
               ignoreCurrentTime: true,
               fastCalendarMode: true,
+              excludedLessonIds: excludedSet,
             });
             if (itin?.liveTrain) {
               return {
@@ -2966,8 +3185,10 @@ export async function syncTrainsToAppleCalendar(
         : stationCalLocMap.get(depStationName.trim().toUpperCase());
 
       const trainLabel = formatTrainLabel(t.category, t.trainNumber);
-      const eventTitle = `${trainLabel} • ${fromStation} → ${toStation}`;
-      const platform = t.platformPlanned || t.platformActual;
+      const rawPlatform = (t.platformPlanned || t.platformActual || "").trim();
+      const platform = rawPlatform.replace(/^(?:bin\.?|binario)\s*/i, "").trim();
+      const platformSuffix = platform ? ` (Bin. ${platform})` : "";
+      const eventTitle = `${trainLabel} • ${fromStation} → ${toStation}${platformSuffix}`;
 
       const notesParts = [
         `Treno: ${trainLabel}`,
@@ -2995,7 +3216,14 @@ export async function syncTrainsToAppleCalendar(
 
       const targetCal = isReturn ? targetCalForReturn : calendarId;
       const notes = notesParts.join("\n");
-      const location = depLoc?.address || `Stazione di ${fromStation}, Italia`;
+      const stationTitle = depLoc?.title?.trim() || "";
+      const stationAddr = depLoc?.address?.trim() || "";
+      const location =
+        stationTitle &&
+        stationAddr &&
+        !stationAddr.toLowerCase().includes(stationTitle.toLowerCase())
+          ? `${stationTitle}, ${stationAddr}`
+          : stationAddr || `Stazione di ${fromStation}, Italia`;
       const details: Parameters<typeof Calendar.createEventAsync>[1] = {
         title: eventTitle,
         startDate,
@@ -3016,6 +3244,9 @@ export async function syncTrainsToAppleCalendar(
         s: eventStartMins,
         dur: trainDurationMins,
         loc: location,
+        lat: depLoc?.latitude ?? null,
+        lng: depLoc?.longitude ?? null,
+        locV: 2,
         n: notes,
         al: alarms,
       });
@@ -3144,12 +3375,14 @@ export async function syncTrainsToAppleCalendar(
             calendarId: slot.targetCalId,
             signature: slot.signature,
           };
-          if (newId && slot.latitude != null && slot.longitude != null) {
+          const hasCoords = slot.latitude != null && slot.longitude != null;
+          const locText = slot.details.location?.trim() || "";
+          if (newId && (hasCoords || locText.length > 0)) {
             trainStructuredEntries.push({
               eventId: newId,
-              title: slot.details.location || "",
-              latitude: slot.latitude,
-              longitude: slot.longitude,
+              title: locText,
+              latitude: slot.latitude ?? 0,
+              longitude: slot.longitude ?? 0,
             });
           }
         }),
@@ -3225,10 +3458,9 @@ export async function syncDualCalendarsToAppleCalendar(
 
     let sharedCalendars: Calendar.Calendar[] | undefined;
     try {
-      sharedCalendars = await Calendar.getCalendarsAsync(
-        Calendar.EntityTypes.EVENT,
-      );
-      if (sharedCalendars.length > 0) {
+      const fetched = await getFreshCalendarsSafe();
+      if (fetched.length > 0) {
+        sharedCalendars = fetched;
         await _pullExternalChangesInternal(sharedCalendars, calendarColor, {
           detectExternalDeletion: false,
         });
@@ -3337,7 +3569,7 @@ export async function switchTrainCalendarMode(
       return { success: true, message: "Modalità salvata." };
     }
 
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const calendars = await getFreshCalendarsSafe();
 
     if (separate) {
       // Passaggio a CALENDARIO SEPARATO: dobbiamo eliminare il calendario UNIFICATO da iOS
@@ -3483,7 +3715,7 @@ export async function triggerCalendarAutoSyncIfNeeded(
     const { status } = await Calendar.getCalendarPermissionsAsync();
     if (status !== "granted") return false;
 
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const calendars = await getFreshCalendarsSafe();
     await _pullExternalChangesInternal(calendars, calendarColor);
 
     const [lessonsAuto, trainsAuto, lessonsEnabled, trainsEnabled] =
@@ -3493,6 +3725,12 @@ export async function triggerCalendarAutoSyncIfNeeded(
         getCalendarEnabled("lessons"),
         getCalendarEnabled("trains"),
       ]);
+    const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
+    const [manualList, excludedRecords] = await Promise.all([
+      getManualEvents(storedDegreeUrl || undefined),
+      getExcludedLessons(storedDegreeUrl || undefined),
+    ]);
+    const excludedIds = Array.from(buildExcludedIdSet(excludedRecords)).sort();
     let anyUpdated = false;
     const sharedOutboundItineraries: Record<string, CommuterItinerary> = {
       ...(syncHints?.precomputedItineraries || {}),
@@ -3503,8 +3741,6 @@ export async function triggerCalendarAutoSyncIfNeeded(
       try {
         const activeTitle = await getCalendarTitle("lessons");
         const alertConfig = await getCalendarAlertConfig("lessons");
-        const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-        const manualList = await getManualEvents(storedDegreeUrl || undefined);
         const storedLessonsId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
 
         const currentFingerprint = computeScheduleFingerprint(
@@ -3513,6 +3749,7 @@ export async function triggerCalendarAutoSyncIfNeeded(
           activeTitle,
           alertConfig.alertType,
           alertConfig.customMinutes,
+          excludedIds,
         );
         const savedFingerprint = await AsyncStorage.getItem(
           CALENDAR_SCHEDULE_HASH_KEY,
@@ -3554,8 +3791,6 @@ export async function triggerCalendarAutoSyncIfNeeded(
         const alertConfig = await getCalendarAlertConfig("trains");
         const returnTitle = await getCalendarTitle("trains_return");
         const commuterConfig = await getCommuterConfig();
-        const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
-        const manualList = await getManualEvents(storedDegreeUrl || undefined);
 
         const storedTrainsId = separateReturn
           ? await AsyncStorage.getItem(TRAIN_OUTBOUND_CALENDAR_ID_KEY)
@@ -3572,6 +3807,7 @@ export async function triggerCalendarAutoSyncIfNeeded(
           true,
           separateReturn,
           returnTitle,
+          excludedIds,
         );
         const savedFingerprint = await AsyncStorage.getItem(
           TRAIN_CALENDAR_SCHEDULE_HASH_KEY,

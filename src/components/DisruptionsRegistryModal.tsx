@@ -170,7 +170,10 @@ export const DisruptionsRegistryModal: React.FC<
         setFilterMode("walk");
       }
     }
-  } else if (!visible && (prevHighlightProp !== null || highlightedId !== null)) {
+  } else if (
+    !visible &&
+    (prevHighlightProp !== null || highlightedId !== null)
+  ) {
     setPrevHighlightProp(null);
     setHighlightedId(null);
   }
@@ -242,10 +245,7 @@ export const DisruptionsRegistryModal: React.FC<
       <TouchableOpacity
         activeOpacity={isLongNote ? 0.85 : 1}
         onPress={isLongNote ? () => toggleExpand(item.id) : undefined}
-        style={[
-          styles.cardContainer,
-          isHighlighted && styles.cardHighlighted,
-        ]}
+        style={[styles.cardContainer, isHighlighted && styles.cardHighlighted]}
       >
         {/* Intestazione Card: Badge Categoria + Data Formattata */}
         <View style={styles.cardHeader}>
@@ -313,7 +313,7 @@ export const DisruptionsRegistryModal: React.FC<
                 style={{ marginRight: 5 }}
               />
               <Text style={styles.impactingBadgeText}>
-                Impatta la tua tratta (Trenitalia / RFI / IC)
+                Impatta la tua tratta
               </Text>
             </View>
           ) : (

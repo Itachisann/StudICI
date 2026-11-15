@@ -2490,6 +2490,22 @@ export function OnboardingCourseSelector({
           "selectedTabInfo",
           JSON.stringify(resolvedTab),
         );
+        await AsyncStorage.setItem("defaultTabUrl", resolvedTab.url);
+        await AsyncStorage.setItem(
+          `defaultTabUrl_${pendingDegree.url}`,
+          resolvedTab.url,
+        );
+        if (resolvedTab.name) {
+          await AsyncStorage.setItem("defaultTabLabel", resolvedTab.name);
+          await AsyncStorage.setItem(
+            `defaultTabLabel_${pendingDegree.url}`,
+            resolvedTab.name,
+          );
+        }
+        await AsyncStorage.setItem(
+          `defaultTabUpdated_${pendingDegree.url}`,
+          String(Date.now()),
+        );
       }
 
       await AsyncStorage.setItem("hasCompletedInitialCourseSelection", "true");

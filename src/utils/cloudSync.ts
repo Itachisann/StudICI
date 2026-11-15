@@ -41,6 +41,17 @@ import {
   notifyManualEventsChanged,
 } from "./manualEvents";
 import {
+  ExcludedLessonRecord,
+  getExcludedLessons,
+  saveExcludedLessonsList,
+  getExcludedLessonsTombstones,
+  setExcludedLessonsTombstones,
+  setExcludedLessonsChangeListener,
+  getAllExcludedLessonsAcrossCourses,
+  saveAllExcludedLessonsAcrossCourses,
+  notifyExcludedLessonsChanged,
+} from "./excludedLessons";
+import {
   DEFAULT_COMMUTER_CONFIG,
   getCommuterConfig,
   saveCommuterConfig,
@@ -117,8 +128,11 @@ export interface PreAssociationBackup {
   tombstones: Record<string, number>;
   manualEvents?: ManualClassEvent[];
   manualTombstones?: Record<string, number>;
+  excludedLessons?: ExcludedLessonRecord[];
+  excludedTombstones?: Record<string, number>;
   allCoursesAttendance?: Record<string, AttendanceRecord[]>;
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
+  allCoursesExcludedLessons?: Record<string, ExcludedLessonRecord[]>;
   commuter: CommuterConfig;
   studentInfo?: StudentInfo;
   savedDocuments?: SavedDocument[];
@@ -133,6 +147,12 @@ export interface PreAssociationBackup {
   timestamp: number;
 }
 
+export interface CourseTabPreference {
+  url: string;
+  label?: string;
+  updatedAt?: number;
+}
+
 export interface CloudBackupPayload {
   syncId: string;
   version: string;
@@ -143,11 +163,15 @@ export interface CloudBackupPayload {
     name: string | null;
     className: string | null;
     defaultTabUrl: string | null;
+    defaultTabLabel?: string | null;
+    defaultTabsByCourse?: Record<string, CourseTabPreference>;
   };
   attendanceRecords: AttendanceRecord[];
   manualEvents?: ManualClassEvent[];
+  excludedLessons?: ExcludedLessonRecord[];
   allCoursesAttendance?: Record<string, AttendanceRecord[]>;
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
+  allCoursesExcludedLessons?: Record<string, ExcludedLessonRecord[]>;
   commuter?: CommuterConfig;
   studentInfo?: StudentInfo;
   savedDocuments?: SavedDocument[];
@@ -164,6 +188,8 @@ export interface CourseData {
   name: string | null;
   className: string | null;
   defaultTabUrl: string | null;
+  defaultTabLabel?: string | null;
+  defaultTabsByCourse?: Record<string, CourseTabPreference>;
 }
 
 interface RemoteDoc {
@@ -179,8 +205,11 @@ interface RemoteDoc {
   tombstones?: Record<string, number>;
   manualEvents?: ManualClassEvent[];
   manualTombstones?: Record<string, number>;
+  excludedLessons?: ExcludedLessonRecord[];
+  excludedTombstones?: Record<string, number>;
   allCoursesAttendance?: Record<string, AttendanceRecord[]>;
   allCoursesManualEvents?: Record<string, ManualClassEvent[]>;
+  allCoursesExcludedLessons?: Record<string, ExcludedLessonRecord[]>;
   commuter?: CommuterConfig;
   commuterModified?: number;
   studentInfo?: { matricola: string; email: string };
@@ -365,8 +394,11 @@ export async function savePreAssociationBackup(): Promise<void> {
       commuter,
       manualEvents,
       manualTombstones,
+      excludedLessons,
+      excludedTombstones,
       allAtt,
       allManual,
+      allExcluded,
       studentInfo,
       savedDocs,
       savedDocTomb,
@@ -379,8 +411,11 @@ export async function savePreAssociationBackup(): Promise<void> {
       readLocalCommuter(),
       getManualEvents(),
       getManualEventsTombstones(),
+      getExcludedLessons(),
+      getExcludedLessonsTombstones(),
       getAllAttendanceAcrossCourses(),
       getAllManualEventsAcrossCourses(),
+      getAllExcludedLessonsAcrossCourses(),
       getStudentInfo(),
       getSavedDocuments(),
       getSavedDocumentsTombstones(),
@@ -393,8 +428,11 @@ export async function savePreAssociationBackup(): Promise<void> {
       tombstones,
       manualEvents,
       manualTombstones,
+      excludedLessons,
+      excludedTombstones,
       allCoursesAttendance: allAtt,
       allCoursesManualEvents: allManual,
+      allCoursesExcludedLessons: allExcluded,
       commuter,
       studentInfo,
       savedDocuments: savedDocs,
@@ -438,6 +476,14 @@ export async function restorePreAssociationBackup(): Promise<void> {
       if (backup.manualTombstones) {
         await setManualEventsTombstones(backup.manualTombstones);
       }
+      if (backup.allCoursesExcludedLessons) {
+        await saveAllExcludedLessonsAcrossCourses(backup.allCoursesExcludedLessons);
+      } else if (Array.isArray(backup.excludedLessons)) {
+        await saveExcludedLessonsList(backup.excludedLessons);
+      }
+      if (backup.excludedTombstones) {
+        await setExcludedLessonsTombstones(backup.excludedTombstones);
+      }
       if (backup.commuter) {
         await writeLocalCommuter(backup.commuter);
       }
@@ -472,11 +518,15 @@ export async function restorePreAssociationBackup(): Promise<void> {
         name: null,
         className: null,
         defaultTabUrl: null,
+        defaultTabLabel: null,
+        defaultTabsByCourse: {},
       });
       await saveAttendanceList([]);
       await setAttendanceTombstones({});
       await saveManualEvents([]);
       await setManualEventsTombstones({});
+      await saveExcludedLessonsList([]);
+      await setExcludedLessonsTombstones({});
       await writeLocalCommuter(DEFAULT_COMMUTER_CONFIG);
     }
     await AsyncStorage.removeItem(COURSE_SNAPSHOT_KEY);
@@ -512,30 +562,28 @@ export async function performCloudSync(): Promise<{
   const formattedDate = new Date(timestamp).toLocaleString("it-IT");
 
   const [
-    url,
-    name,
-    className,
-    defaultTabUrl,
+    localCourse,
     records,
     commuter,
     manualEvents,
+    excludedLessons,
     allAtt,
     allManual,
+    allExcluded,
     studentInfo,
     savedDocs,
     notesList,
     calendarTitle,
     calendarAutoSync,
   ] = await Promise.all([
-    AsyncStorage.getItem("selectedDegreeUrl"),
-    AsyncStorage.getItem("selectedDegreeName"),
-    AsyncStorage.getItem("selectedDegreeClassName"),
-    AsyncStorage.getItem("defaultTabUrl"),
+    readLocalCourse(),
     getAttendanceRecords(),
     readLocalCommuter(),
     getManualEvents(),
+    getExcludedLessons(),
     getAllAttendanceAcrossCourses(),
     getAllManualEventsAcrossCourses(),
+    getAllExcludedLessonsAcrossCourses(),
     getStudentInfo(),
     getSavedDocuments(),
     getNotes(),
@@ -549,15 +597,19 @@ export async function performCloudSync(): Promise<{
     timestamp,
     formattedDate,
     course: {
-      url,
-      name,
-      className,
-      defaultTabUrl,
+      url: localCourse.url,
+      name: localCourse.name,
+      className: localCourse.className,
+      defaultTabUrl: localCourse.defaultTabUrl,
+      defaultTabLabel: localCourse.defaultTabLabel,
+      defaultTabsByCourse: localCourse.defaultTabsByCourse,
     },
     attendanceRecords: records,
     manualEvents,
+    excludedLessons,
     allCoursesAttendance: allAtt,
     allCoursesManualEvents: allManual,
+    allCoursesExcludedLessons: allExcluded,
     commuter,
     studentInfo,
     savedDocuments: savedDocs,
@@ -637,21 +689,7 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
       throw new Error("Formato di backup non valido.");
     }
 
-    if (data.course.url) {
-      await AsyncStorage.setItem("selectedDegreeUrl", data.course.url);
-    }
-    if (data.course.name) {
-      await AsyncStorage.setItem("selectedDegreeName", data.course.name);
-    }
-    if (data.course.className) {
-      await AsyncStorage.setItem(
-        "selectedDegreeClassName",
-        data.course.className,
-      );
-    }
-    if (data.course.defaultTabUrl) {
-      await AsyncStorage.setItem("defaultTabUrl", data.course.defaultTabUrl);
-    }
+    await writeLocalCourse(normalizeCourse(data.course));
 
     if (data.allCoursesAttendance) {
       await saveAllAttendanceAcrossCourses(data.allCoursesAttendance);
@@ -663,6 +701,12 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
       await saveAllManualEventsAcrossCourses(data.allCoursesManualEvents);
     } else if (Array.isArray(data.manualEvents)) {
       await saveManualEvents(data.manualEvents, data.course.url || undefined);
+    }
+
+    if (data.allCoursesExcludedLessons) {
+      await saveAllExcludedLessonsAcrossCourses(data.allCoursesExcludedLessons);
+    } else if (Array.isArray(data.excludedLessons)) {
+      await saveExcludedLessonsList(data.excludedLessons, data.course.url || undefined);
     }
 
     if (data.commuter) {
@@ -793,10 +837,18 @@ function decodeSafeKeys<T>(map?: Record<string, T>): Record<string, T> | undefin
 function sanitizeDocForFirebase(doc: RemoteDoc): RemoteDoc {
   return {
     ...doc,
+    course: doc.course
+      ? {
+          ...doc.course,
+          defaultTabsByCourse: encodeSafeKeys(doc.course.defaultTabsByCourse),
+        }
+      : undefined,
     allCoursesAttendance: encodeSafeKeys(doc.allCoursesAttendance),
     allCoursesManualEvents: encodeSafeKeys(doc.allCoursesManualEvents),
+    allCoursesExcludedLessons: encodeSafeKeys(doc.allCoursesExcludedLessons),
     tombstones: encodeSafeKeys(doc.tombstones),
     manualTombstones: encodeSafeKeys(doc.manualTombstones),
+    excludedTombstones: encodeSafeKeys(doc.excludedTombstones),
     notesTombstones: encodeSafeKeys(doc.notesTombstones),
     // Il percorso file locale è specifico del dispositivo: non va mai sincronizzato
     savedDocuments: doc.savedDocuments?.map((d) => {
@@ -810,10 +862,18 @@ function parseDocFromFirebase(rawDoc: RemoteDoc | null): RemoteDoc | null {
   if (!rawDoc || typeof rawDoc !== "object") return null;
   return {
     ...rawDoc,
+    course: rawDoc.course
+      ? {
+          ...rawDoc.course,
+          defaultTabsByCourse: decodeSafeKeys(rawDoc.course.defaultTabsByCourse),
+        }
+      : undefined,
     allCoursesAttendance: decodeSafeKeys(rawDoc.allCoursesAttendance),
     allCoursesManualEvents: decodeSafeKeys(rawDoc.allCoursesManualEvents),
+    allCoursesExcludedLessons: decodeSafeKeys(rawDoc.allCoursesExcludedLessons),
     tombstones: decodeSafeKeys(rawDoc.tombstones),
     manualTombstones: decodeSafeKeys(rawDoc.manualTombstones),
+    excludedTombstones: decodeSafeKeys(rawDoc.excludedTombstones),
     notesTombstones: decodeSafeKeys(rawDoc.notesTombstones),
   };
 }
@@ -1264,23 +1324,132 @@ export async function dissociateDevice(
   }
 }
 
+const DEFAULT_TAB_URL_PREFIX = "defaultTabUrl_";
+const DEFAULT_TAB_LABEL_PREFIX = "defaultTabLabel_";
+const DEFAULT_TAB_UPDATED_PREFIX = "defaultTabUpdated_";
+
+function sortPerCourseTabs(
+  map?: Record<string, CourseTabPreference> | null,
+): Record<string, CourseTabPreference> | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const entries = Object.keys(map)
+    .filter((k) => Boolean(k && map[k]?.url))
+    .sort()
+    .map((k) => {
+      const entry = map[k];
+      const normalized: CourseTabPreference = { url: entry.url };
+      if (entry.label) normalized.label = entry.label;
+      if (typeof entry.updatedAt === "number" && entry.updatedAt > 0) {
+        normalized.updatedAt = entry.updatedAt;
+      }
+      return [k, normalized] as const;
+    });
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+function mergePerCourseTabs(
+  localMap?: Record<string, CourseTabPreference>,
+  remoteMap?: Record<string, CourseTabPreference>,
+  preferRemoteOnTie = false,
+): Record<string, CourseTabPreference> | undefined {
+  const allCourses = new Set([
+    ...Object.keys(localMap || {}),
+    ...Object.keys(remoteMap || {}),
+  ]);
+  const merged: Record<string, CourseTabPreference> = {};
+  for (const courseUrl of allCourses) {
+    const l = localMap?.[courseUrl];
+    const r = remoteMap?.[courseUrl];
+    if (l && !r) {
+      merged[courseUrl] = l;
+    } else if (r && !l) {
+      merged[courseUrl] = r;
+    } else if (l && r) {
+      const lTs = l.updatedAt || 0;
+      const rTs = r.updatedAt || 0;
+      if (rTs > lTs) {
+        merged[courseUrl] = { ...r, label: r.label || l.label };
+      } else if (lTs > rTs) {
+        merged[courseUrl] = { ...l, label: l.label || r.label };
+      } else if (preferRemoteOnTie) {
+        merged[courseUrl] = { ...r, label: r.label || l.label };
+      } else {
+        merged[courseUrl] = { ...l, label: l.label || r.label };
+      }
+    }
+  }
+  return sortPerCourseTabs(merged);
+}
+
 function normalizeCourse(c?: Partial<CourseData> | null): CourseData {
   return {
     url: c?.url ?? null,
     name: c?.name ?? null,
     className: c?.className ?? null,
     defaultTabUrl: c?.defaultTabUrl ?? null,
+    defaultTabLabel: c?.defaultTabLabel ?? null,
+    defaultTabsByCourse: sortPerCourseTabs(c?.defaultTabsByCourse),
   };
 }
 
 export async function readLocalCourse(): Promise<CourseData> {
-  const [url, name, className, defaultTabUrl] = await Promise.all([
-    AsyncStorage.getItem("selectedDegreeUrl"),
-    AsyncStorage.getItem("selectedDegreeName"),
-    AsyncStorage.getItem("selectedDegreeClassName"),
-    AsyncStorage.getItem("defaultTabUrl"),
-  ]);
-  return { url, name, className, defaultTabUrl };
+  const [url, name, className, defaultTabUrl, defaultTabLabel, allKeys] =
+    await Promise.all([
+      AsyncStorage.getItem("selectedDegreeUrl"),
+      AsyncStorage.getItem("selectedDegreeName"),
+      AsyncStorage.getItem("selectedDegreeClassName"),
+      AsyncStorage.getItem("defaultTabUrl"),
+      AsyncStorage.getItem("defaultTabLabel"),
+      AsyncStorage.getAllKeys().catch(() => [] as string[]),
+    ]);
+
+  const tabUrlKeys = allKeys.filter((k) =>
+    k.startsWith(DEFAULT_TAB_URL_PREFIX),
+  );
+  const perCourseTabs: Record<string, CourseTabPreference> = {};
+  if (tabUrlKeys.length > 0) {
+    const courseUrls = tabUrlKeys.map((k) =>
+      k.slice(DEFAULT_TAB_URL_PREFIX.length),
+    );
+    const keysToFetch = courseUrls.flatMap((cUrl) => [
+      `${DEFAULT_TAB_URL_PREFIX}${cUrl}`,
+      `${DEFAULT_TAB_LABEL_PREFIX}${cUrl}`,
+      `${DEFAULT_TAB_UPDATED_PREFIX}${cUrl}`,
+    ]);
+    const pairs = await AsyncStorage.multiGet(keysToFetch).catch(
+      () => [] as readonly [string, string | null][],
+    );
+    const pairMap = new Map(pairs);
+    for (const cUrl of courseUrls) {
+      const tUrl = pairMap.get(`${DEFAULT_TAB_URL_PREFIX}${cUrl}`);
+      if (!tUrl) continue;
+      const tLabel = pairMap.get(`${DEFAULT_TAB_LABEL_PREFIX}${cUrl}`) || undefined;
+      const tUpdRaw = pairMap.get(`${DEFAULT_TAB_UPDATED_PREFIX}${cUrl}`);
+      const tUpd = tUpdRaw ? parseInt(tUpdRaw, 10) || 0 : 0;
+      perCourseTabs[cUrl] = {
+        url: tUrl,
+        ...(tLabel ? { label: tLabel } : {}),
+        ...(tUpd > 0 ? { updatedAt: tUpd } : {}),
+      };
+    }
+  }
+
+  if (url && defaultTabUrl && !perCourseTabs[url]) {
+    perCourseTabs[url] = {
+      url: defaultTabUrl,
+      ...(defaultTabLabel ? { label: defaultTabLabel } : {}),
+    };
+  }
+
+  return normalizeCourse({
+    url,
+    name,
+    className,
+    defaultTabUrl,
+    defaultTabLabel,
+    defaultTabsByCourse: perCourseTabs,
+  });
 }
 
 export async function writeLocalCourse(c: CourseData): Promise<void> {
@@ -1289,11 +1458,45 @@ export async function writeLocalCourse(c: CourseData): Promise<void> {
     ["selectedDegreeName", c.name],
     ["selectedDegreeClassName", c.className],
     ["defaultTabUrl", c.defaultTabUrl],
+    ["defaultTabLabel", c.defaultTabLabel ?? null],
   ];
+  if (c.url && c.defaultTabUrl) {
+    pairs.push([`${DEFAULT_TAB_URL_PREFIX}${c.url}`, c.defaultTabUrl]);
+    pairs.push([
+      `${DEFAULT_TAB_LABEL_PREFIX}${c.url}`,
+      c.defaultTabLabel ?? null,
+    ]);
+  }
   for (const [key, val] of pairs) {
     if (val) await AsyncStorage.setItem(key, val);
     else await AsyncStorage.removeItem(key);
   }
+  if (c.defaultTabsByCourse) {
+    const toSet: [string, string][] = [];
+    for (const [courseUrl, pref] of Object.entries(c.defaultTabsByCourse)) {
+      if (!courseUrl || !pref?.url) continue;
+      toSet.push([`${DEFAULT_TAB_URL_PREFIX}${courseUrl}`, pref.url]);
+      if (pref.label) {
+        toSet.push([`${DEFAULT_TAB_LABEL_PREFIX}${courseUrl}`, pref.label]);
+      }
+      if (pref.updatedAt && pref.updatedAt > 0) {
+        toSet.push([
+          `${DEFAULT_TAB_UPDATED_PREFIX}${courseUrl}`,
+          String(pref.updatedAt),
+        ]);
+      }
+    }
+    if (toSet.length > 0) {
+      await AsyncStorage.multiSet(toSet);
+    }
+  }
+}
+
+function excludedIdsKey(list: ExcludedLessonRecord[]): string {
+  return list
+    .map((r) => `${r.id}:${r.timestamp}`)
+    .sort()
+    .join("|");
 }
 
 function idsKey(list: AttendanceRecord[]): string {
@@ -1436,27 +1639,68 @@ async function runSync(): Promise<CloudSyncResult> {
       };
     }
 
-    // 1. Sincronizzazione Corso (LWW)
+    // 1. Sincronizzazione Corso e Canale per singolo corso (LWW)
     const localCourse = await readLocalCourse();
     const localSnap = await AsyncStorage.getItem(COURSE_SNAPSHOT_KEY);
     let localMod =
       parseInt((await AsyncStorage.getItem(COURSE_MODIFIED_KEY)) || "0", 10) ||
       0;
     if (JSON.stringify(localCourse) !== localSnap) {
-      localMod = localCourse.url ? Date.now() : 0;
+      localMod =
+        localCourse.url || localCourse.defaultTabsByCourse ? Date.now() : 0;
     }
 
     const remoteMod = remote?.courseModified || 0;
     const remoteCourse = normalizeCourse(remote?.course);
     let finalCourse = localCourse;
     let finalMod = localMod;
-    let courseChanged = false;
     if (remoteCourse.url && remoteMod > localMod) {
-      courseChanged =
-        JSON.stringify(remoteCourse) !== JSON.stringify(localCourse);
-      if (courseChanged) await writeLocalCourse(remoteCourse);
       finalCourse = remoteCourse;
       finalMod = remoteMod;
+    }
+
+    const mergedPerCourseTabs = mergePerCourseTabs(
+      localCourse.defaultTabsByCourse,
+      remoteCourse.defaultTabsByCourse,
+      remoteMod > localMod,
+    );
+    if (finalCourse.url && finalCourse.defaultTabUrl) {
+      const existingEntry = mergedPerCourseTabs?.[finalCourse.url];
+      const existingTs = existingEntry?.updatedAt || 0;
+      if (!existingEntry || finalMod >= existingTs) {
+        const nextTabs = { ...(mergedPerCourseTabs || {}) };
+        nextTabs[finalCourse.url] = {
+          url: finalCourse.defaultTabUrl,
+          ...(finalCourse.defaultTabLabel
+            ? { label: finalCourse.defaultTabLabel }
+            : existingEntry?.label
+              ? { label: existingEntry.label }
+              : {}),
+          ...(finalMod > 0 ? { updatedAt: finalMod } : {}),
+        };
+        finalCourse = normalizeCourse({
+          ...finalCourse,
+          defaultTabsByCourse: nextTabs,
+        });
+      } else {
+        finalCourse = normalizeCourse({
+          ...finalCourse,
+          defaultTabUrl: existingEntry.url,
+          defaultTabLabel: existingEntry.label ?? finalCourse.defaultTabLabel ?? null,
+          defaultTabsByCourse: mergedPerCourseTabs,
+        });
+      }
+    } else {
+      finalCourse = normalizeCourse({
+        ...finalCourse,
+        defaultTabsByCourse: mergedPerCourseTabs,
+      });
+    }
+
+    const courseChanged =
+      JSON.stringify(finalCourse) !== JSON.stringify(localCourse);
+    if (courseChanged) {
+      await writeLocalCourse(finalCourse);
     }
     await AsyncStorage.setItem(
       COURSE_SNAPSHOT_KEY,
@@ -1544,6 +1788,50 @@ async function runSync(): Promise<CloudSyncResult> {
       const mergedAllManual = { ...localAllManual, ...remote.allCoursesManualEvents };
       if (finalCourse.url) mergedAllManual[finalCourse.url] = mergedManual;
       await saveAllManualEventsAcrossCourses(mergedAllManual);
+    }
+
+    // 2c. Sincronizzazione Lezioni Barrate (Union con tombstones)
+    const localExcluded = await getExcludedLessons(finalCourse.url || undefined);
+    const remoteExcluded: ExcludedLessonRecord[] = Array.isArray(remote?.excludedLessons)
+      ? remote!.excludedLessons!.filter(Boolean)
+      : [];
+    const localExcludedTomb = await getExcludedLessonsTombstones(finalCourse.url || undefined);
+    const remoteExcludedTomb = remote?.excludedTombstones || {};
+
+    const excludedTombstones: Record<string, number> = {};
+    for (const src of [localExcludedTomb, remoteExcludedTomb]) {
+      for (const [id, ts] of Object.entries(src)) {
+        if (now - ts > TOMBSTONE_TTL_MS) continue;
+        excludedTombstones[id] = Math.max(excludedTombstones[id] || 0, ts);
+      }
+    }
+
+    const byExcludedId = new Map<string, ExcludedLessonRecord>();
+    for (const r of [...remoteExcluded, ...localExcluded]) {
+      const prev = byExcludedId.get(r.id);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) {
+        byExcludedId.set(r.id, r);
+      }
+    }
+    const mergedExcluded = Array.from(byExcludedId.values())
+      .filter((r) => !(excludedTombstones[r.id] && excludedTombstones[r.id] >= (r.timestamp || 0)))
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    const excludedChanged =
+      excludedIdsKey(mergedExcluded) !== excludedIdsKey(localExcluded);
+    if (excludedChanged) {
+      await saveExcludedLessonsList(mergedExcluded, finalCourse.url || undefined);
+    }
+    await setExcludedLessonsTombstones(excludedTombstones, finalCourse.url || undefined);
+
+    if (remote?.allCoursesExcludedLessons) {
+      const localAllExcluded = await getAllExcludedLessonsAcrossCourses();
+      const mergedAllExcluded = {
+        ...localAllExcluded,
+        ...remote.allCoursesExcludedLessons,
+      };
+      if (finalCourse.url) mergedAllExcluded[finalCourse.url] = mergedExcluded;
+      await saveAllExcludedLessonsAcrossCourses(mergedAllExcluded);
     }
 
     // 3. Sincronizzazione Impostazioni di Viaggio (LWW)
@@ -1741,8 +2029,11 @@ async function runSync(): Promise<CloudSyncResult> {
       tombstones,
       manualEvents: mergedManual,
       manualTombstones,
+      excludedLessons: mergedExcluded,
+      excludedTombstones,
       allCoursesAttendance: await getAllAttendanceAcrossCourses(),
       allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
+      allCoursesExcludedLessons: await getAllExcludedLessonsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
       studentInfo: {
@@ -1784,6 +2075,7 @@ async function runSync(): Promise<CloudSyncResult> {
       attChanged ||
       courseChanged ||
       manualChanged ||
+      excludedChanged ||
       commuterChanged ||
       studentChanged ||
       docsChanged;
@@ -1928,13 +2220,34 @@ export async function linkDeviceWithCode(
       },
     };
 
-    // 1. Corso: adotta corso del master
+    // 1. Corso: adotta corso del master preservando e unendo i canali per singolo corso
+    const localCourseBeforeLink = await readLocalCourse();
     const remoteCourse = normalizeCourse(rootRemote.course);
-    let finalCourse = await readLocalCourse();
+    let finalCourse = localCourseBeforeLink;
     const finalCourseMod = Date.now();
+    const mergedTabsOnLink = mergePerCourseTabs(
+      localCourseBeforeLink.defaultTabsByCourse,
+      remoteCourse.defaultTabsByCourse,
+      true,
+    );
     if (remoteCourse.url) {
-      finalCourse = remoteCourse;
-      await writeLocalCourse(remoteCourse);
+      const nextTabs = { ...(mergedTabsOnLink || {}) };
+      if (remoteCourse.defaultTabUrl) {
+        nextTabs[remoteCourse.url] = {
+          url: remoteCourse.defaultTabUrl,
+          ...(remoteCourse.defaultTabLabel
+            ? { label: remoteCourse.defaultTabLabel }
+            : nextTabs[remoteCourse.url]?.label
+              ? { label: nextTabs[remoteCourse.url].label }
+              : {}),
+          updatedAt: finalCourseMod,
+        };
+      }
+      finalCourse = normalizeCourse({
+        ...remoteCourse,
+        defaultTabsByCourse: nextTabs,
+      });
+      await writeLocalCourse(finalCourse);
       // Eredita immediatamente dati di orari e lezioni già elaborati dall'altro dispositivo
       if (rootRemote.cachedSchedule) {
         await AsyncStorage.setItem(
@@ -1948,6 +2261,12 @@ export async function linkDeviceWithCode(
           rootRemote.cachedTabs,
         ).catch(() => {});
       }
+    } else if (mergedTabsOnLink) {
+      finalCourse = normalizeCourse({
+        ...finalCourse,
+        defaultTabsByCourse: mergedTabsOnLink,
+      });
+      await writeLocalCourse(finalCourse);
     }
     await AsyncStorage.setItem(
       COURSE_SNAPSHOT_KEY,
@@ -2006,6 +2325,35 @@ export async function linkDeviceWithCode(
 
     if (rootRemote.allCoursesManualEvents) {
       await saveAllManualEventsAcrossCourses(rootRemote.allCoursesManualEvents);
+    }
+
+    // 2c. Lezioni Barrate: unione
+    const localExcluded = await getExcludedLessons(finalCourse.url || undefined);
+    const remoteExcluded: ExcludedLessonRecord[] = Array.isArray(rootRemote.excludedLessons)
+      ? rootRemote.excludedLessons
+      : [];
+    const localExcludedTomb = await getExcludedLessonsTombstones(finalCourse.url || undefined);
+    const remoteExcludedTomb = rootRemote.excludedTombstones || {};
+    const excludedTombstones: Record<string, number> = {
+      ...localExcludedTomb,
+      ...remoteExcludedTomb,
+    };
+    const byExcludedId = new Map<string, ExcludedLessonRecord>();
+    for (const r of [...remoteExcluded, ...localExcluded]) {
+      const prev = byExcludedId.get(r.id);
+      if (!prev || (r.timestamp || 0) > (prev.timestamp || 0)) {
+        byExcludedId.set(r.id, r);
+      }
+    }
+    const mergedExcluded = Array.from(byExcludedId.values())
+      .filter((r) => !(excludedTombstones[r.id] && excludedTombstones[r.id] >= (r.timestamp || 0)))
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    await saveExcludedLessonsList(mergedExcluded, finalCourse.url || undefined);
+    await setExcludedLessonsTombstones(excludedTombstones, finalCourse.url || undefined);
+
+    if (rootRemote.allCoursesExcludedLessons) {
+      await saveAllExcludedLessonsAcrossCourses(rootRemote.allCoursesExcludedLessons);
     }
 
     // 3. Impostazioni Viaggio Pendolare: adotta impostazioni del master
@@ -2110,8 +2458,11 @@ export async function linkDeviceWithCode(
       tombstones,
       manualEvents: mergedManual,
       manualTombstones,
+      excludedLessons: mergedExcluded,
+      excludedTombstones,
       allCoursesAttendance: await getAllAttendanceAcrossCourses(),
       allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
+      allCoursesExcludedLessons: await getAllExcludedLessonsAcrossCourses(),
       commuter: finalCommuter,
       commuterModified: finalCommuterMod,
       studentInfo: {
@@ -2198,10 +2549,15 @@ function scheduleAutoPush() {
 setAttendanceChangeListener(scheduleAutoPush);
 setCommuterChangeListener(scheduleAutoPush);
 setManualEventsChangeListener(scheduleAutoPush);
+setExcludedLessonsChangeListener(scheduleAutoPush);
 subscribeToStudentInfoChanges(scheduleAutoPush);
 subscribeToSavedDocumentsChanges(scheduleAutoPush);
 subscribeToNotesChanges(scheduleAutoPush);
 subscribeToCalendarConfigChanges(scheduleAutoPush);
+
+export function notifyCourseConfigChanged(): void {
+  scheduleAutoPush();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sincronizzazione Live in Tempo Reale
@@ -2422,6 +2778,7 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     // 8. Notifica gli ascoltatori dell'azzeramento di presenze, lezioni e sincronizzazione
     notifyAttendanceChanged();
     notifyManualEventsChanged();
+    notifyExcludedLessonsChanged();
     await notifyLiveSyncListeners(true);
     notifyAppReset();
 
@@ -2433,6 +2790,7 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     await AsyncStorage.setItem(CLOUD_SYNC_ID_KEY, fallbackCode);
     notifyAttendanceChanged();
     notifyManualEventsChanged();
+    notifyExcludedLessonsChanged();
     notifyAppReset();
     return fallbackCode;
   }
@@ -2454,4 +2812,36 @@ export function notifyAppReset(): void {
       fn();
     } catch {}
   });
+}
+
+/**
+ * Persiste il canale predefinito (URL, etichetta e timestamp LWW) per un corso
+ * sia nelle chiavi globali correnti sia nelle chiavi per-corso usate dal Cloud Sync.
+ */
+export async function saveCourseDefaultTabPreference(
+  degreeUrl: string,
+  tabUrl: string | null,
+  tabLabel?: string | null,
+): Promise<void> {
+  const nowTs = String(Date.now());
+  if (tabUrl) {
+    const pairs: [string, string][] = [
+      ["defaultTabUrl", tabUrl],
+      [`defaultTabUrl_${degreeUrl}`, tabUrl],
+      [`defaultTabUpdated_${degreeUrl}`, nowTs],
+    ];
+    if (tabLabel) {
+      pairs.push(["defaultTabLabel", tabLabel]);
+      pairs.push([`defaultTabLabel_${degreeUrl}`, tabLabel]);
+    } else {
+      await AsyncStorage.removeItem("defaultTabLabel");
+    }
+    await AsyncStorage.multiSet(pairs);
+  } else {
+    await Promise.all([
+      AsyncStorage.removeItem("defaultTabUrl"),
+      AsyncStorage.removeItem("defaultTabLabel"),
+    ]);
+  }
+  notifyCourseConfigChanged();
 }

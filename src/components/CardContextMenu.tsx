@@ -12,9 +12,11 @@ import { tint as tintModifier } from '@expo/ui/swift-ui/modifiers';
 interface CardContextMenuProps {
   title: string;
   isAttended?: boolean;
+  isExcluded?: boolean;
   isManual?: boolean;
   isNativeAvailable: boolean;
   onTogglePresence?: () => void;
+  onToggleExclude?: () => void;
   onEditManual?: () => void;
   onDeleteManual?: () => void;
   onAddOrViewNote?: () => void;
@@ -25,9 +27,11 @@ interface CardContextMenuProps {
 export function CardContextMenu({
   title,
   isAttended = false,
+  isExcluded = false,
   isManual,
   isNativeAvailable,
   onTogglePresence,
+  onToggleExclude,
   onEditManual,
   onDeleteManual,
   onAddOrViewNote,
@@ -54,6 +58,16 @@ export function CardContextMenu({
                   role={isAttended ? 'destructive' : undefined}
                   modifiers={[tintModifier(isAttended ? '#ff453a' : '#34d399')]}
                   onPress={onTogglePresence}
+                />
+              ) : null}
+
+              {/* Escludi / Ripristina lezione (esclude dal calcolo target standard e dal calendario) */}
+              {onToggleExclude ? (
+                <Button
+                  label={isExcluded ? 'Ripristina lezione' : 'Escludi lezione'}
+                  systemImage={isExcluded ? 'arrow.uturn.backward.circle.fill' : 'nosign'}
+                  modifiers={[tintModifier(isExcluded ? '#38bdf8' : '#fb923c')]}
+                  onPress={onToggleExclude}
                 />
               ) : null}
 
@@ -104,6 +118,12 @@ export function CardContextMenu({
           buttons.push({
             text: isAttended ? 'Rimuovi presenza' : 'Segna presenza',
             onPress: onTogglePresence,
+          });
+        }
+        if (onToggleExclude) {
+          buttons.push({
+            text: isExcluded ? 'Ripristina lezione' : 'Escludi lezione',
+            onPress: onToggleExclude,
           });
         }
         if (isManual && onEditManual) {

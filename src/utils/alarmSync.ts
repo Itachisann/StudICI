@@ -10,6 +10,12 @@ import {
   manualEventToClassEvent,
   subscribeToManualEventsChanges,
 } from './manualEvents';
+import {
+  buildExcludedIdSet,
+  getExcludedLessons,
+  isLessonExcluded,
+  subscribeToExcludedLessonsChanges,
+} from './excludedLessons';
 import { ClassEvent, fetchScheduleData, getCachedTabs, ScheduleData } from './scraper';
 import { minutesToTime, parseTimeToMinutes } from './trenitaliaApi';
 
@@ -227,7 +233,10 @@ export async function computeWeeklyAlarmPlans(
     getCommuterConfig(),
   ]);
 
-  const manualEvents = degreeUrl ? await getManualEvents(degreeUrl) : [];
+  const [manualEvents, excludedRecords] = degreeUrl
+    ? await Promise.all([getManualEvents(degreeUrl), getExcludedLessons(degreeUrl)])
+    : [[], []];
+  const excludedSet = buildExcludedIdSet(excludedRecords);
 
   const plans = await Promise.all(
     WEEKDAYS_META.map(async (meta): Promise<DayAlarmPlan> => {
@@ -249,7 +258,7 @@ export async function computeWeeklyAlarmPlans(
         .map(manualEventToClassEvent);
 
       const allDayClasses = [...officialClasses, ...manualForDay].filter(
-        (c) => Boolean(c && c.startTime)
+        (c) => Boolean(c && c.startTime) && !isLessonExcluded(meta.dayIdx, c, excludedSet)
       );
 
       if (allDayClasses.length === 0) {
@@ -281,6 +290,7 @@ export async function computeWeeklyAlarmPlans(
           selectedClass: firstLesson,
           selectedTrainOffset: 0,
           ignoreCurrentTime: true,
+          excludedLessonIds: excludedSet,
         });
 
         const estimatedDepStr = itinerary.departureTime || '07:00';
@@ -589,6 +599,10 @@ export function refreshCommuterAlarmsInBackground(force = false): Promise<void> 
 if (ENABLE_COMMUTER_ALARMS) {
   // Aggiorna automaticamente le sveglie in background al variare di lezioni manuali o impostazioni viaggio
   subscribeToManualEventsChanges(() => {
+    refreshCommuterAlarmsInBackground(true).catch(() => {});
+  });
+
+  subscribeToExcludedLessonsChanges(() => {
     refreshCommuterAlarmsInBackground(true).catch(() => {});
   });
 

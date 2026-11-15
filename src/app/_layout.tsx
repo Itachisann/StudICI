@@ -12,6 +12,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Linking from 'expo-linking';
 import { linkDeviceWithCode, subscribeToAppReset, subscribeToLiveSync } from '@/utils/cloudSync';
 import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
+import { pullExternalAppleCalendarChanges } from '@/utils/appleCalendar';
 import { prefetchViaggioStartupData } from '@/utils/commuterOptimizer';
 import { subscribeToCommuterChanges } from '@/utils/commuterStorage';
 import {
@@ -180,6 +181,7 @@ function AppLayoutContent() {
     prefetchViaggioStartupData(degreeUrl).catch(() => {});
     refreshCommuterAlarmsInBackground().catch(() => {});
     syncStrikeNotifications().catch(() => {});
+    pullExternalAppleCalendarChanges().catch(() => {});
 
     try {
       const lastResponse = Notifications.getLastNotificationResponse();
@@ -203,6 +205,7 @@ function AppLayoutContent() {
         prefetchViaggioStartupData(degreeUrl).catch(() => {});
         refreshCommuterAlarmsInBackground().catch(() => {});
         syncStrikeNotifications().catch(() => {});
+        pullExternalAppleCalendarChanges().catch(() => {});
       }
     });
     return () => {

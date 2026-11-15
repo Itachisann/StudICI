@@ -35,6 +35,15 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import Reanimated, {
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+} from "react-native-reanimated";
+import {
+  AnimatedStrikethroughText,
+  useExcludedProgress,
+} from "../components/ExcludedLessonVisuals";
 
 import {
   type AppTheme,
@@ -99,6 +108,14 @@ import {
   ManualClassEvent,
   subscribeToManualEventsChanges,
 } from "../utils/manualEvents";
+import {
+  buildExcludedIdSet,
+  ExcludedLessonRecord,
+  getExcludedLessons,
+  isLessonExcluded,
+  jsDayToScheduleDayIndex,
+  subscribeToExcludedLessonsChanges,
+} from "../utils/excludedLessons";
 import {
   ClassEvent,
   fetchAllCourseData,
@@ -266,11 +283,50 @@ function getLectureScrollOffset(index: number, viewportWidth: number): number {
 interface LectureCardProps {
   item: ClassEvent;
   isSelected: boolean;
+  isExcluded?: boolean;
   theme: AppTheme;
   onPress?: () => void;
 }
 
-function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
+function LectureCard({
+  item,
+  isSelected,
+  isExcluded = false,
+  theme,
+  onPress,
+}: LectureCardProps) {
+  const excludedProgress = useExcludedProgress(isExcluded, 0);
+
+  const animatedUnselectedStyle = useAnimatedStyle(() => {
+    if (isSelected) {
+      return {};
+    }
+    return {
+      backgroundColor: interpolateColor(
+        excludedProgress.value,
+        [0, 1],
+        ["#1c1c1e", "#141519"],
+      ),
+      borderColor: interpolateColor(
+        excludedProgress.value,
+        [0, 1],
+        ["rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.055)"],
+      ),
+    };
+  }, [isSelected]);
+
+  const animatedSelectedWashStyle = useAnimatedStyle(() => ({
+    opacity: isSelected ? interpolate(excludedProgress.value, [0, 1], [0, 0.22]) : 0,
+  }), [isSelected]);
+
+  const animatedDimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      excludedProgress.value,
+      [0, 1],
+      [1, isSelected ? 0.78 : 0.55],
+    ),
+  }), [isSelected]);
+
   const cardStyle = [
     styles.classCard,
     isSelected && [
@@ -281,11 +337,18 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
         shadowColor: theme.primary,
       },
     ],
+    !isSelected && animatedUnselectedStyle,
   ];
 
   const cardContent = (
-    <>
-      <View style={styles.classCardTopRow}>
+    <Reanimated.View style={cardStyle}>
+      {isSelected && (
+        <Reanimated.View
+          pointerEvents="none"
+          style={[styles.excludedSelectedWash, animatedSelectedWashStyle]}
+        />
+      )}
+      <Reanimated.View style={[styles.classCardTopRow, animatedDimStyle]}>
         <View
           style={[
             styles.classTimeBadge,
@@ -310,7 +373,7 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
             {item.startTime} - {item.endTime}
           </Text>
         </View>
-        {isSelected && (
+        {isSelected ? (
           <View
             style={[
               styles.targetBadge,
@@ -328,23 +391,26 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
             />
             <Text style={styles.targetBadgeText}>Target</Text>
           </View>
-        )}
-      </View>
+        ) : null}
+      </Reanimated.View>
 
-      <Text
-        style={[
-          styles.classSubjectText,
-          isSelected && styles.classSubjectTextSelected,
-        ]}
+      <AnimatedStrikethroughText
+        progress={excludedProgress}
+        normalColor={isSelected ? "#ffffff" : "#e2e8f0"}
+        excludedColor={isSelected ? "#94a3b8" : "#71717a"}
+        strikeColor="rgba(142, 142, 148, 0.88)"
+        strikeThickness={1.8}
         numberOfLines={2}
+        style={styles.classSubjectText}
       >
         {item.subject}
-      </Text>
+      </AnimatedStrikethroughText>
 
-      <View
+      <Reanimated.View
         style={[
           styles.classRoomRow,
           isSelected && { borderTopColor: theme.border },
+          animatedDimStyle,
         ]}
       >
         <Ionicons
@@ -366,14 +432,13 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
           {item.room || "Aula"}
           {item.building ? ` • ${item.building}` : ""}
         </Text>
-      </View>
-    </>
+      </Reanimated.View>
+    </Reanimated.View>
   );
 
   if (onPress) {
     return (
       <TouchableOpacity
-        style={cardStyle}
         activeOpacity={0.82}
         onPress={onPress}
       >
@@ -382,7 +447,7 @@ function LectureCard({ item, isSelected, theme, onPress }: LectureCardProps) {
     );
   }
 
-  return <View style={cardStyle}>{cardContent}</View>;
+  return cardContent;
 }
 
 const getDayClasses = getDayClassesForWeekday;
@@ -413,6 +478,13 @@ export default function ViaggioScreen() {
   const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>(
     () => initialStartupSeed?.manualEvents ?? [],
   );
+  const [excludedLessons, setExcludedLessons] = useState<
+    ExcludedLessonRecord[]
+  >(() => initialStartupSeed?.excludedLessons ?? []);
+  const excludedSet = useMemo(
+    () => buildExcludedIdSet(excludedLessons),
+    [excludedLessons],
+  );
   const [defaultTabUrl, setDefaultTabUrl] = useState<string | null>(
     () => initialStartupSeed?.defaultTabUrl ?? null,
   );
@@ -432,6 +504,9 @@ export default function ViaggioScreen() {
   );
   const manualsCacheRef = useRef<ManualClassEvent[] | null>(
     initialStartupSeed?.manualEvents ?? null,
+  );
+  const excludedCacheRef = useRef<ExcludedLessonRecord[] | null>(
+    initialStartupSeed?.excludedLessons ?? null,
   );
   const initialSeedConsumedRef = useRef<boolean>(Boolean(initialStartupSeed));
   const loadRequestIdRef = useRef<number>(0);
@@ -745,6 +820,12 @@ export default function ViaggioScreen() {
       if (matched) return matched;
     }
 
+    const schedDayIdx = jsDayToScheduleDayIndex(selectedDayIdx);
+    const activeDayClasses = dayClasses.filter(
+      (c) => !isLessonExcluded(schedDayIdx, c, excludedSet),
+    );
+    if (activeDayClasses.length === 0) return null;
+
     const now = new Date();
     const isToday = now.getDay() === selectedDayIdx;
     const approxTimeToStation = config?.carLeg?.enabled
@@ -755,7 +836,7 @@ export default function ViaggioScreen() {
       approxTimeToStation + 40 + (config?.transitLeg?.durationMinutes || 20);
 
     return getAutoTargetClass(
-      dayClasses,
+      activeDayClasses,
       isToday,
       direction,
       now,
@@ -768,16 +849,17 @@ export default function ViaggioScreen() {
     selectedDayIdx,
     direction,
     config,
+    excludedSet,
   ]);
 
   const activeSelectedClassIndex = useMemo(() => {
-    if (!activeSelectedClass || dayClasses.length === 0) return 0;
+    if (!activeSelectedClass || dayClasses.length === 0) return -1;
     const idx = dayClasses.findIndex(
       (c) =>
         c.subject === activeSelectedClass.subject &&
         c.startTime === activeSelectedClass.startTime,
     );
-    return idx >= 0 ? idx : 0;
+    return idx >= 0 ? idx : -1;
   }, [activeSelectedClass, dayClasses]);
 
   const selectedDateIso = useMemo(() => {
@@ -1111,6 +1193,7 @@ export default function ViaggioScreen() {
             if (seed && (seed.config.enabled === false || seed.itinerary !== null)) {
               configCacheRef.current = seed.config;
               manualsCacheRef.current = seed.manualEvents;
+              excludedCacheRef.current = seed.excludedLessons || [];
               scheduleCacheRef.current = seed.schedule;
               hasLoadedScheduleRef.current = true;
               defaultTabUrlRef.current = seed.defaultTabUrl;
@@ -1120,6 +1203,7 @@ export default function ViaggioScreen() {
               }
               setConfig(seed.config);
               setManualEvents(seed.manualEvents);
+              setExcludedLessons(seed.excludedLessons || []);
               setDefaultTabUrl(seed.defaultTabUrl);
               setSchedule(seed.schedule);
               setDisruptions(seed.disruptions);
@@ -1154,6 +1238,11 @@ export default function ViaggioScreen() {
             ? Promise.resolve(manualsCacheRef.current)
             : getManualEvents().catch(() => manualsCacheRef.current || []);
 
+        const excludedPromise: Promise<ExcludedLessonRecord[]> =
+          !isRefresh && excludedCacheRef.current
+            ? Promise.resolve(excludedCacheRef.current)
+            : getExcludedLessons().catch(() => excludedCacheRef.current || []);
+
         const schedulePromise: Promise<{
           sched: ScheduleData | null;
           defaultTab: string | null;
@@ -1170,7 +1259,14 @@ export default function ViaggioScreen() {
               "defaultTabUrl",
             ]);
             const url = storagePairs[0]?.[1];
-            const nextDefaultTab = storagePairs[1]?.[1] || null;
+            const nextDefaultTab =
+              (url
+                ? await AsyncStorage.getItem(`defaultTabUrl_${url}`).catch(
+                    () => null,
+                  )
+                : null) ||
+              storagePairs[1]?.[1] ||
+              null;
             let loadedSched: ScheduleData | null = null;
             if (url) {
               const courseData = await fetchAllCourseData(url);
@@ -1197,11 +1293,13 @@ export default function ViaggioScreen() {
           }
         })();
 
-        const [configRes, manualsRes, schedRes] = await Promise.allSettled([
-          configPromise,
-          manualsPromise,
-          schedulePromise,
-        ]);
+        const [configRes, manualsRes, excludedRes, schedRes] =
+          await Promise.allSettled([
+            configPromise,
+            manualsPromise,
+            excludedPromise,
+            schedulePromise,
+          ]);
 
         if (
           requestId !== loadRequestIdRef.current ||
@@ -1219,6 +1317,11 @@ export default function ViaggioScreen() {
           manualsRes.status === "fulfilled"
             ? manualsRes.value
             : manualsCacheRef.current || [];
+        const currentExcluded =
+          excludedRes.status === "fulfilled"
+            ? excludedRes.value
+            : excludedCacheRef.current || [];
+        const currentExcludedSet = buildExcludedIdSet(currentExcluded);
         const { sched, defaultTab } =
           schedRes.status === "fulfilled"
             ? schedRes.value
@@ -1237,11 +1340,13 @@ export default function ViaggioScreen() {
           }
           configCacheRef.current = currentConfig;
           manualsCacheRef.current = currentManuals;
+          excludedCacheRef.current = currentExcluded;
           scheduleCacheRef.current = sched;
           hasLoadedScheduleRef.current = true;
           defaultTabUrlRef.current = defaultTab;
           setConfig(currentConfig);
           setManualEvents(currentManuals);
+          setExcludedLessons(currentExcluded);
           setDefaultTabUrl(defaultTab);
           setSchedule(sched);
           setDisruptions(resolvedDisruptions);
@@ -1258,6 +1363,7 @@ export default function ViaggioScreen() {
             manuals: currentManuals,
             defaultTabUrl: defaultTab,
             selectedClassIndex: effClassIdx,
+            excludedLessonIds: currentExcludedSet,
           });
 
         const [itinRes, disruptionsRes] = await Promise.allSettled([
@@ -1272,6 +1378,7 @@ export default function ViaggioScreen() {
             selectedTrainOffset: effTrainOffset,
             selectedTrainNumber: effTrainNum || undefined,
             forceRefresh: isRefresh,
+            excludedLessonIds: currentExcludedSet,
           }),
           disruptionsPromise,
         ]);
@@ -1291,12 +1398,14 @@ export default function ViaggioScreen() {
         // Commit atomico in un unico batch React: lezioni, hero card, treni, mezzi e scioperi compaiono insieme
         configCacheRef.current = currentConfig;
         manualsCacheRef.current = currentManuals;
+        excludedCacheRef.current = currentExcluded;
         scheduleCacheRef.current = sched;
         hasLoadedScheduleRef.current = true;
         defaultTabUrlRef.current = defaultTab;
 
         setConfig(currentConfig);
         setManualEvents(currentManuals);
+        setExcludedLessons(currentExcluded);
         setDefaultTabUrl(defaultTab);
         setSchedule(sched);
         setDisruptions(resolvedDisruptions);
@@ -1345,6 +1454,22 @@ export default function ViaggioScreen() {
         .then((evts) => {
           manualsCacheRef.current = evts;
           setManualEvents(evts);
+          loadData(true, true);
+        })
+        .catch(() => {});
+    });
+    return () => unsub();
+  }, [loadData]);
+
+  useEffect(() => {
+    const unsub = subscribeToExcludedLessonsChanges(() => {
+      excludedCacheRef.current = null;
+      itinerariesCacheRef.current = {};
+      invalidateViaggioStartupSnapshot();
+      getExcludedLessons()
+        .then((recs) => {
+          excludedCacheRef.current = recs;
+          setExcludedLessons(recs);
           loadData(true, true);
         })
         .catch(() => {});
@@ -2818,19 +2943,28 @@ export default function ViaggioScreen() {
             </View>
           ) : (
             (() => {
-              const previewTarget = getAutoTargetClass(
-                pageClasses,
-                isPageToday,
-                direction,
-                new Date(),
+              const pageSchedDayIdx = jsDayToScheduleDayIndex(w.dayIdx);
+              const pageActiveClasses = pageClasses.filter(
+                (c) => !isLessonExcluded(pageSchedDayIdx, c, excludedSet),
               );
+              const previewTarget =
+                pageActiveClasses.length > 0
+                  ? getAutoTargetClass(
+                      pageActiveClasses,
+                      isPageToday,
+                      direction,
+                      new Date(),
+                    )
+                  : null;
               const previewTargetIndex = previewTarget
                 ? pageClasses.findIndex(
                     (c) =>
+                      !isLessonExcluded(pageSchedDayIdx, c, excludedSet) &&
                       c.subject === previewTarget.subject &&
-                      c.startTime === previewTarget.startTime,
+                      c.startTime === previewTarget.startTime &&
+                      c.endTime === previewTarget.endTime,
                   )
-                : 0;
+                : -1;
               const validPreviewIdx =
                 previewTargetIndex >= 0 ? previewTargetIndex : 0;
               const previewOffset = getLectureScrollOffset(
@@ -2847,16 +2981,24 @@ export default function ViaggioScreen() {
                   contentContainerStyle={styles.classesScrollContainer}
                 >
                   {pageClasses.map((item, idx) => {
+                    const isExcluded = isLessonExcluded(
+                      pageSchedDayIdx,
+                      item,
+                      excludedSet,
+                    );
                     const isSelected = previewTarget
-                      ? item.subject === previewTarget.subject &&
-                        item.startTime === previewTarget.startTime
-                      : idx === 0;
+                      ? !isExcluded &&
+                        item.subject === previewTarget.subject &&
+                        item.startTime === previewTarget.startTime &&
+                        item.endTime === previewTarget.endTime
+                      : false;
 
                     return (
                       <LectureCard
-                        key={`${item.subject}-${item.startTime}-${idx}`}
+                        key={`${w.dayIdx}-${item.subject}-${item.startTime}-${idx}`}
                         item={item}
                         isSelected={isSelected}
+                        isExcluded={isExcluded}
                         theme={theme}
                       />
                     );
@@ -3422,18 +3564,26 @@ export default function ViaggioScreen() {
                               }
                             >
                               {dayClasses.map((item, idx) => {
+                                const isExcluded = isLessonExcluded(
+                                  jsDayToScheduleDayIndex(selectedDayIdx),
+                                  item,
+                                  excludedSet,
+                                );
                                 const isSelected = activeSelectedClass
                                   ? item.subject ===
                                       activeSelectedClass.subject &&
                                     item.startTime ===
-                                      activeSelectedClass.startTime
-                                  : idx === 0;
+                                      activeSelectedClass.startTime &&
+                                    item.endTime ===
+                                      activeSelectedClass.endTime
+                                  : false;
 
                                 return (
                                   <LectureCard
-                                    key={`${item.subject}-${item.startTime}-${idx}`}
+                                    key={`${selectedDayIdx}-${item.subject}-${item.startTime}-${idx}`}
                                     item={item}
                                     isSelected={isSelected}
+                                    isExcluded={isExcluded}
                                     theme={theme}
                                     onPress={() => handleSelectClass(idx)}
                                   />
@@ -3538,74 +3688,109 @@ export default function ViaggioScreen() {
                                   : itinerary.arrivalTime}
                               </Text>
 
-                              <View
-                                style={[
-                                  styles.heroTargetLectureBox,
-                                  {
-                                    backgroundColor: theme.subtle,
-                                    borderColor: theme.border,
-                                  },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={
-                                    isWeekend
-                                      ? "train-outline"
-                                      : isTargetLectureFinished
-                                        ? "checkmark-circle-outline"
-                                        : direction === "outbound"
-                                          ? "flag"
-                                          : "home"
-                                  }
-                                  size={16}
-                                  color={
-                                    isWeekend
-                                      ? theme.primary
-                                      : isTargetLectureFinished
-                                        ? "#10b981"
-                                        : theme.accent
-                                  }
-                                  style={{ marginRight: 8 }}
-                                />
-                                <View style={{ flex: 1 }}>
-                                  <Text
-                                    style={styles.heroLectureSubject}
-                                    numberOfLines={1}
+                              {(() => {
+                                const hasNoActiveTargetLecture =
+                                  !isWeekend &&
+                                  !itinerary.targetLecture &&
+                                  !activeSelectedClass;
+                                const isTargetExcluded =
+                                  !isWeekend &&
+                                  !!activeSelectedClass &&
+                                  isLessonExcluded(
+                                    jsDayToScheduleDayIndex(selectedDayIdx),
+                                    activeSelectedClass,
+                                    excludedSet,
+                                  );
+
+                                return (
+                                  <View
+                                    style={[
+                                      styles.heroTargetLectureBox,
+                                      {
+                                        backgroundColor: theme.subtle,
+                                        borderColor: theme.border,
+                                      },
+                                    ]}
                                   >
-                                    {isWeekend
-                                      ? direction === "outbound"
-                                        ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
-                                        : `Rientro ad ${config?.originAddress}`
-                                      : direction === "outbound"
-                                        ? itinerary.targetLecture?.subject &&
-                                          itinerary.targetLecture.subject !==
-                                            "Lezioni di oggi terminate"
-                                          ? itinerary.targetLecture.subject
-                                          : activeSelectedClass?.subject ||
-                                            "Lezione"
-                                        : itinerary.targetLecture?.subject &&
-                                            itinerary.targetLecture.subject !==
-                                              "Lezioni di oggi terminate"
-                                          ? itinerary.targetLecture.subject
-                                          : `Rientro ad ${config?.originAddress}`}
-                                  </Text>
-                                  <Text
-                                    style={styles.heroLectureDetails}
-                                    numberOfLines={1}
-                                  >
-                                    {isWeekend
-                                      ? "Fine settimana • Nessuna lezione collegata"
-                                      : isTargetLectureFinished
-                                        ? "Terminata • Treni da adesso"
-                                        : direction === "outbound"
-                                          ? itinerary.lectureTimeStatus
-                                              ?.type === "late_arrival"
-                                            ? `${itinerary.targetLecture?.room} • In corso (${itinerary.lectureTimeStatus.badgeText})`
-                                            : `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
-                                          : `Fine lezioni ore ${itinerary.targetLecture?.endTime}`}
-                                  </Text>
-                                </View>
-                              </View>
+                                    <Ionicons
+                                      name={
+                                        isWeekend || hasNoActiveTargetLecture
+                                          ? "train-outline"
+                                          : isTargetLectureFinished
+                                            ? "checkmark-circle-outline"
+                                            : direction === "outbound"
+                                              ? "flag"
+                                              : "home"
+                                      }
+                                      size={16}
+                                      color={
+                                        isWeekend || hasNoActiveTargetLecture
+                                          ? theme.primary
+                                          : isTargetLectureFinished
+                                            ? "#10b981"
+                                            : theme.accent
+                                      }
+                                      style={{ marginRight: 8 }}
+                                    />
+                                    <View style={{ flex: 1 }}>
+                                      <Text
+                                        style={styles.heroLectureSubject}
+                                        numberOfLines={1}
+                                      >
+                                        {isWeekend
+                                          ? direction === "outbound"
+                                            ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
+                                            : `Rientro ad ${config?.originAddress}`
+                                          : hasNoActiveTargetLecture
+                                            ? dayClasses.length > 0
+                                              ? "Tutte le lezioni escluse"
+                                              : direction === "outbound"
+                                                ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
+                                                : `Rientro ad ${config?.originAddress}`
+                                            : direction === "outbound"
+                                              ? itinerary.targetLecture
+                                                  ?.subject &&
+                                                itinerary.targetLecture
+                                                  .subject !==
+                                                  "Lezioni di oggi terminate"
+                                                ? itinerary.targetLecture
+                                                    .subject
+                                                : activeSelectedClass?.subject ||
+                                                  "Lezione"
+                                              : itinerary.targetLecture
+                                                    ?.subject &&
+                                                  itinerary.targetLecture
+                                                    .subject !==
+                                                    "Lezioni di oggi terminate"
+                                                ? itinerary.targetLecture
+                                                    .subject
+                                                : `Rientro ad ${config?.originAddress}`}
+                                      </Text>
+                                      <Text
+                                        style={styles.heroLectureDetails}
+                                        numberOfLines={1}
+                                      >
+                                        {isWeekend
+                                          ? "Fine settimana • Nessuna lezione collegata"
+                                          : hasNoActiveTargetLecture
+                                            ? dayClasses.length > 0
+                                              ? "Treni attivi • Tocca una lezione sopra per usarla"
+                                              : "Solo treni • Nessuna lezione attiva"
+                                            : isTargetLectureFinished
+                                              ? `Terminata • Treni da adesso${isTargetExcluded ? " • Esclusa" : ""}`
+                                              : direction === "outbound"
+                                                ? `${
+                                                    itinerary.lectureTimeStatus
+                                                      ?.type === "late_arrival"
+                                                      ? `${itinerary.targetLecture?.room} • In corso (${itinerary.lectureTimeStatus.badgeText})`
+                                                      : `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
+                                                  }${isTargetExcluded ? " • Esclusa" : ""}`
+                                                : `Fine lezioni ore ${itinerary.targetLecture?.endTime}${isTargetExcluded ? " • Esclusa" : ""}`}
+                                      </Text>
+                                    </View>
+                                  </View>
+                                );
+                              })()}
 
                               {renderHeroDisruptionAlerts(10)}
                             </View>
@@ -6227,6 +6412,15 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     letterSpacing: 0.2,
   },
+  excludedSelectedWash: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "#000000",
+    borderRadius: CARD_RADIUS.card,
+  },
   classSubjectText: {
     fontSize: 13,
     fontWeight: "700",
@@ -6234,9 +6428,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     minHeight: 32,
     letterSpacing: -0.2,
-  },
-  classSubjectTextSelected: {
-    color: "#ffffff",
   },
   classRoomRow: {
     flexDirection: "row",

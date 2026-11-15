@@ -5,6 +5,21 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 1.9.7
+
+### Orari, Viaggio ed Esclusione Lezioni
+- **Esclusione lezioni dal target, calendario e sveglie (`excludedLessons.ts`, `ExcludedLessonVisuals.tsx`, `CardContextMenu.tsx`, `index.tsx`, `viaggio.tsx`, `commuterOptimizer.ts`)**: aggiunta nel menu contestuale su pressione prolungata delle card lezione (ufficiali e manuali) la voce `Escludi lezione` / `Ripristina lezione`, aggiornando il suggerimento in Orari a `Tieni premuto per azioni`. Le lezioni escluse restano visibili in Orari e nel carosello di Viaggio con scurimento animato della card e barratura progressiva da sinistra a destra sul titolo (`AnimatedStrikethroughText` con `react-native-reanimated`), restando utilizzabili per presenze, note, consultazione aula e selezione manuale (`explicitClass`) in Viaggio. Il calcolo automatico di andata e ritorno (`computeCommuterItinerary`, `findDayLecture`, `resolveViaggioTargetContext`, `prefetchViaggioStartupData`) salta le lezioni escluse scegliendo la lezione attiva precedente per il ritorno standard, o i soli treni quando tutte le lezioni del giorno risultano escluse.
+- **Integrazione con Calendario Apple, Sveglie e Cloud Sync (`appleCalendar.ts`, `alarmSync.ts`, `cloudSync.ts`)**: escluse le lezioni marcate dalla sincronizzazione di lezioni e relative corse treno (`syncScheduleToAppleCalendar`, `syncTrainsToAppleCalendar` con aggiornamento dei fingerprint) e dal calcolo delle sveglie settimanali (`computeWeeklyAlarmPlans`), con sincronizzazione cloud bidirezionale per-corso e gestione dei tombstone (`excludedLessons`, `excludedTombstones`, `allCoursesExcludedLessons`).
+
+### Calendario Apple, Mappe e Avvisi
+- **Sincronizzazione bidirezionale di nome e colore (`StudICIAlarmsModule.swift`, `modules/studici-alarms/src/index.ts`, `appleCalendar.ts`, `_layout.tsx`, `settings.tsx`)**: introdotti nel modulo nativo iOS `getFreshEventCalendars()` (nuova istanza `EKEventStore`, `refreshSourcesIfNecessary()` e conversione esplicita `CGColorSpace.sRGB`) e `updateEventCalendarMetadata()`, aggirando i limiti di `expo-calendar/legacy` su aggiornamenti parziali e colori Display P3. Rafforzati `normalizeCalendarHex` e `findManagedAppleCalendar`, protetto `_pullExternalChangesInternal` contro elenchi vuoti e attivato il riallineamento all'avvio e al ritorno in foreground.
+- **Binario nel titolo treni e anteprima mappa Apple Maps (`StudICIAlarms.podspec`, `StudICIAlarmsModule.swift`, `appleCalendar.ts`)**: aggiunto il binario programmato/rilevato nel titolo degli eventi treno (`(Bin. ...)`) e collegati i framework `MapKit` e `Contacts` per risolvere le posizioni delle sedi e delle stazioni tramite `MKLocalSearchCompleter` (`MapSuggestionCompleter`), `MKLocalSearch` e fallback `CLGeocoder` / `CNMutablePostalAddress` con `EKStructuredLocation(mapItem:)`.
+- **Impostazioni avvisi calendari (`settings.tsx`)**: unificata la gestione di `AVVISO LEZIONI` e `AVVISO NATIVO TRENI` nel componente `CalendarAlertSection` in stile elenco iOS raggruppato; rimossa l'icona orologio nella pillola centrale dello stepper `Anticipo personalizzato` con incremento e decremento fissi a scatti di `5` minuti.
+
+### Cloud Sync e Comunicazioni
+- **Canale predefinito ed etichetta per-corso (`cloudSync.ts`, `index.tsx`, `settings.tsx`, `OnboardingCourseSelector.tsx`)**: aggiunta la sincronizzazione cloud delle preferenze per singolo corso (`CourseTabPreference`, `defaultTabsByCourse`, `defaultTabLabel`) con codifica sicura delle chiavi URL per Firebase (`encodeSafeKeys` / `decodeSafeKeys`), salvataggio unificato tramite `saveCourseDefaultTabPreference` e ripristino automatico del canale salvato al cambio corso.
+- **Etichetta tratte impattate (`DisruptionsRegistryModal.tsx`, `disruptionsService.ts`)**: semplificata l'etichetta dei disagi ferroviari che impattano la tratta in `Impatta la tua tratta`.
+
 ## 1.9.6
 
 ### Preferenze Treni e Calendario Apple
