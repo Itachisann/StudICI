@@ -19,6 +19,30 @@ export interface FreshEventCalendar {
   };
 }
 
+export interface StrikeReminderInput {
+  existingId?: string;
+  calendarId: string;
+  title: string;
+  notes?: string;
+  url?: string;
+  dueDateMs: number;
+  timeZoneId?: string;
+  priority: number;
+  alarmRelativeOffsetsMinutes?: number[];
+}
+
+export interface NativeStrikeReminder {
+  id: string;
+  calendarId: string;
+  title: string;
+  notes: string;
+  url: string;
+  completed: boolean;
+  priority: number;
+  dueDateMs: number;
+  alarmOffsetsMinutes: number[];
+}
+
 export interface StudICIAlarmsNativeModule {
   isAlarmKitSupported(): Promise<boolean>;
   requestAuthorization(): Promise<boolean>;
@@ -38,6 +62,9 @@ export interface StudICIAlarmsNativeModule {
     title: string | null,
     colorHex: string | null
   ): Promise<boolean>;
+  getStrikeReminders?(): Promise<NativeStrikeReminder[]>;
+  upsertStrikeReminder?(input: StrikeReminderInput): Promise<string | null>;
+  deleteStrikeReminder?(reminderId: string): Promise<boolean>;
 }
 
 export const StudICIAlarms =

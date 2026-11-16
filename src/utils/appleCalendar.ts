@@ -887,11 +887,12 @@ export async function setCalendarTitle(
 
         if (targetCal) {
           await AsyncStorage.setItem(idKey, targetCal.id);
-          const effectiveColor = await getCalendarColor(type);
-          await updateCalendarMetadataSafe(targetCal, {
-            title: titleToSave,
-            color: effectiveColor,
-          });
+          // Aggiorna solo il titolo senza mai sovrascrivere il colore personalizzato scelto dall'utente
+          if (targetCal.title?.trim() !== titleToSave) {
+            await updateCalendarMetadataSafe(targetCal, {
+              title: titleToSave,
+            });
+          }
         }
       }
     }
@@ -1281,7 +1282,7 @@ export async function pullExternalAppleCalendarChanges(
   const runPull = async (): Promise<{ updated: boolean }> => {
     try {
       let waitedMs = 0;
-      while (isCalendarSyncInProgress && waitedMs < 3000) {
+      while (isCalendarSyncInProgress && waitedMs < 15000) {
         await new Promise((r) => setTimeout(r, 100));
         waitedMs += 100;
       }
@@ -1948,7 +1949,11 @@ export async function syncScheduleToAppleCalendar(
   },
 ): Promise<CalendarSyncResult> {
   const isOuter = !isCalendarSyncInProgress;
-  if (isOuter) isCalendarSyncInProgress = true;
+  if (isOuter && inFlightExternalPullPromise) {
+    await inFlightExternalPullPromise.catch(() => {});
+  }
+  const acquiredLock = !isCalendarSyncInProgress;
+  if (acquiredLock) isCalendarSyncInProgress = true;
   try {
     const isAvailable = await Calendar.isAvailableAsync();
     if (!isAvailable) {
@@ -1971,10 +1976,8 @@ export async function syncScheduleToAppleCalendar(
     }
 
     if (calendarColor) {
-      await AsyncStorage.setItem(
-        CALENDAR_COLOR_KEY,
-        normalizeCalendarHex(calendarColor) || calendarColor,
-      );
+      const resolvedThemeHex = await resolveThemePrimaryHex(calendarColor);
+      await AsyncStorage.setItem(CALENDAR_COLOR_KEY, resolvedThemeHex);
     }
     const preCalendars =
       syncOptions?.prefetchedCalendars ||
@@ -2402,7 +2405,7 @@ export async function syncScheduleToAppleCalendar(
       error: String(err),
     };
   } finally {
-    if (isOuter) releaseCalendarSyncLock();
+    if (acquiredLock) releaseCalendarSyncLock();
   }
 }
 
@@ -2417,7 +2420,11 @@ export async function syncTrainsToAppleCalendar(
   syncOptions?: AppleCalendarSyncOptions,
 ): Promise<CalendarSyncResult> {
   const isOuter = !isCalendarSyncInProgress;
-  if (isOuter) isCalendarSyncInProgress = true;
+  if (isOuter && inFlightExternalPullPromise) {
+    await inFlightExternalPullPromise.catch(() => {});
+  }
+  const acquiredLock = !isCalendarSyncInProgress;
+  if (acquiredLock) isCalendarSyncInProgress = true;
   try {
     const isAvailable = await Calendar.isAvailableAsync();
     if (!isAvailable) {
@@ -2455,10 +2462,8 @@ export async function syncTrainsToAppleCalendar(
     }
 
     if (calendarColor) {
-      await AsyncStorage.setItem(
-        CALENDAR_COLOR_KEY,
-        normalizeCalendarHex(calendarColor) || calendarColor,
-      );
+      const resolvedThemeHex = await resolveThemePrimaryHex(calendarColor);
+      await AsyncStorage.setItem(CALENDAR_COLOR_KEY, resolvedThemeHex);
     }
     await AsyncStorage.setItem(CALENDAR_TRAIN_SHADE_MIGRATED_KEY, "1");
     const preCalendars =
@@ -3418,7 +3423,7 @@ export async function syncTrainsToAppleCalendar(
       error: String(err),
     };
   } finally {
-    if (isOuter) releaseCalendarSyncLock();
+    if (acquiredLock) releaseCalendarSyncLock();
   }
 }
 
@@ -3436,6 +3441,9 @@ export async function syncDualCalendarsToAppleCalendar(
   trainsResult?: CalendarSyncResult;
   message: string;
 }> {
+  if (inFlightExternalPullPromise) {
+    await inFlightExternalPullPromise.catch(() => {});
+  }
   if (isCalendarSyncInProgress) {
     return {
       success: false,
@@ -3706,6 +3714,9 @@ export async function triggerCalendarAutoSyncIfNeeded(
     precomputedItineraries?: Record<string, CommuterItinerary>;
   },
 ): Promise<boolean> {
+  if (inFlightExternalPullPromise) {
+    await inFlightExternalPullPromise.catch(() => {});
+  }
   if (isCalendarSyncInProgress) return false;
   isCalendarSyncInProgress = true;
   try {

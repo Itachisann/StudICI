@@ -9,6 +9,7 @@ import {
   getCalendarAutoSync,
   getCalendarConfigUpdatedAt,
   getCalendarTitle,
+  pullExternalAppleCalendarChanges,
   refreshAppleCalendarIfConfigured,
   setCalendarAutoSync,
   setCalendarTitle,
@@ -2005,6 +2006,9 @@ async function runSync(): Promise<CloudSyncResult> {
       }
     }
 
+    // Importa prima eventuali modifiche esterne da Apple Calendar (titolo/colore) prima del confronto timestamp
+    await pullExternalAppleCalendarChanges().catch(() => {});
+
     // Configurazione Calendario (risoluzione con timestamp per non sovrascrivere personalizzazioni locali)
     const localCalMod = await getCalendarConfigUpdatedAt();
     const remoteCalMod = remote?.calendarConfig?.updatedAt || 0;
@@ -2050,7 +2054,7 @@ async function runSync(): Promise<CloudSyncResult> {
       calendarConfig: {
         customTitle: await getCalendarTitle(),
         autoSync: await getCalendarAutoSync(),
-        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod, now),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod),
       },
       devices: devicesMap,
       dissociatedDevices: remote?.dissociatedDevices || {},
@@ -2436,6 +2440,9 @@ export async function linkDeviceWithCode(
 
     await setAllNotes(mergedNotes, notesTombstones, Date.now(), true);
 
+    // Importa prima eventuali modifiche esterne da Apple Calendar (titolo/colore) prima del confronto timestamp
+    await pullExternalAppleCalendarChanges().catch(() => {});
+
     // Configurazione Calendario (risoluzione con timestamp)
     const localCalModRoot = await getCalendarConfigUpdatedAt();
     const remoteCalModRoot = rootRemote?.calendarConfig?.updatedAt || 0;
@@ -2479,7 +2486,7 @@ export async function linkDeviceWithCode(
       calendarConfig: {
         customTitle: await getCalendarTitle(),
         autoSync: await getCalendarAutoSync(),
-        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalModRoot, Date.now()),
+        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalModRoot),
       },
       devices: updatedDevices,
       dissociatedDevices: updatedDissociated,

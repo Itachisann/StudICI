@@ -162,7 +162,7 @@ function getNextDateForWeekday(targetJsDay: number): {
   return { date: target, dateStr: `${y}-${m}-${d}`, scheduledFutureDate };
 }
 
-async function resolveActiveSchedule(): Promise<{
+export async function resolveActiveSchedule(): Promise<{
   degreeUrl: string | null;
   tabUrl: string | null;
   schedule: ScheduleData | null;

@@ -15,6 +15,8 @@ import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
 import { pullExternalAppleCalendarChanges } from '@/utils/appleCalendar';
 import { prefetchViaggioStartupData } from '@/utils/commuterOptimizer';
 import { subscribeToCommuterChanges } from '@/utils/commuterStorage';
+import { subscribeToExcludedLessonsChanges } from '@/utils/excludedLessons';
+import { subscribeToManualEventsChanges } from '@/utils/manualEvents';
 import {
   emitStrikeNotificationTap,
   ensureStrikeNotificationHandler,
@@ -199,6 +201,12 @@ function AppLayoutContent() {
     const unsubCommuter = subscribeToCommuterChanges(() => {
       syncStrikeNotifications().catch(() => {});
     });
+    const unsubExcluded = subscribeToExcludedLessonsChanges(() => {
+      syncStrikeNotifications().catch(() => {});
+    });
+    const unsubManual = subscribeToManualEventsChanges(() => {
+      syncStrikeNotifications().catch(() => {});
+    });
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
@@ -212,6 +220,8 @@ function AppLayoutContent() {
       sub.remove();
       responseSub.remove();
       unsubCommuter();
+      unsubExcluded();
+      unsubManual();
     };
   }, [degreeUrl, startupCheckDone, handleStrikeNotificationResponse]);
 
