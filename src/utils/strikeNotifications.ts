@@ -1194,6 +1194,7 @@ async function syncIosStrikeReminders(
       const baseReminderPayload: Calendar.Reminder = {
         title: item.title,
         notes: item.notes,
+        startDate: dueDate,
         dueDate,
         allDay: false,
         url: item.url,

@@ -167,7 +167,7 @@ jobs:
           if [ -n "$(git status --porcelain apps-dev.json)" ]; then
             git add apps-dev.json
             git commit -m "chore(dev): update apps-dev.json metadata [skip ci]" || true
-            git push origin HEAD || true
+            git push origin HEAD:${{ github.ref_name }} || true
           fi
           
           cat << EOF > release_notes.md
