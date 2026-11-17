@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppState, Platform, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { AppState, Platform, StyleSheet, Alert } from 'react-native';
 import { Tabs as ExpoTabs, router } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { BlurView } from 'expo-blur';
@@ -27,6 +27,27 @@ import { OnboardingCourseSelector } from '@/components/OnboardingCourseSelector'
 import { StartupCheckScreen } from '@/components/StartupCheckScreen';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
+import * as SplashScreen from 'expo-splash-screen';
+import * as SystemUI from 'expo-system-ui';
+import {
+  DarkTheme,
+  ThemeProvider as NavigationThemeProvider,
+} from '@react-navigation/native';
+
+// Mantiene la splash nativa visibile finché il primo render reale non è pronto
+SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions({ duration: 250, fade: true });
+// Colore di sfondo nativo della finestra (evita il nero di default tra splash e prima schermata)
+SystemUI.setBackgroundColorAsync(UNIFORM_SCREEN_BG).catch(() => {});
+
+const ROOT_NAV_THEME = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    background: UNIFORM_SCREEN_BG,
+    card: UNIFORM_SCREEN_BG,
+  },
+};
 
 ensureStrikeNotificationHandler();
 
@@ -225,18 +246,27 @@ function AppLayoutContent() {
     };
   }, [degreeUrl, startupCheckDone, handleStrikeNotificationResponse]);
 
+  // Nasconde la splash solo quando i dati iniziali sono pronti e la prima schermata è stata montata
+  useEffect(() => {
+    if (!isReady) return;
+    const frame = requestAnimationFrame(() => {
+      setTimeout(() => {
+        SplashScreen.hide();
+      }, 60);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isReady, startupCheckDone, degreeUrl]);
+
   if (!isReady) {
     return (
-      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color={theme.primary} />
-      </GestureHandlerRootView>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }} />
     );
   }
 
   // Schermata Iniziale: Seleziona Corso (Nasconde interamente le Tab al primo avvio o dopo reset)
   if (!degreeUrl) {
     return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
         <StatusBar style="light" />
         <OnboardingCourseSelector onComplete={checkOnboarding} />
       </GestureHandlerRootView>
@@ -246,7 +276,7 @@ function AppLayoutContent() {
   // Schermata di Avvio con Controllo Aggiornamenti Foglio (eseguita una volta ad avvio sessione)
   if (!startupCheckDone) {
     return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
         <StatusBar style="light" />
         <StartupCheckScreen
           degreeUrl={degreeUrl}
@@ -259,9 +289,16 @@ function AppLayoutContent() {
 
   if (isNativeComponentAvailable) {
     return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
         <StatusBar style="light" />
-        <NativeTabs screenOptions={{ tabBarActiveTintColor: theme.primary }}>
+        <NativeTabs
+          screenOptions={{
+            tabBarActiveTintColor: theme.primary,
+            lazy: false,
+            freezeOnBlur: false,
+            sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
+          }}
+        >
           <NativeTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' }) }} />
           <NativeTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: () => ({ sfSymbol: 'tram.fill' }) }} />
           <NativeTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' }) }} />
@@ -272,11 +309,14 @@ function AppLayoutContent() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
       <StatusBar style="light" />
       <ExpoTabs
         screenOptions={{
           headerShown: false,
+          lazy: false,
+          freezeOnBlur: false,
+          sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
           tabBarStyle: {
             position: 'absolute', bottom: 0, left: 0, right: 0, elevation: 0,
             backgroundColor: 'transparent', borderTopWidth: 0,
@@ -299,7 +339,9 @@ function AppLayoutContent() {
 export default function AppLayout() {
   return (
     <ThemeProvider>
-      <AppLayoutContent />
+      <NavigationThemeProvider value={ROOT_NAV_THEME}>
+        <AppLayoutContent />
+      </NavigationThemeProvider>
     </ThemeProvider>
   );
 }

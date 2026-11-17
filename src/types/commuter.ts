@@ -66,6 +66,22 @@ export interface SmartReturnRecommendation {
   isCurrentlySelected: boolean;
 }
 
+export interface SmartOutboundRecommendation {
+  trainNumber: string;
+  category: string;
+  departureTime: string;
+  arrivalTime: string;
+  lostLectureMinutes: number;
+  savedDepartureMinutes: number;
+  durationMinutes?: number;
+  standardTrainNumber: string;
+  standardDepartureTime: string;
+  standardArrivalTime: string;
+  smartHomeDepartureTime: string;
+  standardHomeDepartureTime: string;
+  isCurrentlySelected: boolean;
+}
+
 export interface StrikeAlertPreferences {
   /** Crea promemoria/avviso 7 giorni prima dello sciopero (ore 09:00) */
   notify7DaysBefore: boolean;
@@ -231,6 +247,7 @@ export interface CommuterItinerary {
     badgeText: string;
   };
   smartReturnRecommendation?: SmartReturnRecommendation;
+  smartOutboundRecommendation?: SmartOutboundRecommendation;
   prefetchedTransitBoard?: TransitBoardResult;
   transitLiveContext?: boolean;
   transitConstraintTime?: string;

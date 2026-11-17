@@ -92,24 +92,27 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   const canUseLive = isSelectedDayActiveToday && (isLiveContext !== false);
 
   const isCurrentLocOrigin = originMode === 'current_location';
-  const gpsLocationLabel = isCurrentLocOrigin
-    ? detectedAddress || (detectedCity ? `Posizione (${detectedCity})` : 'La mia posizione')
-    : '';
-  const activeStationQueryName =
-    isCurrentLocOrigin && direction !== 'to_station' && userCoords
-      ? gpsLocationLabel
+  const gpsCoordsKey =
+    isCurrentLocOrigin && userCoords
+      ? `gps:${userCoords.lat.toFixed(4)},${userCoords.lng.toFixed(4)}`
+      : '';
+  const stableStationKey =
+    isCurrentLocOrigin && direction !== 'to_station'
+      ? gpsCoordsKey || 'gps:pending'
       : stationName;
-  const activeTargetQueryName =
-    isCurrentLocOrigin && direction === 'to_station' && userCoords
-      ? gpsLocationLabel
+  const stableTargetKey =
+    isCurrentLocOrigin && direction === 'to_station'
+      ? gpsCoordsKey || 'gps:pending'
       : targetName;
-  const activeQueryKey = `${direction}|${activeStationQueryName}|${activeTargetQueryName}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
+  const activeQueryKey = `${direction}|${stableStationKey}|${stableTargetKey}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
 
+  const normStr = (s?: string) => (s || '').trim().toLowerCase();
   const prefetchedMatchesCurrent = Boolean(
     prefetchedBoard &&
       !isCurrentLocOrigin &&
-      prefetchedBoard.stationName === activeStationQueryName &&
-      prefetchedBoard.destinationName === activeTargetQueryName &&
+      (prefetchedBoard.departures?.length ?? 0) > 0 &&
+      normStr(prefetchedBoard.stationName) === normStr(stationName) &&
+      normStr(prefetchedBoard.destinationName) === normStr(targetName) &&
       Boolean(prefetchedBoard.isLiveSource) === canUseLive
   );
 
@@ -131,7 +134,9 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     ? fetchedBoardEntry!.data
     : prefetchedMatchesCurrent
       ? prefetchedBoard!
-      : fetchedBoardEntry?.data ?? null;
+      : fetchedBoardEntry && fetchedBoardEntry.queryKey === activeQueryKey
+        ? fetchedBoardEntry.data
+        : null;
   const [selectedLineFilter, setSelectedLineFilter] = useState<string | null>(null);
   const [expansionLevel, setExpansionLevel] = useState<ExpansionLevel>('collapsed');
   const [manualRefreshCount, setManualRefreshCount] = useState<number>(0);
@@ -142,9 +147,15 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     useState<TransitDepartureItem | null>(null);
 
   const prevManualRefreshCountRef = useRef<number>(0);
+  const manualForcePendingRef = useRef<boolean>(false);
+  const userCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const prevPrefetchedBoardRef = useRef<TransitBoardResult | undefined>(undefined);
   const prevRefreshTimestampRef = useRef<number | undefined>(undefined);
   const lastPrefetchedQueryKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    userCoordsRef.current = userCoords;
+  }, [userCoords]);
 
   // Risoluzione asincrona del nome della località (es. Viterbo, Orte, Terni, Latina, Roma)
   const resolveLocationName = useCallback(async (lat: number, lng: number) => {
@@ -206,21 +217,35 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         Boolean(lastKnown?.timestamp) &&
         nowTs - (lastKnown?.timestamp || 0) < 60000;
 
+      const commitCoordsIfMoved = (nextCoords: { lat: number; lng: number }) => {
+        const prev = userCoordsRef.current;
+        if (
+          !prev ||
+          Math.abs(nextCoords.lat - prev.lat) > 0.00022 ||
+          Math.abs(nextCoords.lng - prev.lng) > 0.00028
+        ) {
+          userCoordsRef.current = nextCoords;
+          setUserCoords(nextCoords);
+          return true;
+        }
+        return false;
+      };
+
       if (isFreshCache && lastKnown?.coords && !isManualRefresh) {
         const cached = {
           lat: lastKnown.coords.latitude,
           lng: lastKnown.coords.longitude,
         };
-        setUserCoords(cached);
+        commitCoordsIfMoved(cached);
         resolveLocationName(cached.lat, cached.lng);
       }
 
-      // 3. Rilevazione live della posizione GPS attuale ad alta precisione con timeout di sicurezza a 15s
+      // 3. Rilevazione live della posizione GPS attuale (Balanced per fix rapido anche al chiuso, timeout 12s)
       const locPromise = Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
+        accuracy: Location.Accuracy.Balanced,
       });
       const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), 15000)
+        setTimeout(() => resolve(null), 12000)
       );
       const freshLoc = await Promise.race([locPromise, timeoutPromise]).catch(() => null);
 
@@ -229,11 +254,24 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           lat: freshLoc.coords.latitude,
           lng: freshLoc.coords.longitude,
         };
-        setUserCoords(freshCoords);
+        commitCoordsIfMoved(freshCoords);
         resolveLocationName(freshCoords.lat, freshCoords.lng);
-      } else if (!isFreshCache) {
-        setLocationError('Impossibile rilevare la posizione GPS attuale. Assicurati che la localizzazione sia attiva.');
-        setLoading(false);
+      } else if (!isFreshCache && !userCoordsRef.current) {
+        const fallbackKnown = await Location.getLastKnownPositionAsync({
+          maxAge: 300000,
+          requiredAccuracy: 1000,
+        }).catch(() => null);
+        if (fallbackKnown?.coords) {
+          const fbCoords = {
+            lat: fallbackKnown.coords.latitude,
+            lng: fallbackKnown.coords.longitude,
+          };
+          commitCoordsIfMoved(fbCoords);
+          resolveLocationName(fbCoords.lat, fbCoords.lng);
+        } else {
+          setLocationError('Impossibile rilevare la posizione GPS attuale. Assicurati che la localizzazione sia attiva.');
+          setLoading(false);
+        }
       }
     } catch (err: unknown) {
       const msg =
@@ -249,17 +287,17 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     (mode: 'station_or_campus' | 'current_location') => {
       if (mode === originMode) return;
       setExpansionLevel('collapsed');
+      setSelectedLineFilter(null);
+      setLocationError(null);
       if (mode === 'station_or_campus') {
         setOriginMode('station_or_campus');
-        setLocationError(null);
         setLoading(!prefetchedMatchesCurrent);
       } else {
-        setFetchedBoardEntry(null);
-        setLoading(true);
         setOriginMode('current_location');
         if (!userCoords) {
-          acquireOrRefreshGpsLocation(false);
+          setLoading(true);
         }
+        acquireOrRefreshGpsLocation(false);
       }
     },
     [originMode, userCoords, acquireOrRefreshGpsLocation, prefetchedMatchesCurrent]
@@ -269,6 +307,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   // aggiorna i transiti e, se l'origine è su GPS, verifica/aggiorna anche la posizione
   const handleManualRefresh = useCallback(async () => {
     setLoading(true);
+    manualForcePendingRef.current = true;
     Animated.timing(spinAnim, {
       toValue: 1,
       duration: 650,
@@ -307,41 +346,43 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     let qTargetName = targetName;
 
     if (isCurrentLoc && userCoords) {
-      const locLabel = detectedAddress || (detectedCity ? `Posizione (${detectedCity})` : 'La mia posizione');
       if (direction === 'to_station') {
         qTargetCoords = userCoords;
-        qTargetName = locLabel;
+        qTargetName = 'La mia posizione';
       } else {
         qStationCoords = userCoords;
-        qStationName = locLabel;
+        qStationName = 'La mia posizione';
       }
     }
 
-    const isManualForce = manualRefreshCount !== prevManualRefreshCountRef.current;
+    const countChanged = manualRefreshCount !== prevManualRefreshCountRef.current;
     prevManualRefreshCountRef.current = manualRefreshCount;
+    const isManualForce = countChanged || manualForcePendingRef.current;
+    if (manualForcePendingRef.current) {
+      manualForcePendingRef.current = false;
+    }
 
-    const cacheKey = `${direction}_${qStationName}_${qTargetName}_${canUseLive ? 'live' : (targetTime || 'now')}_${targetDate || ''}_${constraintTime || ''}_${minDepartureTime || ''}_${isCurrentLoc ? `${userCoords?.lat.toFixed(4)},${userCoords?.lng.toFixed(4)}` : 'default'}`;
+    const gpsKeyPart = isCurrentLoc && userCoords
+      ? `gps:${userCoords.lat.toFixed(4)},${userCoords.lng.toFixed(4)}`
+      : '';
+    const cacheStationPart = isCurrentLoc && direction !== 'to_station' ? gpsKeyPart : qStationName;
+    const cacheTargetPart = isCurrentLoc && direction === 'to_station' ? gpsKeyPart : qTargetName;
+
+    const cacheKey = `${direction}_${cacheStationPart}_${cacheTargetPart}_${canUseLive ? 'live' : (targetTime || 'now')}_${targetDate || ''}_${constraintTime || ''}_${minDepartureTime || ''}_${isCurrentLoc ? gpsKeyPart : 'default'}`;
 
     const prevPrefetched = prevPrefetchedBoardRef.current;
-    const prevRefreshTs = prevRefreshTimestampRef.current;
-    const isTimerOnlyRefresh =
-      prevRefreshTs !== undefined &&
-      refreshTimestamp !== prevRefreshTs &&
-      prefetchedBoard === prevPrefetched;
     prevRefreshTimestampRef.current = refreshTimestamp;
 
-    const currentQueryKey = `${direction}|${qStationName}|${qTargetName}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
+    const currentQueryKey = `${direction}|${cacheStationPart}|${cacheTargetPart}|${targetDate || ''}|${canUseLive ? 'live' : (targetTime || 'now')}|${constraintTime || ''}|${minDepartureTime || ''}`;
 
     const canConsumePrefetched = Boolean(
       prefetchedBoard &&
         !isCurrentLoc &&
         !isManualForce &&
-        !isTimerOnlyRefresh &&
-        prefetchedBoard.stationName === qStationName &&
-        prefetchedBoard.destinationName === qTargetName &&
-        Boolean(prefetchedBoard.isLiveSource) === canUseLive &&
-        (prefetchedBoard !== prevPrefetched ||
-          lastPrefetchedQueryKeyRef.current === currentQueryKey)
+        (prefetchedBoard.departures?.length ?? 0) > 0 &&
+        normStr(prefetchedBoard.stationName) === normStr(qStationName) &&
+        normStr(prefetchedBoard.destinationName) === normStr(qTargetName) &&
+        Boolean(prefetchedBoard.isLiveSource) === canUseLive
     );
 
     if (canConsumePrefetched && prefetchedBoard) {
@@ -361,7 +402,8 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       prevPrefetchedBoardRef.current = prefetchedBoard;
     }
 
-    if (!isManualForce && transitBoardMemoryCache.has(cacheKey)) {
+    const hasMemoryHit = transitBoardMemoryCache.has(cacheKey);
+    if (!isManualForce && hasMemoryHit) {
       const cached = transitBoardMemoryCache.get(cacheKey)!;
       queueMicrotask(() => {
         if (!isMounted) return;
@@ -372,7 +414,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         });
         setLoading(false);
       });
-    } else {
+    } else if (!isManualForce) {
       queueMicrotask(() => {
         if (!isMounted) return;
         setLoading(true);
@@ -394,6 +436,43 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     })
       .then((data) => {
         if (!isMounted) return;
+        // Se il refresh fallisce (es. timeout o errore temporaneo) e abbiamo già corse valide in memoria/stato,
+        // non cancellare le corse già visualizzate.
+        if (data.fetchFailed) {
+          const existing = transitBoardMemoryCache.get(cacheKey);
+          if (existing && existing.departures.length > 0) {
+            setLoading(false);
+            return;
+          }
+          const prefetchedValid = Boolean(
+            prefetchedBoard &&
+              !isCurrentLoc &&
+              (prefetchedBoard.departures?.length ?? 0) > 0 &&
+              normStr(prefetchedBoard.stationName) === normStr(qStationName) &&
+              normStr(prefetchedBoard.destinationName) === normStr(qTargetName) &&
+              Boolean(prefetchedBoard.isLiveSource) === canUseLive
+          );
+          if (prefetchedValid) {
+            setLoading(false);
+            return;
+          }
+          let keptPrevious = false;
+          setFetchedBoardEntry((prev) => {
+            if (prev && prev.queryKey === currentQueryKey && prev.data.departures.length > 0) {
+              keptPrevious = true;
+              return prev;
+            }
+            return {
+              queryKey: currentQueryKey,
+              prefetchedSource: prefetchedBoard,
+              data,
+            };
+          });
+          setLoading(false);
+          if (keptPrevious) return;
+          return;
+        }
+
         transitBoardMemoryCache.set(cacheKey, data);
         setFetchedBoardEntry({
           queryKey: currentQueryKey,
@@ -440,8 +519,6 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     direction,
     originMode,
     userCoords,
-    detectedCity,
-    detectedAddress,
     canUseLive,
     constraintTime,
     minDepartureTime,

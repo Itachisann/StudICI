@@ -4,6 +4,50 @@ import { callGeminiJson } from './aiParser';
 
 const DISRUPTIONS_CACHE_KEY = '@studici_disruptions_cache';
 const DISRUPTIONS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minuti
+const LUCEVERDE_ARTICLES_CACHE_KEY = '@studici_luceverde_articles_cache_v1';
+const LUCEVERDE_ARTICLES_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+
+interface CachedLuceverdeArticle {
+  timestamp: number;
+  title: string;
+  event: DisruptionEvent;
+}
+
+const luceverdeArticlesMemoryCache = new Map<string, CachedLuceverdeArticle>();
+let luceverdeArticlesStorageLoaded = false;
+
+async function ensureLuceverdeArticlesCacheLoaded(): Promise<void> {
+  if (luceverdeArticlesStorageLoaded) return;
+  luceverdeArticlesStorageLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(LUCEVERDE_ARTICLES_CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const now = Date.now();
+      for (const [k, v] of Object.entries<CachedLuceverdeArticle>(parsed)) {
+        if (v && v.event && typeof v.timestamp === 'number' && now - v.timestamp < LUCEVERDE_ARTICLES_TTL_MS) {
+          luceverdeArticlesMemoryCache.set(k, v);
+        }
+      }
+    }
+  } catch {}
+}
+
+async function persistLuceverdeArticlesCache(): Promise<void> {
+  try {
+    const now = Date.now();
+    const entries = Array.from(luceverdeArticlesMemoryCache.entries())
+      .filter(([, val]) => now - val.timestamp < LUCEVERDE_ARTICLES_TTL_MS)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, 60);
+    const payload: Record<string, CachedLuceverdeArticle> = {};
+    for (const [k, v] of entries) {
+      payload[k] = v;
+    }
+    await AsyncStorage.setItem(LUCEVERDE_ARTICLES_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
 
 let memoryDisruptionsCache: { timestamp: number; data: DisruptionEvent[] } | null = null;
 let inFlightDisruptionsPromise: Promise<DisruptionEvent[]> | null = null;
@@ -944,42 +988,75 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
       });
     }
 
-    // Arricchimento asincrono dei dettagli dal corpo degli articoli
-    const detailedEvents = await Promise.all(
-      events.map(async (ev) => {
-        if (!ev.id || !ev.id.startsWith('piattaforma-')) {
-          return ev;
-        }
-        try {
-          const detail = await fetchLuceverdeArticleDetail(ev.id);
-          if (!detail) return ev;
+    await ensureLuceverdeArticlesCacheLoaded();
+    const cachedEventsMap = new Map<string, DisruptionEvent>();
+    const uncachedDrafts: DisruptionEvent[] = [];
 
-          const updatedNotes = detail.text || ev.notes;
-          const updatedTime = detail.timeWindow || ev.timeWindow;
+    for (const ev of events) {
+      const cacheEntry = ev.id ? luceverdeArticlesMemoryCache.get(ev.id) : undefined;
+      if (
+        cacheEntry &&
+        cacheEntry.title === ev.title &&
+        Date.now() - cacheEntry.timestamp < LUCEVERDE_ARTICLES_TTL_MS
+      ) {
+        cachedEventsMap.set(ev.id, cacheEntry.event);
+      } else {
+        uncachedDrafts.push(ev);
+      }
+    }
 
-          const extraAreas = [...(ev.affectedAreas || [])];
-          for (const kw of keywords) {
-            if (!extraAreas.includes(kw) && detail.text?.toLowerCase().includes(kw.toLowerCase())) {
-              extraAreas.push(kw);
-            }
+    if (uncachedDrafts.length > 0) {
+      // Arricchimento asincrono dei dettagli dal corpo dei soli nuovi articoli non ancora in cache
+      const detailedNewEvents = await Promise.all(
+        uncachedDrafts.map(async (ev) => {
+          if (!ev.id || !ev.id.startsWith('piattaforma-')) {
+            return ev;
           }
+          try {
+            const detail = await fetchLuceverdeArticleDetail(ev.id);
+            if (!detail) return ev;
 
-          return {
-            ...ev,
-            notes: updatedNotes,
-            timeWindow: updatedTime,
-            affectedAreas: extraAreas,
-          };
-        } catch {
-          return ev;
+            const updatedNotes = detail.text || ev.notes;
+            const updatedTime = detail.timeWindow || ev.timeWindow;
+
+            const extraAreas = [...(ev.affectedAreas || [])];
+            for (const kw of keywords) {
+              if (!extraAreas.includes(kw) && detail.text?.toLowerCase().includes(kw.toLowerCase())) {
+                extraAreas.push(kw);
+              }
+            }
+
+            return {
+              ...ev,
+              notes: updatedNotes,
+              timeWindow: updatedTime,
+              affectedAreas: extraAreas,
+            };
+          } catch {
+            return ev;
+          }
+        })
+      );
+
+      // Raffinamento intelligente date (da DATA a DATA) e orari con Gemini Flash Lite solo sui nuovi articoli
+      const aiEnrichedNew = await enrichEventsWithGemini(detailedNewEvents);
+      const nowTs = Date.now();
+      for (const enriched of aiEnrichedNew) {
+        cachedEventsMap.set(enriched.id, enriched);
+        if (enriched.id) {
+          luceverdeArticlesMemoryCache.set(enriched.id, {
+            timestamp: nowTs,
+            title: enriched.title,
+            event: enriched,
+          });
         }
-      })
-    );
+      }
+      void persistLuceverdeArticlesCache();
+    }
 
-    // Raffinamento intelligente date (da DATA a DATA) e orari con Gemini Flash Lite
-    const aiEnrichedEvents = await enrichEventsWithGemini(detailedEvents);
+    const finalEvents = events.map((ev) => cachedEventsMap.get(ev.id) || ev);
 
-    return { events: aiEnrichedEvents, ok: true };
+    return { events: finalEvents, ok: true };
   } catch (err) {
     console.warn('[Disruptions] Errore fetch Luceverde Roma:', err);
     return { events: [], ok: false };

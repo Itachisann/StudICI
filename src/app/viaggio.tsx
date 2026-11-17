@@ -64,14 +64,17 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
 import { DisruptionCategory, DisruptionEvent } from "../types/disruptions";
 import { refreshAppleCalendarIfConfigured } from "../utils/appleCalendar";
 import {
+  clearPersistedItinerariesCache,
   computeCommuterItinerary,
   getDayClassesForWeekday,
   getInFlightStartupPrefetch,
   getRomeStationName,
   getWarmViaggioStartupSnapshot,
   invalidateViaggioStartupSnapshot,
+  loadPersistedItinerariesCache,
   resolveAutoTargetClass as getAutoTargetClass,
   resolveViaggioTargetContext,
+  savePersistedItineraryEntry,
 } from "../utils/commuterOptimizer";
 import {
   getCommuterConfig,
@@ -124,13 +127,13 @@ import {
 } from "../utils/scraper";
 import {
   cleanPlatform,
-  clearTrenitaliaCache,
   enrichTrainFromCachedAndamento,
   evaluateTrainStatus,
   isSameStation,
   isTrainAndamentoFresh,
   minutesToTime,
   parseTimeToMinutes,
+  refreshLiveTrenitaliaCache,
   TrainStatusResult,
 } from "../utils/trenitaliaApi";
 
@@ -598,6 +601,43 @@ export default function ViaggioScreen() {
       ? { [initialTodayDayIdx]: initialStartupSeed.itinerary }
       : {},
   );
+
+  // Idratazione istantanea da disco (Stale-While-Revalidate) per mostrare subito l'ultimo itinerario valido
+  useEffect(() => {
+    let mounted = true;
+    loadPersistedItinerariesCache()
+      .then((persisted) => {
+        if (!mounted || !persisted) return;
+        const keys = Object.keys(persisted);
+        if (keys.length === 0) return;
+        const byDayUpdates: Record<number, CommuterItinerary> = {};
+        for (const [k, val] of Object.entries(persisted)) {
+          if (!itinerariesCacheRef.current[k]) {
+            itinerariesCacheRef.current[k] = val;
+          }
+          const parts = k.split("_");
+          if (parts[0] === "outbound" && parts[2] === "auto") {
+            const dIdx = parseInt(parts[1] || "", 10);
+            if (!Number.isNaN(dIdx)) {
+              byDayUpdates[dIdx] = val;
+            }
+          }
+        }
+        if (Object.keys(byDayUpdates).length > 0) {
+          setItinerariesByDay((prev) => ({ ...byDayUpdates, ...prev }));
+        }
+        const curKey = `${directionRef.current}_${activeDayIdxRef.current}_${activeClassIdxRef.current ?? "auto"}`;
+        const curPersisted = itinerariesCacheRef.current[curKey];
+        if (curPersisted) {
+          setItinerary((prev) => prev ?? curPersisted);
+          setLoading(false);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Animazione fluida a scorrimento dello slider dei giorni della settimana (sincronizzato al pager)
   const segmentLayouts = useRef<{
@@ -1170,12 +1210,18 @@ export default function ViaggioScreen() {
       }
 
       if (!silent) {
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
+        if (isRefresh) {
+          setRefreshing(true);
+        } else {
+          const existingCacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
+          if (!itinerariesCacheRef.current[existingCacheKey]) {
+            setLoading(true);
+          }
+        }
       }
 
       if (isRefresh) {
-        clearTrenitaliaCache();
+        refreshLiveTrenitaliaCache();
         invalidateViaggioStartupSnapshot();
       }
 
@@ -1224,7 +1270,8 @@ export default function ViaggioScreen() {
         }
 
         // Avvio in parallelo di tutte le fonti dati necessarie alla schermata Viaggio
-        const disruptionsPromise = getDisruptions(isRefresh).catch(
+        // I refresh silenziosi (timer 60s / foreground) usano la cache 30m degli scioperi/manifestazioni
+        const disruptionsPromise = getDisruptions(isRefresh && !silent).catch(
           () => disruptionsRef.current,
         );
 
@@ -1377,7 +1424,7 @@ export default function ViaggioScreen() {
             isExplicitClass,
             selectedTrainOffset: effTrainOffset,
             selectedTrainNumber: effTrainNum || undefined,
-            forceRefresh: isRefresh,
+            forceRefresh: isRefresh && !silent,
             excludedLessonIds: currentExcludedSet,
           }),
           disruptionsPromise,
@@ -1414,6 +1461,9 @@ export default function ViaggioScreen() {
           const itin = itinRes.value;
           const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
           itinerariesCacheRef.current[cacheKey] = itin;
+          if (effTrainOffset === 0 && !effTrainNum) {
+            savePersistedItineraryEntry(cacheKey, itin);
+          }
           setItinerary(itin);
           if (effClassIdx === null) {
             setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
@@ -1449,6 +1499,7 @@ export default function ViaggioScreen() {
     const unsub = subscribeToManualEventsChanges(() => {
       manualsCacheRef.current = null;
       itinerariesCacheRef.current = {};
+      clearPersistedItinerariesCache();
       invalidateViaggioStartupSnapshot();
       getManualEvents()
         .then((evts) => {
@@ -1465,6 +1516,7 @@ export default function ViaggioScreen() {
     const unsub = subscribeToExcludedLessonsChanges(() => {
       excludedCacheRef.current = null;
       itinerariesCacheRef.current = {};
+      clearPersistedItinerariesCache();
       invalidateViaggioStartupSnapshot();
       getExcludedLessons()
         .then((recs) => {
@@ -1532,14 +1584,16 @@ export default function ViaggioScreen() {
     useCallback(() => {
       loadData();
       // Aggiornamento automatico sincronizzato di treni, ritardi e mezzi ogni minuto (60 secondi)
+      // Eseguito solo quando è visualizzato il giorno odierno (i giorni futuri sono programmati statici)
       const id = setInterval(() => {
         // Non interrompere il caricamento di un treno appena selezionato dall'utente
         if (pendingTrainRef.current) return;
+        if (activeDayIdxRef.current !== new Date().getDay()) return;
         loadData(true, true);
       }, 60000);
       const appStateSub = AppState.addEventListener("change", (nextState) => {
         if (nextState === "active") {
-          if (!pendingTrainRef.current) {
+          if (!pendingTrainRef.current && activeDayIdxRef.current === new Date().getDay()) {
             loadData(true, true);
           }
           refreshAppleCalendarIfConfigured().catch(() => {});
@@ -4712,7 +4766,7 @@ export default function ViaggioScreen() {
                                   theme={theme}
                                 />
 
-                                {/* Consiglio Rientro Anticipato (solo Ritorno, quando conviene nettamente) */}
+                                {/* Consiglio Treno Smart (Andata o Ritorno, quando conviene nettamente) */}
                                 {direction === "return" &&
                                   itinerary.smartReturnRecommendation && (
                                     <View
@@ -4810,6 +4864,113 @@ export default function ViaggioScreen() {
                                           ]}
                                         >
                                           {itinerary.smartReturnRecommendation
+                                            .isCurrentlySelected
+                                            ? "Standard"
+                                            : "Scegli"}
+                                        </Text>
+                                      </TouchableOpacity>
+                                    </View>
+                                  )}
+
+                                {direction === "outbound" &&
+                                  itinerary.smartOutboundRecommendation && (
+                                    <View
+                                      style={[
+                                        styles.smartReturnBanner,
+                                        itinerary.smartOutboundRecommendation
+                                          .isCurrentlySelected
+                                          ? styles.smartReturnBannerActive
+                                          : styles.smartReturnBannerSuggested,
+                                      ]}
+                                    >
+                                      <View
+                                        style={{ flex: 1, paddingRight: 10 }}
+                                      >
+                                        <View
+                                          style={styles.smartReturnTitleRow}
+                                        >
+                                          <Ionicons
+                                            name={
+                                              itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "checkmark-circle"
+                                                : "sparkles"
+                                            }
+                                            size={13}
+                                            color={
+                                              itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "#10b981"
+                                                : "#f59e0b"
+                                            }
+                                            style={{ marginRight: 5 }}
+                                          />
+                                          <Text
+                                            style={[
+                                              styles.smartReturnTitle,
+                                              {
+                                                color: itinerary
+                                                  .smartOutboundRecommendation
+                                                  .isCurrentlySelected
+                                                  ? "#34d399"
+                                                  : "#fbbf24",
+                                              },
+                                            ]}
+                                            numberOfLines={1}
+                                          >
+                                            {itinerary
+                                              .smartOutboundRecommendation
+                                              .isCurrentlySelected
+                                              ? `Andata smart attiva • ${itinerary.smartOutboundRecommendation.trainNumber}`
+                                              : `Consiglio andata • ${itinerary.smartOutboundRecommendation.trainNumber} (${itinerary.smartOutboundRecommendation.departureTime})`}
+                                          </Text>
+                                        </View>
+                                        <Text
+                                          style={styles.smartReturnSub}
+                                          numberOfLines={2}
+                                        >
+                                          {itinerary
+                                            .smartOutboundRecommendation
+                                            .isCurrentlySelected
+                                            ? `Parti ${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo da casa (${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} vs ${itinerary.smartOutboundRecommendation.standardHomeDepartureTime}) • ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min di ritardo`
+                                            : `Parti alle ${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} (${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo di ${itinerary.smartOutboundRecommendation.standardTrainNumber}) entrando ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min in ritardo`}
+                                        </Text>
+                                      </View>
+                                      <TouchableOpacity
+                                        style={[
+                                          styles.smartReturnActionBtn,
+                                          itinerary.smartOutboundRecommendation
+                                            .isCurrentlySelected
+                                            ? styles.smartReturnActionBtnMuted
+                                            : styles.smartReturnActionBtnPrimary,
+                                        ]}
+                                        activeOpacity={0.75}
+                                        onPress={() => {
+                                          const so =
+                                            itinerary.smartOutboundRecommendation;
+                                          if (!so) return;
+                                          handleSelectTrainChip(
+                                            so.isCurrentlySelected
+                                              ? so.standardTrainNumber
+                                              : so.trainNumber,
+                                          );
+                                        }}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.smartReturnActionText,
+                                            {
+                                              color: itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "#cbd5e1"
+                                                : "#1c1917",
+                                            },
+                                          ]}
+                                        >
+                                          {itinerary.smartOutboundRecommendation
                                             .isCurrentlySelected
                                             ? "Standard"
                                             : "Scegli"}
@@ -5036,7 +5197,15 @@ export default function ViaggioScreen() {
                                           const smartRec =
                                             direction === "return"
                                               ? itinerary.smartReturnRecommendation
-                                              : undefined;
+                                              : itinerary.smartOutboundRecommendation;
+                                          const smartSavedBadge =
+                                            direction === "return" &&
+                                            itinerary.smartReturnRecommendation
+                                              ? `-${itinerary.smartReturnRecommendation.savedArrivalMinutes}m`
+                                              : direction === "outbound" &&
+                                                  itinerary.smartOutboundRecommendation
+                                                ? `+${itinerary.smartOutboundRecommendation.savedDepartureMinutes}m`
+                                                : "";
                                           const isSmartRecommended = Boolean(
                                             smartRec &&
                                             at.trainNumber.replace(/\D/g, "") ===
@@ -5217,7 +5386,7 @@ export default function ViaggioScreen() {
                                                         styles.smartChipPillText
                                                       }
                                                     >
-                                                      {`-${smartRec.savedArrivalMinutes}m`}
+                                                      {smartSavedBadge}
                                                     </Text>
                                                   </View>
                                                 )}

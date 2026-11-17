@@ -654,25 +654,25 @@ public class StudICIAlarmsModule: Module {
       var cal = Calendar(identifier: .gregorian)
       cal.timeZone = tz
       let dueDate = Date(timeIntervalSince1970: input.dueDateMs / 1000.0)
+      // Promemoria SENZA ORARIO (tutto il giorno): solo era/anno/mese/giorno senza hour/minute/second
       var comps = cal.dateComponents(
-        [.era, .year, .month, .day, .hour, .minute, .second],
+        [.era, .year, .month, .day],
         from: dueDate
       )
       comps.calendar = cal
       comps.timeZone = tz
-      reminder.startDateComponents = comps
+      reminder.startDateComponents = nil
       reminder.dueDateComponents = comps
       reminder.timeZone = tz
 
-      // Configura gli allarmi nativi: allarme principale alla scadenza (relativeOffset: 0)
-      // più eventuali allarmi anticipati con relativeOffset negativo (es. -1 giorno / -7 giorni)
-      var newAlarms: [EKAlarm] = [EKAlarm(relativeOffset: 0)]
+      // Configura gli allarmi anticipati con relativeOffset negativo (es. -1 giorno / -7 giorni)
+      var newAlarms: [EKAlarm] = []
       if let offsets = input.alarmRelativeOffsetsMinutes {
         for offsetMin in offsets where offsetMin < 0 {
           newAlarms.append(EKAlarm(relativeOffset: TimeInterval(offsetMin * 60)))
         }
       }
-      reminder.alarms = newAlarms
+      reminder.alarms = newAlarms.isEmpty ? nil : newAlarms
 
       do {
         try eventStore.save(reminder, commit: true)

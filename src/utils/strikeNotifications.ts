@@ -457,6 +457,7 @@ function buildAffectedStrikeCommuteDays(
         const manualClasses: ClassEvent[] = ctx.manualEvents
           .filter((m) => {
             if (m.tabUrl && ctx.tabUrl && m.tabUrl !== ctx.tabUrl) return false;
+            if (m.dayIndex !== dayIndex) return false;
             return isManualEventActiveOnDate(m, dateIso);
           })
           .map(manualEventToClassEvent)
@@ -598,7 +599,21 @@ function buildIosStrikeReminderPlans(
   for (const day of affectedDays) {
     const parts = parseIsoDateParts(day.commuteDateIso);
     if (!parts) continue;
+    // Mezzanotte locale del giorno interessato: coerente con EKReminder all-day (senza orario)
     const dueDateMs = new Date(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      0,
+      0,
+      0,
+      0,
+    ).getTime();
+
+    const identifier = `${STRIKE_NOTIFICATION_PREFIX}${day.strikeKey}_${day.commuteDateIso}`;
+    const url = `${STRIKE_REMINDER_URL_BASE}?strikeAlert=${encodeURIComponent(identifier)}`;
+    // Per gli offset (-7g / -1g) valutiamo rispetto alle 09:00 del giorno dello sciopero
+    const alertAnchorMs = new Date(
       parts.year,
       parts.month - 1,
       parts.day,
@@ -607,10 +622,7 @@ function buildIosStrikeReminderPlans(
       0,
       0,
     ).getTime();
-
-    const identifier = `${STRIKE_NOTIFICATION_PREFIX}${day.strikeKey}_${day.commuteDateIso}`;
-    const url = `${STRIKE_REMINDER_URL_BASE}?strikeAlert=${encodeURIComponent(identifier)}`;
-    const offsets = buildReminderRelativeOffsetsMinutes(dueDateMs, alertPrefs, nowMs);
+    const offsets = buildReminderRelativeOffsetsMinutes(alertAnchorMs, alertPrefs, nowMs);
 
     planned.push({
       identifier,
@@ -1185,18 +1197,14 @@ async function syncIosStrikeReminders(
 
     if (!finalReminderId) {
       const dueDate = new Date(item.dueDateMs);
-      const fallbackAlarms: Calendar.Alarm[] = [
-        { absoluteDate: dueDate.toISOString() },
-        ...item.alarmRelativeOffsetsMinutes
-          .filter((offsetMin) => offsetMin < 0)
-          .map((offsetMin) => ({ relativeOffset: offsetMin })),
-      ];
+      const fallbackAlarms: Calendar.Alarm[] = item.alarmRelativeOffsetsMinutes
+        .filter((offsetMin) => offsetMin < 0)
+        .map((offsetMin) => ({ relativeOffset: offsetMin }));
       const baseReminderPayload: Calendar.Reminder = {
         title: item.title,
         notes: item.notes,
-        startDate: dueDate,
         dueDate,
-        allDay: false,
+        allDay: true,
         url: item.url,
         completed: false,
       };

@@ -46,8 +46,10 @@ interface TimetableCacheEntry {
 }
 const FULL_DAY_RAIL_STORAGE_KEY = 'studici_fullday_rail_cache_v1';
 const PLATFORM_STORAGE_KEY = 'studici_platform_cache_v1';
+const TRAIN_ORIGIN_STORAGE_KEY = 'studici_train_origin_cache_v1';
 const FULL_DAY_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 ore per orario ferroviario programmato GTFS
 const PLATFORM_CACHE_TTL_MS = 1000 * 60 * 60 * 24; // 24 ore per binario programmato settimanale
+const TRAIN_ORIGIN_CACHE_TTL_MS = 1000 * 60 * 60 * 18; // 18 ore per codice origine treno giornaliero
 const STATION_DEPARTURES_CACHE_TTL_MS = 1000 * 60 * 30; // 30 min in memoria
 
 const timetableCache = new Map<string, TimetableCacheEntry>();
@@ -69,6 +71,50 @@ let fullDayStorageLoaded = false;
 let fullDayStorageLoadPromise: Promise<void> | null = null;
 let platformStorageLoaded = false;
 let platformStorageLoadPromise: Promise<void> | null = null;
+let trainOriginStorageLoaded = false;
+let trainOriginStorageLoadPromise: Promise<void> | null = null;
+
+async function ensureTrainOriginStorageLoaded(): Promise<void> {
+  if (trainOriginStorageLoaded) return;
+  if (trainOriginStorageLoadPromise) return trainOriginStorageLoadPromise;
+  trainOriginStorageLoadPromise = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(TRAIN_ORIGIN_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed &&
+          typeof parsed.savedAt === 'number' &&
+          Date.now() - parsed.savedAt < TRAIN_ORIGIN_CACHE_TTL_MS &&
+          parsed.entries &&
+          typeof parsed.entries === 'object'
+        ) {
+          for (const [k, v] of Object.entries<any>(parsed.entries)) {
+            if (Array.isArray(v) && v.length > 0 && !trainOriginInfoCache.has(k)) {
+              trainOriginInfoCache.set(k, v);
+            }
+          }
+        }
+      }
+    } catch {}
+    trainOriginStorageLoaded = true;
+    trainOriginStorageLoadPromise = null;
+  })();
+  return trainOriginStorageLoadPromise;
+}
+
+async function persistTrainOriginCache(): Promise<void> {
+  try {
+    const entries: Record<string, { originCode: string; departureMillis?: number }[]> = {};
+    for (const [k, v] of Array.from(trainOriginInfoCache.entries()).slice(-80)) {
+      if (v && v.length > 0) entries[k] = v;
+    }
+    await AsyncStorage.setItem(
+      TRAIN_ORIGIN_STORAGE_KEY,
+      JSON.stringify({ savedAt: Date.now(), entries })
+    );
+  } catch {}
+}
 
 async function ensureFullDayStorageLoaded(): Promise<void> {
   if (fullDayStorageLoaded) return;
@@ -185,6 +231,17 @@ async function withTransitousSlot<T>(task: () => Promise<T>, maxConcurrent = 3):
 const platformMissCache = new Map<string, number>();
 const PLATFORM_MISS_TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Invalida unicamente le cache dei ritardi/stati live (tabelloni e andamentoTreno),
+ * preservando intatte le cache strutturali e giornaliere (orario GTFS 6h, binari programmati 24h e codici origine treno).
+ */
+export function refreshLiveTrenitaliaCache(): void {
+  timetableCache.clear();
+  andamentoMemoryCache.clear();
+  andamentoInFlight.clear();
+  stationDeparturesCache.clear();
+}
+
 export function clearTrenitaliaCache(): void {
   timetableCache.clear();
   fullDayRailCache.clear();
@@ -198,13 +255,18 @@ export function clearTrenitaliaCache(): void {
   platformMissCache.clear();
   fullDayStorageLoaded = false;
   platformStorageLoaded = false;
-  AsyncStorage.multiRemove([FULL_DAY_RAIL_STORAGE_KEY, PLATFORM_STORAGE_KEY]).catch(() => {});
+  trainOriginStorageLoaded = false;
+  AsyncStorage.multiRemove([
+    FULL_DAY_RAIL_STORAGE_KEY,
+    PLATFORM_STORAGE_KEY,
+    TRAIN_ORIGIN_STORAGE_KEY,
+  ]).catch(() => {});
 }
 
 async function fetchViaggiaTrenoRawText(
   url: string,
-  timeoutMs = 4500,
-  retries = 1
+  timeoutMs = 3500,
+  retries = 0
 ): Promise<string | null> {
   fetchTotal++;
   const defaultHeaders = {
@@ -213,35 +275,26 @@ async function fetchViaggiaTrenoRawText(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
   };
 
-  const urlsToTry = [url];
-  if (url.startsWith('http://')) {
-    urlsToTry.push(url.replace('http://', 'https://'));
-  } else if (url.startsWith('https://')) {
-    urlsToTry.push(url.replace('https://', 'http://'));
-  }
-
-  for (const targetUrl of urlsToTry) {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const res = await fetch(targetUrl, {
-          signal: controller.signal,
-          headers: defaultHeaders,
-        });
-        if (!res.ok) {
-          clearTimeout(timeout);
-          lastFetchError = `HTTP ${res.status}`;
-          continue;
-        }
-        const text = await res.text();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: defaultHeaders,
+      });
+      if (!res.ok) {
         clearTimeout(timeout);
-        return text;
-      } catch (e: any) {
-        clearTimeout(timeout);
-        lastFetchError =
-          e?.name === 'AbortError' ? `timeout ${timeoutMs / 1000}s` : String(e?.message || e).slice(0, 80);
+        lastFetchError = `HTTP ${res.status}`;
+        continue;
       }
+      const text = await res.text();
+      clearTimeout(timeout);
+      return text;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      lastFetchError =
+        e?.name === 'AbortError' ? `timeout ${timeoutMs / 1000}s` : String(e?.message || e).slice(0, 80);
     }
   }
   console.warn('[ViaggiaTreno]', lastFetchError, url);
@@ -249,11 +302,10 @@ async function fetchViaggiaTrenoRawText(
 }
 
 /**
- * Fetch JSON con timeout snello (4.5s) per singola richiesta.
- * Supporta fallback automatico tra HTTP diretto (veloce, senza 301) e HTTPS.
+ * Fetch JSON con timeout snello (3.5s) per singola richiesta.
  * Ritorna null se la richiesta fallisce definitivamente (diverso da lista vuota valida).
  */
-async function fetchViaggiaTrenoJson(url: string, timeoutMs = 4500, retries = 1): Promise<any | null> {
+async function fetchViaggiaTrenoJson(url: string, timeoutMs = 3500, retries = 0): Promise<any | null> {
   const text = await fetchViaggiaTrenoRawText(url, timeoutMs, retries);
   if (text === null) return null;
   try {
@@ -1190,6 +1242,7 @@ async function getTrainOriginCandidates(
 ): Promise<{ originCode: string; departureMillis?: number }[]> {
   const cleanNum = trainNum.replace(/\D/g, '');
   if (!cleanNum) return [];
+  await ensureTrainOriginStorageLoaded();
   const originKey = cleanNum + '_' + new Date().toDateString();
   const hit = trainOriginInfoCache.get(originKey);
   if (hit && hit.length > 0) return hit;
@@ -1257,6 +1310,7 @@ async function getTrainOriginCandidates(
 
     if (candidates.length > 0) {
       trainOriginInfoCache.set(originKey, candidates);
+      void persistTrainOriginCache();
     }
     return candidates;
   })().finally(() => {
@@ -1339,18 +1393,24 @@ export async function fetchLiveTrenitaliaTimetable(
     const fetchTask = (async (): Promise<LiveTrainInfo[]> => {
 
     // Finestre di campionamento calibrate per la massima copertura con il minimo numero di richieste:
-    // -90m: copre treni partiti fino a 1h30 fa ancora in viaggio verso destinazione
-    // -30m, +45m, +135m, +225m: sequenza continua con sovrapposizione
-    const depOffsets = [-90, -30, 45, 135, 225];
-    const arrOffsets = [-30, 30, 105, 195, 285];
+    // 3 slot partenze (-75m, +15m, +120m) e 3 slot arrivi (-20m, +70m, +175m) coprono l'intera finestra
+    // riducendo da 10 a max 6 le richieste ai tabelloni ViaggiaTreno.
+    const depOffsets = [-75, 15, 120];
+    const arrOffsets = [-20, 70, 175];
 
-    const buildTimes = (offsets: number[]) =>
-      offsets.map((off) => {
-        const d = new Date(targetDate);
+    const buildTimes = (offsets: number[]) => {
+      const seenMins = new Set<number>();
+      const out: Date[] = [];
+      for (const off of offsets) {
         const m = Math.max(0, Math.min(1439, targetDepMins + off));
+        if (seenMins.has(m)) continue;
+        seenMins.add(m);
+        const d = new Date(targetDate);
         d.setHours(Math.floor(m / 60), m % 60, 0, 0);
-        return d;
-      });
+        out.push(d);
+      }
+      return out;
+    };
 
     const depTimes = buildTimes(depOffsets);
     const arrTimes = buildTimes(arrOffsets);
@@ -1826,8 +1886,8 @@ export async function fetchLiveTrenitaliaTimetable(
           const depStationObj = { code: depCode, name: getStationNameByCode(depCode) || '' };
           const arrStationObj = { code: arrCode, name: getStationNameByCode(arrCode) || '' };
 
-          // Limitiamo a max 8 candidati per non sovraccaricare la rete
-          const toVerify = unverifiedCandidates.slice(0, 8);
+          // Limitiamo a max 4 candidati per non sovraccaricare la rete
+          const toVerify = unverifiedCandidates.slice(0, 4);
 
           await Promise.all(
             toVerify.map(async ({ numStr, arr, origCode, datePart }) => {
@@ -1961,47 +2021,14 @@ export async function fetchLiveTrenitaliaTimetable(
         }
       }
 
-    // Arricchimento in tempo reale con andamentoTreno:
-    // Rileva con precisione se un convoglio è attualmente fermo in una stazione (arrivato ma non partito)
-    // o se ha già effettuato la partenza da una fermata specifica, calcolando il ritardo accumulato in banchina
-    // e popolando andamentoMemoryCache per evitare flash al cambio treno.
+    // Arricchimento immediato (0 ms) con gli stati andamentoTreno già presenti in memoria:
+    // L'interrogazione puntuale di andamentoTreno per il treno scelto e i 2 treni adiacenti
+    // viene eseguita da findOptimalCommuterTrain, evitando 10 chiamate di rete bloccanti qui.
     if (isToday && trains.length > 0) {
-      const activeCirculating = trains
-        .filter(
-          (t) =>
-            t.isLive &&
-            Math.abs(nowMins - parseTimeToMinutes(t.departureTimePlanned)) <= 240
-        )
-        .sort((a, b) => {
-          const score = (t: LiveTrainInfo) => {
-            const depM = parseTimeToMinutes(t.departureTimePlanned);
-            const arrM = parseTimeToMinutes(t.arrivalTimeActual || t.arrivalTimePlanned || '');
-            const isFinishedPenalty =
-              t.isArrivedAtDestination || (arrM > 0 && nowMins > arrM + 10) ? 1000 : 0;
-            const dist = Math.min(Math.abs(depM - nowMins), Math.abs(depM - targetDepMins));
-            return isFinishedPenalty + dist;
-          };
-          return score(a) - score(b);
-        });
-
-      if (activeCirculating.length > 0) {
-        const depStationObj = { code: depCode, name: getStationNameByCode(depCode) || '' };
-        const arrStationObj = { code: arrCode, name: getStationNameByCode(arrCode) || '' };
-        await Promise.all(
-          activeCirculating.slice(0, 10).map(async (t) => {
-            try {
-              const aData = await fetchSingleTrainAndamento(
-                t,
-                depStationObj,
-                arrStationObj,
-                targetDate.getTime(),
-                forceRefresh
-              );
-              if (!aData || !Array.isArray(aData.fermate)) return;
-              applyAndamentoToTrain(t, aData, depStationObj, arrStationObj);
-            } catch {}
-          })
-        );
+      const depStationObj = { code: depCode, name: getStationNameByCode(depCode) || '' };
+      const arrStationObj = { code: arrCode, name: getStationNameByCode(arrCode) || '' };
+      for (const t of trains) {
+        enrichTrainFromCachedAndamento(t, depStationObj, arrStationObj);
       }
     }
 
@@ -3004,7 +3031,7 @@ export async function fetchDynamicFullDayRailTimetable(
   if (!forceRefresh) {
     await ensureFullDayStorageLoaded();
     const cached = fullDayRailCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < FULL_DAY_CACHE_TTL_MS) {
+    if (cached && cached.trains.length > 0 && Date.now() - cached.timestamp < FULL_DAY_CACHE_TTL_MS) {
       return cached.trains;
     }
     const existing = fullDayRailInFlight.get(cacheKey);
@@ -3485,12 +3512,16 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
 
   const effectiveDateIso = `${effectiveQueryDate.getFullYear()}-${String(effectiveQueryDate.getMonth() + 1).padStart(2, '0')}-${String(effectiveQueryDate.getDate()).padStart(2, '0')}`;
 
-  // 1. In modalità scheduledOnly (es. sync calendario veloce) usa prima GTFS e chiama ViaggiaTreno solo come fallback;
-  // altrimenti interroga ViaggiaTreno in tempo reale + GTFS in parallelo.
+  // 1. In modalità scheduledOnly o per giorni diversi da oggi (!isToday) usa prima la tabella giornaliera GTFS
+  // (già cachata su disco per 6h) e chiama ViaggiaTreno solo come fallback;
+  // per il giorno odierno interroga ViaggiaTreno in tempo reale + GTFS in parallelo.
   let liveTrains: LiveTrainInfo[] = [];
   let fullDayTrains: LiveTrainInfo[] = [];
+  const preferScheduledFirst = scheduledOnly || !isToday;
 
-  if (scheduledOnly) {
+  await ensurePlatformStorageLoaded();
+
+  if (preferScheduledFirst) {
     fullDayTrains = await fetchDynamicFullDayRailTimetable(
       departureStation,
       arrivalStation,
@@ -3545,6 +3576,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const nowMinsCurrent = now.getHours() * 60 + now.getMinutes();
 
   if (fullDayTrains.length > 0) {
+    const dow = effectiveQueryDate.getDay();
     for (const ft of fullDayTrains) {
       const clean = ft.trainNumber.replace(/\D/g, '');
       const live = liveMap.get(clean);
@@ -3570,7 +3602,10 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
         const isPassed = isToday && nowMinsCurrent > depM + 3;
         const cachedPlat =
           ft.platformPlanned ||
-          stationTrainPlatformIndex.get(`${departureStation.code}_${clean}_${effectiveDateIso}`);
+          stationTrainPlatformIndex.get(`${departureStation.code}_${clean}_${effectiveDateIso}`) ||
+          plannedPlatformCache.get(
+            `${departureStation.code}_${clean}_dow${dow}_${ft.departureTimePlanned || ''}`
+          )?.platform;
         allTrains.push({
           ...ft,
           platformPlanned: cachedPlat,
@@ -3869,7 +3904,7 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     selectedIndex = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), recommendedIdx + trainOffset));
   }
 
-  const selectedIndexSafe = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), selectedIndex));
+  let selectedIndexSafe = Math.max(0, Math.min(Math.max(0, allTrains.length - 1), selectedIndex));
   const fallbackTrain: LiveTrainInfo = {
     trainNumber: 'REG',
     category: 'REG',
@@ -3889,12 +3924,9 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     isOriginStation: true,
   };
 
-  const chosenTrain = allTrains[selectedIndexSafe]
+  let chosenTrain = allTrains[selectedIndexSafe]
     ? { ...allTrains[selectedIndexSafe] }
     : fallbackTrain;
-
-  chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
-  chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
 
   // Arricchisce SEMPRE il treno selezionato con la corsa reale (andamentoTreno) quando è oggi:
   // vale anche per i treni già arrivati / non più sul tabellone / provenienti dalla tabella statica.
@@ -3909,7 +3941,53 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
     if (aData && applyAndamentoToTrain(chosenTrain, aData, departureStation, arrivalStation)) {
       allTrains[selectedIndexSafe] = chosenTrain;
     }
+
+    // Se l'arricchimento andamentoTreno rivela che il treno auto-selezionato è già partito dalla stazione
+    // (o non è più prendibile), avanza automaticamente al primo treno successivo prendibile e arricchiscilo.
+    if (!selectedTrainNumber && trainOffset === 0 && !isTrainCatchable(chosenTrain)) {
+      const nextCatchableIdx = allTrains.findIndex(
+        (t, idx) => idx > selectedIndexSafe && isTrainCatchable(t)
+      );
+      if (nextCatchableIdx !== -1) {
+        selectedIndexSafe = nextCatchableIdx;
+        recommendedIdx = nextCatchableIdx;
+        chosenTrain = { ...allTrains[selectedIndexSafe] };
+        const nextAData = await fetchSingleTrainAndamento(
+          chosenTrain,
+          departureStation,
+          arrivalStation,
+          targetDate.getTime(),
+          forceRefresh
+        );
+        if (
+          nextAData &&
+          applyAndamentoToTrain(chosenTrain, nextAData, departureStation, arrivalStation)
+        ) {
+          allTrains[selectedIndexSafe] = chosenTrain;
+        }
+      }
+    }
+  } else if (!scheduledOnly && !chosenTrain.platformPlanned && chosenTrain.departureTimePlanned) {
+    try {
+      const resolvedPlat = await resolvePlannedTrainPlatform({
+        trainNumber: chosenTrain.trainNumber,
+        departureStationCode: departureStation.code,
+        departureTimeStr: chosenTrain.departureTimePlanned,
+        queryDate: effectiveQueryDate,
+      });
+      if (resolvedPlat) {
+        chosenTrain.platformPlanned = resolvedPlat;
+        chosenTrain.platformActual = resolvedPlat;
+        if (allTrains[selectedIndexSafe]) {
+          allTrains[selectedIndexSafe].platformPlanned = resolvedPlat;
+          allTrains[selectedIndexSafe].platformActual = resolvedPlat;
+        }
+      }
+    } catch {}
   }
+
+  chosenTrain.hasEarlierTrain = selectedIndexSafe > 0;
+  chosenTrain.hasLaterTrain = selectedIndexSafe < allTrains.length - 1;
 
 
   // Alternative da mostrare nello slider dell'interfaccia:

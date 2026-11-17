@@ -13,6 +13,7 @@ import {
   DarkTheme,
 } from '@react-navigation/native';
 import { useTheme as useAppTheme } from '@/context/ThemeContext';
+import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 
 const { Navigator: BaseBottomTabNavigator, Screen: NativeTabScreen } =
   createNativeBottomTabNavigator();
@@ -42,6 +43,8 @@ const BottomTabNavigator: typeof BaseBottomTabNavigator = (props) => {
       ...DarkTheme.colors,
       primary: theme.primary,
       border: theme.border,
+      background: UNIFORM_SCREEN_BG,
+      card: UNIFORM_SCREEN_BG,
     },
   }), [theme]);
 

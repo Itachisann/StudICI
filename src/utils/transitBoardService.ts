@@ -3,6 +3,7 @@
  * Supporta Roma (ATAC / Metro / Tram / Cotral) e qualsiasi città o stazione in Italia (GTFS / GTFS-RT via Transitous MOTIS 2).
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ROME_STATION_COORDINATES } from './transitRouter';
 import { resolveClassroom } from './classroomLocations';
@@ -111,8 +112,48 @@ const CURATED_LINE_PALETTE = [
   '#2563eb',
 ];
 
-// Cache in-memory per le direzioni reali (capolinea di giro) delle linee circolari/anello GTFS
+// Cache in-memory + persistente per le direzioni reali (capolinea di giro) delle linee circolari/anello GTFS
 const circularTurnaroundCache = new Map<string, string>();
+const circularTurnaroundInFlight = new Map<string, Promise<string>>();
+const CIRCULAR_TURNAROUND_STORAGE_KEY = 'studici_circular_turnaround_v1';
+const CIRCULAR_TURNAROUND_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 giorni
+let circularTurnaroundStorageLoaded = false;
+
+async function ensureCircularTurnaroundLoaded(): Promise<void> {
+  if (circularTurnaroundStorageLoaded) return;
+  circularTurnaroundStorageLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(CIRCULAR_TURNAROUND_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.savedAt === 'number' &&
+      Date.now() - parsed.savedAt < CIRCULAR_TURNAROUND_TTL_MS &&
+      parsed.entries &&
+      typeof parsed.entries === 'object'
+    ) {
+      for (const [k, v] of Object.entries<any>(parsed.entries)) {
+        if (typeof v === 'string' && v && !circularTurnaroundCache.has(k)) {
+          circularTurnaroundCache.set(k, v);
+        }
+      }
+    }
+  } catch {}
+}
+
+async function persistCircularTurnaroundCache(): Promise<void> {
+  try {
+    const entries: Record<string, string> = {};
+    for (const [k, v] of Array.from(circularTurnaroundCache.entries()).slice(-50)) {
+      entries[k] = v;
+    }
+    await AsyncStorage.setItem(
+      CIRCULAR_TURNAROUND_STORAGE_KEY,
+      JSON.stringify({ savedAt: Date.now(), entries })
+    );
+  } catch {}
+}
 
 /**
  * Decodifica una stringa Google Encoded Polyline (precisione 6 o 5 usata da MOTIS/Transitous)
@@ -869,74 +910,92 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
     return formatStopDisplayName(rawHeadsign);
   }
 
+  await ensureCircularTurnaroundLoaded();
   const routeKey = `${primaryLeg.routeId || primaryLeg.routeShortName || 'route'}_${primaryLeg.directionId || '0'}_${normFrom}`;
   const cachedTurnaround = circularTurnaroundCache.get(routeKey);
   if (cachedTurnaround) {
     return cachedTurnaround;
   }
 
+  const existingInFlight = circularTurnaroundInFlight.get(routeKey);
+  if (existingInFlight) {
+    return existingInFlight;
+  }
+
   // Interroga /api/v5/trip di Transitous per trovare il punto più distante (capolinea di svolta dell'anello)
   if (primaryLeg.tripId) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2400);
-      const tripUrl = `https://api.transitous.org/api/v5/trip?tripId=${encodeURIComponent(primaryLeg.tripId)}`;
-      const res = await fetch(tripUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'StudICI/1.0 (https://github.com/studici; contact@studici.app)',
-          Accept: 'application/json',
-        },
-      });
-      clearTimeout(timer);
+    const task = (async (): Promise<string> => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2400);
+        const tripUrl = `https://api.transitous.org/api/v5/trip?tripId=${encodeURIComponent(primaryLeg.tripId)}`;
+        const res = await fetch(tripUrl, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'StudICI/1.0 (https://github.com/studici; contact@studici.app)',
+            Accept: 'application/json',
+          },
+        });
+        clearTimeout(timer);
 
-      if (res.ok) {
-        const tripData = await res.json();
-        const fullLeg = tripData?.legs?.[0];
-        const allStops: any[] = Array.isArray(fullLeg?.intermediateStops)
-          ? fullLeg.intermediateStops
-          : [];
-        const loopOriginLat = fullLeg?.from?.lat ?? primaryLeg.from?.lat;
-        const loopOriginLon = fullLeg?.from?.lon ?? primaryLeg.from?.lon;
+        if (res.ok) {
+          const tripData = await res.json();
+          const fullLeg = tripData?.legs?.[0];
+          const allStops: any[] = Array.isArray(fullLeg?.intermediateStops)
+            ? fullLeg.intermediateStops
+            : [];
+          const loopOriginLat = fullLeg?.from?.lat ?? primaryLeg.from?.lat;
+          const loopOriginLon = fullLeg?.from?.lon ?? primaryLeg.from?.lon;
 
-        if (allStops.length > 0 && typeof loopOriginLat === 'number' && typeof loopOriginLon === 'number') {
-          let maxDist = -1;
-          let turnaroundIdx = Math.floor(allStops.length / 2);
+          if (allStops.length > 0 && typeof loopOriginLat === 'number' && typeof loopOriginLon === 'number') {
+            let maxDist = -1;
+            let turnaroundIdx = Math.floor(allStops.length / 2);
 
-          allStops.forEach((s, idx) => {
-            if (typeof s?.lat === 'number' && typeof s?.lon === 'number') {
-              const d = Math.hypot(s.lat - loopOriginLat, s.lon - loopOriginLon);
-              if (d > maxDist) {
-                maxDist = d;
-                turnaroundIdx = idx;
+            allStops.forEach((s, idx) => {
+              if (typeof s?.lat === 'number' && typeof s?.lon === 'number') {
+                const d = Math.hypot(s.lat - loopOriginLat, s.lon - loopOriginLon);
+                if (d > maxDist) {
+                  maxDist = d;
+                  turnaroundIdx = idx;
+                }
               }
-            }
-          });
+            });
 
-          const turnaroundStopName = allStops[turnaroundIdx]?.name;
-          if (turnaroundStopName) {
-            // Verifica se la fermata di discesa dell'utente si trova nella prima metà dell'anello (verso il turnaround)
-            // o nella seconda metà (dopo il turnaround, tornando al capolinea)
-            const toStopId = primaryLeg.to?.stopId;
-            let userAlightIdx = allStops.findIndex(
-              (s) => (toStopId && s.stopId === toStopId) || normalizeStopTokens(s.name) === normTo
-            );
+            const turnaroundStopName = allStops[turnaroundIdx]?.name;
+            if (turnaroundStopName) {
+              const toStopId = primaryLeg.to?.stopId;
+              let userAlightIdx = allStops.findIndex(
+                (s) => (toStopId && s.stopId === toStopId) || normalizeStopTokens(s.name) === normTo
+              );
 
-            if (userAlightIdx === -1 || userAlightIdx <= turnaroundIdx + 2) {
-              const formatted = formatStopDisplayName(turnaroundStopName);
-              circularTurnaroundCache.set(routeKey, formatted);
-              return formatted;
-            } else if (tripToName && !headsignMatchesOrigin) {
-              const formatted = formatStopDisplayName(tripToName);
-              circularTurnaroundCache.set(routeKey, formatted);
-              return formatted;
+              if (userAlightIdx === -1 || userAlightIdx <= turnaroundIdx + 2) {
+                const formatted = formatStopDisplayName(turnaroundStopName);
+                circularTurnaroundCache.set(routeKey, formatted);
+                void persistCircularTurnaroundCache();
+                return formatted;
+              } else if (tripToName && !headsignMatchesOrigin) {
+                const formatted = formatStopDisplayName(tripToName);
+                circularTurnaroundCache.set(routeKey, formatted);
+                void persistCircularTurnaroundCache();
+                return formatted;
+              }
             }
           }
         }
+      } catch {
+        // Continua con il fallback intelligente
       }
-    } catch {
-      // Continua con il fallback intelligente
-    }
+
+      if (toName && normalizeStopTokens(toName) !== normFrom) {
+        return formatStopDisplayName(toName);
+      }
+      return formatStopDisplayName(rawHeadsign || toName || 'Centro');
+    })().finally(() => {
+      circularTurnaroundInFlight.delete(routeKey);
+    });
+
+    circularTurnaroundInFlight.set(routeKey, task);
+    return task;
   }
 
   // Fallback se il dettaglio trip non risponde: usa la fermata di discesa o l'ultima fermata intermedia nota
@@ -1944,25 +2003,24 @@ export async function getStationTransitBoard(options: {
       isLiveContext && queryTimeForApi === 'now' ? undefined : targetDate,
       queryTimeForApi
     );
-    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${originLat.toFixed(5)},${originLng.toFixed(5)}&toPlace=${destLat.toFixed(5)},${destLng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=30`;
+    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${originLat.toFixed(5)},${originLng.toFixed(5)}&toPlace=${destLat.toFixed(5)},${destLng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20`;
 
-    // In andata, se la lezione inizia più avanti rispetto all'arrivo del treno, interroga in parallelo anche con arriveBy=true
-    // sull'inizio della lezione: così la lista parte dai primi mezzi subito dopo il treno e include fino all'ultimo mezzo utile per arrivare in tempo.
+    // In andata, solo se la lezione inizia molto più avanti (> 55 min) rispetto all'arrivo del treno,
+    // interroga in parallelo anche con arriveBy=true sull'inizio della lezione (i 20 itinerari di planUrl coprono già ~45-55 min).
     const secondaryDepUrl =
       !useArriveBy &&
       direction === 'to_campus' &&
       constraintMins > 0 &&
       minDepMins > 0 &&
-      constraintMins > minDepMins + 12
+      constraintMins > minDepMins + 55
         ? `https://api.transitous.org/api/v5/plan?fromPlace=${originLat.toFixed(5)},${originLng.toFixed(5)}&toPlace=${destLat.toFixed(5)},${destLng.toFixed(5)}&time=${encodeURIComponent(
             buildQueryIsoTime(targetDate, minsToHHMM(constraintMins))
-          )}&arriveBy=true&numItineraries=30`
+          )}&arriveBy=true&numItineraries=15`
         : null;
 
     try {
       const controller = new AbortController();
-      // Timeout esteso a 15s per consentire il calcolo interregionale su grafi complessi
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
       const onExternalAbort = () => controller.abort();
       if (signal) {
@@ -2526,10 +2584,11 @@ export async function getStationTransitBoard(options: {
 
       // Trattieni tutte le corse dirette e utili con camminata a piedi ragionevole (<= 12 min a piedi),
       // evitando di scartare opzioni valide ma ordinando sempre in testa i tragitti con camminata minima
-      const candidatePending = pendingItems.filter((p) => {
+      const filteredByWalk = pendingItems.filter((p) => {
         const wAfter = p.draft.walkAfterMinutes || 0;
         return wAfter <= Math.max(12, minDirectWalk + 6);
       });
+      const candidatePending = filteredByWalk.length > 0 ? filteredByWalk : pendingItems;
 
       // In andata (dalla stazione verso il campus), filtra prima della risoluzione headsign le corse partite prima dell'arrivo del treno
       let filteredPending = candidatePending;

@@ -400,11 +400,11 @@ function TrainPreferencesSection({
             marginBottom: 4,
           }}
         >
-          Consiglio rientro anticipato
+          Consiglio treno smart
         </Text>
         <Text style={[styles.switchDesc, { marginBottom: 10 }]}>
-          Minuti massimi di lezione che puoi perdere per anticipare un treno
-          vantaggioso
+          Minuti massimi di lezione che puoi perdere (entrando in ritardo o
+          uscendo prima) per un treno più comodo
         </Text>
         <View style={styles.trainPrefRow}>
           {EARLY_LEAVE_OPTIONS.map((mins) => {

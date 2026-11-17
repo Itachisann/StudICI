@@ -5,6 +5,7 @@ import {
   TripLeg,
   LiveTrainInfo,
   PreferredTrain,
+  SmartOutboundRecommendation,
   SmartReturnRecommendation,
 } from '../types/commuter';
 import { DisruptionEvent } from '../types/disruptions';
@@ -1200,6 +1201,176 @@ async function computeOutboundItinerary(
     ? `Parti alle ${minutesToTime(homeDepartureMins)} da ${config.originAddress} con ${train.trainNumber} (${train.departureTimePlanned || train.departureTimeActual}) per essere in ${targetLecture.room} alle ${minutesToTime(finalArrivalMins)} (inizio lezione ${targetLecture.startTime})`
     : `Parti alle ${minutesToTime(homeDepartureMins)} da ${config.originAddress} con ${train.trainNumber} (${train.departureTimePlanned || train.departureTimeActual}) per arrivare a ${config.arrivalStation.name} alle ${train.arrivalTimeActual || train.arrivalTimePlanned || minutesToTime(trainArrMins)}`;
 
+  // Analisi Andata Smart:
+  // Valuta se un treno successivo allo standard (entrando in ritardo entro maxEarlyLeaveMinutes)
+  // permette di partire da casa nettamente più tardi secondo le stesse soglie di convenienza del Rientro Smart.
+  const outTrainPrefs = config.trainPreferences;
+  const smartOutboundEnabled = outTrainPrefs?.smartReturnEnabled ?? true;
+  const maxLateArrivalMinutes = smartOutboundEnabled
+    ? Math.max(0, outTrainPrefs?.maxEarlyLeaveMinutes ?? 15)
+    : 0;
+  const minOutboundGainMinutes = Math.max(15, outTrainPrefs?.minReturnGainMinutes ?? 25);
+
+  const recommendedStdIdx =
+    typeof optimalTrainResult.recommendedIndex === 'number'
+      ? optimalTrainResult.recommendedIndex
+      : selectedIndex;
+  const standardOutboundTrain = availableTrains[recommendedStdIdx] || train;
+
+  let smartOutboundRecommendation: SmartOutboundRecommendation | undefined = undefined;
+  if (
+    targetLecture &&
+    activeTransitSolution &&
+    smartOutboundEnabled &&
+    maxLateArrivalMinutes > 0 &&
+    availableTrains.length > 1
+  ) {
+    const lectureStartM = parseTimeToMinutes(targetLecture.startTime);
+    const lectureEndM = parseTimeToMinutes(targetLecture.endTime);
+    const lectureAlreadyStarted = isToday && nowMins >= lectureStartM;
+
+    if (!lectureAlreadyStarted && lectureEndM > lectureStartM) {
+      const stdDepM = parseTimeToMinutes(
+        standardOutboundTrain.departureTimePlanned ||
+          standardOutboundTrain.departureTimeActual ||
+          ''
+      );
+      const stdArrM = isToday
+        ? parseTimeToMinutes(
+            standardOutboundTrain.arrivalTimeActual ||
+              standardOutboundTrain.arrivalTimePlanned ||
+              ''
+          )
+        : parseTimeToMinutes(
+            standardOutboundTrain.arrivalTimePlanned ||
+              standardOutboundTrain.arrivalTimeActual ||
+              ''
+          );
+
+      const stdClassArrM = stdArrM > 0 ? stdArrM + activeTransitMins : 0;
+
+      // Proponi il consiglio smart in andata solo quando il treno standard arriva puntuale in aula
+      if (stdDepM > 0 && stdArrM > 0 && stdClassArrM <= lectureStartM) {
+        let bestOutScore = -Infinity;
+        let bestOutMatch: {
+          train: LiveTrainInfo;
+          lostLectureMinutes: number;
+          savedDepartureMinutes: number;
+          candHomeDepM: number;
+          stdHomeDepM: number;
+        } | null = null;
+
+        const stdHomeDepM = stdDepM - parkDuration - carDuration;
+
+        for (let idx = 0; idx < availableTrains.length; idx++) {
+          const cand = availableTrains[idx];
+          const candNum = cand.trainNumber.replace(/\D/g, '');
+          const stdNum = standardOutboundTrain.trainNumber.replace(/\D/g, '');
+          if (candNum && candNum === stdNum) continue;
+
+          const statusLow = (cand.statusDescription || '').toLowerCase();
+          if (statusLow.includes('soppresso') || statusLow.includes('cancellato')) continue;
+
+          const candDepM = parseTimeToMinutes(
+            cand.departureTimePlanned || cand.departureTimeActual || ''
+          );
+          const candArrM = isToday
+            ? parseTimeToMinutes(cand.arrivalTimeActual || cand.arrivalTimePlanned || '')
+            : parseTimeToMinutes(cand.arrivalTimePlanned || cand.arrivalTimeActual || '');
+
+          if (candDepM <= stdDepM || candArrM <= 0) continue;
+          if (isToday && !isTrainCatchable(cand)) continue;
+
+          const candStation = getRomeStationName(config, cand, 'outbound');
+          let candTransitM = activeTransitMins;
+          if (
+            candStation &&
+            candStation !== (config.arrivalStation.shortName || config.arrivalStation.name)
+          ) {
+            const altTransit = getOptimalRomeTransit({
+              fromStationCode: config.arrivalStation.code,
+              fromStationName: candStation,
+              classroom: {
+                displayName: targetLecture.room,
+                buildingName: targetLecture.buildingName || '',
+                buildingCode: targetLecture.buildingCode || '',
+                address: targetLecture.address,
+                latitude: targetLecture.latitude,
+                longitude: targetLecture.longitude,
+              },
+              direction: 'to_campus',
+              preferredMode: config.transitLeg?.preferredMode || 'auto',
+            });
+            if (altTransit) candTransitM = altTransit.durationMinutes;
+          }
+
+          const candClassArrM = candArrM + candTransitM;
+          if (candClassArrM >= lectureEndM) continue;
+
+          const lostMins = candClassArrM - lectureStartM;
+          if (lostMins < 1 || lostMins > maxLateArrivalMinutes) continue;
+
+          const savedDepMins = candDepM - stdDepM;
+          const minRequiredSaved = Math.max(minOutboundGainMinutes, lostMins * 2);
+          if (savedDepMins < minRequiredSaved || savedDepMins - lostMins < 15) continue;
+
+          const score = savedDepMins - lostMins * 1.5;
+          if (
+            score > bestOutScore ||
+            (score === bestOutScore && bestOutMatch && lostMins < bestOutMatch.lostLectureMinutes)
+          ) {
+            bestOutScore = score;
+            bestOutMatch = {
+              train: cand,
+              lostLectureMinutes: lostMins,
+              savedDepartureMinutes: savedDepMins,
+              candHomeDepM: candDepM - parkDuration - carDuration,
+              stdHomeDepM,
+            };
+          }
+        }
+
+        if (bestOutMatch) {
+          smartOutboundRecommendation = {
+            trainNumber: bestOutMatch.train.trainNumber,
+            category: bestOutMatch.train.category,
+            departureTime:
+              bestOutMatch.train.departureTimePlanned ||
+              bestOutMatch.train.departureTimeActual ||
+              '',
+            arrivalTime: isToday
+              ? bestOutMatch.train.arrivalTimeActual ||
+                bestOutMatch.train.arrivalTimePlanned ||
+                ''
+              : bestOutMatch.train.arrivalTimePlanned ||
+                bestOutMatch.train.arrivalTimeActual ||
+                '',
+            lostLectureMinutes: bestOutMatch.lostLectureMinutes,
+            savedDepartureMinutes: bestOutMatch.savedDepartureMinutes,
+            durationMinutes: bestOutMatch.train.durationMinutes,
+            standardTrainNumber: standardOutboundTrain.trainNumber,
+            standardDepartureTime:
+              standardOutboundTrain.departureTimePlanned ||
+              standardOutboundTrain.departureTimeActual ||
+              '',
+            standardArrivalTime: isToday
+              ? standardOutboundTrain.arrivalTimeActual ||
+                standardOutboundTrain.arrivalTimePlanned ||
+                ''
+              : standardOutboundTrain.arrivalTimePlanned ||
+                standardOutboundTrain.arrivalTimeActual ||
+                '',
+            smartHomeDepartureTime: minutesToTime(bestOutMatch.candHomeDepM),
+            standardHomeDepartureTime: minutesToTime(bestOutMatch.stdHomeDepM),
+            isCurrentlySelected:
+              train.trainNumber.replace(/\D/g, '') ===
+              bestOutMatch.train.trainNumber.replace(/\D/g, ''),
+          };
+        }
+      }
+    }
+  }
+
   return {
     direction: 'outbound',
     targetDate: targetDate.toISOString().slice(0, 10),
@@ -1218,6 +1389,7 @@ async function computeOutboundItinerary(
     },
     summaryMessage: summary,
     lectureTimeStatus,
+    smartOutboundRecommendation,
     prefetchedTransitBoard: prefetchedOutboundBoard,
     transitLiveContext: resolvedOutboundLiveContext,
     transitConstraintTime: resolvedOutboundConstraintTime,
@@ -2362,9 +2534,78 @@ export interface ViaggioStartupSnapshot {
   disruptions: DisruptionEvent[];
 }
 
-const STARTUP_SNAPSHOT_TTL_MS = 45000;
+const STARTUP_SNAPSHOT_TTL_MS = 90000;
 let warmViaggioSnapshot: ViaggioStartupSnapshot | null = null;
 let inFlightStartupPrefetch: Promise<ViaggioStartupSnapshot | null> | null = null;
+
+const PERSISTED_ITINERARIES_CACHE_KEY = 'studici_itineraries_cache_v1';
+const PERSISTED_ITINERARY_TTL_MS = 24 * 60 * 60 * 1000; // 24 ore
+let persistedItinerariesMemory: Record<
+  string,
+  { timestamp: number; itinerary: CommuterItinerary }
+> | null = null;
+
+export async function loadPersistedItinerariesCache(): Promise<
+  Record<string, CommuterItinerary>
+> {
+  try {
+    if (!persistedItinerariesMemory) {
+      const raw = await AsyncStorage.getItem(PERSISTED_ITINERARIES_CACHE_KEY);
+      persistedItinerariesMemory = raw ? JSON.parse(raw) : {};
+    }
+    const now = Date.now();
+    const valid: Record<string, CommuterItinerary> = {};
+    for (const [k, entry] of Object.entries(persistedItinerariesMemory || {})) {
+      if (entry && entry.itinerary && now - (entry.timestamp || 0) < PERSISTED_ITINERARY_TTL_MS) {
+        valid[k] = entry.itinerary;
+      }
+    }
+    return valid;
+  } catch {
+    return {};
+  }
+}
+
+export function savePersistedItineraryEntry(
+  key: string,
+  itinerary: CommuterItinerary
+): void {
+  if (!key || !itinerary) return;
+  void (async () => {
+    try {
+      if (!persistedItinerariesMemory) {
+        await loadPersistedItinerariesCache();
+      }
+      if (!persistedItinerariesMemory) {
+        persistedItinerariesMemory = {};
+      }
+      persistedItinerariesMemory[key] = {
+        timestamp: Date.now(),
+        itinerary,
+      };
+      const keys = Object.keys(persistedItinerariesMemory);
+      if (keys.length > 20) {
+        const sorted = keys.sort(
+          (a, b) =>
+            (persistedItinerariesMemory?.[a]?.timestamp || 0) -
+            (persistedItinerariesMemory?.[b]?.timestamp || 0)
+        );
+        for (const oldKey of sorted.slice(0, keys.length - 20)) {
+          delete persistedItinerariesMemory[oldKey];
+        }
+      }
+      await AsyncStorage.setItem(
+        PERSISTED_ITINERARIES_CACHE_KEY,
+        JSON.stringify(persistedItinerariesMemory)
+      );
+    } catch {}
+  })();
+}
+
+export function clearPersistedItinerariesCache(): void {
+  persistedItinerariesMemory = {};
+  AsyncStorage.removeItem(PERSISTED_ITINERARIES_CACHE_KEY).catch(() => {});
+}
 
 export function invalidateViaggioStartupSnapshot(): void {
   warmViaggioSnapshot = null;
@@ -2493,6 +2734,9 @@ export function prefetchViaggioStartupData(
       }
 
       const disruptions = await disruptionsPromise;
+      if (itin) {
+        savePersistedItineraryEntry(`outbound_${todayIdx}_auto`, itin);
+      }
       const snapshot: ViaggioStartupSnapshot = {
         timestamp: Date.now(),
         dayIdx: todayIdx,
