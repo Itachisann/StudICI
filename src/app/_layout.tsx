@@ -203,8 +203,11 @@ function AppLayoutContent() {
     // Aggiorna in background sveglie native, avvisi scioperi (-7g / -1g) e cache Viaggio
     prefetchViaggioStartupData(degreeUrl).catch(() => {});
     refreshCommuterAlarmsInBackground().catch(() => {});
-    syncStrikeNotifications().catch(() => {});
-    pullExternalAppleCalendarChanges().catch(() => {});
+    pullExternalAppleCalendarChanges()
+      .catch(() => {})
+      .finally(() => {
+        syncStrikeNotifications().catch(() => {});
+      });
 
     try {
       const lastResponse = Notifications.getLastNotificationResponse();
@@ -219,7 +222,19 @@ function AppLayoutContent() {
       },
     );
 
-    const unsubCommuter = subscribeToCommuterChanges(() => {
+    const unsubCommuter = subscribeToCommuterChanges((nextCfg) => {
+      syncStrikeNotifications(undefined, {
+        promptIfNeeded: Boolean(
+          nextCfg.enabled &&
+            (nextCfg.strikeAlerts?.notify7DaysBefore ||
+              nextCfg.strikeAlerts?.notify1DayBefore),
+        ),
+      }).catch(() => {});
+    });
+    const unsubExcluded = subscribeToExcludedLessonsChanges(() => {
+      syncStrikeNotifications().catch(() => {});
+    });
+    const unsubManual = subscribeToManualEventsChanges(() => {
       syncStrikeNotifications().catch(() => {});
     });
     const unsubExcluded = subscribeToExcludedLessonsChanges(() => {
@@ -233,8 +248,11 @@ function AppLayoutContent() {
       if (nextState === 'active') {
         prefetchViaggioStartupData(degreeUrl).catch(() => {});
         refreshCommuterAlarmsInBackground().catch(() => {});
-        syncStrikeNotifications().catch(() => {});
-        pullExternalAppleCalendarChanges().catch(() => {});
+        pullExternalAppleCalendarChanges()
+          .catch(() => {})
+          .finally(() => {
+            syncStrikeNotifications().catch(() => {});
+          });
       }
     });
     return () => {

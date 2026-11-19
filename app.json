@@ -2,7 +2,7 @@
   "expo": {
     "name": "StudICI",
     "slug": "StudICI",
-    "version": "1.9.7",
+    "version": "1.9.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "studici",
@@ -10,7 +10,7 @@
     "backgroundColor": "#0d0e12",
     "ios": {
       "bundleIdentifier": "com.vitor.studici",
-      "buildNumber": "77",
+      "buildNumber": "78",
       "icon": "./assets/images/icon.png",
       "infoPlist": {
         "CFBundleDevelopmentRegion": "it",
@@ -51,7 +51,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 64,
+      "versionCode": 65,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.READ_CALENDAR",
@@ -72,7 +72,7 @@
       [
         "expo-calendar",
         {
-          "calendarPermission": "L'app ha bisogno di accedere al calendario per sincronizzare l'orario delle lezioni.",
+          "calendarPermission": "L'app ha bisogno di accedere al calendario per sincronizzare l'orario delle lezioni, i treni e gli avvisi scioperi.",
           "remindersPermission": "L'app utilizza i promemoria per gestire gli avvisi e le sveglie automatiche."
         }
       ],

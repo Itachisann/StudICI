@@ -7,6 +7,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ROME_STATION_COORDINATES } from './transitRouter';
 import { resolveClassroom } from './classroomLocations';
+import {
+  fetchCloserCorridorItineraries,
+  optimizeSingleLegStopsViaTrip,
+  resolveEffectiveEndpointForRouting,
+  resolveWalkLegMetrics,
+} from './transitClosestStopHelper';
 
 import {
   pruneAnomalousLoopsAndSpikes,
@@ -94,8 +100,12 @@ export interface TransitBoardResult {
   departures: TransitDepartureItem[];
   optimalDeparture?: TransitDepartureItem;
   optimalIndex: number;
+  lastUsefulDeparture?: TransitDepartureItem;
+  lastUsefulIndex?: number;
   lastUpdated: string;
   isLiveSource: boolean;
+  arrivalBufferMinutes?: number;
+  preferLatestBeforeDeadline?: boolean;
   fetchFailed?: boolean;
 }
 
@@ -523,7 +533,7 @@ export function snapStopToRoadway(
   _stopName?: string,
   coords?: { lat: number; lng: number }
 ): { lat: number; lng: number } {
-  if (!coords) return { lat: 41.90955, lng: 12.53038 };
+  if (!coords) return ROME_STATION_COORDINATES.generic;
   return coords;
 }
 
@@ -701,98 +711,20 @@ export function cleanTransitPolylineRoadway(polyline: LatLngPoint[]): LatLngPoin
 }
 
 /**
- * Risolve in modo generale per qualsiasi linea (71, 163, 448, 492, 545, ecc.)
- * la traiettoria corretta lungo la carreggiata stradale verificata, garantendo che i bus
- * viaggino sempre nella corsia corretta (es. corsia nord-ovest per Castro Laurenziano/Verano,
- * corsia sud-est verso Stazione Tiburtina) senza mai finire nella corsia contromano, fare zig-zag
- * o passare sopra fabbricati e spartitraffico chiusi per cantiere tranviario.
+ * Normalizza e ripulisce dinamicamente qualsiasi polilinea GTFS/OSRM da loop anomali e micro-spike,
+ * in modo valido per qualsiasi linea o città senza tracciati statici hardcoded.
  */
 export function resolveOptimizedTransitPolyline(
-  fromName: string,
-  toName: string,
-  fromCoords: { lat: number; lng: number },
-  toCoords: { lat: number; lng: number },
+  _fromName: string,
+  _toName: string,
+  _fromCoords: { lat: number; lng: number },
+  _toCoords: { lat: number; lng: number },
   rawPolyline: LatLngPoint[]
 ): LatLngPoint[] {
-  // Se la nostra API o il feed dati ha già fornito la geometria ad alta risoluzione derivata da shapes.txt del dataset GTFS,
-  // ripuliscila da eventuali deviazioni anomale verso edifici privati/piazzali GTFS preservando tutte le curve stradali reali!
   if (rawPolyline && rawPolyline.length >= 15) {
     const cleaned = pruneAnomalousLoopsAndSpikes(rawPolyline);
     return deduplicateAdjacentPoints(cleaned, 0.5);
   }
-
-  const fNorm = (fromName || '').toLowerCase();
-  const tNorm = (toName || '').toLowerCase();
-
-  const isTiburtinaOrigin =
-    (fNorm.includes('tiburtina') &&
-      (fNorm.includes('mb') || fNorm.includes('staz') || fNorm.includes('fs'))) ||
-    (fromCoords.lat > 41.9080 && fromCoords.lng > 12.5270);
-
-  const isTiburtinaDestination =
-    (tNorm.includes('tiburtina') &&
-      (tNorm.includes('mb') || tNorm.includes('staz') || tNorm.includes('fs'))) ||
-    (toCoords.lat > 41.9080 && toCoords.lng > 12.5270);
-
-  const isSanLorenzoDest =
-    tNorm.includes('san lorenzo') ||
-    tNorm.includes('marrucini') ||
-    tNorm.includes('passamonti') ||
-    tNorm.includes('lollis') ||
-    (toCoords.lat < 41.9018 && toCoords.lat > 41.8950);
-
-  const isSanLorenzoOrigin =
-    fNorm.includes('san lorenzo') ||
-    fNorm.includes('marrucini') ||
-    fNorm.includes('passamonti') ||
-    fNorm.includes('lollis') ||
-    (fromCoords.lat < 41.9018 && fromCoords.lat > 41.8950);
-
-  const isToVerano = tNorm.includes('verano') || (toCoords.lat < 41.9036 && toCoords.lat >= 41.9018);
-  const isFromVerano = fNorm.includes('verano') || (fromCoords.lat < 41.9036 && fromCoords.lat >= 41.9018);
-
-  // Corridoio Via Tiburtina: Andata (dalla Stazione Tiburtina verso sud-ovest)
-  if (isTiburtinaOrigin || (fromCoords.lat > 41.9080 && fromCoords.lng > 12.5270)) {
-    if (isSanLorenzoDest) {
-      return TIBURTINA_OUTBOUND_TO_SAN_LORENZO;
-    }
-    if (isToVerano) {
-      return TIBURTINA_OUTBOUND_TO_VERANO;
-    }
-    return TIBURTINA_OUTBOUND_TO_CASTRO;
-  }
-
-  // Corridoio Via Tiburtina: Ritorno (verso la Stazione Tiburtina in direzione nord-est)
-  if (isTiburtinaDestination || (toCoords.lat > 41.9080 && toCoords.lng > 12.5270)) {
-    if (isSanLorenzoOrigin) {
-      return TIBURTINA_INBOUND_FROM_SAN_LORENZO;
-    }
-    if (isFromVerano) {
-      return TIBURTINA_INBOUND_FROM_VERANO;
-    }
-    return TIBURTINA_INBOUND_FROM_CASTRO;
-  }
-
-  // Corsa di passaggio che attraversa il corridoio di Via Tiburtina verso sud-ovest (es. linee generiche)
-  if (
-    fromCoords.lat > 41.9075 &&
-    toCoords.lat < 41.9045 &&
-    fromCoords.lng > 12.5250 &&
-    toCoords.lng < 12.5220
-  ) {
-    return isToVerano ? TIBURTINA_OUTBOUND_TO_VERANO : TIBURTINA_OUTBOUND_TO_CASTRO;
-  }
-  // Corsa di passaggio verso nord-est
-  if (
-    fromCoords.lat < 41.9045 &&
-    toCoords.lat > 41.9075 &&
-    fromCoords.lng < 12.5220 &&
-    toCoords.lng > 12.5250
-  ) {
-    return isFromVerano ? TIBURTINA_INBOUND_FROM_VERANO : TIBURTINA_INBOUND_FROM_CASTRO;
-  }
-
-  // Per qualsiasi altra linea / città in Italia: applica il filtro geometrico anti-zigzag
   return cleanTransitPolylineRoadway(rawPolyline);
 }
 
@@ -1141,6 +1073,26 @@ function formatIsoToHHMM(isoStr?: string): string {
   }
 }
 
+function resolveDateWithDayOffset(targetDate?: string, dayOffset = 0): string {
+  const base =
+    targetDate && /^\d{4}-\d{2}-\d{2}$/.test(targetDate)
+      ? (() => {
+          const [y, m, d] = targetDate.split('-').map(Number);
+          return new Date(y, m - 1, d, 12, 0, 0);
+        })()
+      : (() => {
+          const now = new Date();
+          return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+        })();
+  if (dayOffset !== 0) {
+    base.setDate(base.getDate() + dayOffset);
+  }
+  const yy = base.getFullYear();
+  const mm = String(base.getMonth() + 1).padStart(2, '0');
+  const dd = String(base.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 function buildQueryIsoTime(targetDate?: string, targetTime?: string): string {
   try {
     const now = new Date();
@@ -1175,10 +1127,19 @@ function buildQueryIsoTime(targetDate?: string, targetTime?: string): string {
   }
 }
 
+function unwrapMinutesFromRef(mins: number, refMins: number): number {
+  if (mins < 0) return mins;
+  if (refMins >= 0 && mins < refMins && refMins - mins > 720) {
+    return mins + 1440;
+  }
+  return mins;
+}
+
 /**
- * Individua la corsa ottimale (l'ultimo mezzo utile per arrivare a destinazione in tempo,
+ * Individua la corsa ottimale (il mezzo più efficiente per arrivare a destinazione,
  * considerando camminata iniziale, durata reale del mezzo e camminata finale fino all'aula/stazione,
- * e privilegiando a parità di fascia la corsa con durata minore che fa arrivare prima).
+ * privilegiando minor cammino a piedi e arrivo più rapido) e, quando esiste un vincolo orario
+ * (es. partenza treno o inizio lezione), identifica anche l'ultima corsa utile per non perdere il vincolo.
  */
 export function findOptimalTransitDeparture(
   departures: TransitDepartureItem[],
@@ -1186,73 +1147,132 @@ export function findOptimalTransitDeparture(
     direction: 'to_campus' | 'to_station';
     isLiveContext: boolean;
     constraintTime?: string; // Ritorno: partenza treno. Andata: inizio lezione.
-    minDepartureTime?: string; // Andata: arrivo treno in stazione.
+    minDepartureTime?: string; // Andata: arrivo treno in stazione. Ritorno: fine lezione.
     targetTime?: string;
+    arrivalBufferMinutes?: number; // Anticipo in aula (andata) o in stazione (ritorno) rispetto al vincolo
+    preferLatestBeforeDeadline?: boolean; // Uscita anticipata da lezione: calibra a ritroso dal treno per perdere meno minuti possibili
   }
-): { optimal: TransitDepartureItem | undefined; optimalIndex: number } {
+): {
+  optimal: TransitDepartureItem | undefined;
+  optimalIndex: number;
+  lastUseful?: TransitDepartureItem;
+  lastUsefulIndex?: number;
+} {
   if (!departures || departures.length === 0) {
     return { optimal: undefined, optimalIndex: 0 };
   }
 
   const { direction, isLiveContext, constraintTime, minDepartureTime } = options;
+  const effectiveAdvanceMins = Math.max(
+    0,
+    typeof options.arrivalBufferMinutes === 'number'
+      ? options.arrivalBufferMinutes
+      : direction === 'to_station'
+        ? 5
+        : 0
+  );
   const now = new Date();
   const nowMins = now.getHours() * 60 + now.getMinutes();
 
-  const getDepMins = (d: TransitDepartureItem) =>
-    parseHHMMToMins(isLiveContext && d.isLive ? d.estimatedTime || d.scheduledTime : d.scheduledTime);
+  const rawDeadlineMins = parseHHMMToMins(constraintTime);
+  const rawMinDepMins = parseHHMMToMins(minDepartureTime);
+  const rawClockBase = isLiveContext
+    ? nowMins
+    : rawMinDepMins > 0
+      ? rawMinDepMins
+      : rawDeadlineMins > 0
+        ? Math.max(0, rawDeadlineMins - 60)
+        : nowMins;
 
-  const getDestArrMins = (d: TransitDepartureItem) => {
-    const arrM = parseHHMMToMins(d.arrivalTime);
-    if (arrM >= 0) return arrM;
-    const depM = getDepMins(d);
-    return depM >= 0 ? depM + d.durationMinutes : -1;
+  const deadlineMins =
+    rawDeadlineMins > 0 ? unwrapMinutesFromRef(rawDeadlineMins, rawClockBase) : -1;
+  const unwrappedMinDepMins =
+    rawMinDepMins > 0 ? unwrapMinutesFromRef(rawMinDepMins, rawClockBase) : -1;
+
+  const getDepMins = (d: TransitDepartureItem) => {
+    const raw = parseHHMMToMins(
+      isLiveContext && d.isLive ? d.estimatedTime || d.scheduledTime : d.scheduledTime
+    );
+    return unwrapMinutesFromRef(raw, rawClockBase);
   };
 
-  const deadlineMins = parseHHMMToMins(constraintTime);
-  const rawMinDepMins = parseHHMMToMins(minDepartureTime);
-  const effectiveMinDepMins =
-    direction === 'to_campus'
-      ? rawMinDepMins
-      : rawMinDepMins > 0 && (deadlineMins < 0 || deadlineMins - rawMinDepMins >= 14)
-        ? rawMinDepMins
-        : -1;
+  const getDestArrMins = (d: TransitDepartureItem) => {
+    const depM = getDepMins(d);
+    const rawArrM = parseHHMMToMins(d.arrivalTime);
+    if (rawArrM >= 0) {
+      const refForArr = depM >= 0 ? depM : rawClockBase;
+      return unwrapMinutesFromRef(rawArrM, refForArr);
+    }
+    const rideAndAfter =
+      d.inVehicleMinutes !== undefined
+        ? Math.max(1, d.inVehicleMinutes) + (d.walkAfterMinutes || 0)
+        : d.durationMinutes;
+    return depM >= 0 ? depM + rideAndAfter : -1;
+  };
 
-  // Orario minimo in cui l'utente può iniziare a muoversi dall'origine (stazione o aula)
-  const minOriginStartMins = isLiveContext
-    ? Math.max(nowMins - 1, effectiveMinDepMins > 0 ? effectiveMinDepMins : 0)
-    : effectiveMinDepMins > 0
-      ? effectiveMinDepMins
-      : 0;
+  // Quando minDepartureTime è valorizzato (es. fine lezione in ritorno standard o arrivo treno in andata),
+  // va sempre rispettato rigorosamente per non far perdere minuti di lezione né proporre corse irraggiungibili.
+  const effectiveMinDepMins = unwrappedMinDepMins > 0 ? unwrappedMinDepMins : -1;
 
-  // 1. Filtra le corse prendibili (considerando anche i minuti a piedi per raggiungere la fermata di salita)
-  let reachable = departures.filter((d) => {
+  // Orario minimo in cui l'utente può iniziare a muoversi dall'origine (stazione, aula o posizione GPS attuale)
+  const isNowTarget = options.targetTime === 'now';
+  const minOriginStartMins =
+    isLiveContext || isNowTarget
+      ? Math.max(nowMins, effectiveMinDepMins > 0 ? effectiveMinDepMins : 0)
+      : effectiveMinDepMins > 0
+        ? effectiveMinDepMins
+        : 0;
+
+  // 1. Filtra le corse effettivamente raggiungibili (partenza mezzo meno camminata iniziale >= ora uscita possibile).
+  //    Tolleranza 0 in ogni direzione e contesto: tiene sempre conto dei minuti a piedi dall'origine reale
+  //    (fine lezione, arrivo treno, orario/posizione attuale) senza basarsi sulla sola partenza del mezzo.
+  const strictReachable = departures.filter((d) => {
     const depM = getDepMins(d);
     if (depM < 0) return false;
     const leaveOriginM = depM - (d.walkBeforeMinutes || 0);
-    return leaveOriginM >= minOriginStartMins - 1;
+    return leaveOriginM >= minOriginStartMins;
   });
+  const hasStrictReachable = strictReachable.length > 0;
+  const reachable = hasStrictReachable ? strictReachable : [...departures];
 
-  if (reachable.length === 0) {
-    reachable = [...departures];
-  }
+  // 2. Filtra le corse che arrivano a destinazione (mezzo + cambi + tutte le camminate) entro il vincolo comprensivo di anticipo
+  const effectiveDeadline = deadlineMins > 0 ? deadlineMins - effectiveAdvanceMins : -1;
+  const strictEffectiveMatches =
+    effectiveDeadline > 0 && hasStrictReachable
+      ? strictReachable.filter((d) => {
+          const destArrM = getDestArrMins(d);
+          return destArrM > 0 && destArrM <= effectiveDeadline;
+        })
+      : [];
+  const strictWithinDeadlineMatches =
+    deadlineMins > 0 && hasStrictReachable
+      ? strictReachable.filter((d) => {
+          const destArrM = getDestArrMins(d);
+          return destArrM > 0 && destArrM <= deadlineMins;
+        })
+      : [];
 
-  // 2. Filtra le corse che arrivano a destinazione (inclusa la camminata dalla fermata di discesa) entro il vincolo orario
   let onTimeCandidates = reachable;
   if (deadlineMins > 0) {
-    // Per il ritorno in stazione consideriamo almeno 2 minuti di margine per raggiungere il binario;
-    // per l'andata l'arrivo in aula (inclusa la camminata a piedi) deve avvenire entro l'orario di inizio lezione
-    const effectiveDeadline = direction === 'to_station' ? deadlineMins - 2 : deadlineMins;
-    const withinEffective = reachable.filter((d) => {
-      const destArrM = getDestArrMins(d);
-      return destArrM > 0 && destArrM <= effectiveDeadline && destArrM >= effectiveDeadline - 65;
-    });
+    const enforceLowerArrivalWindow = !isLiveContext && minOriginStartMins <= 0;
+    const baseEffectiveMatches =
+      strictEffectiveMatches.length > 0
+        ? strictEffectiveMatches
+        : reachable.filter((d) => {
+            const destArrM = getDestArrMins(d);
+            return destArrM > 0 && destArrM <= effectiveDeadline;
+          });
 
-    if (withinEffective.length > 0) {
-      onTimeCandidates = withinEffective;
+    if (baseEffectiveMatches.length > 0) {
+      const withinWindow = enforceLowerArrivalWindow
+        ? baseEffectiveMatches.filter((d) => getDestArrMins(d) >= effectiveDeadline - 65)
+        : baseEffectiveMatches;
+      onTimeCandidates = withinWindow.length > 0 ? withinWindow : baseEffectiveMatches;
     } else {
       const withinStrict = reachable.filter((d) => {
         const destArrM = getDestArrMins(d);
-        return destArrM > 0 && destArrM <= deadlineMins && destArrM >= deadlineMins - 65;
+        if (destArrM <= 0 || destArrM > deadlineMins) return false;
+        return enforceLowerArrivalWindow ? destArrM >= deadlineMins - 65 : true;
       });
       if (withinStrict.length > 0) {
         onTimeCandidates = withinStrict;
@@ -1260,39 +1280,139 @@ export function findOptimalTransitDeparture(
     }
   }
 
-  // 3. Rimuovi le corse dominate (più lente: partono prima o uguale ma arrivano dopo un'altra corsa valida)
-  const nonDominated = onTimeCandidates.filter((cand) => {
-    const cDep = getDepMins(cand);
-    const cArr = getDestArrMins(cand);
-    const isDominated = onTimeCandidates.some((other) => {
-      if (other.id === cand.id) return false;
-      const oDep = getDepMins(other);
-      const oArr = getDestArrMins(other);
-      return oDep >= cDep && oArr <= cArr && (oDep > cDep || oArr < cArr);
-    });
-    return !isDominated;
-  });
+  const getWalkTotal = (d: TransitDepartureItem) =>
+    (d.walkBeforeMinutes || 0) + (d.walkAfterMinutes || 0);
 
+  const getLeaveOriginMins = (d: TransitDepartureItem) => {
+    const depM = getDepMins(d);
+    return depM >= 0 ? depM - (d.walkBeforeMinutes || 0) : -1;
+  };
+
+  const getDoorToDoorMins = (d: TransitDepartureItem) =>
+    typeof d.totalDoorToDoorMinutes === 'number' && d.totalDoorToDoorMinutes > 0
+      ? d.totalDoorToDoorMinutes
+      : (d.walkBeforeMinutes || 0) + d.durationMinutes;
+
+  // 3. Rimuovi le corse dominate considerando anche il momento di partenza dall'origine (sottraendo il cammino iniziale) e il cammino totale
+  const filterNonDominated = (candidatesList: TransitDepartureItem[]) =>
+    candidatesList.filter((cand) => {
+      const cLeave = getLeaveOriginMins(cand);
+      const cArr = getDestArrMins(cand);
+      const cWalk = getWalkTotal(cand);
+      const isDominated = candidatesList.some((other) => {
+        if (other.id === cand.id) return false;
+        const oLeave = getLeaveOriginMins(other);
+        const oArr = getDestArrMins(other);
+        const oWalk = getWalkTotal(other);
+        return (
+          oLeave >= cLeave &&
+          oArr <= cArr &&
+          oWalk <= cWalk &&
+          (oLeave > cLeave || oArr < cArr || oWalk < cWalk)
+        );
+      });
+      return !isDominated;
+    });
+
+  const nonDominated = filterNonDominated(onTimeCandidates);
   const pool = nonDominated.length > 0 ? nonDominated : onTimeCandidates;
 
-  // 4. Scelta del mezzo ottimale (soluzione più rapida, vicina ed efficiente):
-  //    Tra le corse raggiungibili nella prima finestra utile dopo l'arrivo del treno o da adesso,
-  //    privilegia l'arrivo anticipato a destinazione con la minore durata di viaggio e camminata a piedi.
-  //    (Es. bus alle 8:47 che impiega 16m -> arrivo 9:03 vs bus alle 8:50 che impiega 10m -> arrivo 9:00:
-  //    viene selezionato e suggerito quello delle 8:50 perché arriva prima a destinazione e risparmia tempo).
-  const sortedPool = [...pool].sort((a, b) => getDepMins(a) - getDepMins(b));
-  const firstDep = sortedPool.length > 0 ? getDepMins(sortedPool[0]) : 0;
+  // 4. Scelta del mezzo ottimale:
+  //    - In modalità uscita anticipata da lezione (preferLatestBeforeDeadline): procede a ritroso dal vincolo treno
+  //      per massimizzare l'orario di uscita dall'aula (perdendo il minor numero possibile di minuti di lezione),
+  //      bilanciando comunque la camminata a piedi tra opzioni equivalenti.
+  //    - In modalità standard (andata, ritorno post-lezione, live): privilegia il minor tempo a piedi complessivo,
+  //      l'arrivo anticipato a destinazione e la minore durata porta-a-porta nella prima finestra utile.
+  const useBackwardMinimizeLoss = Boolean(
+    options.preferLatestBeforeDeadline &&
+      direction === 'to_station' &&
+      deadlineMins > 0 &&
+      effectiveMinDepMins <= 0
+  );
 
-  // Finestra di connessione utile (corse entro 25 minuti dalla prima partenza raggiungibile)
-  const immediateWindow = sortedPool.filter((d) => getDepMins(d) <= firstDep + 25);
-  const candidates = immediateWindow.length > 0 ? immediateWindow : sortedPool.slice(0, 4);
+  let chosen: TransitDepartureItem | undefined;
 
-  const chooseBest = (list: TransitDepartureItem[]): TransitDepartureItem => {
-    return list.reduce((best, curr) => {
+  if (useBackwardMinimizeLoss) {
+    const latestPool = [...pool].sort((a, b) => {
+      const aLeave = getLeaveOriginMins(a);
+      const bLeave = getLeaveOriginMins(b);
+      if (bLeave !== aLeave) return bLeave - aLeave;
+      const aWalk = getWalkTotal(a);
+      const bWalk = getWalkTotal(b);
+      if (aWalk !== bWalk) return aWalk - bWalk;
+      const aDoor = getDoorToDoorMins(a);
+      const bDoor = getDoorToDoorMins(b);
+      if (aDoor !== bDoor) return aDoor - bDoor;
+      if (a.transfersCount !== b.transfersCount) return a.transfersCount - b.transfersCount;
+      return getDestArrMins(a) - getDestArrMins(b);
+    });
+    const maxLeaveOrigin = latestPool.length > 0 ? getLeaveOriginMins(latestPool[0]) : 0;
+    const lateWindow = latestPool.filter((d) => getLeaveOriginMins(d) >= maxLeaveOrigin - 5);
+    const lateCandidates = lateWindow.length > 0 ? lateWindow : latestPool.slice(0, 4);
+
+    const pickLeastLostLecture = (
+      best: TransitDepartureItem,
+      curr: TransitDepartureItem
+    ): TransitDepartureItem => {
+      const bLeave = getLeaveOriginMins(best);
+      const cLeave = getLeaveOriginMins(curr);
+      const leaveDiff = cLeave - bLeave; // positivo se curr permette di uscire dall'aula più tardi
+      const bWalk = getWalkTotal(best);
+      const cWalk = getWalkTotal(curr);
+      const walkDiff = cWalk - bWalk; // negativo se curr ha meno minuti a piedi
+
+      // Se l'orario di uscita dall'aula è praticamente identico (<= 1 min di scarto),
+      // privilegia la corsa con sensibilmente meno camminata (>= 3 min in meno).
+      if (Math.abs(leaveDiff) <= 1 && Math.abs(walkDiff) >= 3) {
+        return walkDiff < 0 ? curr : best;
+      }
+      // Obiettivo primario in uscita anticipata: uscire il più tardi possibile per perdere meno minuti di lezione
+      if (leaveDiff !== 0) {
+        return leaveDiff > 0 ? curr : best;
+      }
+      if (walkDiff !== 0) {
+        return walkDiff < 0 ? curr : best;
+      }
+      const bDoor = getDoorToDoorMins(best);
+      const cDoor = getDoorToDoorMins(curr);
+      if (cDoor !== bDoor) {
+        return cDoor < bDoor ? curr : best;
+      }
+      if (curr.transfersCount !== best.transfersCount) {
+        return curr.transfersCount < best.transfersCount ? curr : best;
+      }
       const bArr = getDestArrMins(best);
       const cArr = getDestArrMins(curr);
-      const bWalk = (best.walkBeforeMinutes || 0) + (best.walkAfterMinutes || 0);
-      const cWalk = (curr.walkBeforeMinutes || 0) + (curr.walkAfterMinutes || 0);
+      if (cArr > 0 && bArr > 0 && cArr !== bArr) {
+        return cArr < bArr ? curr : best;
+      }
+      return getDepMins(curr) > getDepMins(best) ? curr : best;
+    };
+
+    chosen =
+      lateCandidates.length > 0
+        ? lateCandidates.reduce((best, curr) => pickLeastLostLecture(best, curr), lateCandidates[0])
+        : departures[0];
+  } else {
+    const sortedPool = [...pool].sort(
+      (a, b) => getLeaveOriginMins(a) - getLeaveOriginMins(b) || getDepMins(a) - getDepMins(b)
+    );
+    const firstLeaveOrigin = sortedPool.length > 0 ? getLeaveOriginMins(sortedPool[0]) : 0;
+
+    // Finestra di connessione utile (corse con partenza dall'origine entro 25 minuti dalla prima opzione raggiungibile)
+    const immediateWindow = sortedPool.filter(
+      (d) => getLeaveOriginMins(d) <= firstLeaveOrigin + 25
+    );
+    const candidates = immediateWindow.length > 0 ? immediateWindow : sortedPool.slice(0, 4);
+
+    const pickMoreEfficient = (
+      best: TransitDepartureItem,
+      curr: TransitDepartureItem
+    ): TransitDepartureItem => {
+      const bArr = getDestArrMins(best);
+      const cArr = getDestArrMins(curr);
+      const bWalk = getWalkTotal(best);
+      const cWalk = getWalkTotal(curr);
       const walkDiff = cWalk - bWalk; // negativo se curr ha una camminata a piedi inferiore
 
       // Criterio 1: MINOR TEMPO A PIEDI.
@@ -1312,9 +1432,11 @@ export function findOptimalTransitDeparture(
         return walkDiff < 0 ? curr : best;
       }
 
-      // Criterio 4: Minore durata complessiva / tempo effettivo a bordo
-      if (curr.durationMinutes !== best.durationMinutes) {
-        return curr.durationMinutes < best.durationMinutes ? curr : best;
+      // Criterio 4: Minore durata porta-a-porta complessiva (piedi + bordo + piedi)
+      const bDoor = getDoorToDoorMins(best);
+      const cDoor = getDoorToDoorMins(curr);
+      if (cDoor !== bDoor) {
+        return cDoor < bDoor ? curr : best;
       }
 
       // Criterio 5: Corsa diretta (meno cambi)
@@ -1322,12 +1444,21 @@ export function findOptimalTransitDeparture(
         return curr.transfersCount < best.transfersCount ? curr : best;
       }
 
-      // Criterio 6: Meno attesa a vuoto alla fermata di salita
-      return getDepMins(curr) > getDepMins(best) ? curr : best;
-    }, list[0]);
-  };
+      // Criterio 6: Partenza dall'origine meno anticipata (meno attesa a vuoto)
+      const bLeave = getLeaveOriginMins(best);
+      const cLeave = getLeaveOriginMins(curr);
+      if (cLeave !== bLeave) {
+        return cLeave > bLeave ? curr : best;
+      }
 
-  const chosen = candidates.length > 0 ? chooseBest(candidates) : departures[0];
+      return getDepMins(curr) > getDepMins(best) ? curr : best;
+    };
+
+    chosen =
+      candidates.length > 0
+        ? candidates.reduce((best, curr) => pickMoreEfficient(best, curr), candidates[0])
+        : departures[0];
+  }
 
   if (chosen) {
     chosen.isSuggested = true;
@@ -1341,9 +1472,65 @@ export function findOptimalTransitDeparture(
     departures[optimalIndex].isOptimal = true;
   }
 
+  // 5. Individua l'ultima corsa utile per non mancare il vincolo (treno o inizio lezione comprensivo di anticipo):
+  //    - non può MAI precedere nella lista cronologica la corsa consigliata (lastUsefulIndex >= optimalIndex);
+  //    - tra le corse nella fascia più tarda utile (entro 1 min dall'uscita massima dall'origine),
+  //      privilegia quella che arriva prima delle altre con la durata TOTALE porta-a-porta più breve.
+  let lastUseful: TransitDepartureItem | undefined = undefined;
+  let lastUsefulIndex: number | undefined = undefined;
+  const lastUsefulCandidates =
+    strictEffectiveMatches.length > 0
+      ? strictEffectiveMatches
+      : strictWithinDeadlineMatches;
+  if (deadlineMins > 0 && lastUsefulCandidates.length > 0) {
+    const eligibleLastCandidates = lastUsefulCandidates.filter((d) => {
+      const dIdx = departures.findIndex((x) => x.id === d.id);
+      return dIdx >= optimalIndex;
+    });
+    const scopedLastCandidates =
+      eligibleLastCandidates.length > 0 ? eligibleLastCandidates : lastUsefulCandidates;
+    const nonDomLast = filterNonDominated(scopedLastCandidates);
+    const lastUsefulPool = nonDomLast.length > 0 ? nonDomLast : scopedLastCandidates;
+
+    const maxLastLeave = lastUsefulPool.reduce(
+      (maxM, d) => Math.max(maxM, getLeaveOriginMins(d)),
+      -Infinity
+    );
+    const finalTier = lastUsefulPool.filter((d) => getLeaveOriginMins(d) >= maxLastLeave - 1);
+    const tierPool = finalTier.length > 0 ? finalTier : lastUsefulPool;
+
+    const sortedForLast = [...tierPool].sort((a, b) => {
+      const aArr = getDestArrMins(a);
+      const bArr = getDestArrMins(b);
+      const aDoor = getDoorToDoorMins(a);
+      const bDoor = getDoorToDoorMins(b);
+      if (aArr > 0 && bArr > 0) {
+        // Bilancia arrivo più anticipato e durata TOTALE porta-a-porta più breve
+        const aCombined = aArr + aDoor;
+        const bCombined = bArr + bDoor;
+        if (aCombined !== bCombined) return aCombined - bCombined;
+      }
+      if (aDoor !== bDoor) return aDoor - bDoor;
+      if (aArr > 0 && bArr > 0 && aArr !== bArr) return aArr - bArr;
+      if (a.transfersCount !== b.transfersCount) return a.transfersCount - b.transfersCount;
+      const aLeave = getLeaveOriginMins(a);
+      const bLeave = getLeaveOriginMins(b);
+      if (bLeave !== aLeave) return bLeave - aLeave;
+      return getDepMins(b) - getDepMins(a);
+    });
+    lastUseful = sortedForLast[0];
+
+    if (lastUseful) {
+      const foundLastIdx = departures.findIndex((d) => d.id === lastUseful!.id);
+      lastUsefulIndex = foundLastIdx >= 0 ? foundLastIdx : optimalIndex;
+    }
+  }
+
   return {
     optimal: chosen || departures[0],
     optimalIndex,
+    lastUseful,
+    lastUsefulIndex,
   };
 }
 
@@ -1354,328 +1541,9 @@ export function buildStraightPolyline(
 }
 
 
-// ── CORRIDOI STRADALI VERIFICATI PER PULLMAN E TRAM SU VIA TIBURTINA (DEVIAZIONE CANTIERE TRANVIA) ──
-// Andata (Sud-Ovest verso Castro Laurenziano / Verano):
-// Transito continuo sulla carreggiata laterale nord-ovest (Way 142371901 + 1330675123 + 142371900 + 31860828),
-// evitando la sede centrale chiusa per i lavori della tranvia Verano-Tiburtina, senza zig-zag o tratti contromano.
-export const TIBURTINA_OUTBOUND_TO_CASTRO: LatLngPoint[] = [
-  // Capolinea bus Stazione Tiburtina (Piazzale della Stazione Tiburtina)
-  { latitude: 41.909550, longitude: 12.530377 },
-  { latitude: 41.909650, longitude: 12.530050 },
-  { latitude: 41.909454, longitude: 12.529797 },
-  { latitude: 41.909290, longitude: 12.529830 },
-  { latitude: 41.908970, longitude: 12.529677 },
-  { latitude: 41.908787, longitude: 12.529303 },
-  { latitude: 41.908703, longitude: 12.529090 },
-  { latitude: 41.908615, longitude: 12.528888 },
-  { latitude: 41.908585, longitude: 12.528822 },
-  // Curva attraverso Piazza delle Crociate verso l'immissione su Via Tiburtina
-  { latitude: 41.908530, longitude: 12.528150 },
-  { latitude: 41.908480, longitude: 12.527450 },
-  { latitude: 41.908400, longitude: 12.526800 },
-  { latitude: 41.908220, longitude: 12.526250 },
-  // Fermata Tiburtina / Crociate (banchina laterale ordinaria)
-  { latitude: 41.908035, longitude: 12.525917 },
-  // Carreggiata laterale nord-ovest di Via Tiburtina (Way 142371901)
-  { latitude: 41.907991, longitude: 12.525408 },
-  { latitude: 41.907954, longitude: 12.525295 },
-  { latitude: 41.907927, longitude: 12.525210 },
-  { latitude: 41.907901, longitude: 12.525127 },
-  { latitude: 41.907869, longitude: 12.525035 },
-  { latitude: 41.907833, longitude: 12.524936 },
-  { latitude: 41.907794, longitude: 12.524842 },
-  { latitude: 41.907682, longitude: 12.524577 },
-  { latitude: 41.907618, longitude: 12.524440 },
-  { latitude: 41.907548, longitude: 12.524303 },
-  { latitude: 41.907433, longitude: 12.524105 },
-  { latitude: 41.907310, longitude: 12.523907 },
-  { latitude: 41.907150, longitude: 12.523672 },
-  { latitude: 41.907026, longitude: 12.523494 },
-  { latitude: 41.906890, longitude: 12.523314 },
-  { latitude: 41.906765, longitude: 12.523160 },
-  { latitude: 41.906630, longitude: 12.523004 },
-  { latitude: 41.906499, longitude: 12.522865 },
-  { latitude: 41.906370, longitude: 12.522728 },
-  // Fermata Tiburtina / Valerio Massimo (banchina laterale ordinaria)
-  { latitude: 41.905884, longitude: 12.522221 },
-  // Prosecuzione su viabilità laterale nord-ovest (Way 1330675123 + 142371900 + 31860828)
-  { latitude: 41.905799, longitude: 12.522134 },
-  { latitude: 41.905350, longitude: 12.521657 },
-  { latitude: 41.904697, longitude: 12.521016 },
-  { latitude: 41.904408, longitude: 12.520742 },
-  { latitude: 41.904052, longitude: 12.520436 },
-  // Fermata Tiburtina / Castro Laurenziano (banchina laterale sul marciapiede davanti Via del Castro Laurenziano)
-  { latitude: 41.903932, longitude: 12.520330 },
-];
 
-export const TIBURTINA_OUTBOUND_TO_VERANO: LatLngPoint[] = [
-  ...TIBURTINA_OUTBOUND_TO_CASTRO,
-  { latitude: 41.903859, longitude: 12.520286 },
-  { latitude: 41.903567, longitude: 12.520106 },
-  { latitude: 41.903187, longitude: 12.519780 },
-  { latitude: 41.902640, longitude: 12.519320 },
-  { latitude: 41.902190, longitude: 12.518908 }, // Piazzale del Verano
-];
 
-export const TIBURTINA_OUTBOUND_TO_SAN_LORENZO: LatLngPoint[] = [
-  { latitude: 41.909553, longitude: 12.530307 },
-  { latitude: 41.909665, longitude: 12.530232 },
-  { latitude: 41.909640, longitude: 12.530159 },
-  { latitude: 41.909615, longitude: 12.530086 },
-  { latitude: 41.909611, longitude: 12.530075 },
-  { latitude: 41.909591, longitude: 12.530017 },
-  { latitude: 41.909578, longitude: 12.529983 },
-  { latitude: 41.909564, longitude: 12.529942 },
-  { latitude: 41.909542, longitude: 12.529875 },
-  { latitude: 41.909517, longitude: 12.529801 },
-  { latitude: 41.909437, longitude: 12.529797 },
-  { latitude: 41.909370, longitude: 12.529782 },
-  { latitude: 41.909300, longitude: 12.529793 },
-  { latitude: 41.909253, longitude: 12.529806 },
-  { latitude: 41.909234, longitude: 12.529809 },
-  { latitude: 41.909212, longitude: 12.529809 },
-  { latitude: 41.909198, longitude: 12.529808 },
-  { latitude: 41.909182, longitude: 12.529804 },
-  { latitude: 41.909161, longitude: 12.529798 },
-  { latitude: 41.909137, longitude: 12.529788 },
-  { latitude: 41.909105, longitude: 12.529772 },
-  { latitude: 41.909073, longitude: 12.529747 },
-  { latitude: 41.909041, longitude: 12.529717 },
-  { latitude: 41.909014, longitude: 12.529686 },
-  { latitude: 41.908991, longitude: 12.529657 },
-  { latitude: 41.908965, longitude: 12.529622 },
-  { latitude: 41.908935, longitude: 12.529575 },
-  { latitude: 41.908912, longitude: 12.529525 },
-  { latitude: 41.908868, longitude: 12.529411 },
-  { latitude: 41.908732, longitude: 12.529037 },
-  { latitude: 41.908657, longitude: 12.528828 },
-  { latitude: 41.908614, longitude: 12.528696 },
-  { latitude: 41.908589, longitude: 12.528612 },
-  { latitude: 41.908581, longitude: 12.528575 },
-  { latitude: 41.908578, longitude: 12.528545 },
-  { latitude: 41.908575, longitude: 12.528520 },
-  { latitude: 41.908565, longitude: 12.528265 },
-  { latitude: 41.908547, longitude: 12.527958 },
-  { latitude: 41.908440, longitude: 12.527424 },
-  { latitude: 41.908415, longitude: 12.527295 },
-  { latitude: 41.908408, longitude: 12.527266 },
-  { latitude: 41.908398, longitude: 12.527231 },
-  { latitude: 41.908389, longitude: 12.527202 },
-  { latitude: 41.908371, longitude: 12.527146 },
-  { latitude: 41.908286, longitude: 12.526915 },
-  { latitude: 41.908224, longitude: 12.526632 },
-  { latitude: 41.908136, longitude: 12.526298 },
-  { latitude: 41.908097, longitude: 12.526148 },
-  { latitude: 41.908041, longitude: 12.525940 },
-  { latitude: 41.907993, longitude: 12.525765 },
-  { latitude: 41.907990, longitude: 12.525757 },
-  { latitude: 41.907983, longitude: 12.525729 },
-  { latitude: 41.907946, longitude: 12.525590 },
-  { latitude: 41.907874, longitude: 12.525336 },
-  { latitude: 41.907790, longitude: 12.525077 },
-  { latitude: 41.907718, longitude: 12.524874 },
-  { latitude: 41.907590, longitude: 12.524573 },
-  { latitude: 41.907440, longitude: 12.524293 },
-  { latitude: 41.907291, longitude: 12.524042 },
-  { latitude: 41.907090, longitude: 12.523751 },
-  { latitude: 41.907113, longitude: 12.523721 },
-  { latitude: 41.907150, longitude: 12.523672 },
-  { latitude: 41.907026, longitude: 12.523494 },
-  { latitude: 41.906890, longitude: 12.523314 },
-  { latitude: 41.906765, longitude: 12.523160 },
-  { latitude: 41.906630, longitude: 12.523004 },
-  { latitude: 41.906499, longitude: 12.522865 },
-  { latitude: 41.906370, longitude: 12.522728 },
-  { latitude: 41.905883, longitude: 12.522221 },
-  { latitude: 41.905799, longitude: 12.522133 },
-  { latitude: 41.905350, longitude: 12.521657 },
-  { latitude: 41.904698, longitude: 12.521016 },
-  { latitude: 41.904408, longitude: 12.520742 },
-  { latitude: 41.904052, longitude: 12.520436 },
-  { latitude: 41.903902, longitude: 12.520316 },
-  { latitude: 41.903859, longitude: 12.520286 },
-  { latitude: 41.903567, longitude: 12.520106 },
-  { latitude: 41.903499, longitude: 12.520036 },
-  { latitude: 41.903439, longitude: 12.519976 },
-  { latitude: 41.903396, longitude: 12.519936 },
-  { latitude: 41.903073, longitude: 12.519677 },
-  { latitude: 41.903050, longitude: 12.519656 },
-  { latitude: 41.903026, longitude: 12.519636 },
-  { latitude: 41.903013, longitude: 12.519621 },
-  { latitude: 41.902997, longitude: 12.519605 },
-  { latitude: 41.902931, longitude: 12.519541 },
-  { latitude: 41.902886, longitude: 12.519494 },
-  { latitude: 41.902815, longitude: 12.519401 },
-  { latitude: 41.902790, longitude: 12.519339 },
-  { latitude: 41.902781, longitude: 12.519318 },
-  { latitude: 41.902759, longitude: 12.519303 },
-  { latitude: 41.902599, longitude: 12.519200 },
-  { latitude: 41.902559, longitude: 12.519174 },
-  { latitude: 41.902449, longitude: 12.519092 },
-  { latitude: 41.902287, longitude: 12.518971 },
-  { latitude: 41.902194, longitude: 12.518901 },
-  { latitude: 41.902138, longitude: 12.518861 },
-  { latitude: 41.901985, longitude: 12.518752 },
-  { latitude: 41.901965, longitude: 12.518779 },
-  { latitude: 41.901954, longitude: 12.518800 },
-  { latitude: 41.901945, longitude: 12.518819 },
-  { latitude: 41.901830, longitude: 12.518728 },
-  { latitude: 41.901599, longitude: 12.518554 },
-  { latitude: 41.900829, longitude: 12.517968 },
-  { latitude: 41.900474, longitude: 12.517704 },
-  { latitude: 41.900188, longitude: 12.517461 },
-  { latitude: 41.900002, longitude: 12.517309 },
-  { latitude: 41.899908, longitude: 12.517233 },
-  { latitude: 41.899866, longitude: 12.517147 },
-  { latitude: 41.899726, longitude: 12.516874 },
-  { latitude: 41.899818, longitude: 12.516788 },
-];
 
-// Ritorno (Nord-Est verso Stazione Tiburtina):
-// Transito continuo sulla carreggiata laterale sud-est (Way 23036876 + 51081970 + 122080729 + 1448323550)
-export const TIBURTINA_INBOUND_FROM_CASTRO: LatLngPoint[] = [
-  // Fermata Tiburtina / Castro Laurenziano (ritorno su carreggiata laterale sud-est)
-  { latitude: 41.903813, longitude: 12.520513 },
-  { latitude: 41.904057, longitude: 12.520715 },
-  { latitude: 41.904215, longitude: 12.520850 },
-  { latitude: 41.904404, longitude: 12.521016 },
-  { latitude: 41.904600, longitude: 12.521198 },
-  { latitude: 41.904974, longitude: 12.521568 },
-  { latitude: 41.905291, longitude: 12.521893 },
-  { latitude: 41.905540, longitude: 12.522163 },
-  // Fermata Tiburtina / Valerio Massimo (ritorno)
-  { latitude: 41.905772, longitude: 12.522396 },
-  { latitude: 41.905930, longitude: 12.522562 },
-  { latitude: 41.906220, longitude: 12.522871 },
-  { latitude: 41.906339, longitude: 12.522997 },
-  { latitude: 41.906539, longitude: 12.523211 },
-  { latitude: 41.906603, longitude: 12.523283 },
-  { latitude: 41.906668, longitude: 12.523357 },
-  { latitude: 41.906734, longitude: 12.523444 },
-  { latitude: 41.906798, longitude: 12.523527 },
-  { latitude: 41.907010, longitude: 12.523810 },
-  { latitude: 41.907165, longitude: 12.524040 },
-  { latitude: 41.907349, longitude: 12.524346 },
-  { latitude: 41.907511, longitude: 12.524656 },
-  { latitude: 41.907636, longitude: 12.524942 },
-  { latitude: 41.907700, longitude: 12.525112 },
-  { latitude: 41.907842, longitude: 12.525546 },
-  // Fermata Tiburtina / Crociate (ritorno su corsia laterale sud-est)
-  { latitude: 41.907907, longitude: 12.525800 },
-  // Immissione su Piazza delle Crociate e prosecuzione su Via della Stazione Tiburtina
-  { latitude: 41.908100, longitude: 12.526050 },
-  { latitude: 41.908220, longitude: 12.526250 },
-  { latitude: 41.908400, longitude: 12.526800 },
-  { latitude: 41.908480, longitude: 12.527450 },
-  { latitude: 41.908530, longitude: 12.528150 },
-  { latitude: 41.908585, longitude: 12.528822 },
-  { latitude: 41.908615, longitude: 12.528888 },
-  { latitude: 41.908703, longitude: 12.529090 },
-  { latitude: 41.908787, longitude: 12.529303 },
-  { latitude: 41.908970, longitude: 12.529677 },
-  { latitude: 41.909290, longitude: 12.529830 },
-  { latitude: 41.909454, longitude: 12.529797 },
-  { latitude: 41.909650, longitude: 12.530050 },
-  { latitude: 41.909550, longitude: 12.530377 }, // Piazzale Stazione Tiburtina
-];
-
-export const TIBURTINA_INBOUND_FROM_VERANO: LatLngPoint[] = [
-  { latitude: 41.902190, longitude: 12.518908 }, // Piazzale del Verano
-  { latitude: 41.902640, longitude: 12.519320 },
-  { latitude: 41.903187, longitude: 12.519780 },
-  { latitude: 41.903567, longitude: 12.520106 },
-  ...TIBURTINA_INBOUND_FROM_CASTRO,
-];
-
-export const TIBURTINA_INBOUND_FROM_SAN_LORENZO: LatLngPoint[] = [
-  { latitude: 41.899818, longitude: 12.516788 },
-  { latitude: 41.899726, longitude: 12.516874 },
-  { latitude: 41.899866, longitude: 12.517147 },
-  { latitude: 41.899908, longitude: 12.517233 },
-  { latitude: 41.899935, longitude: 12.517274 },
-  { latitude: 41.899974, longitude: 12.517338 },
-  { latitude: 41.900018, longitude: 12.517407 },
-  { latitude: 41.900065, longitude: 12.517454 },
-  { latitude: 41.900155, longitude: 12.517535 },
-  { latitude: 41.900430, longitude: 12.517796 },
-  { latitude: 41.900920, longitude: 12.518248 },
-  { latitude: 41.901186, longitude: 12.518488 },
-  { latitude: 41.901503, longitude: 12.518753 },
-  { latitude: 41.901565, longitude: 12.518806 },
-  { latitude: 41.901674, longitude: 12.518895 },
-  { latitude: 41.901782, longitude: 12.518983 },
-  { latitude: 41.901954, longitude: 12.519112 },
-  { latitude: 41.902010, longitude: 12.519153 },
-  { latitude: 41.902209, longitude: 12.519292 },
-  { latitude: 41.902358, longitude: 12.519384 },
-  { latitude: 41.902451, longitude: 12.519498 },
-  { latitude: 41.902479, longitude: 12.519530 },
-  { latitude: 41.902516, longitude: 12.519568 },
-  { latitude: 41.902553, longitude: 12.519602 },
-  { latitude: 41.902604, longitude: 12.519646 },
-  { latitude: 41.902643, longitude: 12.519677 },
-  { latitude: 41.902887, longitude: 12.519853 },
-  { latitude: 41.902906, longitude: 12.519867 },
-  { latitude: 41.903284, longitude: 12.520153 },
-  { latitude: 41.903551, longitude: 12.520331 },
-  { latitude: 41.903813, longitude: 12.520513 },
-  { latitude: 41.904057, longitude: 12.520715 },
-  { latitude: 41.904215, longitude: 12.520850 },
-  { latitude: 41.904404, longitude: 12.521017 },
-  { latitude: 41.904600, longitude: 12.521198 },
-  { latitude: 41.904974, longitude: 12.521568 },
-  { latitude: 41.905291, longitude: 12.521894 },
-  { latitude: 41.905540, longitude: 12.522163 },
-  { latitude: 41.905772, longitude: 12.522396 },
-  { latitude: 41.905930, longitude: 12.522561 },
-  { latitude: 41.906220, longitude: 12.522871 },
-  { latitude: 41.906339, longitude: 12.522997 },
-  { latitude: 41.906539, longitude: 12.523211 },
-  { latitude: 41.906603, longitude: 12.523283 },
-  { latitude: 41.906668, longitude: 12.523357 },
-  { latitude: 41.906735, longitude: 12.523444 },
-  { latitude: 41.906798, longitude: 12.523527 },
-  { latitude: 41.907010, longitude: 12.523810 },
-  { latitude: 41.907029, longitude: 12.523835 },
-  { latitude: 41.907090, longitude: 12.523751 },
-  { latitude: 41.907291, longitude: 12.524042 },
-  { latitude: 41.907440, longitude: 12.524293 },
-  { latitude: 41.907590, longitude: 12.524573 },
-  { latitude: 41.907718, longitude: 12.524874 },
-  { latitude: 41.907790, longitude: 12.525077 },
-  { latitude: 41.907874, longitude: 12.525336 },
-  { latitude: 41.907946, longitude: 12.525590 },
-  { latitude: 41.907983, longitude: 12.525729 },
-  { latitude: 41.907990, longitude: 12.525757 },
-  { latitude: 41.907993, longitude: 12.525765 },
-  { latitude: 41.908041, longitude: 12.525940 },
-  { latitude: 41.908097, longitude: 12.526148 },
-  { latitude: 41.908136, longitude: 12.526298 },
-  { latitude: 41.908224, longitude: 12.526632 },
-  { latitude: 41.908219, longitude: 12.527001 },
-  { latitude: 41.908217, longitude: 12.527161 },
-  { latitude: 41.908216, longitude: 12.527199 },
-  { latitude: 41.908245, longitude: 12.527531 },
-  { latitude: 41.908273, longitude: 12.527716 },
-  { latitude: 41.908317, longitude: 12.527967 },
-  { latitude: 41.908369, longitude: 12.528223 },
-  { latitude: 41.908379, longitude: 12.528262 },
-  { latitude: 41.908388, longitude: 12.528299 },
-  { latitude: 41.908400, longitude: 12.528338 },
-  { latitude: 41.908411, longitude: 12.528375 },
-  { latitude: 41.908453, longitude: 12.528492 },
-  { latitude: 41.908599, longitude: 12.528862 },
-  { latitude: 41.908941, longitude: 12.529836 },
-  { latitude: 41.909058, longitude: 12.530155 },
-  { latitude: 41.909073, longitude: 12.530188 },
-  { latitude: 41.909099, longitude: 12.530257 },
-  { latitude: 41.909130, longitude: 12.530330 },
-  { latitude: 41.909158, longitude: 12.530400 },
-  { latitude: 41.909187, longitude: 12.530470 },
-  { latitude: 41.909214, longitude: 12.530534 },
-  { latitude: 41.909275, longitude: 12.530493 },
-  { latitude: 41.909530, longitude: 12.530323 },
-];
 
 /**
  * Risultato tabellone dinamico vuoto per corse non attive o rete non raggiungibile.
@@ -1745,65 +1613,45 @@ function buildBoardCacheEntry(
   };
 }
 
-function inferCorridorIntermediateStops(
-  fromName: string,
-  toName: string,
-  mode: string
-): { names: string[]; coords: { name: string; lat: number; lng: number }[] } {
-  const normFrom = (fromName || '').toLowerCase();
-  const normTo = (toName || '').toLowerCase();
-
-  // Corridoio Via Tiburtina <-> Castro Laurenziano / Verano (qualsiasi bus urbano)
-  const isTib = normFrom.includes('tiburtina') || normTo.includes('tiburtina');
-  const isCastroOrVerano =
-    normFrom.includes('castro') || normTo.includes('castro') ||
-    normFrom.includes('verano') || normTo.includes('verano');
-
-  if (isTib && isCastroOrVerano && mode !== 'subway' && mode !== 'metro') {
-    const isOutbound = normTo.includes('castro') || normTo.includes('verano');
-    const stops = isOutbound
-      ? [
-          { name: 'Tiburtina / Crociate', lat: 41.908035, lng: 12.525917 },
-          { name: 'Tiburtina / Valerio Massimo', lat: 41.905884, lng: 12.522221 },
-        ]
-      : [
-          { name: 'Tiburtina / Valerio Massimo', lat: 41.905772, lng: 12.522396 },
-          { name: 'Tiburtina / Crociate', lat: 41.907907, lng: 12.525800 },
-        ];
-    return { names: stops.map((s) => s.name), coords: stops };
+function isStopInsideStationHub(
+  stationCoords: { lat: number; lng: number },
+  stopCoords: { lat: number; lng: number },
+  stationName: string,
+  stopName: string
+): boolean {
+  const distMeters = haversineMeters(
+    { latitude: stationCoords.lat, longitude: stationCoords.lng },
+    { latitude: stopCoords.lat, longitude: stopCoords.lng }
+  );
+  // Entro 135m dal punto stazione (banchine del piazzale o accesso metro della stazione stessa)
+  if (distMeters <= 135) return true;
+  // Fino a 260m se il nome della fermata identifica esplicitamente lo stesso hub di stazione
+  if (distMeters <= 260) {
+    const stToken =
+      (stationName || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\b(roma|stazione|staz\.?ne|fs|centrale|p\.?le|piazzale)\b/g, '')
+        .trim()
+        .split(/\s+/)[0] || '';
+    const stopLow = (stopName || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    const isExplicitHubTag =
+      stopLow.includes('staz') ||
+      stopLow.includes('(mb)') ||
+      stopLow.includes('(ma)') ||
+      stopLow.includes('(mc)') ||
+      stopLow.includes('(fs)') ||
+      stopLow.includes('piazzale') ||
+      stopLow.includes('capolinea');
+    if (stToken.length >= 3 && stopLow.includes(stToken) && isExplicitHubTag) {
+      return true;
+    }
   }
-
-  // Corridoio Tiburtina <-> Catania / Cremona (Linee 490, 495, 649)
-  const isCatania = normFrom.includes('catania') || normTo.includes('catania') ||
-                    normFrom.includes('cremona') || normTo.includes('cremona');
-  if (isTib && isCatania && mode !== 'subway' && mode !== 'metro') {
-    const isOutbound = normTo.includes('catania') || normTo.includes('cremona');
-    const stops = isOutbound
-      ? [
-          { name: 'Crociate', lat: 41.90825, lng: 12.52591 },
-          { name: 'Lega Lombarda / Provincie', lat: 41.90750, lng: 12.52210 },
-        ]
-      : [
-          { name: 'Lega Lombarda / Provincie', lat: 41.90750, lng: 12.52210 },
-          { name: 'Crociate', lat: 41.90825, lng: 12.52591 },
-        ];
-    return { names: stops.map((s) => s.name), coords: stops };
-  }
-
-  // Metro B Tiburtina <-> Policlinico
-  const isPoliclinico = normFrom.includes('policlinico') || normTo.includes('policlinico');
-  if (isTib && isPoliclinico && (mode === 'subway' || mode === 'metro')) {
-    const stop = [{ name: 'Bologna', lat: 41.9135, lng: 12.5218 }];
-    return { names: stop.map((s) => s.name), coords: stop };
-  }
-
-  // Bus 310 Policlinico <-> Castro Laurenziano
-  if (isPoliclinico && (normTo.includes('castro') || normFrom.includes('castro'))) {
-    const stop = [{ name: 'Regina Elena / Università', lat: 41.9042, lng: 12.5185 }];
-    return { names: stop.map((s) => s.name), coords: stop };
-  }
-
-  return { names: [], coords: [] };
+  return false;
 }
 
 /**
@@ -1821,6 +1669,8 @@ export async function getStationTransitBoard(options: {
   isLiveContext?: boolean;
   constraintTime?: string;
   minDepartureTime?: string;
+  arrivalBufferMinutes?: number;
+  preferLatestBeforeDeadline?: boolean;
   forceRefresh?: boolean;
   signal?: AbortSignal;
 }): Promise<TransitBoardResult> {
@@ -1835,9 +1685,20 @@ export async function getStationTransitBoard(options: {
     isLiveContext = false,
     constraintTime,
     minDepartureTime,
+    arrivalBufferMinutes,
+    preferLatestBeforeDeadline = false,
     forceRefresh = false,
     signal,
   } = options;
+
+  const effectiveAdvanceMins = Math.max(
+    0,
+    typeof arrivalBufferMinutes === 'number'
+      ? arrivalBufferMinutes
+      : direction === 'to_station'
+        ? 5
+        : 0
+  );
 
   const stCoords = providedStCoords || resolveStationCoordinates(stationName);
 
@@ -1857,7 +1718,7 @@ export async function getStationTransitBoard(options: {
   const destLat = direction === 'to_station' ? stCoords.lat : tgCoords.lat;
   const destLng = direction === 'to_station' ? stCoords.lng : tgCoords.lng;
 
-  const cacheKey = `${direction}|${originLat.toFixed(4)},${originLng.toFixed(4)}|${destLat.toFixed(4)},${destLng.toFixed(4)}|${targetDate || 'today'}|${targetTime || ''}|${constraintTime || ''}|${minDepartureTime || ''}|${isLiveContext ? 'live' : 'sched'}`;
+  const cacheKey = `${direction}|${originLat.toFixed(4)},${originLng.toFixed(4)}|${destLat.toFixed(4)},${destLng.toFixed(4)}|${targetDate || 'today'}|${targetTime || ''}|${constraintTime || ''}|${minDepartureTime || ''}|buf:${effectiveAdvanceMins}|${preferLatestBeforeDeadline ? 'late' : 'std'}|${isLiveContext ? 'live' : 'sched'}`;
   const baseCacheKey = `${direction}|${originLat.toFixed(4)},${originLng.toFixed(4)}|${destLat.toFixed(4)},${destLng.toFixed(4)}|${targetDate || 'today'}|${isLiveContext ? 'live' : 'sched'}`;
   const reqConstraintMins = parseHHMMToMins(constraintTime);
   const reqMinDepMins = parseHHMMToMins(minDepartureTime);
@@ -1909,17 +1770,43 @@ export async function getStationTransitBoard(options: {
         isOptimal: false,
       }));
 
-      if (direction === 'to_campus' && reqMinDepMins > 0) {
-        reusedDeps = reusedDeps.filter((d) => {
-          const depM = parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime);
-          return depM >= 0 && depM - (d.walkBeforeMinutes || 0) >= reqMinDepMins - 1;
+      const nowForReuse = new Date().getHours() * 60 + new Date().getMinutes();
+      const isNowReuse = isLiveContext || targetTime === 'now';
+      const reuseRefMins = isNowReuse
+        ? nowForReuse
+        : reqMinDepMins > 0
+          ? reqMinDepMins
+          : reqConstraintMins > 0
+            ? Math.max(0, reqConstraintMins - 60)
+            : nowForReuse;
+
+      if (reqMinDepMins > 0 || isNowReuse) {
+        const effectiveReuseMin = isNowReuse
+          ? Math.max(
+              nowForReuse,
+              reqMinDepMins > 0 ? unwrapMinutesFromRef(reqMinDepMins, nowForReuse) : 0
+            )
+          : unwrapMinutesFromRef(reqMinDepMins, reuseRefMins);
+        const reachableFromOrigin = reusedDeps.filter((d) => {
+          const depM = unwrapMinutesFromRef(
+            parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime),
+            reuseRefMins
+          );
+          return depM >= 0 && depM - (d.walkBeforeMinutes || 0) >= effectiveReuseMin;
         });
+        reusedDeps = reachableFromOrigin;
       } else if (direction === 'to_station' && reqConstraintMins > 0) {
+        const relConstraint = unwrapMinutesFromRef(reqConstraintMins, reuseRefMins);
         const beforeTrain = reusedDeps.filter((d) => {
           const arrM = parseHHMMToMins(d.arrivalTime);
-          if (arrM >= 0) return arrM <= reqConstraintMins + 2;
+          if (arrM >= 0) {
+            return unwrapMinutesFromRef(arrM, reuseRefMins) <= relConstraint + 2;
+          }
           const depM = parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime);
-          return depM >= 0 && depM + d.durationMinutes <= reqConstraintMins + 2;
+          return (
+            depM >= 0 &&
+            unwrapMinutesFromRef(depM, reuseRefMins) + d.durationMinutes <= relConstraint + 2
+          );
         });
         if (beforeTrain.length > 0) {
           reusedDeps = beforeTrain;
@@ -1928,12 +1815,14 @@ export async function getStationTransitBoard(options: {
 
       if (reusedDeps.length === 0) continue;
 
-      const { optimal, optimalIndex } = findOptimalTransitDeparture(reusedDeps, {
+      const { optimal, optimalIndex, lastUseful, lastUsefulIndex } = findOptimalTransitDeparture(reusedDeps, {
         direction,
         isLiveContext,
         constraintTime,
         minDepartureTime,
         targetTime,
+        arrivalBufferMinutes: effectiveAdvanceMins,
+        preferLatestBeforeDeadline,
       });
 
       const directSet = new Set<string>();
@@ -1950,6 +1839,10 @@ export async function getStationTransitBoard(options: {
         departures: reusedDeps,
         optimalDeparture: optimal,
         optimalIndex,
+        lastUsefulDeparture: lastUseful,
+        lastUsefulIndex,
+        arrivalBufferMinutes: effectiveAdvanceMins,
+        preferLatestBeforeDeadline,
       };
     }
 
@@ -1966,30 +1859,51 @@ export async function getStationTransitBoard(options: {
     const minDepMins = parseHHMMToMins(minDepartureTime);
 
     // Determina la strategia di interrogazione:
-    // - In ANDATA (to_campus): la lista nella card "Mezzi" mostra i primi pullman/metro in partenza subito dopo l'arrivo del treno (o da adesso se già in stazione),
-    //   mentre la card esterna della tappa usa anche la query arriveBy sulla lezione per riportare l'ultimo mezzo utile per arrivare in tempo.
-    // - Nel RITORNO (to_station): mostra le corse che permettono di arrivare in stazione in tempo per il treno (arriveBy).
+    // - In ANDATA (to_campus): la lista nella card "Mezzi" mostra i primi pullman/metro efficienti subito dopo l'arrivo del treno (o da adesso se già in stazione),
+    //   e se la lezione è più avanti interroga in parallelo con arriveBy=true per individuare anche l'ultima corsa utile.
+    // - Nel RITORNO (to_station): in condizioni live o con minDepartureTime definito (fine lezione / partenza immediata),
+    //   interroga a partire da adesso / fine lezione con useArriveBy=false per privilegiare il mezzo più efficiente,
+    //   ed esegue in parallelo arriveBy=true prima del treno per mostrare l'ultima corsa utile sulla timeline.
     let useArriveBy = false;
     let queryTimeForApi = targetTime;
+    const relConstraintFromNow =
+      constraintMins > 0 ? unwrapMinutesFromRef(constraintMins, nowMins) : -1;
+    const relMinDepFromNow =
+      minDepMins > 0 ? unwrapMinutesFromRef(minDepMins, nowMins) : -1;
+    const relConstraintFromMinDep =
+      constraintMins > 0 && minDepMins > 0
+        ? unwrapMinutesFromRef(constraintMins, minDepMins)
+        : constraintMins;
 
     if (!isLiveContext) {
-      if (direction === 'to_station' && constraintMins > 0) {
-        // Arrivare in stazione almeno 2 minuti prima della partenza del treno
-        queryTimeForApi = minsToHHMM(constraintMins - 2);
-        useArriveBy = true;
+      if (direction === 'to_station') {
+        if (minDepMins > 0) {
+          // In modalità standard con fine lezione nota, interroga sempre a partire dalla fine della lezione
+          queryTimeForApi = minsToHHMM(minDepMins);
+          useArriveBy = false;
+        } else if (constraintMins >= 0) {
+          // Modalità uscita anticipata / senza fine lezione: arriva in stazione con l'anticipo configurato prima del treno
+          queryTimeForApi = minsToHHMM((constraintMins - effectiveAdvanceMins + 1440) % 1440);
+          useArriveBy = true;
+        }
       } else if (direction === 'to_campus' && minDepMins > 0) {
         // In andata mostra sempre i primi mezzi subito dopo l'arrivo del treno in stazione
         queryTimeForApi = minsToHHMM(minDepMins);
         useArriveBy = false;
-      } else if (direction === 'to_campus' && constraintMins > 0) {
-        queryTimeForApi = minsToHHMM(constraintMins);
+      } else if (direction === 'to_campus' && constraintMins >= 0) {
+        queryTimeForApi = minsToHHMM((constraintMins - effectiveAdvanceMins + 1440) % 1440);
         useArriveBy = true;
       }
     } else {
-      if (direction === 'to_station' && constraintMins > nowMins + 15) {
-        queryTimeForApi = minsToHHMM(constraintMins - 2);
-        useArriveBy = true;
-      } else if (direction === 'to_campus' && minDepMins > nowMins + 2) {
+      if (direction === 'to_station') {
+        if (relMinDepFromNow > nowMins + 2) {
+          queryTimeForApi = minsToHHMM(minDepMins);
+          useArriveBy = false;
+        } else {
+          queryTimeForApi = 'now';
+          useArriveBy = false;
+        }
+      } else if (direction === 'to_campus' && relMinDepFromNow > nowMins + 2) {
         // Il treno non è ancora arrivato alla stazione di Roma: interroga subito dopo l'arrivo del treno
         queryTimeForApi = minsToHHMM(minDepMins);
         useArriveBy = false;
@@ -2003,20 +1917,46 @@ export async function getStationTransitBoard(options: {
       isLiveContext && queryTimeForApi === 'now' ? undefined : targetDate,
       queryTimeForApi
     );
-    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${originLat.toFixed(5)},${originLng.toFixed(5)}&toPlace=${destLat.toFixed(5)},${destLng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20`;
+    const [effectiveOrigin, effectiveDest] = await Promise.all([
+      resolveEffectiveEndpointForRouting(
+        { lat: originLat, lng: originLng },
+        direction === 'to_station'
+      ),
+      resolveEffectiveEndpointForRouting(
+        { lat: destLat, lng: destLng },
+        direction === 'to_campus'
+      ),
+    ]);
+    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20`;
 
-    // In andata, solo se la lezione inizia molto più avanti (> 55 min) rispetto all'arrivo del treno,
-    // interroga in parallelo anche con arriveBy=true sull'inizio della lezione (i 20 itinerari di planUrl coprono già ~45-55 min).
-    const secondaryDepUrl =
-      !useArriveBy &&
-      direction === 'to_campus' &&
-      constraintMins > 0 &&
-      minDepMins > 0 &&
-      constraintMins > minDepMins + 55
-        ? `https://api.transitous.org/api/v5/plan?fromPlace=${originLat.toFixed(5)},${originLng.toFixed(5)}&toPlace=${destLat.toFixed(5)},${destLng.toFixed(5)}&time=${encodeURIComponent(
-            buildQueryIsoTime(targetDate, minsToHHMM(constraintMins))
-          )}&arriveBy=true&numItineraries=15`
-        : null;
+    // Query secondaria con arriveBy=true sul vincolo comprensivo di anticipo per identificare con precisione l'ultima corsa utile
+    let secondaryDepUrl: string | null = null;
+    if (!useArriveBy && constraintMins >= 0) {
+      const startCheckMins = isLiveContext
+        ? Math.max(nowMins, relMinDepFromNow > 0 ? relMinDepFromNow : nowMins)
+        : minDepMins > 0
+          ? minDepMins
+          : nowMins;
+      const targetConstraintRel = isLiveContext ? relConstraintFromNow : relConstraintFromMinDep;
+      const targetEffectiveRel = targetConstraintRel - effectiveAdvanceMins;
+      const minGap =
+        preferLatestBeforeDeadline && direction === 'to_station'
+          ? 0
+          : direction === 'to_station'
+            ? 12
+            : 20;
+      if (targetEffectiveRel > startCheckMins + minGap) {
+        const secMins = (constraintMins - effectiveAdvanceMins + 1440) % 1440;
+        const secDayOffset =
+          (targetConstraintRel > 1439 ? 1 : 0) -
+          (constraintMins < effectiveAdvanceMins ? 1 : 0);
+        const secBaseDate = isLiveContext ? undefined : targetDate;
+        const secDate = resolveDateWithDayOffset(secBaseDate, secDayOffset);
+        secondaryDepUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(
+          buildQueryIsoTime(secDate, minsToHHMM(secMins))
+        )}&arriveBy=true&numItineraries=15`;
+      }
+    }
 
     try {
       const controller = new AbortController();
@@ -2068,6 +2008,158 @@ export async function getStationTransitBoard(options: {
         }
       }
       const itineraries: any[] = [...primaryItineraries, ...secondaryItineraries];
+
+      const existingTripIds = new Set<string>();
+      const preferredLinesHint = new Set<string>();
+      for (const it of itineraries) {
+        const trLegs = Array.isArray(it?.legs)
+          ? it.legs.filter((l: any) => l?.mode && l.mode !== 'WALK')
+          : [];
+        for (const tl of trLegs) {
+          if (tl?.tripId) existingTripIds.add(tl.tripId);
+          if (trLegs.length === 1 && tl?.routeShortName) {
+            preferredLinesHint.add(String(tl.routeShortName).trim().toUpperCase());
+          }
+        }
+      }
+
+      const corridorStartIso = useArriveBy
+        ? itineraries.reduce<string>((minIso, it) => {
+            const st = it?.startTime;
+            return st && (!minIso || st < minIso) ? st : minIso;
+          }, '') || new Date(new Date(queryIso).getTime() - 45 * 60000).toISOString()
+        : queryIso;
+
+      try {
+        const extraItins = await fetchCloserCorridorItineraries({
+          originCoords: effectiveOrigin,
+          destCoords: effectiveDest,
+          destName: direction === 'to_station' ? stationName : targetName,
+          queryIso: corridorStartIso,
+          windowMinutes: useArriveBy ? 75 : 120,
+          existingTripIds,
+          preferredLinesHint,
+        });
+        if (extraItins.length > 0) {
+          itineraries.push(...extraItins);
+        }
+      } catch {
+        // Arricchimento opzionale: prosegue con gli itinerari /plan principali
+      }
+
+      const originLeaveEpochMs = !useArriveBy ? new Date(queryIso).getTime() : undefined;
+      await Promise.all(
+        itineraries.slice(0, 18).map(async (it) => {
+          const legsArr = Array.isArray(it?.legs) ? it.legs : [];
+          const trIdxs = legsArr
+            .map((l: any, idx: number) => (l?.mode && l.mode !== 'WALK' ? idx : -1))
+            .filter((idx: number) => idx >= 0);
+          if (trIdxs.length !== 1) return;
+          const tIdx = trIdxs[0];
+          const optLeg = await optimizeSingleLegStopsViaTrip({
+            leg: legsArr[tIdx],
+            originCoords: effectiveOrigin,
+            destCoords: effectiveDest,
+            originLeaveEpochMs,
+          });
+          if (optLeg !== legsArr[tIdx]) {
+            legsArr[tIdx] = optLeg;
+          }
+        })
+      );
+
+      // Risolve dinamicamente i tragitti pedonali reali su marciapiede per le fermate uniche
+      // (eliminando giri viziosi da cortili interni OSM e velocità pedonali MOTIS troppo lente)
+      const uniqueBoardStops = new Map<string, { lat: number; lng: number; name: string }>();
+      const uniqueAlightStops = new Map<string, { lat: number; lng: number }>();
+      for (const it of itineraries) {
+        const legsArr = Array.isArray(it?.legs) ? it.legs : [];
+        const trLegs = legsArr.filter((l: any) => l?.mode && l.mode !== 'WALK');
+        if (trLegs.length === 0) continue;
+        const firstTr = trLegs[0];
+        const lastTr = trLegs[trLegs.length - 1];
+        if (typeof firstTr?.from?.lat === 'number' && typeof firstTr?.from?.lon === 'number') {
+          const k = `${firstTr.from.lat.toFixed(4)},${firstTr.from.lon.toFixed(4)}`;
+          if (!uniqueBoardStops.has(k) && uniqueBoardStops.size < 8) {
+            uniqueBoardStops.set(k, {
+              lat: firstTr.from.lat,
+              lng: firstTr.from.lon,
+              name: firstTr.from.name || '',
+            });
+          }
+        }
+        if (typeof lastTr?.to?.lat === 'number' && typeof lastTr?.to?.lon === 'number') {
+          const k = `${lastTr.to.lat.toFixed(4)},${lastTr.to.lon.toFixed(4)}`;
+          if (!uniqueAlightStops.has(k) && uniqueAlightStops.size < 8) {
+            uniqueAlightStops.set(k, { lat: lastTr.to.lat, lng: lastTr.to.lon });
+          }
+        }
+      }
+
+      const preWalkBeforeList: {
+        stop: { lat: number; lng: number };
+        metrics: { polyline: LatLngPoint[]; distanceMeters: number; minutes: number };
+      }[] = [];
+      const preWalkAfterList: {
+        stop: { lat: number; lng: number };
+        metrics: { polyline: LatLngPoint[]; distanceMeters: number; minutes: number };
+      }[] = [];
+
+      try {
+        const rawOrig = { lat: originLat, lng: originLng };
+        const rawDest = { lat: destLat, lng: destLng };
+        const [beforeResults, afterResults] = await Promise.all([
+          Promise.all(
+            Array.from(uniqueBoardStops.values()).map(async (stop) => {
+              if (
+                direction === 'to_campus' &&
+                isStopInsideStationHub(rawOrig, stop, stationName, stop.name)
+              ) {
+                return {
+                  stop,
+                  metrics: { polyline: [], distanceMeters: 0, minutes: 0 },
+                };
+              }
+              return {
+                stop,
+                metrics: await resolveWalkLegMetrics(rawOrig, stop),
+              };
+            })
+          ),
+          Promise.all(
+            Array.from(uniqueAlightStops.values()).map(async (stop) => ({
+              stop,
+              metrics: await resolveWalkLegMetrics(stop, rawDest),
+            }))
+          ),
+        ]);
+        preWalkBeforeList.push(...beforeResults);
+        preWalkAfterList.push(...afterResults);
+      } catch {
+        // fallback al calcolo locale esistente
+      }
+
+      const findPreWalkMatch = (
+        list: {
+          stop: { lat: number; lng: number };
+          metrics: { polyline: LatLngPoint[]; distanceMeters: number; minutes: number };
+        }[],
+        coord: { lat: number; lng: number }
+      ) => {
+        let best: { polyline: LatLngPoint[]; distanceMeters: number; minutes: number } | null = null;
+        let bestD = 160;
+        for (const item of list) {
+          const d = haversineMeters(
+            { latitude: item.stop.lat, longitude: item.stop.lng },
+            { latitude: coord.lat, longitude: coord.lng }
+          );
+          if (d < bestD) {
+            bestD = d;
+            best = item.metrics;
+          }
+        }
+        return best;
+      };
 
       if (itineraries.length === 0) {
         return {
@@ -2158,17 +2250,6 @@ export async function getStationTransitBoard(options: {
             };
           });
         let intermediateStopNames = intermediateStopCoords.map((s) => s.name);
-        if (intermediateStopNames.length === 0) {
-          const inferred = inferCorridorIntermediateStops(
-            primaryLeg.from?.name || '',
-            lastTransitLeg.to?.name || '',
-            (primaryLeg.mode || '').toLowerCase()
-          );
-          if (inferred.coords.length > 0) {
-            intermediateStopCoords.push(...inferred.coords);
-            intermediateStopNames = inferred.names;
-          }
-        }
 
         // OTTIMIZZAZIONE GENERICA PER IL MINOR TEMPO A PIEDI:
         // Si applica unicamente alle corse dirette (1 tratta transit):
@@ -2259,19 +2340,53 @@ export async function getStationTransitBoard(options: {
           walkAfterPolyline.push(...pts);
         }
 
-        // Calcolo verificato della camminata reale (4.5 km/h, 75 m/min con fattore rete pedonale urbana)
-        const realWalkBefore = calculateRealWalkMinutes(originCoords, fromStopCoords, walkBeforePolyline);
-        const realWalkAfter = calculateRealWalkMinutes(toStopCoords, finalDestCoords);
+        const preBefore = findPreWalkMatch(preWalkBeforeList, fromStopCoords);
+        if (preBefore && preBefore.polyline.length >= 2) {
+          walkBeforePolyline.length = 0;
+          walkBeforePolyline.push(...preBefore.polyline);
+        }
+
+        const preAfter = findPreWalkMatch(preWalkAfterList, toStopCoords);
+        if (preAfter && preAfter.polyline.length >= 2) {
+          walkAfterPolyline.length = 0;
+          walkAfterPolyline.push(...preAfter.polyline);
+        }
+
+        // Se l'utente è già in stazione (andata) e la fermata di salita fa parte dello stesso hub di stazione,
+        // considera il tragitto direttamente dalla fermata del mezzo senza inserire una camminata fittizia precedente.
+        const isAtOriginStationHub =
+          direction === 'to_campus' &&
+          isStopInsideStationHub(
+            originCoords,
+            fromStopCoords,
+            stationName,
+            primaryLeg.from?.name || ''
+          );
+        const effectiveOriginCoords = isAtOriginStationHub
+          ? fromStopCoords
+          : originCoords;
+        if (isAtOriginStationHub) {
+          walkBeforePolyline.length = 0;
+        }
+
+        // Calcolo verificato della camminata reale (rete pedonale urbana reale senza deviazioni da cortili chiusi)
+        const realWalkBefore = isAtOriginStationHub
+          ? { minutes: 0, distanceMeters: 0 }
+          : calculateRealWalkMinutes(originCoords, fromStopCoords, walkBeforePolyline);
+        const realWalkAfter = calculateRealWalkMinutes(toStopCoords, finalDestCoords, walkAfterPolyline);
 
         const walkBeforeSec = walkBeforeLegs.reduce(
           (acc, l) => acc + (typeof l.duration === 'number' ? l.duration : 0),
           0
         );
         const apiBeforeMin = Math.round(walkBeforeSec / 60);
-        const walkBeforeMinutes =
-          apiBeforeMin > 0 && Math.abs(apiBeforeMin - realWalkBefore.minutes) <= 1
-            ? apiBeforeMin
-            : realWalkBefore.minutes;
+        const walkBeforeMinutes = isAtOriginStationHub
+          ? 0
+          : preBefore
+            ? preBefore.minutes
+            : apiBeforeMin > 0 && Math.abs(apiBeforeMin - realWalkBefore.minutes) <= 1
+              ? apiBeforeMin
+              : realWalkBefore.minutes;
 
         // 2) Tragitto a bordo del mezzo fino alla fermata di discesa (inVehicle)
         const transitStartMs = new Date(primaryLeg.startTime).getTime();
@@ -2288,8 +2403,9 @@ export async function getStationTransitBoard(options: {
         );
         const apiAfterMin = Math.round(walkAfterSec / 60);
         // Se l'API restituisce un percorso pedonale con deviazioni anomale (> 2 min di scarto rispetto alla distanza stradale reale), usa il calcolo stradale verificato
-        const walkAfterMinutes =
-          apiAfterMin > 0 && Math.abs(apiAfterMin - realWalkAfter.minutes) <= 2
+        const walkAfterMinutes = preAfter
+          ? preAfter.minutes
+          : apiAfterMin > 0 && Math.abs(apiAfterMin - realWalkAfter.minutes) <= 2
             ? apiAfterMin
             : realWalkAfter.minutes;
 
@@ -2345,39 +2461,6 @@ export async function getStationTransitBoard(options: {
           }
         }
 
-        // Rilevamento deviazioni per cantieri attivi (es. lavori nuova tranvia Verano-Tiburtina e Circonvallazione Verano)
-        const fNorm = (primaryLeg.from?.name || '').toLowerCase();
-        const tNorm = (lastTransitLeg.to?.name || '').toLowerCase();
-        const isTiburtinaCorridor =
-          (fNorm.includes('tiburtina') || tNorm.includes('tiburtina')) &&
-          (tNorm.includes('castro') ||
-            tNorm.includes('laurenziano') ||
-            tNorm.includes('verano') ||
-            tNorm.includes('valerio') ||
-            tNorm.includes('crociate') ||
-            fNorm.includes('castro') ||
-            fNorm.includes('verano'));
-
-        if (
-          isTiburtinaCorridor &&
-          ['71', '163', '448', '492', '545', 'c3'].includes(lineShort.toLowerCase())
-        ) {
-          const detourMsg =
-            lineShort === '71'
-              ? 'Linea 71: percorso deviato su corsie laterali di Via Tiburtina e nodo Verano per cantieri della nuova tranvia.'
-              : 'Cantiere nuova tranvia Verano-Tiburtina: transito su corsie laterali della viabilità ordinaria anziché sulla sede centrale; fermate attive su banchina laterale.';
-          if (
-            !alertMsgs.some(
-              (m) =>
-                m.toLowerCase().includes('tranvia') ||
-                m.toLowerCase().includes('cantiere') ||
-                m.toLowerCase().includes('corsie laterali')
-            )
-          ) {
-            alertMsgs.unshift(detourMsg);
-          }
-        }
-
         const depHour = parseInt((isLiveContext ? estDep : schedDep).split(':')[0], 10);
         const isPeakHour =
           !isNaN(depHour) && ((depHour >= 7 && depHour <= 9) || (depHour >= 17 && depHour <= 19));
@@ -2404,19 +2487,9 @@ export async function getStationTransitBoard(options: {
           const dur = typeof tl.duration === 'number' && tl.duration > 0
             ? Math.max(1, Math.round(tl.duration / 60))
             : endM >= 0 && startM >= 0 && endM > startM ? endM - startM : 5;
-          let intStops = Array.isArray(tl.intermediateStops)
+          const intStops = Array.isArray(tl.intermediateStops)
             ? tl.intermediateStops.filter((s: any) => s?.name).map((s: any) => formatStopDisplayName(s.name))
             : [];
-          if (intStops.length === 0) {
-            const inferred = inferCorridorIntermediateStops(
-              tl.from?.name || '',
-              tl.to?.name || '',
-              (tl.mode || '').toLowerCase()
-            );
-            if (inferred.names.length > 0) {
-              intStops = inferred.names;
-            }
-          }
           const legPts = decodeEncodedPolyline(
             tl.legGeometry?.points,
             tl.legGeometry?.precision || 6
@@ -2526,7 +2599,7 @@ export async function getStationTransitBoard(options: {
             transfersCount: transitLegs.length - 1,
             transferSummary: !isDirect ? transferSummaryStr : undefined,
             legs: !isDirect ? transferLegDetails : undefined,
-            initialOriginCoords: originCoords,
+            initialOriginCoords: effectiveOriginCoords,
             fromStopCoords,
             toStopCoords,
             finalDestCoords,
@@ -2590,17 +2663,25 @@ export async function getStationTransitBoard(options: {
       });
       const candidatePending = filteredByWalk.length > 0 ? filteredByWalk : pendingItems;
 
-      // In andata (dalla stazione verso il campus), filtra prima della risoluzione headsign le corse partite prima dell'arrivo del treno
+      // Filtra prima della risoluzione headsign le corse che richiederebbero di partire dall'origine prima
+      // dell'orario minimo utile (fine lezione, arrivo del treno o orario attuale in live/GPS),
+      // tenendo sempre conto del tempo reale a piedi fino alla fermata di salita (walkBeforeMinutes).
       let filteredPending = candidatePending;
-      if (direction === 'to_campus' && minDepMins > 0) {
-        const afterTrain = candidatePending.filter((item) => {
-          const depM = parseHHMMToMins(
-            isLiveContext ? item.draft.estimatedTime : item.draft.scheduledTime
+      const isNowQuery = isLiveContext || targetTime === 'now';
+      if (minDepMins > 0 || isNowQuery) {
+        const filterRefMins = isNowQuery ? nowMins : minDepMins;
+        const effectiveMinOrigin = isNowQuery
+          ? Math.max(nowMins, minDepMins > 0 ? unwrapMinutesFromRef(minDepMins, nowMins) : 0)
+          : minDepMins;
+        const afterMinDep = candidatePending.filter((item) => {
+          const depM = unwrapMinutesFromRef(
+            parseHHMMToMins(isLiveContext ? item.draft.estimatedTime : item.draft.scheduledTime),
+            filterRefMins
           );
-          return depM >= 0 && depM - (item.draft.walkBeforeMinutes || 0) >= minDepMins - 1;
+          return depM >= 0 && depM - (item.draft.walkBeforeMinutes || 0) >= effectiveMinOrigin;
         });
-        if (afterTrain.length > 0) {
-          filteredPending = afterTrain;
+        if (afterMinDep.length > 0) {
+          filteredPending = afterMinDep;
         }
       }
 
@@ -2612,36 +2693,60 @@ export async function getStationTransitBoard(options: {
         }))
       );
 
-      // Ordine cronologico con priorità alla minima camminata a piedi e minor durata totale (combinazione mezzi-piedi più breve)
+      const sortClockRef = isLiveContext
+        ? nowMins
+        : minDepMins > 0
+          ? minDepMins
+          : constraintMins > 0
+            ? Math.max(0, constraintMins - 60)
+            : nowMins;
+
+      // Ordine rigorosamente cronologico per orario di partenza crescente
       finalDepartures.sort((a, b) => {
-        const aDep = parseHHMMToMins(a.estimatedTime);
-        const bDep = parseHHMMToMins(b.estimatedTime);
+        const aTimeStr = isLiveContext
+          ? a.estimatedTime || a.scheduledTime
+          : a.scheduledTime || a.estimatedTime;
+        const bTimeStr = isLiveContext
+          ? b.estimatedTime || b.scheduledTime
+          : b.scheduledTime || b.estimatedTime;
+        const aDep = unwrapMinutesFromRef(parseHHMMToMins(aTimeStr), sortClockRef);
+        const bDep = unwrapMinutesFromRef(parseHHMMToMins(bTimeStr), sortClockRef);
+        if (aDep !== bDep) {
+          return aDep - bDep;
+        }
         const aWalk = (a.walkBeforeMinutes || 0) + (a.walkAfterMinutes || 0);
         const bWalk = (b.walkBeforeMinutes || 0) + (b.walkAfterMinutes || 0);
-
-        // Se le partenze sono nella stessa fascia utile (entro 4 minuti di scarto), favorisci la corsa che garantisce minor tempo a piedi
-        if (Math.abs(aDep - bDep) <= 4 && Math.abs(aWalk - bWalk) >= 2) {
+        if (aWalk !== bWalk) {
           return aWalk - bWalk;
         }
+        return a.durationMinutes - b.durationMinutes;
+      });
 
-        if (Math.abs(aDep - bDep) <= 1) {
-          if (aWalk !== bWalk) {
-            return aWalk - bWalk;
-          }
-          return a.durationMinutes - b.durationMinutes;
+      const { optimal, optimalIndex, lastUseful, lastUsefulIndex } = findOptimalTransitDeparture(
+        finalDepartures,
+        {
+          direction,
+          isLiveContext,
+          constraintTime,
+          minDepartureTime,
+          targetTime,
+          arrivalBufferMinutes: effectiveAdvanceMins,
+          preferLatestBeforeDeadline,
         }
-        return a.estimatedTime.localeCompare(b.estimatedTime);
-      });
+      );
 
-      const { optimal, optimalIndex } = findOptimalTransitDeparture(finalDepartures, {
-        direction,
-        isLiveContext,
-        constraintTime,
-        minDepartureTime,
-        targetTime,
-      });
-
-      const directLines = Array.from(directLinesSet);
+      const orderedDirectLines: string[] = [];
+      const seenOrderedLines = new Set<string>();
+      for (const d of finalDepartures) {
+        if (!d.isDirect) continue;
+        const k = d.line.trim().toLowerCase();
+        if (k && !seenOrderedLines.has(k)) {
+          seenOrderedLines.add(k);
+          orderedDirectLines.push(d.line);
+        }
+      }
+      const directLines =
+        orderedDirectLines.length > 0 ? orderedDirectLines : Array.from(directLinesSet);
       if (directLines.length === 0) {
         finalDepartures.slice(0, 4).forEach((d) => {
           if (!directLines.includes(d.line)) directLines.push(d.line);
@@ -2655,12 +2760,16 @@ export async function getStationTransitBoard(options: {
         departures: finalDepartures,
         optimalDeparture: optimal,
         optimalIndex,
+        lastUsefulDeparture: lastUseful,
+        lastUsefulIndex,
         lastUpdated: new Date().toLocaleTimeString('it-IT', {
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
         }),
         isLiveSource: isLiveContext,
+        arrivalBufferMinutes: effectiveAdvanceMins,
+        preferLatestBeforeDeadline,
       };
 
       if (transitBoardMemoryCache.size >= 40) {

@@ -107,13 +107,6 @@ import {
   GITHUB_LATEST_RELEASE_URL,
   AppUpdateInfo,
 } from "../utils/updateChecker";
-import { DisruptionEvent } from "../types/disruptions";
-import {
-  getDisruptions,
-  getDisruptionsImpactingLecture,
-} from "../utils/disruptionsService";
-import { getCommuterConfig } from "../utils/commuterStorage";
-import { DisruptionsRegistryModal } from "../components/DisruptionsRegistryModal";
 import {
   AppNote,
   filterNotesForDay,
@@ -213,13 +206,11 @@ interface ScheduleClassCardProps {
   isAttended: boolean;
   isExcluded: boolean;
   lectureNotes: AppNote[];
-  disruptionAlert: ReturnType<typeof getDisruptionsImpactingLecture>;
   theme: ReturnType<typeof useTheme>["theme"];
   onEditManual: () => void;
   onPressRoom: () => void;
   onAddNote: () => void;
   onOpenNotes: () => void;
-  onPressDisruption: () => void;
 }
 
 function ScheduleClassCard({
@@ -230,13 +221,11 @@ function ScheduleClassCard({
   isAttended,
   isExcluded,
   lectureNotes,
-  disruptionAlert,
   theme,
   onEditManual,
   onPressRoom,
   onAddNote,
   onOpenNotes,
-  onPressDisruption,
 }: ScheduleClassCardProps) {
   const excludedProgress = useExcludedProgress(
     isExcluded,
@@ -436,56 +425,6 @@ function ScheduleClassCard({
             </TouchableOpacity>
           )}
         </Reanimated.View>
-
-        {/* Avviso Interruzioni / Scioperi intelligente per questa lezione e data */}
-        {disruptionAlert ? (
-          <Reanimated.View style={animatedDimStyle}>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              style={[
-                styles.classDisruptionBanner,
-                disruptionAlert.type === "train"
-                  ? styles.classDisruptionBannerTrain
-                  : styles.classDisruptionBannerUrban,
-              ]}
-              onPress={onPressDisruption}
-            >
-              <View style={styles.classDisruptionHeaderRow}>
-                <Ionicons
-                  name={
-                    disruptionAlert.type === "train" ? "alert-circle" : "warning"
-                  }
-                  size={11.5}
-                  color={
-                    disruptionAlert.type === "train" ? "#ef4444" : "#f59e0b"
-                  }
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[
-                    styles.classDisruptionBadgeText,
-                    disruptionAlert.type === "train"
-                      ? styles.classDisruptionBadgeTextTrain
-                      : styles.classDisruptionBadgeTextUrban,
-                  ]}
-                >
-                  {disruptionAlert.badgeLabel}
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.classDisruptionDescText,
-                  disruptionAlert.type === "train"
-                    ? styles.classDisruptionDescTextTrain
-                    : styles.classDisruptionDescTextUrban,
-                ]}
-                numberOfLines={2}
-              >
-                {disruptionAlert.shortDesc}
-              </Text>
-            </TouchableOpacity>
-          </Reanimated.View>
-        ) : null}
       </View>
     </Reanimated.View>
   );
@@ -778,33 +717,6 @@ export default function ScheduleScreen() {
         }
       }
     });
-  }, []);
-
-  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
-  const [disruptionsModalVisible, setDisruptionsModalVisible] = useState(false);
-  const [disruptionsInitialFilter, setDisruptionsInitialFilter] = useState<'all' | 'train' | 'walk' | 'transit'>('all');
-  const [selectedDisruptionId, setSelectedDisruptionId] = useState<string | null>(null);
-  const [commuterStationName, setCommuterStationName] = useState<string>('Roma Tiburtina');
-
-  useEffect(() => {
-    getCommuterConfig()
-      .then((cfg) => {
-        if (cfg?.arrivalStation) {
-          const stName = typeof cfg.arrivalStation === 'string'
-            ? cfg.arrivalStation
-            : cfg.arrivalStation.name || cfg.arrivalStation.shortName || 'Roma Tiburtina';
-          setCommuterStationName(stName);
-        }
-      })
-      .catch(() => {});
-
-    getDisruptions()
-      .then((res) => {
-        if (res && res.length > 0) {
-          setDisruptions(res);
-        }
-      })
-      .catch(() => {});
   }, []);
 
   const insets = useSafeAreaInsets();
@@ -1314,14 +1226,6 @@ export default function ScheduleScreen() {
       setContextNotesModalVisible(true);
     };
 
-    const disruptionAlert = getDisruptionsImpactingLecture(
-      dateStr,
-      cls.startTime,
-      cls.endTime,
-      disruptions,
-      commuterStationName
-    );
-
     const cardView = (
       <ScheduleClassCard
         cls={cls}
@@ -1331,7 +1235,6 @@ export default function ScheduleScreen() {
         isAttended={isAttended}
         isExcluded={isExcluded}
         lectureNotes={lectureNotes}
-        disruptionAlert={disruptionAlert}
         theme={theme}
         onEditManual={() => {
           const found = manualEvents.find((e) => e.id === cls.manualId);
@@ -1356,14 +1259,6 @@ export default function ScheduleScreen() {
           setNoteModalVisible(true);
         }}
         onOpenNotes={handleOpenLectureNotes}
-        onPressDisruption={() => {
-          if (!disruptionAlert) return;
-          setDisruptionsInitialFilter(
-            disruptionAlert.type === "train" ? "train" : "walk"
-          );
-          setSelectedDisruptionId(disruptionAlert.id);
-          setDisruptionsModalVisible(true);
-        }}
       />
     );
 
@@ -1973,27 +1868,6 @@ export default function ScheduleScreen() {
         }}
         onSave={handleSaveManualEvent}
         onDelete={handleDeleteManualEvent}
-      />
-
-      {/* Modal Registro Manifestazioni e Scioperi */}
-      <DisruptionsRegistryModal
-        visible={disruptionsModalVisible}
-        onClose={() => {
-          setDisruptionsModalVisible(false);
-          setSelectedDisruptionId(null);
-        }}
-        disruptions={disruptions}
-        theme={theme}
-        initialFilter={disruptionsInitialFilter}
-        activeStationName={commuterStationName}
-        highlightEventId={selectedDisruptionId}
-        onRefresh={() => {
-          getDisruptions(true)
-            .then((res) => {
-              if (res) setDisruptions(res);
-            })
-            .catch(() => {});
-        }}
       />
 
       {/* Modal Note e Promemoria */}
@@ -2854,48 +2728,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     marginTop: 4,
-  },
-  /* Banner Avviso Interruzioni / Scioperi nella card lezione */
-  classDisruptionBanner: {
-    marginTop: 6,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderWidth: 1,
-  },
-  classDisruptionBannerTrain: {
-    backgroundColor: "rgba(239, 68, 68, 0.10)",
-    borderColor: "rgba(239, 68, 68, 0.28)",
-  },
-  classDisruptionBannerUrban: {
-    backgroundColor: "rgba(245, 158, 11, 0.10)",
-    borderColor: "rgba(245, 158, 11, 0.28)",
-  },
-  classDisruptionHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 2,
-  },
-  classDisruptionBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-  },
-  classDisruptionBadgeTextTrain: {
-    color: "#ef4444",
-  },
-  classDisruptionBadgeTextUrban: {
-    color: "#f59e0b",
-  },
-  classDisruptionDescText: {
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  classDisruptionDescTextTrain: {
-    color: "#fca5a5",
-  },
-  classDisruptionDescTextUrban: {
-    color: "#fde68a",
   },
   dayNoteBadge: {
     flexDirection: "row",

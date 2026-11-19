@@ -1,4 +1,4 @@
-import type { TransitBoardResult } from '../utils/transitBoardService';
+import type { TransitBoardResult, TransitDepartureItem } from '../utils/transitBoardService';
 
 export interface StationInfo {
   name: string;
@@ -83,9 +83,9 @@ export interface SmartOutboundRecommendation {
 }
 
 export interface StrikeAlertPreferences {
-  /** Crea promemoria/avviso 7 giorni prima dello sciopero (ore 09:00) */
+  /** Crea evento su Calendario (iOS) / notifica (Android) 7 giorni prima dello sciopero (ore 09:00) */
   notify7DaysBefore: boolean;
-  /** Crea promemoria/avviso 1 giorno prima dello sciopero (ore 09:00) */
+  /** Crea evento su Calendario (iOS) / notifica (Android) 1 giorno prima dello sciopero (ore 09:00) */
   notify1DayBefore: boolean;
 }
 
@@ -249,7 +249,10 @@ export interface CommuterItinerary {
   smartReturnRecommendation?: SmartReturnRecommendation;
   smartOutboundRecommendation?: SmartOutboundRecommendation;
   prefetchedTransitBoard?: TransitBoardResult;
+  lastUsefulTransitDeparture?: TransitDepartureItem;
   transitLiveContext?: boolean;
   transitConstraintTime?: string;
   transitMinDepartureTime?: string;
+  transitArrivalBufferMinutes?: number;
+  transitPreferLatestBeforeDeadline?: boolean;
 }

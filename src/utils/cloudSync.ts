@@ -9,10 +9,12 @@ import {
   getCalendarAutoSync,
   getCalendarConfigUpdatedAt,
   getCalendarTitle,
+  getCustomCalendarColor,
   pullExternalAppleCalendarChanges,
   refreshAppleCalendarIfConfigured,
   setCalendarAutoSync,
   setCalendarTitle,
+  setCustomCalendarColor,
   subscribeToCalendarConfigChanges,
 } from "./appleCalendar";
 import {
@@ -143,6 +145,8 @@ export interface PreAssociationBackup {
   calendarConfig?: {
     customTitle?: string;
     autoSync?: boolean;
+    strikesTitle?: string;
+    strikesCustomColor?: string | null;
     updatedAt?: number;
   };
   timestamp: number;
@@ -180,6 +184,8 @@ export interface CloudBackupPayload {
   calendarConfig?: {
     customTitle?: string;
     autoSync?: boolean;
+    strikesTitle?: string;
+    strikesCustomColor?: string | null;
     updatedAt?: number;
   };
 }
@@ -224,6 +230,8 @@ interface RemoteDoc {
   calendarConfig?: {
     customTitle?: string;
     autoSync?: boolean;
+    strikesTitle?: string;
+    strikesCustomColor?: string | null;
     updatedAt?: number;
   };
   devices?: Record<string, SyncDeviceInfo>;
@@ -576,6 +584,8 @@ export async function performCloudSync(): Promise<{
     notesList,
     calendarTitle,
     calendarAutoSync,
+    strikesTitle,
+    strikesCustomColor,
   ] = await Promise.all([
     readLocalCourse(),
     getAttendanceRecords(),
@@ -590,6 +600,8 @@ export async function performCloudSync(): Promise<{
     getNotes(),
     getCalendarTitle(),
     getCalendarAutoSync(),
+    getCalendarTitle("strikes"),
+    getCustomCalendarColor("strikes"),
   ]);
 
   const payload: CloudBackupPayload = {
@@ -618,6 +630,8 @@ export async function performCloudSync(): Promise<{
     calendarConfig: {
       customTitle: calendarTitle,
       autoSync: calendarAutoSync,
+      strikesTitle,
+      strikesCustomColor,
       updatedAt: timestamp,
     },
   };
@@ -746,6 +760,12 @@ export async function restoreFromCloudBackup(codeOrJson: string): Promise<{
       }
       if (data.calendarConfig.autoSync !== undefined) {
         await setCalendarAutoSync(data.calendarConfig.autoSync);
+      }
+      if (data.calendarConfig.strikesTitle) {
+        await setCalendarTitle(data.calendarConfig.strikesTitle, "strikes");
+      }
+      if (data.calendarConfig.strikesCustomColor !== undefined) {
+        await setCustomCalendarColor("strikes", data.calendarConfig.strikesCustomColor);
       }
     }
 
@@ -1625,6 +1645,8 @@ async function runSync(): Promise<CloudSyncResult> {
         calendarConfig: {
           customTitle: await getCalendarTitle(),
           autoSync: await getCalendarAutoSync(),
+          strikesTitle: await getCalendarTitle("strikes"),
+          strikesCustomColor: await getCustomCalendarColor("strikes"),
           updatedAt: Date.now(),
         },
         devices: devicesMap,
@@ -2020,6 +2042,20 @@ async function runSync(): Promise<CloudSyncResult> {
       if (remote.calendarConfig.autoSync !== undefined) {
         await setCalendarAutoSync(remote.calendarConfig.autoSync, remoteCalMod);
       }
+      if (remote.calendarConfig.strikesTitle) {
+        await setCalendarTitle(
+          remote.calendarConfig.strikesTitle,
+          "strikes",
+          remoteCalMod,
+        );
+      }
+      if (remote.calendarConfig.strikesCustomColor !== undefined) {
+        await setCustomCalendarColor(
+          "strikes",
+          remote.calendarConfig.strikesCustomColor,
+          remoteCalMod,
+        );
+      }
     }
 
     // Pubblica al gruppo attivo
@@ -2054,6 +2090,8 @@ async function runSync(): Promise<CloudSyncResult> {
       calendarConfig: {
         customTitle: await getCalendarTitle(),
         autoSync: await getCalendarAutoSync(),
+        strikesTitle: await getCalendarTitle("strikes"),
+        strikesCustomColor: await getCustomCalendarColor("strikes"),
         updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod),
       },
       devices: devicesMap,
@@ -2454,6 +2492,20 @@ export async function linkDeviceWithCode(
       if (rootRemote.calendarConfig.autoSync !== undefined) {
         await setCalendarAutoSync(rootRemote.calendarConfig.autoSync, remoteCalModRoot);
       }
+      if (rootRemote.calendarConfig.strikesTitle) {
+        await setCalendarTitle(
+          rootRemote.calendarConfig.strikesTitle,
+          "strikes",
+          remoteCalModRoot,
+        );
+      }
+      if (rootRemote.calendarConfig.strikesCustomColor !== undefined) {
+        await setCustomCalendarColor(
+          "strikes",
+          rootRemote.calendarConfig.strikesCustomColor,
+          remoteCalModRoot,
+        );
+      }
     }
 
     // Salva nel gruppo master
@@ -2486,6 +2538,8 @@ export async function linkDeviceWithCode(
       calendarConfig: {
         customTitle: await getCalendarTitle(),
         autoSync: await getCalendarAutoSync(),
+        strikesTitle: await getCalendarTitle("strikes"),
+        strikesCustomColor: await getCustomCalendarColor("strikes"),
         updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalModRoot),
       },
       devices: updatedDevices,

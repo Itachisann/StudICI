@@ -13,7 +13,7 @@ import {
   getExcludedLessons,
   isLessonExcluded,
 } from "./excludedLessons";
-import { getCommuterConfig } from "./commuterStorage";
+import { getCommuterConfig, saveCommuterConfig } from "./commuterStorage";
 import {
   computeCommuterItinerary,
   getRomeStationName,
@@ -57,7 +57,7 @@ async function attachStructuredLocationsIfSupported(
   }
 }
 
-export type CalendarType = "lessons" | "trains" | "trains_return";
+export type CalendarType = "lessons" | "trains" | "trains_return" | "strikes";
 
 export type CalendarAlertType =
   | "none"
@@ -152,6 +152,7 @@ export const DEFAULT_LESSONS_CALENDAR_TITLE = "StudICI - Lezioni Sapienza";
 export const DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE = "StudICI - Treni";
 export const DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE = "StudICI - Treni andata";
 export const DEFAULT_TRAIN_RETURN_CALENDAR_TITLE = "StudICI - Treni ritorno";
+export const DEFAULT_STRIKES_CALENDAR_TITLE = "StudICI - Scioperi";
 export const DEFAULT_TRAIN_CALENDAR_TITLE = DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE;
 export const DEFAULT_CALENDAR_TITLE = DEFAULT_LESSONS_CALENDAR_TITLE;
 
@@ -181,6 +182,12 @@ export const TRAIN_SEPARATE_RETURN_KEY = "studici_train_separate_return";
 export const TRAIN_RETURN_CALENDAR_NAME_KEY = "studici_train_return_calendar_custom_title";
 export const TRAIN_RETURN_CALENDAR_ID_KEY = "@studici_train_return_calendar_id";
 
+// Chiavi Storage per Calendario Scioperi (gestito esternamente da Apple Calendar)
+export const STRIKES_CALENDAR_NAME_KEY = "studici_strike_calendar_custom_title";
+export const STRIKES_CALENDAR_ID_KEY = "@studici_strike_calendar_id";
+export const LAST_STRIKES_CALENDAR_SYNC_KEY = "studici_last_strike_calendar_sync";
+const STRIKES_EVENTS_STATE_KEY = "studici_strike_calendar_state_v3";
+
 // Chiavi Globali
 export const CALENDAR_CONFIG_UPDATED_AT_KEY = "@studici_calendar_config_updated_at";
 export const CALENDAR_SCHEDULE_HASH_KEY = "studici_calendar_schedule_hash";
@@ -190,18 +197,22 @@ export const CALENDAR_COLOR_KEY = "@studici_calendar_theme_color";
 export const CALENDAR_LESSONS_CUSTOM_COLOR_KEY = "@studici_calendar_lessons_custom_color";
 export const CALENDAR_TRAINS_CUSTOM_COLOR_KEY = "@studici_calendar_trains_custom_color";
 export const CALENDAR_TRAINS_RETURN_CUSTOM_COLOR_KEY = "@studici_calendar_trains_return_custom_color";
+export const CALENDAR_STRIKES_CUSTOM_COLOR_KEY = "@studici_calendar_strikes_custom_color";
 export const CALENDAR_TRAIN_SHADE_MIGRATED_KEY = "@studici_calendar_train_shade_v1";
 export const LAST_CALENDAR_SYNC_KEY = "studici_last_calendar_sync";
 export const LAST_TRAIN_CALENDAR_SYNC_KEY = "studici_last_train_calendar_sync";
 
-const THEME_CALENDAR_SHADE_MAP: Record<string, { trains: string; trainsReturn: string }> = {
-  "#822433": { trains: "#e05666", trainsReturn: "#f07b88" }, // Rosso Sapienza
-  "#1d4ed8": { trains: "#3b82f6", trainsReturn: "#60a5fa" }, // Blu Notte
-  "#059669": { trains: "#10b981", trainsReturn: "#34d399" }, // Verde Smeraldo
-  "#7c3aed": { trains: "#a855f7", trainsReturn: "#c084fc" }, // Viola Reale
-  "#d97706": { trains: "#f59e0b", trainsReturn: "#fbbf24" }, // Arancio Caldo
-  "#be185d": { trains: "#ec4899", trainsReturn: "#f472b6" }, // Rosa Rubino
-  "#0284c7": { trains: "#0ea5e9", trainsReturn: "#38bdf8" }, // Ciano Oceano
+const THEME_CALENDAR_SHADE_MAP: Record<
+  string,
+  { trains: string; trainsReturn: string; strikes: string }
+> = {
+  "#822433": { trains: "#e05666", trainsReturn: "#f07b88", strikes: "#ef4444" }, // Rosso Sapienza
+  "#1d4ed8": { trains: "#3b82f6", trainsReturn: "#60a5fa", strikes: "#1e40af" }, // Blu Notte
+  "#059669": { trains: "#10b981", trainsReturn: "#34d399", strikes: "#047857" }, // Verde Smeraldo
+  "#7c3aed": { trains: "#a855f7", trainsReturn: "#c084fc", strikes: "#6d28d9" }, // Viola Reale
+  "#d97706": { trains: "#f59e0b", trainsReturn: "#fbbf24", strikes: "#b45309" }, // Arancio Caldo
+  "#be185d": { trains: "#ec4899", trainsReturn: "#f472b6", strikes: "#9d174d" }, // Rosa Rubino
+  "#0284c7": { trains: "#0ea5e9", trainsReturn: "#38bdf8", strikes: "#0369a1" }, // Ciano Oceano
 };
 
 export function normalizeCalendarHex(color?: string | null): string | null {
@@ -386,11 +397,25 @@ function blendHexTowardWhite(hex: string, factor: number): string {
   return `#${mix(r)}${mix(g)}${mix(b)}`;
 }
 
+function blendHexTowardBlack(hex: string, factor: number): string {
+  const clean = normalizeCalendarHex(hex);
+  if (!clean || !/^#[0-9a-f]{6}$/.test(clean)) return hex;
+  const r = parseInt(clean.slice(1, 3), 16);
+  const g = parseInt(clean.slice(3, 5), 16);
+  const b = parseInt(clean.slice(5, 7), 16);
+  const mix = (c: number) =>
+    Math.min(255, Math.max(0, Math.round(c * (1 - factor))))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${mix(r)}${mix(g)}${mix(b)}`;
+}
+
 /**
  * Restituisce il colore di default derivato dal tema per lo specifico calendario:
  * - Lezioni: colore primario del tema
  * - Treni (unificato/andata): tonalità più vivida dello stesso colore tema
  * - Treni ritorno (se separato): terza tonalità più chiara dello stesso colore tema
+ * - Scioperi: tonalità dedicata ad alto contrasto coerente col tema
  */
 export function getThemeCalendarDefaultColor(
   type: CalendarType,
@@ -400,15 +425,74 @@ export function getThemeCalendarDefaultColor(
   if (type === "lessons") return normPrimary;
   const preset = THEME_CALENDAR_SHADE_MAP[normPrimary];
   if (preset) {
+    if (type === "strikes") return preset.strikes;
     return type === "trains_return" ? preset.trainsReturn : preset.trains;
   }
+  if (type === "strikes") return blendHexTowardBlack(normPrimary, 0.2);
   return blendHexTowardWhite(normPrimary, type === "trains_return" ? 0.42 : 0.25);
 }
 
 function getCustomColorStorageKey(type: CalendarType): string {
   if (type === "trains") return CALENDAR_TRAINS_CUSTOM_COLOR_KEY;
   if (type === "trains_return") return CALENDAR_TRAINS_RETURN_CUSTOM_COLOR_KEY;
+  if (type === "strikes") return CALENDAR_STRIKES_CUSTOM_COLOR_KEY;
   return CALENDAR_LESSONS_CUSTOM_COLOR_KEY;
+}
+
+export async function getCustomCalendarColor(
+  type: CalendarType = "lessons",
+): Promise<string | null> {
+  try {
+    const custom = await AsyncStorage.getItem(getCustomColorStorageKey(type));
+    return normalizeCalendarHex(custom);
+  } catch {
+    return null;
+  }
+}
+
+export async function setCustomCalendarColor(
+  type: CalendarType,
+  color: string | null | undefined,
+  updatedAt?: number,
+): Promise<void> {
+  const key = getCustomColorStorageKey(type);
+  const ts = updatedAt || Date.now();
+  const basePrimary = await resolveThemePrimaryHex();
+  const themeDefault = getThemeCalendarDefaultColor(type, basePrimary);
+  const normColor = normalizeCalendarHex(color);
+  const customToStore =
+    normColor && normColor !== themeDefault ? normColor : null;
+
+  if (customToStore) {
+    await AsyncStorage.setItem(key, customToStore);
+  } else {
+    await AsyncStorage.removeItem(key);
+  }
+
+  try {
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (isAvailable) {
+      const { status } = await Calendar.getCalendarPermissionsAsync();
+      if (status === "granted") {
+        const calendars = await getFreshCalendarsSafe();
+        const cal = await findManagedAppleCalendar(calendars, type);
+        const effectiveColor = customToStore || themeDefault;
+        if (
+          cal &&
+          normalizeCalendarHex(cal.color) !== normalizeCalendarHex(effectiveColor)
+        ) {
+          await updateCalendarMetadataSafe(cal, {
+            color: effectiveColor,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Errore aggiornamento colore calendario su dispositivo:", err);
+  }
+
+  await AsyncStorage.setItem(CALENDAR_CONFIG_UPDATED_AT_KEY, ts.toString());
+  notifyCalendarConfigChanged();
 }
 
 export async function getCalendarColor(
@@ -649,7 +733,12 @@ export async function getLastCalendarSync(
   type: CalendarType = "lessons",
 ): Promise<number | null> {
   try {
-    const key = type === "trains" ? LAST_TRAIN_CALENDAR_SYNC_KEY : LAST_CALENDAR_SYNC_KEY;
+    const key =
+      type === "trains"
+        ? LAST_TRAIN_CALENDAR_SYNC_KEY
+        : type === "strikes"
+          ? LAST_STRIKES_CALENDAR_SYNC_KEY
+          : LAST_CALENDAR_SYNC_KEY;
     const val = await AsyncStorage.getItem(key);
     return val ? parseInt(val, 10) : null;
   } catch {
@@ -788,6 +877,9 @@ export async function getCalendarTitle(
         return defaultTitle;
       }
       return val && val.trim() ? val.trim() : defaultTitle;
+    } else if (type === "strikes") {
+      key = STRIKES_CALENDAR_NAME_KEY;
+      defaultTitle = DEFAULT_STRIKES_CALENDAR_TITLE;
     }
 
     const val = await AsyncStorage.getItem(key);
@@ -799,6 +891,7 @@ export async function getCalendarTitle(
         : DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE;
     }
     if (type === "trains_return") return DEFAULT_TRAIN_RETURN_CALENDAR_TITLE;
+    if (type === "strikes") return DEFAULT_STRIKES_CALENDAR_TITLE;
     return DEFAULT_LESSONS_CALENDAR_TITLE;
   }
 }
@@ -843,6 +936,11 @@ export async function setCalendarTitle(
     key = TRAIN_RETURN_CALENDAR_NAME_KEY;
     idKey = TRAIN_RETURN_CALENDAR_ID_KEY;
     internalName = "studici_trains_return";
+  } else if (type === "strikes") {
+    defaultTitle = DEFAULT_STRIKES_CALENDAR_TITLE;
+    key = STRIKES_CALENDAR_NAME_KEY;
+    idKey = STRIKES_CALENDAR_ID_KEY;
+    internalName = "studici_strikes";
   }
 
   const trimmed = newTitle.trim();
@@ -869,6 +967,7 @@ export async function setCalendarTitle(
 
         let targetCal = await findManagedAppleCalendar(calendars, type, isSeparate);
         if (!targetCal) {
+          const isTrainType = type === "trains" || type === "trains_return";
           targetCal =
             calendars.find(
               (c) =>
@@ -876,11 +975,12 @@ export async function setCalendarTitle(
                   c.title === previousTitle ||
                   c.title === titleToSave ||
                   c.title === defaultTitle ||
-                  c.title === DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE ||
-                  c.title === DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE ||
-                  c.title === DEFAULT_TRAIN_RETURN_CALENDAR_TITLE ||
-                  c.title === "StudICI - Treni & Viaggio" ||
-                  c.title === "StudICI - Treni Ritorno") &&
+                  (isTrainType &&
+                    (c.title === DEFAULT_TRAIN_UNIFIED_CALENDAR_TITLE ||
+                      c.title === DEFAULT_TRAIN_OUTBOUND_CALENDAR_TITLE ||
+                      c.title === DEFAULT_TRAIN_RETURN_CALENDAR_TITLE ||
+                      c.title === "StudICI - Treni & Viaggio" ||
+                      c.title === "StudICI - Treni Ritorno"))) &&
                 c.allowsModifications,
             ) || null;
         }
@@ -1040,6 +1140,10 @@ async function findManagedAppleCalendar(
     idKey = TRAIN_RETURN_CALENDAR_ID_KEY;
     internalNames = ["studici_trains_return"];
     defaultTitles = [DEFAULT_TRAIN_RETURN_CALENDAR_TITLE, "StudICI - Treni Ritorno"];
+  } else if (type === "strikes") {
+    idKey = STRIKES_CALENDAR_ID_KEY;
+    internalNames = ["studici_strikes"];
+    defaultTitles = [DEFAULT_STRIKES_CALENDAR_TITLE];
   }
 
   const [storedId, fallbackId, savedTitle] = await Promise.all([
@@ -1129,8 +1233,8 @@ async function _pullExternalChangesInternal(
     ]);
 
     const activeTypes: CalendarType[] = separateReturn
-      ? ["lessons", "trains", "trains_return"]
-      : ["lessons", "trains"];
+      ? ["lessons", "trains", "trains_return", "strikes"]
+      : ["lessons", "trains", "strikes"];
 
     for (const type of activeTypes) {
       const idKey =
@@ -1138,9 +1242,11 @@ async function _pullExternalChangesInternal(
           ? CALENDAR_ID_KEY
           : type === "trains_return"
             ? TRAIN_RETURN_CALENDAR_ID_KEY
-            : separateReturn
-              ? TRAIN_OUTBOUND_CALENDAR_ID_KEY
-              : TRAIN_UNIFIED_CALENDAR_ID_KEY;
+            : type === "strikes"
+              ? STRIKES_CALENDAR_ID_KEY
+              : separateReturn
+                ? TRAIN_OUTBOUND_CALENDAR_ID_KEY
+                : TRAIN_UNIFIED_CALENDAR_ID_KEY;
 
       const cal = await findManagedAppleCalendar(calendars, type, separateReturn);
       if (!cal) {
@@ -1190,6 +1296,27 @@ async function _pullExternalChangesInternal(
                   : [idKey, TRAIN_CALENDAR_SCHEDULE_HASH_KEY];
               await AsyncStorage.multiRemove(keysToClear);
             }
+          } else if (type === "strikes") {
+            // Se il calendario Scioperi è stato eliminato direttamente da Apple Calendar, disattiva gli avvisi così non viene ricreato
+            const [storedId, lastSync] = await Promise.all([
+              AsyncStorage.getItem(STRIKES_CALENDAR_ID_KEY),
+              AsyncStorage.getItem(LAST_STRIKES_CALENDAR_SYNC_KEY),
+            ]);
+            if (storedId || lastSync) {
+              await AsyncStorage.multiRemove([
+                STRIKES_CALENDAR_ID_KEY,
+                LAST_STRIKES_CALENDAR_SYNC_KEY,
+                CALENDAR_STRIKES_CUSTOM_COLOR_KEY,
+                STRIKES_EVENTS_STATE_KEY,
+              ]);
+              await saveCommuterConfig({
+                strikeAlerts: {
+                  notify7DaysBefore: false,
+                  notify1DayBefore: false,
+                },
+              });
+              updated = true;
+            }
           }
         }
         continue;
@@ -1211,6 +1338,8 @@ async function _pullExternalChangesInternal(
           await AsyncStorage.setItem(trainTitleKey, calTitle);
           await AsyncStorage.setItem(TRAIN_CALENDAR_NAME_KEY, calTitle);
           await patchSavedFingerprintTitle(TRAIN_CALENDAR_SCHEDULE_HASH_KEY, "t", calTitle);
+        } else if (type === "strikes") {
+          await AsyncStorage.setItem(STRIKES_CALENDAR_NAME_KEY, calTitle);
         } else {
           await AsyncStorage.setItem(TRAIN_RETURN_CALENDAR_NAME_KEY, calTitle);
           await patchSavedFingerprintTitle(
@@ -1360,6 +1489,7 @@ export async function updateAppleCalendarColor(
         AsyncStorage.removeItem(CALENDAR_LESSONS_CUSTOM_COLOR_KEY),
         AsyncStorage.removeItem(CALENDAR_TRAINS_CUSTOM_COLOR_KEY),
         AsyncStorage.removeItem(CALENDAR_TRAINS_RETURN_CUSTOM_COLOR_KEY),
+        AsyncStorage.removeItem(CALENDAR_STRIKES_CUSTOM_COLOR_KEY),
       ]);
     }
 
@@ -1389,6 +1519,12 @@ export async function updateAppleCalendarColor(
         color: forceResetCustom
           ? getThemeCalendarDefaultColor("trains", normPrimary)
           : await getCalendarColor("trains", normPrimary),
+      },
+      {
+        type: "strikes",
+        color: forceResetCustom
+          ? getThemeCalendarDefaultColor("strikes", normPrimary)
+          : await getCalendarColor("strikes", normPrimary),
       },
     ];
     if (separateReturn) {
@@ -1421,10 +1557,10 @@ export async function updateAppleCalendarColor(
 }
 
 /**
- * Rimuove dal dispositivo il calendario indicato (o entrambi se 'all').
+ * Rimuove dal dispositivo il calendario indicato (o tutti se 'all').
  */
 export async function deleteStudICICalendar(
-  target: "lessons" | "trains" | "trains_return" | "all" = "all",
+  target: "lessons" | "trains" | "trains_return" | "strikes" | "all" = "all",
 ): Promise<{ success: boolean; message: string }> {
   const isOuter = !isCalendarSyncInProgress;
   if (isOuter) isCalendarSyncInProgress = true;
@@ -1443,6 +1579,7 @@ export async function deleteStudICICalendar(
     const deleteLessons = target === "lessons" || target === "all";
     const deleteTrains = target === "trains" || target === "all";
     const deleteTrainsReturnOnly = target === "trains_return";
+    const deleteStrikes = target === "strikes" || target === "all";
 
     if (deleteLessons) {
       const storedId = await AsyncStorage.getItem(CALENDAR_ID_KEY);
@@ -1548,12 +1685,38 @@ export async function deleteStudICICalendar(
       };
     }
 
+    if (deleteStrikes) {
+      const storedStrikeId = await AsyncStorage.getItem(STRIKES_CALENDAR_ID_KEY);
+      const strikeTitle = await getCalendarTitle("strikes");
+      const matchingStrikes = calendars.filter(
+        (c) =>
+          c.allowsModifications &&
+          (c.id === storedStrikeId ||
+            c.name === "studici_strikes" ||
+            c.title === strikeTitle ||
+            c.title === DEFAULT_STRIKES_CALENDAR_TITLE),
+      );
+      for (const cal of matchingStrikes) {
+        try {
+          await Calendar.deleteCalendarAsync(cal.id);
+        } catch {}
+      }
+      await AsyncStorage.multiRemove([
+        STRIKES_CALENDAR_ID_KEY,
+        LAST_STRIKES_CALENDAR_SYNC_KEY,
+        CALENDAR_STRIKES_CUSTOM_COLOR_KEY,
+        STRIKES_EVENTS_STATE_KEY,
+      ]);
+    }
+
     const label =
       target === "all"
-        ? "I calendari StudICI (Lezioni e Treni) sono stati rimossi"
+        ? "I calendari StudICI (Lezioni, Treni e Scioperi) sono stati rimossi"
         : target === "lessons"
           ? "Il calendario Lezioni è stato rimosso"
-          : "I calendari dei treni sono stati rimossi";
+          : target === "strikes"
+            ? "Il calendario Scioperi è stato rimosso"
+            : "I calendari dei treni sono stati rimossi";
 
     return {
       success: true,
@@ -1567,6 +1730,120 @@ export async function deleteStudICICalendar(
   } finally {
     if (isOuter) releaseCalendarSyncLock();
   }
+}
+
+/**
+ * Restituisce lo snapshot attuale (sola lettura) del calendario Scioperi gestito e dei calendari modificabili.
+ */
+export async function getManagedStrikeCalendarsSnapshot(): Promise<{
+  targetCalendarId: string | null;
+  writableCalendarIds: string[];
+}> {
+  try {
+    const calendars = await getFreshCalendarsSafe();
+    const cal = await findManagedAppleCalendar(calendars, "strikes");
+    const writableCalendarIds = calendars
+      .filter((c) => c.allowsModifications && Boolean(c.id))
+      .map((c) => c.id);
+    return {
+      targetCalendarId: cal?.id || null,
+      writableCalendarIds,
+    };
+  } catch {
+    return {
+      targetCalendarId: null,
+      writableCalendarIds: [],
+    };
+  }
+}
+
+/**
+ * Crea o recupera il calendario nativo Scioperi applicando tutte le regole condivise con i calendari
+ * Lezioni/Treni (mutex condiviso, pull bidirezionale di nome/colore da Apple Calendar, preferenza iCloud
+ * e preservazione della condivisione esistente senza eliminare eventi esterni).
+ */
+export async function ensureManagedStrikeCalendar(
+  calendarColor?: string,
+): Promise<{
+  targetCalendarId: string | null;
+  writableCalendarIds: string[];
+}> {
+  const isOuter = !isCalendarSyncInProgress;
+  if (isOuter && inFlightExternalPullPromise) {
+    await inFlightExternalPullPromise.catch(() => {});
+  }
+  if (isOuter && isCalendarSyncInProgress) {
+    let waitedMs = 0;
+    while (isCalendarSyncInProgress && waitedMs < 15000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waitedMs += 100;
+    }
+  }
+  const acquiredLock = !isCalendarSyncInProgress;
+  if (acquiredLock) isCalendarSyncInProgress = true;
+  try {
+    if (calendarColor) {
+      const resolvedThemeHex = await resolveThemePrimaryHex(calendarColor);
+      await AsyncStorage.setItem(CALENDAR_COLOR_KEY, resolvedThemeHex);
+    }
+
+    const preCalendars = await getFreshCalendarsSafe().catch(
+      () => [] as Calendar.Calendar[],
+    );
+    if (preCalendars.length > 0) {
+      try {
+        await _pullExternalChangesInternal(preCalendars, calendarColor, {
+          detectExternalDeletion: false,
+        });
+      } catch {}
+    }
+
+    const [activeColor, activeTitle] = await Promise.all([
+      getCalendarColor("strikes", calendarColor),
+      getCalendarTitle("strikes"),
+    ]);
+
+    const { calendarId } = await getOrCreateNativeCalendar({
+      idStorageKey: STRIKES_CALENDAR_ID_KEY,
+      name: "studici_strikes",
+      activeTitle,
+      activeColor,
+      defaultTitle: DEFAULT_STRIKES_CALENDAR_TITLE,
+      skipClearEvents: true,
+      prefetchedCalendars: preCalendars.length > 0 ? preCalendars : undefined,
+    });
+
+    const writableCalendarIds = Array.from(
+      new Set(
+        [
+          ...preCalendars
+            .filter((c) => c.allowsModifications && Boolean(c.id))
+            .map((c) => c.id),
+          calendarId,
+        ].filter(Boolean),
+      ),
+    );
+
+    return {
+      targetCalendarId: calendarId,
+      writableCalendarIds,
+    };
+  } catch {
+    return {
+      targetCalendarId: null,
+      writableCalendarIds: [],
+    };
+  } finally {
+    if (acquiredLock) releaseCalendarSyncLock();
+  }
+}
+
+export async function markStrikesCalendarSynced(
+  timestamp: number = Date.now(),
+): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LAST_STRIKES_CALENDAR_SYNC_KEY, timestamp.toString());
+  } catch {}
 }
 
 /**
