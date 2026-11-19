@@ -1642,14 +1642,6 @@ async function syncIosStrikeCalendarEvents(
           targetCalendarId,
           eventDetails,
         );
-        if (finalReminderId) {
-          await Calendar.updateReminderAsync(finalReminderId, {
-            title: item.title,
-            notes: item.notes,
-            url: item.url,
-            alarms: fallbackAlarms,
-          });
-        }
       } catch (err) {
         console.warn("[StrikeCalendar] Errore creazione evento sciopero:", err);
       }

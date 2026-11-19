@@ -302,10 +302,6 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     userCoordsRef.current = userCoords;
   }, [userCoords]);
 
-  useEffect(() => {
-    userCoordsRef.current = userCoords;
-  }, [userCoords]);
-
   // Risoluzione asincrona del nome della località (es. Viterbo, Orte, Terni, Latina, Roma)
   const resolveLocationName = useCallback(async (lat: number, lng: number) => {
     try {

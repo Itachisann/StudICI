@@ -237,12 +237,6 @@ function AppLayoutContent() {
     const unsubManual = subscribeToManualEventsChanges(() => {
       syncStrikeNotifications().catch(() => {});
     });
-    const unsubExcluded = subscribeToExcludedLessonsChanges(() => {
-      syncStrikeNotifications().catch(() => {});
-    });
-    const unsubManual = subscribeToManualEventsChanges(() => {
-      syncStrikeNotifications().catch(() => {});
-    });
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
