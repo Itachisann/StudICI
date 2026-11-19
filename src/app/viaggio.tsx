@@ -64,14 +64,19 @@ import { CommuterConfig, CommuterItinerary, TripLeg } from "../types/commuter";
 import { DisruptionCategory, DisruptionEvent } from "../types/disruptions";
 import { refreshAppleCalendarIfConfigured } from "../utils/appleCalendar";
 import {
+  clearPersistedItinerariesCache,
   computeCommuterItinerary,
+  elapsedMinutes,
   getDayClassesForWeekday,
   getInFlightStartupPrefetch,
   getRomeStationName,
   getWarmViaggioStartupSnapshot,
   invalidateViaggioStartupSnapshot,
+  loadPersistedItinerariesCache,
+  normalizeRelativeMinutes,
   resolveAutoTargetClass as getAutoTargetClass,
   resolveViaggioTargetContext,
+  savePersistedItineraryEntry,
 } from "../utils/commuterOptimizer";
 import {
   getCommuterConfig,
@@ -124,13 +129,13 @@ import {
 } from "../utils/scraper";
 import {
   cleanPlatform,
-  clearTrenitaliaCache,
   enrichTrainFromCachedAndamento,
   evaluateTrainStatus,
   isSameStation,
   isTrainAndamentoFresh,
   minutesToTime,
   parseTimeToMinutes,
+  refreshLiveTrenitaliaCache,
   TrainStatusResult,
 } from "../utils/trenitaliaApi";
 
@@ -297,23 +302,37 @@ function LectureCard({
 }: LectureCardProps) {
   const excludedProgress = useExcludedProgress(isExcluded, 0);
 
-  const animatedUnselectedStyle = useAnimatedStyle(() => {
-    if (isSelected) {
-      return {};
-    }
-    return {
-      backgroundColor: interpolateColor(
-        excludedProgress.value,
-        [0, 1],
-        ["#1c1c1e", "#141519"],
-      ),
-      borderColor: interpolateColor(
-        excludedProgress.value,
-        [0, 1],
-        ["rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.055)"],
-      ),
-    };
-  }, [isSelected]);
+  const normalBg = isSelected ? theme.cardTint : "#1c1c1e";
+  const excludedBg = isSelected ? theme.cardTint : "#141519";
+  const normalBorder = isSelected
+    ? theme.primary
+    : "rgba(255, 255, 255, 0.08)";
+  const excludedBorder = isSelected
+    ? theme.primary
+    : "rgba(255, 255, 255, 0.055)";
+
+  // L'animated style resta sempre agganciato e valorizzato per entrambi gli stati:
+  // rimuoverlo condizionalmente o restituire `{}` su Fabric/Reanimated 4 lascia
+  // impressi sul layer nativo `#1c1c1e` e il bordo scuro al primo cambio target.
+  const animatedCardStyle = useAnimatedStyle(
+    () => ({
+      backgroundColor: isSelected
+        ? normalBg
+        : interpolateColor(
+            excludedProgress.value,
+            [0, 1],
+            [normalBg, excludedBg],
+          ),
+      borderColor: isSelected
+        ? normalBorder
+        : interpolateColor(
+            excludedProgress.value,
+            [0, 1],
+            [normalBorder, excludedBorder],
+          ),
+    }),
+    [isSelected, normalBg, excludedBg, normalBorder, excludedBorder],
+  );
 
   const animatedSelectedWashStyle = useAnimatedStyle(() => ({
     opacity: isSelected ? interpolate(excludedProgress.value, [0, 1], [0, 0.22]) : 0,
@@ -332,12 +351,10 @@ function LectureCard({
     isSelected && [
       styles.classCardSelected,
       {
-        backgroundColor: theme.cardTint,
-        borderColor: theme.primary,
         shadowColor: theme.primary,
       },
     ],
-    !isSelected && animatedUnselectedStyle,
+    animatedCardStyle,
   ];
 
   const cardContent = (
@@ -467,6 +484,9 @@ export default function ViaggioScreen() {
   );
   const [schedule, setSchedule] = useState<ScheduleData | null>(
     () => initialStartupSeed?.schedule ?? null,
+  );
+  const [scheduleHydrated, setScheduleHydrated] = useState<boolean>(
+    () => Boolean(initialStartupSeed),
   );
   const [itinerary, setItinerary] = useState<CommuterItinerary | null>(
     () => initialStartupSeed?.itinerary ?? null,
@@ -598,6 +618,149 @@ export default function ViaggioScreen() {
       ? { [initialTodayDayIdx]: initialStartupSeed.itinerary }
       : {},
   );
+
+  // Idratazione istantanea da disco (Stale-While-Revalidate): legge in parallelo da AsyncStorage
+  // config, orario lezioni, eventi manuali, esclusioni e ultimi itinerari validi (zero rete)
+  // così la schermata Viaggio compare subito completa senza mai flashare "Nessuna lezione".
+  useEffect(() => {
+    let mounted = true;
+    const readLocalScheduleCache = async (): Promise<{
+      found: boolean;
+      sched: ScheduleData | null;
+      defaultTab: string | null;
+    }> => {
+      if (hasLoadedScheduleRef.current) {
+        return {
+          found: true,
+          sched: scheduleCacheRef.current,
+          defaultTab: defaultTabUrlRef.current,
+        };
+      }
+      try {
+        const pairs = await AsyncStorage.multiGet([
+          "selectedDegreeUrl",
+          "defaultTabUrl",
+        ]);
+        const url = pairs[0]?.[1];
+        if (!url) {
+          return { found: true, sched: null, defaultTab: null };
+        }
+        const extraPairs = await AsyncStorage.multiGet([
+          `defaultTabUrl_${url}`,
+          `allSchedules_v8_${url}`,
+        ]);
+        const nextDefaultTab =
+          extraPairs[0]?.[1] || pairs[1]?.[1] || null;
+        const rawCourse = extraPairs[1]?.[1];
+        if (!rawCourse) {
+          return { found: false, sched: null, defaultTab: nextDefaultTab };
+        }
+        const parsed = JSON.parse(rawCourse);
+        if (
+          parsed?.tabs &&
+          parsed?.schedules &&
+          Array.isArray(parsed.tabs) &&
+          parsed.tabs.length > 0
+        ) {
+          const activeTab =
+            parsed.tabs.find((t: { url?: string }) => t?.url === nextDefaultTab) ||
+            parsed.tabs[0];
+          const loadedSched: ScheduleData | null = activeTab
+            ? parsed.schedules[activeTab.url] ||
+              parsed.schedules[activeTab.name] ||
+              null
+            : null;
+          if (loadedSched) {
+            return {
+              found: true,
+              sched: loadedSched,
+              defaultTab: nextDefaultTab,
+            };
+          }
+        }
+        return { found: false, sched: null, defaultTab: nextDefaultTab };
+      } catch {
+        return { found: false, sched: null, defaultTab: null };
+      }
+    };
+
+    const curInitialKey = `outbound_${initialTodayDayIdx}_auto`;
+    if (itinerariesCacheRef.current[curInitialKey]) {
+      savePersistedItineraryEntry(
+        curInitialKey,
+        itinerariesCacheRef.current[curInitialKey]!,
+      );
+    }
+
+    Promise.all([
+      loadPersistedItinerariesCache().catch(() => null),
+      configCacheRef.current
+        ? Promise.resolve(configCacheRef.current)
+        : getCommuterConfig().catch(() => null),
+      manualsCacheRef.current
+        ? Promise.resolve(manualsCacheRef.current)
+        : getManualEvents().catch(() => null),
+      excludedCacheRef.current
+        ? Promise.resolve(excludedCacheRef.current)
+        : getExcludedLessons().catch(() => null),
+      readLocalScheduleCache(),
+    ])
+      .then(([persisted, localCfg, localManuals, localExcluded, localSched]) => {
+        if (!mounted) return;
+
+        if (localCfg && !configCacheRef.current) {
+          configCacheRef.current = localCfg;
+          setConfig((prev) => prev ?? localCfg);
+        }
+        if (localManuals && !manualsCacheRef.current) {
+          manualsCacheRef.current = localManuals;
+          setManualEvents((prev) => (prev.length > 0 ? prev : localManuals));
+        }
+        if (localExcluded && !excludedCacheRef.current) {
+          excludedCacheRef.current = localExcluded;
+          setExcludedLessons((prev) => (prev.length > 0 ? prev : localExcluded));
+        }
+        if (localSched.found && !hasLoadedScheduleRef.current) {
+          scheduleCacheRef.current = localSched.sched;
+          defaultTabUrlRef.current = localSched.defaultTab;
+          hasLoadedScheduleRef.current = true;
+          setDefaultTabUrl((prev) => prev ?? localSched.defaultTab);
+          setSchedule((prev) => prev ?? localSched.sched);
+          setScheduleHydrated(true);
+        }
+
+        if (persisted && Object.keys(persisted).length > 0) {
+          const byDayUpdates: Record<number, CommuterItinerary> = {};
+          for (const [k, val] of Object.entries(persisted)) {
+            if (!itinerariesCacheRef.current[k]) {
+              itinerariesCacheRef.current[k] = val;
+            }
+            const parts = k.split("_");
+            if (parts[0] === "outbound" && parts[2] === "auto") {
+              const dIdx = parseInt(parts[1] || "", 10);
+              if (!Number.isNaN(dIdx)) {
+                byDayUpdates[dIdx] = val;
+              }
+            }
+          }
+          if (Object.keys(byDayUpdates).length > 0) {
+            setItinerariesByDay((prev) => ({ ...byDayUpdates, ...prev }));
+          }
+          const curKey = `${directionRef.current}_${activeDayIdxRef.current}_${activeClassIdxRef.current ?? "auto"}`;
+          const curPersisted = itinerariesCacheRef.current[curKey];
+          if (curPersisted) {
+            setItinerary((prev) => prev ?? curPersisted);
+            setLoading(false);
+          }
+        } else if (localCfg?.enabled === false) {
+          setLoading(false);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [initialTodayDayIdx]);
 
   // Animazione fluida a scorrimento dello slider dei giorni della settimana (sincronizzato al pager)
   const segmentLayouts = useRef<{
@@ -1170,12 +1333,18 @@ export default function ViaggioScreen() {
       }
 
       if (!silent) {
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
+        if (isRefresh) {
+          setRefreshing(true);
+        } else {
+          const existingCacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
+          if (!itinerariesCacheRef.current[existingCacheKey]) {
+            setLoading(true);
+          }
+        }
       }
 
       if (isRefresh) {
-        clearTrenitaliaCache();
+        refreshLiveTrenitaliaCache();
         invalidateViaggioStartupSnapshot();
       }
 
@@ -1190,41 +1359,46 @@ export default function ViaggioScreen() {
             ) {
               return;
             }
-            if (seed && (seed.config.enabled === false || seed.itinerary !== null)) {
+            if (seed) {
               configCacheRef.current = seed.config;
               manualsCacheRef.current = seed.manualEvents;
               excludedCacheRef.current = seed.excludedLessons || [];
               scheduleCacheRef.current = seed.schedule;
               hasLoadedScheduleRef.current = true;
               defaultTabUrlRef.current = seed.defaultTabUrl;
-              const cacheKey = `${effDir}_${effDayIdx}_auto`;
-              if (seed.itinerary) {
-                itinerariesCacheRef.current[cacheKey] = seed.itinerary;
-              }
               setConfig(seed.config);
               setManualEvents(seed.manualEvents);
               setExcludedLessons(seed.excludedLessons || []);
               setDefaultTabUrl(seed.defaultTabUrl);
               setSchedule(seed.schedule);
+              setScheduleHydrated(true);
               setDisruptions(seed.disruptions);
-              setItinerary(seed.itinerary);
-              if (seed.itinerary) {
-                setItinerariesByDay((prev) => ({
-                  ...prev,
-                  [effDayIdx]: seed.itinerary,
-                }));
+              if (seed.config.enabled === false || seed.itinerary !== null) {
+                const cacheKey = `${effDir}_${effDayIdx}_auto`;
+                if (seed.itinerary) {
+                  itinerariesCacheRef.current[cacheKey] = seed.itinerary;
+                  savePersistedItineraryEntry(cacheKey, seed.itinerary);
+                }
+                setItinerary(seed.itinerary);
+                if (seed.itinerary) {
+                  setItinerariesByDay((prev) => ({
+                    ...prev,
+                    [effDayIdx]: seed.itinerary,
+                  }));
+                }
+                setLastUpdated(new Date(seed.timestamp));
+                syncStrikeNotifications(seed.disruptions, {
+                  promptIfNeeded: true,
+                }).catch(() => {});
+                return;
               }
-              setLastUpdated(new Date(seed.timestamp));
-              syncStrikeNotifications(seed.disruptions, {
-                promptIfNeeded: true,
-              }).catch(() => {});
-              return;
             }
           }
         }
 
         // Avvio in parallelo di tutte le fonti dati necessarie alla schermata Viaggio
-        const disruptionsPromise = getDisruptions(isRefresh).catch(
+        // I refresh silenziosi (timer 60s / foreground) usano la cache 30m degli scioperi/manifestazioni
+        const disruptionsPromise = getDisruptions(isRefresh && !silent).catch(
           () => disruptionsRef.current,
         );
 
@@ -1349,6 +1523,7 @@ export default function ViaggioScreen() {
           setExcludedLessons(currentExcluded);
           setDefaultTabUrl(defaultTab);
           setSchedule(sched);
+          setScheduleHydrated(true);
           setDisruptions(resolvedDisruptions);
           setItinerary(null);
           return;
@@ -1377,7 +1552,7 @@ export default function ViaggioScreen() {
             isExplicitClass,
             selectedTrainOffset: effTrainOffset,
             selectedTrainNumber: effTrainNum || undefined,
-            forceRefresh: isRefresh,
+            forceRefresh: isRefresh && !silent,
             excludedLessonIds: currentExcludedSet,
           }),
           disruptionsPromise,
@@ -1408,12 +1583,16 @@ export default function ViaggioScreen() {
         setExcludedLessons(currentExcluded);
         setDefaultTabUrl(defaultTab);
         setSchedule(sched);
+        setScheduleHydrated(true);
         setDisruptions(resolvedDisruptions);
 
         if (itinRes.status === "fulfilled") {
           const itin = itinRes.value;
           const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
           itinerariesCacheRef.current[cacheKey] = itin;
+          if (effTrainOffset === 0 && !effTrainNum) {
+            savePersistedItineraryEntry(cacheKey, itin);
+          }
           setItinerary(itin);
           if (effClassIdx === null) {
             setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
@@ -1449,6 +1628,7 @@ export default function ViaggioScreen() {
     const unsub = subscribeToManualEventsChanges(() => {
       manualsCacheRef.current = null;
       itinerariesCacheRef.current = {};
+      clearPersistedItinerariesCache();
       invalidateViaggioStartupSnapshot();
       getManualEvents()
         .then((evts) => {
@@ -1465,6 +1645,7 @@ export default function ViaggioScreen() {
     const unsub = subscribeToExcludedLessonsChanges(() => {
       excludedCacheRef.current = null;
       itinerariesCacheRef.current = {};
+      clearPersistedItinerariesCache();
       invalidateViaggioStartupSnapshot();
       getExcludedLessons()
         .then((recs) => {
@@ -1532,14 +1713,16 @@ export default function ViaggioScreen() {
     useCallback(() => {
       loadData();
       // Aggiornamento automatico sincronizzato di treni, ritardi e mezzi ogni minuto (60 secondi)
+      // Eseguito solo quando è visualizzato il giorno odierno (i giorni futuri sono programmati statici)
       const id = setInterval(() => {
         // Non interrompere il caricamento di un treno appena selezionato dall'utente
         if (pendingTrainRef.current) return;
+        if (activeDayIdxRef.current !== new Date().getDay()) return;
         loadData(true, true);
       }, 60000);
       const appStateSub = AppState.addEventListener("change", (nextState) => {
         if (nextState === "active") {
-          if (!pendingTrainRef.current) {
+          if (!pendingTrainRef.current && activeDayIdxRef.current === new Date().getDay()) {
             loadData(true, true);
           }
           refreshAppleCalendarIfConfigured().catch(() => {});
@@ -2330,7 +2513,7 @@ export default function ViaggioScreen() {
   );
 
   // Ricalcola dinamicamente l'orario e la durata sulla card esterna della tappa del viaggio
-  // affinché corrisponda all'ultimo mezzo utile per arrivare a destinazione in tempo
+  // affinché corrisponda al mezzo più efficiente e aggiorni l'eventuale ultima corsa utile
   const handleOptimalTransitResolved = useCallback(
     (update: OptimalTransitTimingUpdate) => {
       setItinerary((prev) => {
@@ -2339,17 +2522,48 @@ export default function ViaggioScreen() {
         if (transitIdx === -1) return prev;
         const currentLeg = prev.legs[transitIdx];
         const newTitle =
-          update.directLines && update.directLines.length > 0
-            ? `Linee ${update.directLines.join(" / ")}`
-            : update.line
-              ? `Linea ${update.line}`
-              : currentLeg.title;
+          update.directLines && update.directLines.length === 1
+            ? /^metro\b/i.test(update.directLines[0])
+              ? update.directLines[0]
+              : `Linea ${update.directLines[0]}`
+            : update.directLines && update.directLines.length > 1
+              ? `Linee ${update.directLines.join(" / ")}`
+              : update.line
+                ? /^metro\b/i.test(update.line)
+                  ? update.line
+                  : `Linea ${update.line}`
+                : currentLeg.title;
+
+        const prevLastId = prev.lastUsefulTransitDeparture?.id;
+        const nextLastId = update.lastUsefulDeparture?.id;
+        const prevLastTime =
+          prev.lastUsefulTransitDeparture?.estimatedTime ||
+          prev.lastUsefulTransitDeparture?.scheduledTime;
+        const nextLastTime =
+          update.lastUsefulDeparture?.estimatedTime ||
+          update.lastUsefulDeparture?.scheduledTime;
+
+        const prevLeaveLeg =
+          prev.legs[0]?.id === "leave-lecture-leg" ? prev.legs[0] : null;
+        const leaveLegNeedsSync = Boolean(
+          prevLeaveLeg &&
+            typeof update.walkBeforeMinutes === "number" &&
+            prev.targetLecture?.endTime &&
+            parseTimeToMinutes(update.startTime) -
+              Math.max(0, update.walkBeforeMinutes) >=
+              parseTimeToMinutes(prev.targetLecture.endTime) &&
+            prevLeaveLeg.durationMinutes !==
+              Math.max(0, update.walkBeforeMinutes),
+        );
 
         if (
+          !leaveLegNeedsSync &&
           currentLeg.startTime === update.startTime &&
           currentLeg.endTime === update.endTime &&
           currentLeg.durationMinutes === update.durationMinutes &&
-          currentLeg.title === newTitle
+          currentLeg.title === newTitle &&
+          prevLastId === nextLastId &&
+          prevLastTime === nextLastTime
         ) {
           return prev;
         }
@@ -2363,7 +2577,7 @@ export default function ViaggioScreen() {
           durationMinutes: update.durationMinutes,
         };
 
-        // Se la tappa successiva è l'attesa in stazione (nel ritorno), riallinea il suo inizio all'arrivo del mezzo
+        // Se la tappa successiva è l'attesa in stazione (nel ritorno), riallinea il suo inizio all'arrivo del mezzo consigliato
         const nextLeg = updatedLegs[transitIdx + 1];
         let nextLectureTimeStatus = prev.lectureTimeStatus;
 
@@ -2372,14 +2586,58 @@ export default function ViaggioScreen() {
           nextLeg.type === "wait" &&
           nextLeg.id === "station-wait-leg"
         ) {
-          const waitStartM = parseTimeToMinutes(update.endTime);
-          const waitEndM = parseTimeToMinutes(nextLeg.endTime);
-          const newWaitDur = Math.max(0, waitEndM - waitStartM);
-          updatedLegs[transitIdx + 1] = {
-            ...nextLeg,
-            startTime: update.endTime,
-            durationMinutes: newWaitDur,
-          };
+          const refStartM = parseTimeToMinutes(update.startTime);
+          const relStartM = normalizeRelativeMinutes(
+            parseTimeToMinutes(update.endTime),
+            refStartM,
+          );
+          const waitEndM = normalizeRelativeMinutes(
+            parseTimeToMinutes(nextLeg.endTime),
+            refStartM,
+          );
+          const newWaitDur = Math.max(0, waitEndM - relStartM);
+          if (newWaitDur <= 3) {
+            updatedLegs.splice(transitIdx + 1, 1);
+          } else {
+            updatedLegs[transitIdx + 1] = {
+              ...nextLeg,
+              startTime: update.endTime,
+              durationMinutes: newWaitDur,
+            };
+          }
+        } else if (
+          prev.direction === "return" &&
+          nextLeg &&
+          nextLeg.type === "train"
+        ) {
+          const refStartM = parseTimeToMinutes(update.startTime);
+          const relStartM = normalizeRelativeMinutes(
+            parseTimeToMinutes(update.endTime),
+            refStartM,
+          );
+          const waitEndM = normalizeRelativeMinutes(
+            parseTimeToMinutes(nextLeg.startTime),
+            refStartM,
+          );
+          const newWaitDur = waitEndM - relStartM;
+          if (newWaitDur > 3) {
+            const trainPlat = nextLeg.details?.platform;
+            const stName = nextLeg.subtitle?.split(" ➔ ")[0];
+            updatedLegs.splice(transitIdx + 1, 0, {
+              id: "station-wait-leg",
+              type: "wait",
+              title: stName
+                ? `Attesa in Stazione a ${stName}`
+                : "Attesa in Stazione",
+              subtitle: `Binario di partenza: ${trainPlat || "In definizione"}`,
+              startTime: update.endTime,
+              endTime: nextLeg.startTime,
+              durationMinutes: newWaitDur,
+              details: {
+                platform: trainPlat,
+              },
+            });
+          }
         } else if (
           prev.direction === "outbound" &&
           prev.targetLecture?.startTime &&
@@ -2390,7 +2648,17 @@ export default function ViaggioScreen() {
           );
           const lectureEndM = parseTimeToMinutes(prev.targetLecture.endTime);
           const classArrM = parseTimeToMinutes(update.endTime);
-          const isLectureFinished = lectureEndM > 0 && classArrM >= lectureEndM;
+          const depRefM = parseTimeToMinutes(
+            prev.departureTime || update.startTime,
+          );
+          const relClassArrM = normalizeRelativeMinutes(classArrM, depRefM);
+          const nowDate = new Date();
+          const nowM = nowDate.getHours() * 60 + nowDate.getMinutes();
+          const isTargetDayToday =
+            activeDayIdxRef.current === nowDate.getDay();
+          const isLectureFinished =
+            (isTargetDayToday && lectureEndM > 0 && nowM >= lectureEndM) ||
+            (lectureEndM > 0 && relClassArrM >= lectureEndM);
 
           const existingLectureIdx = updatedLegs.findIndex(
             (l) => l.id === "lecture-leg",
@@ -2401,8 +2669,8 @@ export default function ViaggioScreen() {
               updatedLegs.splice(existingLectureIdx, 1);
             }
             nextLectureTimeStatus = undefined;
-          } else if (classArrM > lectureStartM && classArrM < lectureEndM) {
-            const remainingMins = Math.max(1, lectureEndM - classArrM);
+          } else if (relClassArrM > lectureStartM && relClassArrM < lectureEndM) {
+            const remainingMins = Math.max(1, lectureEndM - relClassArrM);
             const remainingBadge = `${formatDuration(remainingMins)} rimanenti`;
             nextLectureTimeStatus = {
               type: "late_arrival",
@@ -2431,7 +2699,7 @@ export default function ViaggioScreen() {
               updatedLegs.splice(transitIdx + 1, 0, updatedLectureLeg);
             }
           } else {
-            const spareTime = lectureStartM - classArrM;
+            const spareTime = lectureStartM - relClassArrM;
             nextLectureTimeStatus = undefined;
             const updatedLectureLeg: TripLeg = {
               id: "lecture-leg",
@@ -2463,7 +2731,7 @@ export default function ViaggioScreen() {
           // In andata l'arrivo complessivo del viaggio coincide con l'arrivo reale (mezzo + camminata) in aula
           newArrTime = update.endTime;
         } else if (transitIdx === 0) {
-          // Nel ritorno, se la prima tappa è il mezzo urbano, la partenza coincide con l'ultimo mezzo utile
+          // Nel ritorno, se la prima tappa è il mezzo urbano, la partenza coincide con il mezzo consigliato
           newDepTime = update.startTime;
         } else if (
           updatedLegs[0]?.id === "leave-lecture-leg" &&
@@ -2473,13 +2741,20 @@ export default function ViaggioScreen() {
             prev.targetLecture.startTime || "08:30",
           );
           const lecEndM = parseTimeToMinutes(prev.targetLecture.endTime);
+          const walkBefore =
+            typeof update.walkBeforeMinutes === "number"
+              ? Math.max(0, update.walkBeforeMinutes)
+              : 7;
           const leaveM = Math.max(
             lecStartM,
-            parseTimeToMinutes(update.startTime) - 7,
+            parseTimeToMinutes(update.startTime) - walkBefore,
           );
+          const lectureRoomSubtitle = prev.targetLecture.buildingName
+            ? `${prev.targetLecture.room} • ${prev.targetLecture.buildingName}`
+            : prev.targetLecture.room;
           if (leaveM < lecEndM) {
             const lostMins = Math.max(1, lecEndM - leaveM);
-            const lostBadge = `${formatDuration(lostMins)} persi`;
+            const lostBadge = `Perdi ${formatDuration(lostMins)} di lezione`;
             nextLectureTimeStatus = {
               type: "early_departure",
               minutes: lostMins,
@@ -2487,10 +2762,12 @@ export default function ViaggioScreen() {
             };
             updatedLegs[0] = {
               ...updatedLegs[0],
+              title: `Termine lezione: ${prev.targetLecture.subject}`,
+              subtitle: lectureRoomSubtitle,
               startTime: minutesToTime(leaveM),
               endTime: update.startTime,
               durationMinutes: Math.max(
-                1,
+                0,
                 parseTimeToMinutes(update.startTime) - leaveM,
               ),
               details: {
@@ -2505,11 +2782,14 @@ export default function ViaggioScreen() {
             newDepTime = minutesToTime(leaveM);
           } else {
             nextLectureTimeStatus = undefined;
+            const postEndDur = walkBefore;
             updatedLegs[0] = {
               ...updatedLegs[0],
+              title: `Termine lezione: ${prev.targetLecture.subject}`,
+              subtitle: lectureRoomSubtitle,
               startTime: prev.targetLecture.endTime,
-              endTime: minutesToTime(lecEndM + 7),
-              durationMinutes: 7,
+              endTime: minutesToTime(lecEndM + postEndDur),
+              durationMinutes: postEndDur,
               details: undefined,
             };
             newDepTime = prev.targetLecture.endTime;
@@ -2518,8 +2798,22 @@ export default function ViaggioScreen() {
 
         const depM = parseTimeToMinutes(newDepTime);
         const arrM = parseTimeToMinutes(newArrTime);
-        const newTotalDur =
-          arrM >= depM ? arrM - depM : prev.totalDurationMinutes;
+        let newTotalDur = elapsedMinutes(depM, arrM);
+        if (newTotalDur <= 0) {
+          const legsSum = updatedLegs.reduce(
+            (acc, l) => acc + Math.max(0, l.durationMinutes || 0),
+            0,
+          );
+          newTotalDur = legsSum > 0 ? legsSum : prev.totalDurationMinutes;
+        }
+
+        const isPrevTargetFinished = Boolean(
+          prev.direction === "outbound" &&
+            prev.targetLecture?.endTime &&
+            activeDayIdxRef.current === new Date().getDay() &&
+            new Date().getHours() * 60 + new Date().getMinutes() >=
+              parseTimeToMinutes(prev.targetLecture.endTime),
+        );
 
         const nextItin: CommuterItinerary = {
           ...prev,
@@ -2527,6 +2821,10 @@ export default function ViaggioScreen() {
           arrivalTime: newArrTime,
           totalDurationMinutes: newTotalDur,
           lectureTimeStatus: nextLectureTimeStatus,
+          transitLiveContext: update.isLiveContext ?? prev.transitLiveContext,
+          lastUsefulTransitDeparture: isPrevTargetFinished
+            ? undefined
+            : update.lastUsefulDeparture,
           legs: updatedLegs,
         };
 
@@ -2929,7 +3227,7 @@ export default function ViaggioScreen() {
                 stazione-stazione
               </Text>
             </View>
-          ) : pageClasses.length === 0 ? (
+          ) : !scheduleHydrated && pageClasses.length === 0 ? null : pageClasses.length === 0 ? (
             <View style={[styles.noClassesCard, { borderColor: theme.border }]}>
               <Ionicons
                 name="sunny-outline"
@@ -3480,7 +3778,8 @@ export default function ViaggioScreen() {
                   >
                     {isCurrentDayPage ? (
                       <View>
-                        {(config !== null || itinerary !== null || !loading) && (
+                        {(isWeekend || scheduleHydrated || dayClasses.length > 0) &&
+                          (config !== null || itinerary !== null || !loading) && (
                           <View style={styles.lecturesSection}>
                           <View style={styles.sectionHeaderRow}>
                             <View
@@ -3626,7 +3925,17 @@ export default function ViaggioScreen() {
                                   />
                                   <Text style={styles.durationBadgeText}>
                                     {formatDuration(
-                                      itinerary.totalDurationMinutes,
+                                      itinerary.totalDurationMinutes > 0
+                                        ? itinerary.totalDurationMinutes
+                                        : itinerary.legs.reduce(
+                                            (acc, l) =>
+                                              acc +
+                                              Math.max(
+                                                0,
+                                                l.durationMinutes || 0,
+                                              ),
+                                            0,
+                                          ),
                                     )}
                                   </Text>
                                 </View>
@@ -4712,7 +5021,7 @@ export default function ViaggioScreen() {
                                   theme={theme}
                                 />
 
-                                {/* Consiglio Rientro Anticipato (solo Ritorno, quando conviene nettamente) */}
+                                {/* Consiglio Treno Smart (Andata o Ritorno, quando conviene nettamente) */}
                                 {direction === "return" &&
                                   itinerary.smartReturnRecommendation && (
                                     <View
@@ -4810,6 +5119,113 @@ export default function ViaggioScreen() {
                                           ]}
                                         >
                                           {itinerary.smartReturnRecommendation
+                                            .isCurrentlySelected
+                                            ? "Standard"
+                                            : "Scegli"}
+                                        </Text>
+                                      </TouchableOpacity>
+                                    </View>
+                                  )}
+
+                                {direction === "outbound" &&
+                                  itinerary.smartOutboundRecommendation && (
+                                    <View
+                                      style={[
+                                        styles.smartReturnBanner,
+                                        itinerary.smartOutboundRecommendation
+                                          .isCurrentlySelected
+                                          ? styles.smartReturnBannerActive
+                                          : styles.smartReturnBannerSuggested,
+                                      ]}
+                                    >
+                                      <View
+                                        style={{ flex: 1, paddingRight: 10 }}
+                                      >
+                                        <View
+                                          style={styles.smartReturnTitleRow}
+                                        >
+                                          <Ionicons
+                                            name={
+                                              itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "checkmark-circle"
+                                                : "sparkles"
+                                            }
+                                            size={13}
+                                            color={
+                                              itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "#10b981"
+                                                : "#f59e0b"
+                                            }
+                                            style={{ marginRight: 5 }}
+                                          />
+                                          <Text
+                                            style={[
+                                              styles.smartReturnTitle,
+                                              {
+                                                color: itinerary
+                                                  .smartOutboundRecommendation
+                                                  .isCurrentlySelected
+                                                  ? "#34d399"
+                                                  : "#fbbf24",
+                                              },
+                                            ]}
+                                            numberOfLines={1}
+                                          >
+                                            {itinerary
+                                              .smartOutboundRecommendation
+                                              .isCurrentlySelected
+                                              ? `Andata smart attiva • ${itinerary.smartOutboundRecommendation.trainNumber}`
+                                              : `Consiglio andata • ${itinerary.smartOutboundRecommendation.trainNumber} (${itinerary.smartOutboundRecommendation.departureTime})`}
+                                          </Text>
+                                        </View>
+                                        <Text
+                                          style={styles.smartReturnSub}
+                                          numberOfLines={2}
+                                        >
+                                          {itinerary
+                                            .smartOutboundRecommendation
+                                            .isCurrentlySelected
+                                            ? `Parti ${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo da casa (${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} vs ${itinerary.smartOutboundRecommendation.standardHomeDepartureTime}) • ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min di ritardo`
+                                            : `Parti alle ${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} (${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo di ${itinerary.smartOutboundRecommendation.standardTrainNumber}) entrando ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min in ritardo`}
+                                        </Text>
+                                      </View>
+                                      <TouchableOpacity
+                                        style={[
+                                          styles.smartReturnActionBtn,
+                                          itinerary.smartOutboundRecommendation
+                                            .isCurrentlySelected
+                                            ? styles.smartReturnActionBtnMuted
+                                            : styles.smartReturnActionBtnPrimary,
+                                        ]}
+                                        activeOpacity={0.75}
+                                        onPress={() => {
+                                          const so =
+                                            itinerary.smartOutboundRecommendation;
+                                          if (!so) return;
+                                          handleSelectTrainChip(
+                                            so.isCurrentlySelected
+                                              ? so.standardTrainNumber
+                                              : so.trainNumber,
+                                          );
+                                        }}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.smartReturnActionText,
+                                            {
+                                              color: itinerary
+                                                .smartOutboundRecommendation
+                                                .isCurrentlySelected
+                                                ? "#cbd5e1"
+                                                : "#1c1917",
+                                            },
+                                          ]}
+                                        >
+                                          {itinerary.smartOutboundRecommendation
                                             .isCurrentlySelected
                                             ? "Standard"
                                             : "Scegli"}
@@ -5036,7 +5452,15 @@ export default function ViaggioScreen() {
                                           const smartRec =
                                             direction === "return"
                                               ? itinerary.smartReturnRecommendation
-                                              : undefined;
+                                              : itinerary.smartOutboundRecommendation;
+                                          const smartSavedBadge =
+                                            direction === "return" &&
+                                            itinerary.smartReturnRecommendation
+                                              ? `-${itinerary.smartReturnRecommendation.savedArrivalMinutes}m`
+                                              : direction === "outbound" &&
+                                                  itinerary.smartOutboundRecommendation
+                                                ? `+${itinerary.smartOutboundRecommendation.savedDepartureMinutes}m`
+                                                : "";
                                           const isSmartRecommended = Boolean(
                                             smartRec &&
                                             at.trainNumber.replace(/\D/g, "") ===
@@ -5217,7 +5641,7 @@ export default function ViaggioScreen() {
                                                         styles.smartChipPillText
                                                       }
                                                     >
-                                                      {`-${smartRec.savedArrivalMinutes}m`}
+                                                      {smartSavedBadge}
                                                     </Text>
                                                   </View>
                                                 )}
@@ -5261,6 +5685,10 @@ export default function ViaggioScreen() {
                                   iconName = "walk";
                                   iconColor = "#38bdf8";
                                   circleBg = "rgba(56, 189, 248, 0.15)";
+                                } else if (leg.id === "leave-lecture-leg") {
+                                  iconName = "school";
+                                  iconColor = "#60a5fa";
+                                  circleBg = "rgba(96, 165, 250, 0.15)";
                                 } else if (leg.type === "destination") {
                                   iconName =
                                     direction === "outbound" ? "flag" : "home";
@@ -5287,9 +5715,12 @@ export default function ViaggioScreen() {
                                       <Text style={styles.timeStartText}>
                                         {leg.startTime}
                                       </Text>
-                                      <Text style={styles.timeEndText}>
-                                        {leg.endTime}
-                                      </Text>
+                                      {leg.endTime &&
+                                        leg.endTime !== leg.startTime && (
+                                          <Text style={styles.timeEndText}>
+                                            {leg.endTime}
+                                          </Text>
+                                        )}
                                     </View>
 
                                     {/* Colonna Linea & Icona */}
@@ -5354,21 +5785,23 @@ export default function ViaggioScreen() {
                                                   ? "A piedi"
                                                   : leg.title}
                                               </Text>
-                                              <View
-                                                style={
-                                                  styles.durationBadgeContainer
-                                                }
-                                              >
-                                                <Text
+                                              {leg.durationMinutes > 0 && (
+                                                <View
                                                   style={
-                                                    styles.stepDurationText
+                                                    styles.durationBadgeContainer
                                                   }
                                                 >
-                                                  {formatDuration(
-                                                    leg.durationMinutes,
-                                                  )}
-                                                </Text>
-                                              </View>
+                                                  <Text
+                                                    style={
+                                                      styles.stepDurationText
+                                                    }
+                                                  >
+                                                    {formatDuration(
+                                                      leg.durationMinutes,
+                                                    )}
+                                                  </Text>
+                                                </View>
+                                              )}
                                             </View>
 
                                             <Text
@@ -5604,9 +6037,31 @@ export default function ViaggioScreen() {
                                             (() => {
                                               const liveTr =
                                                 itinerary.liveTrain;
-                                              const anchorTimeStr =
-                                                leg.details?.targetTime ||
-                                                leg.startTime;
+                                              const isPastReturnTrain = Boolean(
+                                                direction === "return" &&
+                                                  isSelectedDayToday &&
+                                                  liveTr &&
+                                                  !liveTr.isStoppedInStation &&
+                                                  (liveTr.isDepartedFromStation ||
+                                                    (
+                                                      liveTr.statusDescription ||
+                                                      ""
+                                                    )
+                                                      .toLowerCase()
+                                                      .includes("passato") ||
+                                                    (
+                                                      liveTr.statusDescription ||
+                                                      ""
+                                                    )
+                                                      .toLowerCase()
+                                                      .includes("arrivato")),
+                                              );
+                                              const isOutboundPostLesson =
+                                                direction === "outbound" &&
+                                                Boolean(
+                                                  isSelectedDayToday &&
+                                                    isTargetLectureFinished,
+                                                );
 
                                               // Verifica se la lezione target odierna è in corso oppure già conclusa
                                               const lectureStartMins = itinerary
@@ -5629,11 +6084,18 @@ export default function ViaggioScreen() {
                                                       "Lezioni di oggi terminate"),
                                                 );
 
-                                              // Se una lezione è in corso o conclusa, la card dei mezzi deve mostrare le linee "programmate"
-                                              // per quell'orario precedente, selezionando la corsa consigliata (primi mezzi utili)
+                                              // In ritorno a lezioni terminate (con treno ancora da prendere) il tabellone è live da subito;
+                                              // in altri contesti con lezione attiva usa il contesto calcolato dall'itinerario
                                               const isTransitLiveContext =
+                                                direction === "return" &&
                                                 Boolean(isSelectedDayToday) &&
-                                                !isLectureActiveOrFinished;
+                                                isTargetLectureFinished &&
+                                                !isPastReturnTrain
+                                                  ? true
+                                                  : Boolean(
+                                                      isSelectedDayToday,
+                                                    ) &&
+                                                    !isLectureActiveOrFinished;
 
                                               const constraintTimeForTransit =
                                                 direction === "return"
@@ -5641,8 +6103,10 @@ export default function ViaggioScreen() {
                                                     ? liveTr?.departureTimePlanned ||
                                                       liveTr?.departureTimeActual
                                                     : liveTr?.departureTimePlanned
-                                                  : itinerary.targetLecture
-                                                      ?.startTime;
+                                                  : isOutboundPostLesson
+                                                    ? undefined
+                                                    : itinerary.targetLecture
+                                                        ?.startTime;
 
                                               const minDepTimeForTransit =
                                                 direction === "outbound"
@@ -5650,8 +6114,20 @@ export default function ViaggioScreen() {
                                                     ? liveTr?.arrivalTimeActual ||
                                                       liveTr?.arrivalTimePlanned
                                                     : liveTr?.arrivalTimePlanned
-                                                  : itinerary.targetLecture
-                                                      ?.endTime;
+                                                  : isTargetLectureFinished
+                                                    ? undefined
+                                                    : itinerary.targetLecture
+                                                        ?.endTime;
+
+                                              const anchorTimeStr =
+                                                direction === "return" &&
+                                                isTransitLiveContext
+                                                  ? "now"
+                                                  : isOutboundPostLesson
+                                                    ? minDepTimeForTransit ||
+                                                      leg.startTime
+                                                    : leg.details?.targetTime ||
+                                                      leg.startTime;
 
                                               return (
                                                 <TransitBoardCard
@@ -5703,16 +6179,49 @@ export default function ViaggioScreen() {
                                                     currentWeekday?.label
                                                   }
                                                   isLiveContext={
-                                                    itinerary.transitLiveContext ??
-                                                    isTransitLiveContext
+                                                    direction === "return" &&
+                                                    Boolean(
+                                                      isSelectedDayToday,
+                                                    ) &&
+                                                    isTargetLectureFinished &&
+                                                    !isPastReturnTrain
+                                                      ? true
+                                                      : (itinerary.transitLiveContext ??
+                                                        isTransitLiveContext)
                                                   }
                                                   constraintTime={
-                                                    itinerary.transitConstraintTime ??
-                                                    constraintTimeForTransit
+                                                    isOutboundPostLesson
+                                                      ? undefined
+                                                      : (itinerary.transitConstraintTime ??
+                                                        constraintTimeForTransit)
                                                   }
                                                   minDepartureTime={
-                                                    itinerary.transitMinDepartureTime ??
-                                                    minDepTimeForTransit
+                                                    direction === "return" &&
+                                                    (isTargetLectureFinished ||
+                                                      itinerary.lectureTimeStatus
+                                                        ?.type ===
+                                                        "early_departure")
+                                                      ? undefined
+                                                      : (itinerary.transitMinDepartureTime ??
+                                                        minDepTimeForTransit)
+                                                  }
+                                                  arrivalBufferMinutes={
+                                                    direction === "return"
+                                                      ? (itinerary.transitArrivalBufferMinutes ??
+                                                        5)
+                                                      : (itinerary.transitArrivalBufferMinutes ??
+                                                        config?.bufferMinutes ??
+                                                        10)
+                                                  }
+                                                  preferLatestBeforeDeadline={
+                                                    direction === "return" &&
+                                                    !isTargetLectureFinished &&
+                                                    Boolean(
+                                                      itinerary.transitPreferLatestBeforeDeadline ||
+                                                        itinerary.lectureTimeStatus
+                                                          ?.type ===
+                                                          "early_departure",
+                                                    )
                                                   }
                                                   prefetchedBoard={
                                                     itinerary.prefetchedTransitBoard
@@ -5727,7 +6236,8 @@ export default function ViaggioScreen() {
                                             })()}
 
                                           {leg.details?.badgeText &&
-                                            leg.type !== "walk" && (
+                                            leg.type !== "walk" &&
+                                            leg.type !== "transit" && (
                                               <View
                                                 style={[
                                                   styles.legCustomBadge,

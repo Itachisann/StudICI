@@ -1,34 +1,70 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Calendar from 'expo-calendar/legacy';
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Calendar from "expo-calendar/legacy";
+import * as Notifications from "expo-notifications";
+import { Platform } from "react-native";
 
-import { CommuterConfig, StrikeAlertPreferences } from '../types/commuter';
-import { DisruptionCategory, DisruptionEvent } from '../types/disruptions';
+import { StudICIAlarms } from "../../modules/studici-alarms/src";
+import { CommuterConfig, StrikeAlertPreferences } from "../types/commuter";
+import { DisruptionCategory, DisruptionEvent } from "../types/disruptions";
+import { resolveActiveSchedule } from "./alarmSync";
 import {
   DEFAULT_STRIKE_ALERTS,
   getCommuterConfig,
   saveCommuterConfig,
-} from './commuterStorage';
+} from "./commuterStorage";
 import {
+  doesDisruptionOverlapMinutesForDate,
+  formatDisruptionModalTimeWindow,
   formatTrainStrikeBannerSummary,
   getDisruptions,
   isTrainStrikeImpactingCommuter,
   isWalkDisruptionImpactingCommuter,
-} from './disruptionsService';
+  parseDisruptionSchedule,
+} from "./disruptionsService";
+import {
+  buildExcludedIdSet,
+  getExcludedLessons,
+  isLessonExcluded,
+  jsDayToScheduleDayIndex,
+} from "./excludedLessons";
+import {
+  getManualEvents,
+  isManualEventActiveOnDate,
+  ManualClassEvent,
+  manualEventToClassEvent,
+} from "./manualEvents";
+import { ClassEvent, ScheduleData } from "./scraper";
+import { parseTimeToMinutes } from "./trenitaliaApi";
+import {
+  ensureManagedStrikeCalendar,
+  getManagedStrikeCalendarsSnapshot,
+  markStrikesCalendarSynced,
+} from "./appleCalendar";
 
-export const STRIKE_NOTIFICATION_PREFIX = 'studici_strike_';
-const REMINDER_TAG_PREFIX = '[StudICI-Sciopero:';
-const STRIKE_CHANNEL_ID = 'strikes';
-const STRIKE_STATE_KEY = 'studici_strike_reminders_state_v2';
-const STRIKE_DISPATCH_LOG_KEY = 'studici_strike_notifications_log_v1';
-const STRIKE_PERMISSION_ASKED_KEY = 'studici_strike_reminders_perm_asked_v2';
-const LEGACY_NOTIFS_CLEANED_KEY = 'studici_strike_legacy_notifs_cleaned_v1';
+export const STRIKE_NOTIFICATION_PREFIX = "studici_strike_";
+const LEGACY_REMINDER_TAG_PREFIX = "[StudICI-Sciopero:";
+const STRIKE_EVENT_URL_BASE = "studici://viaggio";
+const STRIKE_CHANNEL_ID = "strikes";
+
+const LEGACY_REMINDER_STATE_KEY = "studici_strike_reminders_state_v2";
+const LEGACY_REMINDERS_CLEANED_KEY =
+  "studici_strike_legacy_reminders_cleaned_v1";
+const STRIKE_STATE_KEY = "studici_strike_calendar_state_v3";
+const STRIKE_DISPATCH_LOG_KEY = "studici_strike_notifications_log_v1";
+const STRIKE_PERMISSION_ASKED_KEY = "studici_strike_calendar_perm_asked_v3";
+const LEGACY_NOTIFS_CLEANED_KEY = "studici_strike_legacy_notifs_cleaned_v1";
 
 const MAX_SCHEDULED_STRIKE_ITEMS = 40;
-const NOTIFY_HOUR_LOCAL = 12;
-const NOTIFY_MINUTE_LOCAL = 0;
-const CATCHUP_DELAY_IOS_MS = 60_000;
+const MAX_DAYS_PER_STRIKE = 14;
+const REMINDER_DUE_HOUR_LOCAL = 9;
+const REMINDER_DUE_MINUTE_LOCAL = 0;
+// Su Apple Calendar per eventi tutto il giorno (startDate 00:00 locale):
+// -9540 min = -6 giorni e 15 ore (7 giorni prima alle 09:00)
+// -900 min  = -15 ore (1 giorno prima alle 09:00)
+// +540 min  = +9 ore (09:00 del giorno stesso dell'evento, avviso predefinito se già oggi o dopo le 09:00 della vigilia)
+const OFFSET_CALENDAR_7D_MINUTES = -(6 * 24 + 15) * 60;
+const OFFSET_CALENDAR_1D_MINUTES = -15 * 60;
+const OFFSET_CALENDAR_SAME_DAY_MINUTES = 9 * 60;
 const CATCHUP_DELAY_ANDROID_MS = 20_000;
 const MIN_FUTURE_MARGIN_MS = 15_000;
 const LOG_RETENTION_MS = 35 * 24 * 60 * 60 * 1000;
@@ -48,31 +84,81 @@ export interface StrikeNotificationsStatus {
   canAskAgain: boolean;
   scheduledCount: number;
   upcomingImpactingCount: number;
-  backend: 'reminders' | 'notifications';
+  backend: "calendar" | "notifications";
 }
 
-interface StoredReminderStateEntry {
+interface StoredStrikeStateEntry {
   identifier: string;
-  reminderId: string;
+  eventId: string;
+  calendarId?: string;
   fireAtMs: number;
   title: string;
   notes: string;
   strikeDateIso: string;
   strikeEventId: string;
+  offsetsSignature?: string;
 }
 
-interface PlannedStrikeAlert {
+interface LegacyStoredReminderStateEntry {
   identifier: string;
-  leadDays: 7 | 1;
+  reminderId: string;
+}
+
+interface CommuteScheduleContext {
+  tabUrl: string | null;
+  schedule: ScheduleData | null;
+  excludedSet: Set<string>;
+  manualEvents: ManualClassEvent[];
+  hasKnownSchedule: boolean;
+}
+
+interface AffectedStrikeCommuteDay {
+  strikeKey: string;
+  event: DisruptionEvent;
+  commuteDateIso: string;
+  firstLessonStartTime?: string;
+  lastLessonEndTime?: string;
+}
+
+interface PlannedIosStrikeCalendarEvent {
+  identifier: string;
+  strikeKey: string;
+  commuteDateIso: string;
+  startDateMs: number;
+  endDateMs: number;
+  title: string;
+  location: string;
+  notes: string;
+  url: string;
+  alarmRelativeOffsetsMinutes: number[];
+  offsetsSignature: string;
+  strikeEventId: string;
+  strikeCategory: DisruptionCategory;
+}
+
+interface PlannedAndroidStrikeNotification {
+  identifier: string;
+  leadDays: 7 | 1 | 0;
   strikeKey: string;
   fireAtMs: number;
   title: string;
-  subtitle: string;
   body: string;
-  notesWithTag: string;
   strikeEventId: string;
-  strikeDateIso: string;
+  commuteDateIso: string;
   strikeCategory: DisruptionCategory;
+}
+
+interface ManagedIosCalendarEvent {
+  id: string;
+  calendarId: string;
+  title: string;
+  location: string;
+  notes: string;
+  url: string;
+  allDay: boolean;
+  startDateMs: number;
+  endDateMs: number;
+  alarmOffsetsMinutes: number[];
 }
 
 let handlerInitialized = false;
@@ -85,7 +171,7 @@ let pendingTapPayload: StrikeNotificationTapPayload | null = null;
 export function ensureStrikeNotificationHandler(): void {
   if (handlerInitialized) return;
   handlerInitialized = true;
-  if (Platform.OS === 'ios') return;
+  if (Platform.OS === "ios") return;
   try {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
@@ -100,7 +186,9 @@ export function ensureStrikeNotificationHandler(): void {
   }
 }
 
-export function emitStrikeNotificationTap(payload: StrikeNotificationTapPayload): void {
+export function emitStrikeNotificationTap(
+  payload: StrikeNotificationTapPayload,
+): void {
   pendingTapPayload = payload;
   tapListeners.forEach((cb) => {
     try {
@@ -142,7 +230,7 @@ function notifyStatusListeners(status: StrikeNotificationsStatus): void {
 }
 
 function normalizeHashPart(value?: string): string {
-  return (value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function fnv1aHashHex(input: string): string {
@@ -162,7 +250,7 @@ export function computeStableStrikeKey(event: DisruptionEvent): string {
     normalizeHashPart(event.scope),
     normalizeHashPart(event.affectedCompanies),
     normalizeHashPart(event.title),
-  ].join('|');
+  ].join("|");
   return `${event.category}_${event.startDate}_${fnv1aHashHex(signature)}`;
 }
 
@@ -170,10 +258,13 @@ export function isStrikeEventImpactingRoute(
   event: DisruptionEvent,
   arrivalStationName?: string,
 ): boolean {
-  if (event.category === 'sciopero_treni') {
+  if (event.category === "sciopero_treni") {
     return isTrainStrikeImpactingCommuter(event);
   }
-  if (event.category === 'sciopero_tpl') {
+  if (
+    event.category === "sciopero_tpl" ||
+    event.category === "manifestazione"
+  ) {
     return isWalkDisruptionImpactingCommuter(event, arrivalStationName);
   }
   return false;
@@ -190,16 +281,66 @@ function resolveAlertPrefs(config: CommuterConfig): StrikeAlertPreferences {
   };
 }
 
-function parseIsoDateParts(iso: string): { year: number; month: number; day: number } | null {
-  const m = (iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+function parseIsoDateParts(
+  iso: string,
+): { year: number; month: number; day: number } | null {
+  const m = (iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
   const year = parseInt(m[1], 10);
   const month = parseInt(m[2], 10);
   const day = parseInt(m[3], 10);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
     return null;
   }
   return { year, month, day };
+}
+
+function formatLocalIsoDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function formatItalianIsoDate(iso: string): string {
+  const parts = parseIsoDateParts(iso);
+  if (!parts) return iso;
+  return `${String(parts.day).padStart(2, "0")}/${String(parts.month).padStart(2, "0")}/${parts.year}`;
+}
+
+function enumerateStrikeIsoDates(startIso: string, endIso: string): string[] {
+  const startParts = parseIsoDateParts(startIso);
+  if (!startParts) return [];
+  const endParts = parseIsoDateParts(endIso) || startParts;
+  const startDt = new Date(
+    startParts.year,
+    startParts.month - 1,
+    startParts.day,
+    12,
+    0,
+    0,
+  );
+  const endDt = new Date(
+    endParts.year,
+    endParts.month - 1,
+    endParts.day,
+    12,
+    0,
+    0,
+  );
+  const safeEnd = endDt >= startDt ? endDt : startDt;
+
+  const dates: string[] = [];
+  const cursor = new Date(startDt);
+  for (let i = 0; i < MAX_DAYS_PER_STRIKE && cursor <= safeEnd; i++) {
+    dates.push(formatLocalIsoDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
 }
 
 function isSameLocalCalendarDay(a: Date, b: Date): boolean {
@@ -210,10 +351,21 @@ function isSameLocalCalendarDay(a: Date, b: Date): boolean {
   );
 }
 
-function diffLocalCalendarDays(targetIso: string, refDate: Date): number | null {
+function diffLocalCalendarDays(
+  targetIso: string,
+  refDate: Date,
+): number | null {
   const parts = parseIsoDateParts(targetIso);
   if (!parts) return null;
-  const targetMidnight = new Date(parts.year, parts.month - 1, parts.day, 0, 0, 0, 0);
+  const targetMidnight = new Date(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    0,
+    0,
+    0,
+    0,
+  );
   const refMidnight = new Date(
     refDate.getFullYear(),
     refDate.getMonth(),
@@ -223,155 +375,726 @@ function diffLocalCalendarDays(targetIso: string, refDate: Date): number | null 
     0,
     0,
   );
-  return Math.round((targetMidnight.getTime() - refMidnight.getTime()) / (24 * 60 * 60 * 1000));
+  return Math.round(
+    (targetMidnight.getTime() - refMidnight.getTime()) / (24 * 60 * 60 * 1000),
+  );
 }
 
-function formatItalianStrikeDate(event: DisruptionEvent): string {
-  if (event.formattedDateSpan && event.formattedDateSpan.trim()) {
-    return event.formattedDateSpan.trim();
+function parseNormalizedClockMinutes(timeStr?: string): number | null {
+  if (!timeStr) return null;
+  const normalized = timeStr.trim().replace(".", ":");
+  if (!normalized.includes(":")) return null;
+  const mins = parseTimeToMinutes(normalized);
+  return Number.isFinite(mins) && mins >= 0 ? mins : null;
+}
+
+function buildStrikeTitle(event: DisruptionEvent): string {
+  if (event.category === "sciopero_treni") {
+    return "Sciopero treni";
   }
-  const parts = parseIsoDateParts(event.startDate);
-  if (!parts) return event.startDate;
-  return `${String(parts.day).padStart(2, '0')}/${String(parts.month).padStart(2, '0')}/${parts.year}`;
+  if (event.category === "sciopero_tpl") {
+    return "Sciopero mezzi";
+  }
+  if (event.category === "manifestazione") {
+    const clean = stripSquareBracketMetadata(event.title || "")
+      .split(",")[0]
+      .replace(
+        /^(luned[ìi]|marted[ìi]|mercoled[ìi]|gioved[ìi]|venerd[ìi]|sabato|domenica)\s+/i,
+        "",
+      )
+      .trim();
+    if (!clean) return "Manifestazione";
+    const condensed =
+      clean.length > 52 ? `${clean.slice(0, 49).trim()}…` : clean;
+    return /^manifestazi/i.test(condensed)
+      ? condensed.charAt(0).toUpperCase() + condensed.slice(1)
+      : `Manifestazione: ${condensed}`;
+  }
+  return "Avviso mobilità";
 }
 
-function buildAlertCopy(
-  event: DisruptionEvent,
-  leadDays: 7 | 1,
-): { title: string; subtitle: string; body: string } {
-  const isTrain = event.category === 'sciopero_treni';
-  const dateLabel = formatItalianStrikeDate(event);
+function stripSquareBracketMetadata(text: string): string {
+  return text
+    .replace(/\s*\[[^\]]*\]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
+function formatClockMinutes(mins: number): string {
+  const clamped = Math.max(0, Math.min(1440, Math.round(mins)));
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function formatDurationLabel(totalMinutes: number): string {
+  if (totalMinutes <= 0) return "";
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (mins === 0) {
+    return `${hours} ${hours === 1 ? "ora" : "ore"}`;
+  }
+  if (hours === 0) {
+    return `${mins} min`;
+  }
+  return `${hours} ${hours === 1 ? "ora" : "ore"} e ${mins} min`;
+}
+
+function resolveStrikeDurationLabel(event: DisruptionEvent): string {
+  const sched = parseDisruptionSchedule(event);
+  if (typeof sched.durationHours === "number" && sched.durationHours > 0) {
+    return `${sched.durationHours} ${sched.durationHours === 1 ? "ora" : "ore"}`;
+  }
+
+  const startParts = parseIsoDateParts(sched.startDateIso);
+  const endParts = parseIsoDateParts(sched.endDateIso);
+
+  if (
+    sched.hasExplicitRange &&
+    sched.endHour !== undefined &&
+    startParts &&
+    endParts
+  ) {
+    const startMs = new Date(
+      startParts.year,
+      startParts.month - 1,
+      startParts.day,
+      sched.startHour,
+      sched.startMinute,
+      0,
+      0,
+    ).getTime();
+    const endMs = new Date(
+      endParts.year,
+      endParts.month - 1,
+      endParts.day,
+      sched.endHour,
+      sched.endMinute || 0,
+      0,
+      0,
+    ).getTime();
+    const diffMins = Math.round((endMs - startMs) / 60_000);
+    if (diffMins > 0) {
+      return formatDurationLabel(diffMins);
+    }
+  }
+
+  if (sched.isFullDay && startParts && endParts) {
+    const sMid = new Date(
+      startParts.year,
+      startParts.month - 1,
+      startParts.day,
+      12,
+      0,
+      0,
+    ).getTime();
+    const eMid = new Date(
+      endParts.year,
+      endParts.month - 1,
+      endParts.day,
+      12,
+      0,
+      0,
+    ).getTime();
+    const days = Math.max(
+      1,
+      Math.round((eMid - sMid) / (24 * 60 * 60 * 1000)) + 1,
+    );
+    return days === 1
+      ? "Intera giornata (24 ore)"
+      : `${days} giorni (intera prestazione)`;
+  }
+
+  return "";
+}
+
+function buildStrikeCalendarLocation(
+  event: DisruptionEvent,
+  config: CommuterConfig,
+): string {
+  const dep =
+    config.departureStation?.shortName || config.departureStation?.name || "";
+  const arr =
+    config.arrivalStation?.shortName || config.arrivalStation?.name || "";
+  if (event.category === "sciopero_treni") {
+    if (dep && arr) return `${dep} ↔ ${arr}`;
+    if (dep || arr) return dep || arr;
+  } else if (
+    event.category === "manifestazione" &&
+    event.affectedAreas &&
+    event.affectedAreas.length > 0
+  ) {
+    return `Roma (${event.affectedAreas.slice(0, 3).join(", ")})`;
+  } else if (arr) {
+    return `Roma (${arr} / Università)`;
+  }
+  return "Roma";
+}
+
+function buildStrikeCalendarNotes(event: DisruptionEvent): string {
+  const isTrain = event.category === "sciopero_treni";
+  const isManifestazione = event.category === "manifestazione";
+  const sched = parseDisruptionSchedule(event);
+
+  const timeWindowRaw =
+    formatDisruptionModalTimeWindow(event) || event.timeWindow || "";
+  const timeWindowClean = stripSquareBracketMetadata(timeWindowRaw);
+  const durationLabel = resolveStrikeDurationLabel(event);
+
+  const lines: string[] = [];
+
+  if (isManifestazione && event.title?.trim()) {
+    lines.push(`Evento: ${stripSquareBracketMetadata(event.title)}`);
+  }
+
+  if (durationLabel) {
+    lines.push(`Durata: ${durationLabel}`);
+  }
+  if (timeWindowClean) {
+    lines.push(`Orari: ${timeWindowClean}`);
+  } else if (sched.hasStartTimeOnly) {
+    lines.push(
+      `Orario inizio: dalle ${formatClockMinutes(sched.startHour * 60 + sched.startMinute)}`,
+    );
+  } else {
+    lines.push("Orari: Intera giornata (00:00 - 24:00)");
+  }
+
+  if (event.affectedAreas && event.affectedAreas.length > 0) {
+    lines.push(`Zone: ${event.affectedAreas.join(", ")}`);
+  }
+  if (event.scope?.trim()) {
+    lines.push(`Ambito: ${stripSquareBracketMetadata(event.scope)}`);
+  }
+  if (event.affectedCompanies?.trim()) {
+    lines.push(
+      `Settore: ${stripSquareBracketMetadata(event.affectedCompanies)}`,
+    );
+  }
+  const extraModalita = stripSquareBracketMetadata(event.notes || "");
+  if (
+    extraModalita &&
+    extraModalita.toLowerCase() !== timeWindowClean.toLowerCase()
+  ) {
+    lines.push(`Dettagli: ${extraModalita}`);
+  }
+  if (event.sourceName) {
+    lines.push(`Fonte: ${event.sourceName}`);
+  }
+
+  lines.push(
+    isTrain
+      ? "Controlla orari e corse in StudICI."
+      : "Verifica il tragitto e i mezzi alternativi in StudICI.",
+  );
+
+  return lines.join("\n");
+}
+
+function buildReminderNotes(
+  event: DisruptionEvent,
+  commuteDateIso: string,
+  firstLessonStartTime?: string,
+  lastLessonEndTime?: string,
+): string {
+  const isTrain = event.category === "sciopero_treni";
+  const isManifestazione = event.category === "manifestazione";
   const summaryRaw = isTrain
-    ? formatTrainStrikeBannerSummary(event, event.startDate)
-    : (event.timeWindow || event.scope || '').trim();
-  const detailSuffix = summaryRaw ? ` • ${summaryRaw}` : '';
+    ? formatTrainStrikeBannerSummary(event, commuteDateIso)
+    : formatDisruptionModalTimeWindow(event);
+  const summary = stripSquareBracketMetadata(summaryRaw || "");
+  const dateLabel = formatItalianIsoDate(commuteDateIso);
+  const lessonSpan =
+    firstLessonStartTime && lastLessonEndTime
+      ? ` (lezioni ${firstLessonStartTime} - ${lastLessonEndTime})`
+      : "";
 
   if (isTrain) {
-    return {
-      title:
-        leadDays === 7
-          ? 'Sciopero treni tra 1 settimana'
-          : 'Domani sciopero treni',
-      subtitle: 'Impatta la tua tratta (Trenitalia / RFI)',
-      body: `${dateLabel}${detailSuffix}. Controlla orari e corse garantite in StudICI.`,
-    };
+    const line1 = summary
+      ? `Impatta la tua tratta ferroviaria del ${dateLabel}${lessonSpan}: ${summary}.`
+      : `Impatta la tua tratta ferroviaria del ${dateLabel}${lessonSpan}.`;
+    return `${line1}\nControlla orari e corse garantite in StudICI.`;
   }
 
+  const prefix = isManifestazione
+    ? `Manifestazione sul percorso urbano del ${dateLabel}${lessonSpan}`
+    : `Impatta il tuo percorso urbano del ${dateLabel}${lessonSpan}`;
+  const line1 = summary ? `${prefix}: ${summary}.` : `${prefix}.`;
+  return `${line1}\nVerifica il tragitto in StudICI.`;
+}
+
+async function loadCommuteScheduleContext(): Promise<CommuteScheduleContext> {
+  const { degreeUrl, tabUrl, schedule } = await resolveActiveSchedule().catch(
+    () => ({
+      degreeUrl: null,
+      tabUrl: null,
+      schedule: null,
+    }),
+  );
+
+  const [excludedRecords, manualEvents] = await Promise.all([
+    getExcludedLessons(degreeUrl || undefined).catch(() => []),
+    getManualEvents(degreeUrl || undefined).catch(() => []),
+  ]);
+
+  const excludedSet = buildExcludedIdSet(excludedRecords);
+  const hasScheduleDays = Boolean(
+    schedule &&
+    Array.isArray(schedule.days) &&
+    schedule.days.some((d) => Array.isArray(d) && d.length > 0),
+  );
+
   return {
-    title:
-      leadDays === 7
-        ? 'Sciopero mezzi TPL tra 1 settimana'
-        : 'Domani sciopero mezzi TPL',
-    subtitle: 'Impatta il tuo percorso urbano',
-    body: `${dateLabel}${detailSuffix}. Verifica il tragitto in StudICI.`,
+    tabUrl,
+    schedule,
+    excludedSet,
+    manualEvents,
+    hasKnownSchedule: hasScheduleDays || manualEvents.length > 0,
   };
 }
 
-function buildStrikeAlertPlans(
+/**
+ * Determina i soli giorni di calendario dello sciopero in cui il pendolare
+ * ha effettivamente lezioni attive (non escluse) la cui tratta andata/ritorno
+ * si sovrappone alla fascia oraria dello sciopero.
+ */
+function buildAffectedStrikeCommuteDays(
   events: DisruptionEvent[],
   config: CommuterConfig,
-  alertPrefs: StrikeAlertPreferences,
-  nowMs: number,
-  previousDispatchLog: Record<string, number>,
+  ctx: CommuteScheduleContext,
+  todayIso: string,
 ): {
-  planned: PlannedStrikeAlert[];
-  updatedDispatchLog: Record<string, number>;
+  affectedDays: AffectedStrikeCommuteDay[];
   upcomingImpactingCount: number;
 } {
-  const arrivalStationName =
-    config.arrivalStation?.shortName || config.arrivalStation?.name || undefined;
+  if (!config.enabled) {
+    return { affectedDays: [], upcomingImpactingCount: 0 };
+  }
 
-  const impactingStrikes = events.filter((ev) =>
-    isStrikeEventImpactingRoute(ev, arrivalStationName),
-  );
+  const arrivalStationName =
+    config.arrivalStation?.shortName ||
+    config.arrivalStation?.name ||
+    undefined;
 
   const uniqueByKey = new Map<string, DisruptionEvent>();
-  for (const ev of impactingStrikes) {
+  for (const ev of events) {
+    if (!isStrikeEventImpactingRoute(ev, arrivalStationName)) continue;
     const key = computeStableStrikeKey(ev);
     if (!uniqueByKey.has(key)) {
       uniqueByKey.set(key, ev);
     }
   }
 
+  const affectedDays: AffectedStrikeCommuteDay[] = [];
+  const impactingStrikeKeys = new Set<string>();
+
+  for (const [strikeKey, ev] of uniqueByKey.entries()) {
+    const parsedSchedule = parseDisruptionSchedule(ev);
+    const candidateDates = enumerateStrikeIsoDates(
+      parsedSchedule.startDateIso,
+      parsedSchedule.endDateIso,
+    );
+    const isTrain = ev.category === "sciopero_treni";
+    const fallbackDurationMins = isTrain ? undefined : 180;
+
+    for (const dateIso of candidateDates) {
+      if (dateIso < todayIso) continue;
+
+      const parts = parseIsoDateParts(dateIso);
+      if (!parts) continue;
+      const localNoon = new Date(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        12,
+        0,
+        0,
+      );
+      const dayIndex = jsDayToScheduleDayIndex(localNoon.getDay());
+
+      let commuteLegs: { startMins: number; endMins: number }[] = [];
+      let firstLessonStartTime: string | undefined;
+      let lastLessonEndTime: string | undefined;
+
+      if (ctx.hasKnownSchedule) {
+        const officialClasses: ClassEvent[] = (
+          ctx.schedule?.days?.[dayIndex] || []
+        ).filter(
+          (c) =>
+            Boolean(c && c.startTime) &&
+            !isLessonExcluded(dayIndex, c, ctx.excludedSet),
+        );
+
+        const manualClasses: ClassEvent[] = ctx.manualEvents
+          .filter((m) => {
+            if (m.tabUrl && ctx.tabUrl && m.tabUrl !== ctx.tabUrl) return false;
+            if (m.dayIndex !== dayIndex) return false;
+            return isManualEventActiveOnDate(m, dateIso);
+          })
+          .map(manualEventToClassEvent)
+          .filter(
+            (c) =>
+              Boolean(c && c.startTime) &&
+              !isLessonExcluded(dayIndex, c, ctx.excludedSet),
+          );
+
+        const activeClasses = [...officialClasses, ...manualClasses];
+        if (activeClasses.length === 0) {
+          continue;
+        }
+
+        const parsedClasses = activeClasses
+          .map((c) => {
+            const s = parseNormalizedClockMinutes(c.startTime);
+            if (s === null) return null;
+            const eRaw = parseNormalizedClockMinutes(c.endTime);
+            const e =
+              eRaw !== null && eRaw > s ? eRaw : Math.min(1440, s + 120);
+            return {
+              startMins: s,
+              endMins: e,
+              startLabel: (c.startTime || "").trim().replace(".", ":"),
+              endLabel: (c.endTime || "").trim().replace(".", ":"),
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+
+        if (parsedClasses.length === 0) {
+          continue;
+        }
+
+        let earliest = parsedClasses[0];
+        let latest = parsedClasses[0];
+        for (const item of parsedClasses) {
+          if (item.startMins < earliest.startMins) earliest = item;
+          if (item.endMins > latest.endMins) latest = item;
+        }
+
+        firstLessonStartTime = earliest.startLabel;
+        lastLessonEndTime = latest.endLabel || earliest.startLabel;
+
+        if (isTrain) {
+          commuteLegs = [
+            {
+              startMins: Math.max(0, earliest.startMins - 150),
+              endMins: earliest.startMins,
+            },
+            {
+              startMins: latest.endMins,
+              endMins: Math.min(1440, latest.endMins + 120),
+            },
+          ];
+        } else {
+          commuteLegs = [
+            {
+              startMins: Math.max(0, earliest.startMins - 75),
+              endMins: earliest.startMins,
+            },
+            {
+              startMins: latest.endMins,
+              endMins: Math.min(1440, latest.endMins + 90),
+            },
+          ];
+        }
+      } else {
+        // Fallback prudenziale Lun-Ven se la cache orario non è ancora stata scaricata
+        if (dayIndex > 4) continue;
+        commuteLegs = isTrain
+          ? [
+              { startMins: 390, endMins: 570 }, // 06:30 - 09:30
+              { startMins: 780, endMins: 1170 }, // 13:00 - 19:30
+            ]
+          : [
+              { startMins: 450, endMins: 570 },
+              { startMins: 780, endMins: 1140 },
+            ];
+      }
+
+      const overlaps = commuteLegs.some((leg) =>
+        doesDisruptionOverlapMinutesForDate(
+          ev,
+          dateIso,
+          leg.startMins,
+          leg.endMins,
+          fallbackDurationMins,
+        ),
+      );
+
+      if (!overlaps) continue;
+
+      impactingStrikeKeys.add(strikeKey);
+      affectedDays.push({
+        strikeKey,
+        event: ev,
+        commuteDateIso: dateIso,
+        firstLessonStartTime,
+        lastLessonEndTime,
+      });
+    }
+  }
+
+  affectedDays.sort((a, b) => a.commuteDateIso.localeCompare(b.commuteDateIso));
+  return {
+    affectedDays: affectedDays.slice(0, MAX_SCHEDULED_STRIKE_ITEMS),
+    upcomingImpactingCount: impactingStrikeKeys.size,
+  };
+}
+
+function buildCalendarRelativeOffsetsMinutes(
+  year: number,
+  month: number,
+  day: number,
+  alertPrefs: StrikeAlertPreferences,
+  nowMs: number,
+): number[] {
+  const offsets: number[] = [];
+  const isAnyAlertEnabled =
+    alertPrefs.notify7DaysBefore || alertPrefs.notify1DayBefore;
+
+  if (alertPrefs.notify7DaysBefore) {
+    const alert7dMs = new Date(
+      year,
+      month - 1,
+      day - 7,
+      REMINDER_DUE_HOUR_LOCAL,
+      REMINDER_DUE_MINUTE_LOCAL,
+      0,
+      0,
+    ).getTime();
+    if (alert7dMs > nowMs - 60_000) {
+      offsets.push(OFFSET_CALENDAR_7D_MINUTES);
+    }
+  }
+
+  if (alertPrefs.notify1DayBefore) {
+    const alert1dMs = new Date(
+      year,
+      month - 1,
+      day - 1,
+      REMINDER_DUE_HOUR_LOCAL,
+      REMINDER_DUE_MINUTE_LOCAL,
+      0,
+      0,
+    ).getTime();
+    if (alert1dMs > nowMs - 60_000) {
+      offsets.push(OFFSET_CALENDAR_1D_MINUTES);
+    }
+  }
+
+  // Se l'evento viene inserito il giorno stesso (oggi) o dopo le 09:00 della vigilia
+  // e nessun avviso anticipato cade più nel futuro, imposta l'avviso predefinito alle 09:00 del giorno dell'evento.
+  if (isAnyAlertEnabled && offsets.length === 0) {
+    offsets.push(OFFSET_CALENDAR_SAME_DAY_MINUTES);
+  }
+
+  return offsets;
+}
+
+function computeOffsetsSignature(offsets: number[]): string {
+  return [...offsets].sort((a, b) => a - b).join(",");
+}
+
+function buildIosStrikeCalendarPlans(
+  events: DisruptionEvent[],
+  config: CommuterConfig,
+  alertPrefs: StrikeAlertPreferences,
+  ctx: CommuteScheduleContext,
+  nowMs: number,
+): {
+  planned: PlannedIosStrikeCalendarEvent[];
+  upcomingImpactingCount: number;
+} {
+  const todayIso = formatLocalIsoDate(new Date(nowMs));
+  const { affectedDays, upcomingImpactingCount } =
+    buildAffectedStrikeCommuteDays(events, config, ctx, todayIso);
+
+  const planned: PlannedIosStrikeCalendarEvent[] = [];
+  for (const day of affectedDays) {
+    const parts = parseIsoDateParts(day.commuteDateIso);
+    if (!parts) continue;
+
+    const startDateMs = new Date(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      0,
+      0,
+      0,
+      0,
+    ).getTime();
+    const endDateMs = new Date(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      23,
+      59,
+      59,
+      0,
+    ).getTime();
+
+    const identifier = `${STRIKE_NOTIFICATION_PREFIX}${day.strikeKey}_${day.commuteDateIso}`;
+    const url = `${STRIKE_EVENT_URL_BASE}?strikeAlert=${encodeURIComponent(identifier)}`;
+    const offsets = buildCalendarRelativeOffsetsMinutes(
+      parts.year,
+      parts.month,
+      parts.day,
+      alertPrefs,
+      nowMs,
+    );
+
+    planned.push({
+      identifier,
+      strikeKey: day.strikeKey,
+      commuteDateIso: day.commuteDateIso,
+      startDateMs,
+      endDateMs,
+      title: buildStrikeTitle(day.event),
+      location: buildStrikeCalendarLocation(day.event, config),
+      notes: buildStrikeCalendarNotes(day.event),
+      url,
+      alarmRelativeOffsetsMinutes: offsets,
+      offsetsSignature: computeOffsetsSignature(offsets),
+      strikeEventId: day.event.id,
+      strikeCategory: day.event.category,
+    });
+  }
+
+  planned.sort((a, b) => a.startDateMs - b.startDateMs);
+  return {
+    planned: planned.slice(0, MAX_SCHEDULED_STRIKE_ITEMS),
+    upcomingImpactingCount,
+  };
+}
+
+function buildAndroidStrikeAlertPlans(
+  events: DisruptionEvent[],
+  config: CommuterConfig,
+  alertPrefs: StrikeAlertPreferences,
+  ctx: CommuteScheduleContext,
+  nowMs: number,
+  previousDispatchLog: Record<string, number>,
+): {
+  planned: PlannedAndroidStrikeNotification[];
+  updatedDispatchLog: Record<string, number>;
+  upcomingImpactingCount: number;
+} {
   const nowDate = new Date(nowMs);
-  const todayIso = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, '0')}-${String(nowDate.getDate()).padStart(2, '0')}`;
-  let upcomingImpactingCount = 0;
+  const todayIso = formatLocalIsoDate(nowDate);
+  const { affectedDays, upcomingImpactingCount } =
+    buildAffectedStrikeCommuteDays(events, config, ctx, todayIso);
 
   const updatedDispatchLog: Record<string, number> = {};
   for (const [k, ts] of Object.entries(previousDispatchLog)) {
-    if (typeof ts === 'number' && nowMs - ts < LOG_RETENTION_MS) {
+    if (typeof ts === "number" && nowMs - ts < LOG_RETENTION_MS) {
       updatedDispatchLog[k] = ts;
     }
   }
 
-  const catchupDelay =
-    Platform.OS === 'ios' ? CATCHUP_DELAY_IOS_MS : CATCHUP_DELAY_ANDROID_MS;
-  const planned: PlannedStrikeAlert[] = [];
+  const activeLeads: (7 | 1)[] = [];
+  if (alertPrefs.notify7DaysBefore) activeLeads.push(7);
+  if (alertPrefs.notify1DayBefore) activeLeads.push(1);
 
-  for (const [strikeKey, ev] of uniqueByKey.entries()) {
-    if (!ev.endDate || ev.endDate >= todayIso) {
-      upcomingImpactingCount += 1;
-    }
-
-    const parts = parseIsoDateParts(ev.startDate);
+  const planned: PlannedAndroidStrikeNotification[] = [];
+  for (const day of affectedDays) {
+    const parts = parseIsoDateParts(day.commuteDateIso);
     if (!parts) continue;
+    const daysUntilCommute = diffLocalCalendarDays(day.commuteDateIso, nowDate);
+    const title = buildStrikeTitle(day.event);
+    const notesBody = buildReminderNotes(
+      day.event,
+      day.commuteDateIso,
+      day.firstLessonStartTime,
+      day.lastLessonEndTime,
+    );
 
-    const daysUntilStart = diffLocalCalendarDays(ev.startDate, nowDate);
-    const activeLeads: (7 | 1)[] = [];
-    if (alertPrefs.notify7DaysBefore) activeLeads.push(7);
-    if (alertPrefs.notify1DayBefore) activeLeads.push(1);
-
+    let scheduledAnyForDay = false;
     for (const leadDays of activeLeads) {
       const targetLocalDate = new Date(
         parts.year,
         parts.month - 1,
         parts.day - leadDays,
-        NOTIFY_HOUR_LOCAL,
-        NOTIFY_MINUTE_LOCAL,
+        REMINDER_DUE_HOUR_LOCAL,
+        REMINDER_DUE_MINUTE_LOCAL,
         0,
         0,
       );
       const nominalMs = targetLocalDate.getTime();
-      const identifier = `${STRIKE_NOTIFICATION_PREFIX}${strikeKey}_${leadDays}d`;
+      const identifier = `${STRIKE_NOTIFICATION_PREFIX}${day.strikeKey}_${day.commuteDateIso}_${leadDays}d`;
 
       let fireAtMs: number | null = null;
-
       if (nominalMs > nowMs + MIN_FUTURE_MARGIN_MS) {
         fireAtMs = nominalMs;
       } else if (
         isSameLocalCalendarDay(nowDate, targetLocalDate) &&
         nowDate.getHours() < 22 &&
-        !(leadDays === 7 && daysUntilStart !== null && daysUntilStart <= 1)
+        !(leadDays === 7 && daysUntilCommute !== null && daysUntilCommute <= 1)
       ) {
         const existingLogTs = updatedDispatchLog[identifier];
-        if (typeof existingLogTs === 'number') {
+        if (typeof existingLogTs === "number") {
           if (existingLogTs > nowMs + 2_000) {
             fireAtMs = existingLogTs;
           }
         } else {
-          fireAtMs = nowMs + catchupDelay;
+          fireAtMs = nowMs + CATCHUP_DELAY_ANDROID_MS;
           updatedDispatchLog[identifier] = fireAtMs;
         }
       }
 
       if (fireAtMs === null) continue;
-
-      const copy = buildAlertCopy(ev, leadDays);
-      const notesWithTag = `${copy.subtitle}\n${copy.body}\n\n${REMINDER_TAG_PREFIX}${identifier}]`;
+      scheduledAnyForDay = true;
       planned.push({
         identifier,
         leadDays,
-        strikeKey,
+        strikeKey: day.strikeKey,
         fireAtMs,
-        title: copy.title,
-        subtitle: copy.subtitle,
-        body: copy.body,
-        notesWithTag,
-        strikeEventId: ev.id,
-        strikeDateIso: ev.startDate,
-        strikeCategory: ev.category,
+        title,
+        body: notesBody,
+        strikeEventId: day.event.id,
+        commuteDateIso: day.commuteDateIso,
+        strikeCategory: day.event.category,
       });
+    }
+
+    // Se l'evento è oggi stesso e nessuno degli anticipi ha potuto schedulare una notifica futura,
+    // schedula l'avviso predefinito alle 09:00 del giorno stesso (o catch-up immediato se dopo le 09:00).
+    if (!scheduledAnyForDay && daysUntilCommute === 0 && activeLeads.length > 0) {
+      const sameDayTargetMs = new Date(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        REMINDER_DUE_HOUR_LOCAL,
+        REMINDER_DUE_MINUTE_LOCAL,
+        0,
+        0,
+      ).getTime();
+      const identifier = `${STRIKE_NOTIFICATION_PREFIX}${day.strikeKey}_${day.commuteDateIso}_0d`;
+      let fireAtMs: number | null = null;
+      if (sameDayTargetMs > nowMs + MIN_FUTURE_MARGIN_MS) {
+        fireAtMs = sameDayTargetMs;
+      } else if (nowDate.getHours() < 22) {
+        const existingLogTs = updatedDispatchLog[identifier];
+        if (typeof existingLogTs === "number") {
+          if (existingLogTs > nowMs + 2_000) {
+            fireAtMs = existingLogTs;
+          }
+        } else {
+          fireAtMs = nowMs + CATCHUP_DELAY_ANDROID_MS;
+          updatedDispatchLog[identifier] = fireAtMs;
+        }
+      }
+      if (fireAtMs !== null) {
+        planned.push({
+          identifier,
+          leadDays: 0,
+          strikeKey: day.strikeKey,
+          fireAtMs,
+          title,
+          body: notesBody,
+          strikeEventId: day.event.id,
+          commuteDateIso: day.commuteDateIso,
+          strikeCategory: day.event.category,
+        });
+      }
     }
   }
 
@@ -383,9 +1106,25 @@ function buildStrikeAlertPlans(
   };
 }
 
-function extractStrikeIdentifierFromNotes(notes?: string | null): string | null {
+function extractStrikeIdentifierFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  const match = url.match(/[?&]strikeAlert=([^&]+)/);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function extractLegacyStrikeIdentifierFromNotes(
+  notes?: string | null,
+): string | null {
   if (!notes) return null;
-  const escapedPrefix = REMINDER_TAG_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedPrefix = LEGACY_REMINDER_TAG_PREFIX.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
   const match = notes.match(new RegExp(`${escapedPrefix}([^\\]\\s]+)\\]`));
   return match ? match[1] : null;
 }
@@ -400,107 +1139,202 @@ async function readJsonStorage<T>(key: string, fallback: T): Promise<T> {
   }
 }
 
-async function resolveIosTargetRemindersCalendar(): Promise<{
-  targetCalendarId: string | null;
-  writableCalendarIds: (string | null)[];
-}> {
-  try {
-    const calendars = await Calendar.getCalendarsAsync(
-      Calendar.EntityTypes.REMINDER,
-    );
-    const writable = calendars.filter((c) => c.allowsModifications && c.id);
-    const primary =
-      writable.find((c) => c.isPrimary) ||
-      writable.find(
-        (c) =>
-          c.title === 'Promemoria' ||
-          c.name === 'Promemoria' ||
-          c.title === 'Reminders' ||
-          c.name === 'Reminders',
-      ) ||
-      writable[0] ||
-      null;
-
-    const writableIds: (string | null)[] = writable.map((c) => c.id);
-    if (writableIds.length === 0) writableIds.push(null);
-
-    return {
-      targetCalendarId: primary ? primary.id : null,
-      writableCalendarIds: writableIds,
-    };
-  } catch {
-    return { targetCalendarId: null, writableCalendarIds: [null] };
-  }
+function isManagedStrikeCandidate(
+  url: string | undefined,
+  notes: string | undefined,
+  id: string | undefined,
+  managedIds: Set<string>,
+): boolean {
+  return (
+    Boolean(extractStrikeIdentifierFromUrl(url)) ||
+    Boolean(extractLegacyStrikeIdentifierFromNotes(notes)) ||
+    (id ? managedIds.has(id) : false)
+  );
 }
 
-async function fetchManagedIosReminders(
-  writableCalendarIds: (string | null)[],
-  storedState: Record<string, StoredReminderStateEntry>,
-): Promise<Calendar.Reminder[]> {
-  let allReminders: Calendar.Reminder[] = [];
-  try {
-    allReminders = await Calendar.getRemindersAsync(
-      writableCalendarIds,
-      null,
-      null,
-      null,
-    );
-  } catch {
-    try {
-      const startWin = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const endWin = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-      const [incomplete, completed] = await Promise.all([
-        Calendar.getRemindersAsync(
-          writableCalendarIds,
-          Calendar.ReminderStatus.INCOMPLETE,
-          startWin,
-          endWin,
-        ).catch(() => []),
-        Calendar.getRemindersAsync(
-          writableCalendarIds,
-          Calendar.ReminderStatus.COMPLETED,
-          startWin,
-          endWin,
-        ).catch(() => []),
-      ]);
-      allReminders = [...incomplete, ...completed];
-    } catch {
-      allReminders = [];
+function normalizeCalendarEventAlarms(ev: Calendar.Event): number[] {
+  if (!Array.isArray(ev.alarms)) return [];
+  const startMs = ev.startDate ? new Date(ev.startDate).getTime() : NaN;
+  const offsets: number[] = [];
+
+  for (const a of ev.alarms) {
+    if (
+      typeof a.relativeOffset === "number" &&
+      Number.isFinite(a.relativeOffset)
+    ) {
+      offsets.push(Math.round(a.relativeOffset));
+      continue;
+    }
+    if (a.absoluteDate && Number.isFinite(startMs)) {
+      const diffMin = Math.round(
+        (new Date(a.absoluteDate).getTime() - startMs) / 60_000,
+      );
+      if (Number.isFinite(diffMin)) {
+        offsets.push(diffMin);
+      }
     }
   }
 
-  // Fallback per eventuali ID salvati in stato locale ma non inclusi nella query globale
-  const foundIds = new Set(allReminders.map((r) => r.id).filter(Boolean));
+  return offsets.sort((a, b) => a - b);
+}
+
+function toManagedCalendarEvent(
+  ev: Calendar.Event,
+): ManagedIosCalendarEvent | null {
+  if (!ev.id) return null;
+  const startMs = ev.startDate ? new Date(ev.startDate).getTime() : 0;
+  const endMs = ev.endDate ? new Date(ev.endDate).getTime() : startMs;
+  return {
+    id: ev.id,
+    calendarId: ev.calendarId || "",
+    title: ev.title || "",
+    location: ev.location || "",
+    notes: ev.notes || "",
+    url: ev.url || "",
+    allDay: Boolean(ev.allDay),
+    startDateMs: Number.isFinite(startMs) ? startMs : 0,
+    endDateMs: Number.isFinite(endMs) ? endMs : 0,
+    alarmOffsetsMinutes: normalizeCalendarEventAlarms(ev),
+  };
+}
+
+async function fetchManagedIosStrikeEvents(
+  candidateCalendarIds: string[],
+  storedState: Record<string, StoredStrikeStateEntry>,
+): Promise<ManagedIosCalendarEvent[]> {
+  const managedIds = new Set(Object.values(storedState).map((e) => e.eventId));
+  const searchCalIds = Array.from(
+    new Set(
+      [
+        ...candidateCalendarIds,
+        ...Object.values(storedState).map((e) => e.calendarId || ""),
+      ].filter(Boolean),
+    ),
+  );
+
+  let rawEvents: Calendar.Event[] = [];
+  if (searchCalIds.length > 0) {
+    try {
+      const startWin = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const endWin = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      rawEvents = await Calendar.getEventsAsync(searchCalIds, startWin, endWin);
+    } catch {
+      rawEvents = [];
+    }
+  }
+
+  const foundIds = new Set(rawEvents.map((e) => e.id).filter(Boolean));
   for (const entry of Object.values(storedState)) {
-    if (entry.reminderId && !foundIds.has(entry.reminderId)) {
+    if (entry.eventId && !foundIds.has(entry.eventId)) {
       try {
-        const single = await Calendar.getReminderAsync(entry.reminderId);
+        const single = await Calendar.getEventAsync(entry.eventId);
         if (single) {
-          allReminders.push(single);
+          rawEvents.push(single);
           if (single.id) foundIds.add(single.id);
         }
       } catch {}
     }
   }
 
-  const managedIds = new Set(
-    Object.values(storedState).map((e) => e.reminderId),
-  );
-  return allReminders.filter(
-    (rem) =>
-      Boolean(extractStrikeIdentifierFromNotes(rem.notes)) ||
-      (rem.id ? managedIds.has(rem.id) : false),
+  const dedupedById = new Map<string, ManagedIosCalendarEvent>();
+  for (const ev of rawEvents) {
+    if (!isManagedStrikeCandidate(ev.url, ev.notes, ev.id, managedIds)) {
+      continue;
+    }
+    const mapped = toManagedCalendarEvent(ev);
+    if (mapped && !dedupedById.has(mapped.id)) {
+      dedupedById.set(mapped.id, mapped);
+    }
+  }
+
+  return Array.from(dedupedById.values());
+}
+
+async function deleteIosCalendarEventById(eventId: string): Promise<void> {
+  if (!eventId) return;
+  await Calendar.deleteEventAsync(eventId, { futureEvents: false }).catch(
+    () => {},
   );
 }
 
+async function purgeLegacyIosStrikeRemindersOnce(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  try {
+    const cleaned = await AsyncStorage.getItem(LEGACY_REMINDERS_CLEANED_KEY);
+    if (cleaned === "true") return;
+
+    const remPerm = await Calendar.getRemindersPermissionsAsync().catch(
+      () => null,
+    );
+    if (remPerm?.status === "granted") {
+      const legacyStored = await readJsonStorage<
+        Record<string, LegacyStoredReminderStateEntry>
+      >(LEGACY_REMINDER_STATE_KEY, {});
+      const legacyIds = new Set(
+        Object.values(legacyStored)
+          .map((e) => e.reminderId)
+          .filter(Boolean),
+      );
+
+      if (typeof StudICIAlarms?.getStrikeReminders === "function") {
+        try {
+          const nativeRems = await StudICIAlarms.getStrikeReminders();
+          for (const rem of nativeRems) {
+            if (
+              rem.id &&
+              !rem.completed &&
+              isManagedStrikeCandidate(rem.url, rem.notes, rem.id, legacyIds)
+            ) {
+              if (typeof StudICIAlarms?.deleteStrikeReminder === "function") {
+                await StudICIAlarms.deleteStrikeReminder(rem.id).catch(
+                  () => {},
+                );
+              }
+            }
+          }
+        } catch {}
+      } else {
+        try {
+          const remCals = await Calendar.getCalendarsAsync(
+            Calendar.EntityTypes.REMINDER,
+          );
+          const remCalIds = remCals
+            .filter((c) => c.allowsModifications && c.id)
+            .map((c) => c.id);
+          if (remCalIds.length > 0) {
+            const rems = await Calendar.getRemindersAsync(
+              remCalIds,
+              Calendar.ReminderStatus.INCOMPLETE,
+              null,
+              null,
+            ).catch(() => []);
+            for (const rem of rems) {
+              if (
+                rem.id &&
+                isManagedStrikeCandidate(rem.url, rem.notes, rem.id, legacyIds)
+              ) {
+                await Calendar.deleteReminderAsync(rem.id).catch(() => {});
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+
+    await AsyncStorage.removeItem(LEGACY_REMINDER_STATE_KEY).catch(() => {});
+    await AsyncStorage.setItem(LEGACY_REMINDERS_CLEANED_KEY, "true").catch(
+      () => {},
+    );
+  } catch {}
+}
+
 async function purgeLegacyIosStrikeNotificationsOnce(): Promise<void> {
-  if (Platform.OS !== 'ios') return;
+  if (Platform.OS !== "ios") return;
   try {
     const cleaned = await AsyncStorage.getItem(LEGACY_NOTIFS_CLEANED_KEY);
-    if (cleaned === 'true') return;
-    const scheduled = await Notifications.getAllScheduledNotificationsAsync().catch(
-      () => [],
-    );
+    if (cleaned === "true") return;
+    const scheduled =
+      await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
     const strikeItems = scheduled.filter((req) =>
       req.identifier.startsWith(STRIKE_NOTIFICATION_PREFIX),
     );
@@ -511,91 +1345,153 @@ async function purgeLegacyIosStrikeNotificationsOnce(): Promise<void> {
         ),
       ),
     );
-    await AsyncStorage.setItem(LEGACY_NOTIFS_CLEANED_KEY, 'true');
+    await AsyncStorage.setItem(LEGACY_NOTIFS_CLEANED_KEY, "true");
   } catch {}
 }
 
-async function clearAllIosStrikeReminders(
-  storedState: Record<string, StoredReminderStateEntry>,
+async function clearAllIosStrikeCalendarEvents(
+  storedState: Record<string, StoredStrikeStateEntry>,
 ): Promise<void> {
   try {
     const avail = await Calendar.isAvailableAsync();
     if (!avail) return;
-    const perm = await Calendar.getRemindersPermissionsAsync();
-    if (perm.status !== 'granted') return;
+    const perm = await Calendar.getCalendarPermissionsAsync();
+    if (perm.status !== "granted") return;
 
-    const { writableCalendarIds } = await resolveIosTargetRemindersCalendar();
-    const managed = await fetchManagedIosReminders(
-      writableCalendarIds,
-      storedState,
+    const {
+      targetCalendarId: existingCalendarId,
+      writableCalendarIds: writableIds,
+    } = await getManagedStrikeCalendarsSnapshot();
+
+    const searchIds = Array.from(
+      new Set(
+        [
+          existingCalendarId || "",
+          ...Object.values(storedState).map((e) => e.calendarId || ""),
+        ].filter((id) => Boolean(id) && writableIds.includes(id)),
+      ),
     );
-    for (const rem of managed) {
-      if (rem.id && !rem.completed) {
-        await Calendar.deleteReminderAsync(rem.id).catch(() => {});
-      }
+
+    if (searchIds.length === 0 && Object.keys(storedState).length === 0) {
+      await AsyncStorage.removeItem(STRIKE_STATE_KEY).catch(() => {});
+      return;
+    }
+
+    const managed = await fetchManagedIosStrikeEvents(searchIds, storedState);
+    for (const ev of managed) {
+      await deleteIosCalendarEventById(ev.id);
     }
   } catch {}
   await AsyncStorage.removeItem(STRIKE_STATE_KEY).catch(() => {});
 }
 
-async function syncIosStrikeReminders(
+function isIosCalendarEventUnchanged(
+  existing: ManagedIosCalendarEvent | undefined,
+  prevStored: StoredStrikeStateEntry | undefined,
+  targetCalendarId: string,
+  plan: PlannedIosStrikeCalendarEvent,
+): boolean {
+  if (!existing?.id) return false;
+  if (
+    targetCalendarId &&
+    existing.calendarId &&
+    existing.calendarId !== targetCalendarId
+  ) {
+    return false;
+  }
+  if (!existing.allDay) return false;
+  if (existing.title !== plan.title) return false;
+  if ((existing.location || "") !== plan.location) return false;
+  if ((existing.notes || "").trim() !== plan.notes.trim()) return false;
+  if (extractStrikeIdentifierFromUrl(existing.url) !== plan.identifier) {
+    return false;
+  }
+
+  const startIsoMatches =
+    existing.startDateMs > 0 &&
+    formatLocalIsoDate(new Date(existing.startDateMs)) === plan.commuteDateIso;
+  const durationSingleDay =
+    existing.endDateMs >= existing.startDateMs &&
+    existing.endDateMs - existing.startDateMs <= 25 * 60 * 60 * 1000;
+  if (!startIsoMatches || !durationSingleDay) return false;
+
+  const existingSig = computeOffsetsSignature(existing.alarmOffsetsMinutes);
+  if (existingSig !== plan.offsetsSignature) {
+    return false;
+  }
+
+  if (prevStored && prevStored.offsetsSignature !== plan.offsetsSignature) {
+    return false;
+  }
+
+  return true;
+}
+
+async function syncIosStrikeCalendarEvents(
   config: CommuterConfig,
   alertPrefs: StrikeAlertPreferences,
   events: DisruptionEvent[],
+  ctx: CommuteScheduleContext,
   options?: { promptIfNeeded?: boolean },
 ): Promise<StrikeNotificationsStatus> {
-  await purgeLegacyIosStrikeNotificationsOnce();
+  await Promise.all([
+    purgeLegacyIosStrikeNotificationsOnce(),
+    purgeLegacyIosStrikeRemindersOnce(),
+  ]);
 
   const storedState = await readJsonStorage<
-    Record<string, StoredReminderStateEntry>
+    Record<string, StoredStrikeStateEntry>
   >(STRIKE_STATE_KEY, {});
   const isAnyAlertEnabled =
     alertPrefs.notify7DaysBefore || alertPrefs.notify1DayBefore;
 
   const isAvail = await Calendar.isAvailableAsync().catch(() => false);
   let perm = isAvail
-    ? await Calendar.getRemindersPermissionsAsync().catch(() => ({
+    ? await Calendar.getCalendarPermissionsAsync().catch(() => ({
         granted: false,
         canAskAgain: true,
-        status: 'undetermined' as const,
+        status: "undetermined" as const,
       }))
-    : { granted: false, canAskAgain: false, status: 'denied' as const };
+    : { granted: false, canAskAgain: false, status: "denied" as const };
 
   if (!config.enabled || !isAnyAlertEnabled) {
-    await clearAllIosStrikeReminders(storedState);
+    await clearAllIosStrikeCalendarEvents(storedState);
     return {
       enabled: isAnyAlertEnabled,
       notify7DaysBefore: alertPrefs.notify7DaysBefore,
       notify1DayBefore: alertPrefs.notify1DayBefore,
-      permissionGranted: perm.status === 'granted',
+      permissionGranted: perm.status === "granted",
       canAskAgain: perm.canAskAgain ?? true,
       scheduledCount: 0,
       upcomingImpactingCount: 0,
-      backend: 'reminders',
+      backend: "calendar",
     };
   }
 
-  const dispatchLog = await readJsonStorage<Record<string, number>>(
-    STRIKE_DISPATCH_LOG_KEY,
-    {},
+  const { planned, upcomingImpactingCount } = buildIosStrikeCalendarPlans(
+    events,
+    config,
+    alertPrefs,
+    ctx,
+    Date.now(),
   );
-  const { planned, updatedDispatchLog, upcomingImpactingCount } =
-    buildStrikeAlertPlans(events, config, alertPrefs, Date.now(), dispatchLog);
 
-  if (isAvail && perm.status !== 'granted' && perm.canAskAgain) {
-    const alreadyAsked = await AsyncStorage.getItem(STRIKE_PERMISSION_ASKED_KEY);
+  if (isAvail && perm.status !== "granted" && perm.canAskAgain) {
+    const alreadyAsked = await AsyncStorage.getItem(
+      STRIKE_PERMISSION_ASKED_KEY,
+    );
     const shouldPrompt =
       Boolean(options?.promptIfNeeded) ||
-      (planned.length > 0 && alreadyAsked !== 'true');
+      (planned.length > 0 && alreadyAsked !== "true");
     if (shouldPrompt) {
-      await AsyncStorage.setItem(STRIKE_PERMISSION_ASKED_KEY, 'true');
+      await AsyncStorage.setItem(STRIKE_PERMISSION_ASKED_KEY, "true");
       try {
-        perm = await Calendar.requestRemindersPermissionsAsync();
+        perm = await Calendar.requestCalendarPermissionsAsync();
       } catch {}
     }
   }
 
-  if (!isAvail || perm.status !== 'granted') {
+  if (!isAvail || perm.status !== "granted") {
     return {
       enabled: true,
       notify7DaysBefore: alertPrefs.notify7DaysBefore,
@@ -604,161 +1500,173 @@ async function syncIosStrikeReminders(
       canAskAgain: perm.canAskAgain ?? false,
       scheduledCount: 0,
       upcomingImpactingCount,
-      backend: 'reminders',
+      backend: "calendar",
     };
   }
 
   const { targetCalendarId, writableCalendarIds } =
-    await resolveIosTargetRemindersCalendar();
-  const managedReminders = await fetchManagedIosReminders(
-    writableCalendarIds,
+    await ensureManagedStrikeCalendar();
+  if (!targetCalendarId) {
+    return {
+      enabled: true,
+      notify7DaysBefore: alertPrefs.notify7DaysBefore,
+      notify1DayBefore: alertPrefs.notify1DayBefore,
+      permissionGranted: true,
+      canAskAgain: perm.canAskAgain ?? true,
+      scheduledCount: 0,
+      upcomingImpactingCount,
+      backend: "calendar",
+    };
+  }
+
+  const scanCalendarIds = Array.from(
+    new Set(
+      [
+        targetCalendarId,
+        ...Object.values(storedState).map((e) => e.calendarId || ""),
+      ].filter((id) => Boolean(id) && writableCalendarIds.includes(id)),
+    ),
+  );
+  const managedEvents = await fetchManagedIosStrikeEvents(
+    scanCalendarIds,
     storedState,
   );
 
-  // Indicizza i promemoria esistenti per identificatore logico
-  const existingByIdentifier = new Map<string, Calendar.Reminder[]>();
-  const completedIdentifiers = new Set<string>();
-
-  for (const rem of managedReminders) {
-    const extracted = extractStrikeIdentifierFromNotes(rem.notes);
-    let identifier = extracted;
-    if (!identifier && rem.id) {
+  const existingByIdentifier = new Map<string, ManagedIosCalendarEvent[]>();
+  for (const ev of managedEvents) {
+    let identifier =
+      extractStrikeIdentifierFromUrl(ev.url) ||
+      extractLegacyStrikeIdentifierFromNotes(ev.notes);
+    if (!identifier && ev.id) {
       const storedMatch = Object.values(storedState).find(
-        (s) => s.reminderId === rem.id,
+        (s) => s.eventId === ev.id,
       );
       if (storedMatch) identifier = storedMatch.identifier;
     }
     if (!identifier) continue;
 
-    if (rem.completed) {
-      completedIdentifiers.add(identifier);
-      continue;
-    }
     const bucket = existingByIdentifier.get(identifier) || [];
-    bucket.push(rem);
+    bucket.push(ev);
     existingByIdentifier.set(identifier, bucket);
   }
 
-  const desiredMap = new Map<string, PlannedStrikeAlert>();
+  const desiredMap = new Map<string, PlannedIosStrikeCalendarEvent>();
   for (const item of planned) {
     desiredMap.set(item.identifier, item);
   }
 
-  // Elimina promemoria obsoleti, disattivati dalle impostazioni (-7 o -1) o non più nel feed
+  // Elimina eventi obsoleti (es. sciopero terminato/rimosso o giorno senza lezioni attive)
   for (const [identifier, bucket] of existingByIdentifier.entries()) {
     if (!desiredMap.has(identifier)) {
-      for (const rem of bucket) {
-        if (rem.id) {
-          await Calendar.deleteReminderAsync(rem.id).catch(() => {});
+      for (const ev of bucket) {
+        if (ev.id) {
+          await deleteIosCalendarEventById(ev.id);
         }
       }
       existingByIdentifier.delete(identifier);
     }
   }
 
-  const nextState: Record<string, StoredReminderStateEntry> = {};
+  const timeZoneId =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Rome";
+  const nextState: Record<string, StoredStrikeStateEntry> = {};
   let scheduledCount = 0;
 
   for (const item of planned) {
-    if (completedIdentifiers.has(item.identifier)) {
-      // Rispetta il promemoria già segnato come completato dall'utente in Apple Promemoria
-      continue;
-    }
-
     const bucket = existingByIdentifier.get(item.identifier) || [];
     const primaryExisting = bucket[0];
-    // Rimuove eventuali duplicati extra con lo stesso identificatore
     for (let i = 1; i < bucket.length; i++) {
       const dup = bucket[i];
       if (dup?.id) {
-        await Calendar.deleteReminderAsync(dup.id).catch(() => {});
+        await deleteIosCalendarEventById(dup.id);
       }
     }
 
-    const dueDate = new Date(item.fireAtMs);
-    const existingDueMs = primaryExisting?.dueDate
-      ? new Date(primaryExisting.dueDate).getTime()
-      : NaN;
     const prevStored = storedState[item.identifier];
-
-    const isUnchanged =
-      Boolean(primaryExisting?.id) &&
-      primaryExisting?.title === item.title &&
-      (primaryExisting?.notes || '') === item.notesWithTag &&
-      ((Number.isFinite(existingDueMs) &&
-        Math.abs(existingDueMs - item.fireAtMs) <= 60_000) ||
-        (Boolean(prevStored) &&
-          Math.abs(prevStored.fireAtMs - item.fireAtMs) <= 60_000));
-
-    if (isUnchanged && primaryExisting?.id) {
+    if (
+      isIosCalendarEventUnchanged(
+        primaryExisting,
+        prevStored,
+        targetCalendarId,
+        item,
+      ) &&
+      primaryExisting?.id
+    ) {
       nextState[item.identifier] = {
         identifier: item.identifier,
-        reminderId: primaryExisting.id,
-        fireAtMs: item.fireAtMs,
+        eventId: primaryExisting.id,
+        calendarId: targetCalendarId,
+        fireAtMs: item.startDateMs,
         title: item.title,
-        notes: item.notesWithTag,
-        strikeDateIso: item.strikeDateIso,
+        notes: item.notes,
+        strikeDateIso: item.commuteDateIso,
         strikeEventId: item.strikeEventId,
+        offsetsSignature: item.offsetsSignature,
       };
       scheduledCount += 1;
       continue;
     }
 
-    const reminderPayload: Calendar.Reminder = {
+    const eventDetails: Partial<Calendar.Event> = {
+      calendarId: targetCalendarId,
       title: item.title,
-      notes: item.notesWithTag,
-      startDate: dueDate,
-      dueDate,
-      allDay: false,
-      alarms: [{ absoluteDate: dueDate.toISOString() }],
-      url: 'studici://viaggio',
-      completed: false,
+      startDate: new Date(item.startDateMs),
+      endDate: new Date(item.endDateMs),
+      allDay: true,
+      timeZone: timeZoneId,
+      location: item.location,
+      notes: item.notes,
+      url: item.url,
+      availability: Calendar.Availability.FREE,
+      alarms: item.alarmRelativeOffsetsMinutes.map((relativeOffset) => ({
+        relativeOffset,
+      })),
     };
 
-    let finalReminderId: string | null = null;
+    let finalEventId: string | null = null;
     if (primaryExisting?.id) {
       try {
-        await Calendar.updateReminderAsync(primaryExisting.id, reminderPayload);
-        finalReminderId = primaryExisting.id;
+        finalEventId = await Calendar.updateEventAsync(
+          primaryExisting.id,
+          eventDetails,
+        );
       } catch {
-        await Calendar.deleteReminderAsync(primaryExisting.id).catch(() => {});
+        await deleteIosCalendarEventById(primaryExisting.id);
+        finalEventId = null;
       }
     }
 
-    if (!finalReminderId) {
+    if (!finalEventId) {
       try {
-        finalReminderId = await Calendar.createReminderAsync(
+        finalEventId = await Calendar.createEventAsync(
           targetCalendarId,
-          reminderPayload,
+          eventDetails,
         );
       } catch (err) {
-        console.warn('[StrikeReminders] Errore creazione promemoria:', err);
+        console.warn("[StrikeCalendar] Errore creazione evento sciopero:", err);
       }
     }
 
-    if (finalReminderId) {
+    if (finalEventId) {
       nextState[item.identifier] = {
         identifier: item.identifier,
-        reminderId: finalReminderId,
-        fireAtMs: item.fireAtMs,
+        eventId: finalEventId,
+        calendarId: targetCalendarId,
+        fireAtMs: item.startDateMs,
         title: item.title,
-        notes: item.notesWithTag,
-        strikeDateIso: item.strikeDateIso,
+        notes: item.notes,
+        strikeDateIso: item.commuteDateIso,
         strikeEventId: item.strikeEventId,
+        offsetsSignature: item.offsetsSignature,
       };
       scheduledCount += 1;
     }
   }
 
-  await Promise.all([
-    AsyncStorage.setItem(STRIKE_STATE_KEY, JSON.stringify(nextState)).catch(
-      () => {},
-    ),
-    AsyncStorage.setItem(
-      STRIKE_DISPATCH_LOG_KEY,
-      JSON.stringify(updatedDispatchLog),
-    ).catch(() => {}),
-  ]);
+  await AsyncStorage.setItem(STRIKE_STATE_KEY, JSON.stringify(nextState)).catch(
+    () => {},
+  );
+  await markStrikesCalendarSynced();
 
   return {
     enabled: true,
@@ -768,7 +1676,7 @@ async function syncIosStrikeReminders(
     canAskAgain: perm.canAskAgain ?? true,
     scheduledCount,
     upcomingImpactingCount,
-    backend: 'reminders',
+    backend: "calendar",
   };
 }
 
@@ -782,6 +1690,7 @@ async function syncAndroidStrikeNotifications(
   config: CommuterConfig,
   alertPrefs: StrikeAlertPreferences,
   events: DisruptionEvent[],
+  ctx: CommuteScheduleContext,
   options?: { promptIfNeeded?: boolean },
 ): Promise<StrikeNotificationsStatus> {
   ensureStrikeNotificationHandler();
@@ -792,7 +1701,7 @@ async function syncAndroidStrikeNotifications(
     granted: false,
     canAskAgain: true,
     status: Notifications.PermissionStatus.UNDETERMINED,
-    expires: 'never' as const,
+    expires: "never" as const,
   }));
 
   if (!config.enabled || !isAnyAlertEnabled) {
@@ -800,11 +1709,13 @@ async function syncAndroidStrikeNotifications(
       const scheduled = await Notifications.getAllScheduledNotificationsAsync();
       await Promise.all(
         scheduled
-          .filter((req) => req.identifier.startsWith(STRIKE_NOTIFICATION_PREFIX))
+          .filter((req) =>
+            req.identifier.startsWith(STRIKE_NOTIFICATION_PREFIX),
+          )
           .map((req) =>
-            Notifications.cancelScheduledNotificationAsync(req.identifier).catch(
-              () => {},
-            ),
+            Notifications.cancelScheduledNotificationAsync(
+              req.identifier,
+            ).catch(() => {}),
           ),
       );
     } catch {}
@@ -817,7 +1728,7 @@ async function syncAndroidStrikeNotifications(
       canAskAgain: initialPerms.canAskAgain ?? true,
       scheduledCount: 0,
       upcomingImpactingCount: 0,
-      backend: 'notifications',
+      backend: "notifications",
     };
   }
 
@@ -826,14 +1737,26 @@ async function syncAndroidStrikeNotifications(
     {},
   );
   const { planned, updatedDispatchLog, upcomingImpactingCount } =
-    buildStrikeAlertPlans(events, config, alertPrefs, Date.now(), dispatchLog);
+    buildAndroidStrikeAlertPlans(
+      events,
+      config,
+      alertPrefs,
+      ctx,
+      Date.now(),
+      dispatchLog,
+    );
 
   let currentPerms = initialPerms;
   let granted = isAndroidNotificationPermissionGranted(currentPerms);
   if (!granted && currentPerms.canAskAgain) {
-    const alreadyAsked = await AsyncStorage.getItem(STRIKE_PERMISSION_ASKED_KEY);
-    if (options?.promptIfNeeded || (planned.length > 0 && alreadyAsked !== 'true')) {
-      await AsyncStorage.setItem(STRIKE_PERMISSION_ASKED_KEY, 'true');
+    const alreadyAsked = await AsyncStorage.getItem(
+      STRIKE_PERMISSION_ASKED_KEY,
+    );
+    if (
+      options?.promptIfNeeded ||
+      (planned.length > 0 && alreadyAsked !== "true")
+    ) {
+      await AsyncStorage.setItem(STRIKE_PERMISSION_ASKED_KEY, "true");
       currentPerms = await Notifications.requestPermissionsAsync().catch(
         () => initialPerms,
       );
@@ -850,21 +1773,21 @@ async function syncAndroidStrikeNotifications(
       canAskAgain: currentPerms.canAskAgain ?? false,
       scheduledCount: 0,
       upcomingImpactingCount,
-      backend: 'notifications',
+      backend: "notifications",
     };
   }
 
   await Notifications.setNotificationChannelAsync(STRIKE_CHANNEL_ID, {
-    name: 'Avvisi scioperi',
+    name: "Avvisi scioperi",
     importance: Notifications.AndroidImportance.HIGH,
-    sound: 'default',
+    sound: "default",
     vibrationPattern: [0, 250, 200, 250],
-    lightColor: '#EF4444',
+    lightColor: "#EF4444",
   }).catch(() => {});
 
   const [existingAll, storedState] = await Promise.all([
     Notifications.getAllScheduledNotificationsAsync().catch(() => []),
-    readJsonStorage<Record<string, StoredReminderStateEntry>>(
+    readJsonStorage<Record<string, StoredStrikeStateEntry>>(
       STRIKE_STATE_KEY,
       {},
     ),
@@ -883,7 +1806,7 @@ async function syncAndroidStrikeNotifications(
     }
   }
 
-  const nextState: Record<string, StoredReminderStateEntry> = {};
+  const nextState: Record<string, StoredStrikeStateEntry> = {};
   let scheduledCount = 0;
 
   for (const item of planned) {
@@ -901,9 +1824,9 @@ async function syncAndroidStrikeNotifications(
     }
 
     if (existingIds.has(item.identifier)) {
-      await Notifications.cancelScheduledNotificationAsync(item.identifier).catch(
-        () => {},
-      );
+      await Notifications.cancelScheduledNotificationAsync(
+        item.identifier,
+      ).catch(() => {});
     }
 
     try {
@@ -912,15 +1835,15 @@ async function syncAndroidStrikeNotifications(
         content: {
           title: item.title,
           body: item.body,
-          sound: 'default',
-          color: '#EF4444',
+          sound: "default",
+          color: "#EF4444",
           priority: Notifications.AndroidNotificationPriority.HIGH,
           data: {
-            type: 'strike_alert',
+            type: "strike_alert",
             leadDays: item.leadDays,
             strikeKey: item.strikeKey,
             strikeEventId: item.strikeEventId,
-            strikeStartDate: item.strikeDateIso,
+            strikeStartDate: item.commuteDateIso,
             strikeCategory: item.strikeCategory,
           },
         },
@@ -932,11 +1855,11 @@ async function syncAndroidStrikeNotifications(
       });
       nextState[item.identifier] = {
         identifier: item.identifier,
-        reminderId: item.identifier,
+        eventId: item.identifier,
         fireAtMs: item.fireAtMs,
         title: item.title,
         notes: item.body,
-        strikeDateIso: item.strikeDateIso,
+        strikeDateIso: item.commuteDateIso,
         strikeEventId: item.strikeEventId,
       };
       scheduledCount += 1;
@@ -961,7 +1884,7 @@ async function syncAndroidStrikeNotifications(
     canAskAgain: currentPerms.canAskAgain ?? true,
     scheduledCount,
     upcomingImpactingCount,
-    backend: 'notifications',
+    backend: "notifications",
   };
 }
 
@@ -997,48 +1920,58 @@ export async function setStrikeNotificationsEnabled(
 export async function getStrikeNotificationsStatus(
   disruptionsInput?: DisruptionEvent[],
 ): Promise<StrikeNotificationsStatus> {
-  const [config, events] = await Promise.all([
+  const [config, events, ctx] = await Promise.all([
     getCommuterConfig(),
     disruptionsInput ? Promise.resolve(disruptionsInput) : getDisruptions(),
+    loadCommuteScheduleContext(),
   ]);
   const prefs = resolveAlertPrefs(config);
-  const arrivalStationName =
-    config.arrivalStation?.shortName || config.arrivalStation?.name || undefined;
-  const upcomingImpactingCount = config.enabled
-    ? events.filter((ev) => isStrikeEventImpactingRoute(ev, arrivalStationName))
-        .length
-    : 0;
+  const todayIso = formatLocalIsoDate(new Date());
+  const { upcomingImpactingCount } = buildAffectedStrikeCommuteDays(
+    events,
+    config,
+    ctx,
+    todayIso,
+  );
 
-  if (Platform.OS === 'ios') {
+  if (Platform.OS === "ios") {
     const isAvail = await Calendar.isAvailableAsync().catch(() => false);
     const perm = isAvail
-      ? await Calendar.getRemindersPermissionsAsync().catch(() => ({
+      ? await Calendar.getCalendarPermissionsAsync().catch(() => ({
           granted: false,
           canAskAgain: true,
-          status: 'undetermined' as const,
+          status: "undetermined" as const,
         }))
-      : { granted: false, canAskAgain: false, status: 'denied' as const };
+      : { granted: false, canAskAgain: false, status: "denied" as const };
     const storedState = await readJsonStorage<
-      Record<string, StoredReminderStateEntry>
+      Record<string, StoredStrikeStateEntry>
     >(STRIKE_STATE_KEY, {});
     let scheduledCount = Object.keys(storedState).length;
-    if (isAvail && perm.status === 'granted') {
-      const { writableCalendarIds } = await resolveIosTargetRemindersCalendar();
-      const managed = await fetchManagedIosReminders(
-        writableCalendarIds,
-        storedState,
+    if (isAvail && perm.status === "granted") {
+      const {
+        targetCalendarId: existingCalendarId,
+        writableCalendarIds: writableIds,
+      } = await getManagedStrikeCalendarsSnapshot();
+      const searchIds = Array.from(
+        new Set(
+          [
+            existingCalendarId || "",
+            ...Object.values(storedState).map((e) => e.calendarId || ""),
+          ].filter((id) => Boolean(id) && writableIds.includes(id)),
+        ),
       );
-      scheduledCount = managed.filter((r) => !r.completed).length;
+      const managed = await fetchManagedIosStrikeEvents(searchIds, storedState);
+      scheduledCount = managed.length;
     }
     return {
       enabled: prefs.notify7DaysBefore || prefs.notify1DayBefore,
       notify7DaysBefore: prefs.notify7DaysBefore,
       notify1DayBefore: prefs.notify1DayBefore,
-      permissionGranted: perm.status === 'granted',
+      permissionGranted: perm.status === "granted",
       canAskAgain: perm.canAskAgain ?? true,
       scheduledCount,
       upcomingImpactingCount,
-      backend: 'reminders',
+      backend: "calendar",
     };
   }
 
@@ -1046,7 +1979,7 @@ export async function getStrikeNotificationsStatus(
     granted: false,
     canAskAgain: true,
     status: Notifications.PermissionStatus.UNDETERMINED,
-    expires: 'never' as const,
+    expires: "never" as const,
   }));
   let scheduledCount = 0;
   try {
@@ -1063,7 +1996,7 @@ export async function getStrikeNotificationsStatus(
     canAskAgain: perm.canAskAgain ?? true,
     scheduledCount,
     upcomingImpactingCount,
-    backend: 'notifications',
+    backend: "notifications",
   };
 }
 
@@ -1071,16 +2004,29 @@ async function runSyncStrikeNotifications(
   disruptionsInput?: DisruptionEvent[],
   options?: { promptIfNeeded?: boolean },
 ): Promise<StrikeNotificationsStatus> {
-  const [config, events] = await Promise.all([
+  const [config, events, ctx] = await Promise.all([
     getCommuterConfig(),
     disruptionsInput ? Promise.resolve(disruptionsInput) : getDisruptions(),
+    loadCommuteScheduleContext(),
   ]);
   const alertPrefs = resolveAlertPrefs(config);
 
   const status =
-    Platform.OS === 'ios'
-      ? await syncIosStrikeReminders(config, alertPrefs, events, options)
-      : await syncAndroidStrikeNotifications(config, alertPrefs, events, options);
+    Platform.OS === "ios"
+      ? await syncIosStrikeCalendarEvents(
+          config,
+          alertPrefs,
+          events,
+          ctx,
+          options,
+        )
+      : await syncAndroidStrikeNotifications(
+          config,
+          alertPrefs,
+          events,
+          ctx,
+          options,
+        );
 
   notifyStatusListeners(status);
   return status;

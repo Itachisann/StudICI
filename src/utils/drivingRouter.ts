@@ -602,6 +602,7 @@ interface RealRouteData {
   distanceKm: number;
   steps: any[];
   mainRoadSummary?: string;
+  intersectionsCount?: number;
 }
 
 const stationCoordsCache = new Map<
@@ -613,6 +614,132 @@ const originCoordsCache = new Map<
   { lat: number; lon: number; name: string }
 >();
 const realRouteCache = new Map<string, RealRouteData>();
+const realRouteInFlight = new Map<string, Promise<RealRouteData | null>>();
+const originCoordsInFlight = new Map<
+  string,
+  Promise<{ lat: number; lon: number; name: string } | null>
+>();
+
+const DRIVING_STORAGE_KEY = "studici_driving_route_cache_v1";
+const DRIVING_STORAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 giorni
+let drivingStorageLoaded = false;
+let drivingStorageLoadPromise: Promise<void> | null = null;
+
+function summarizeStepsMetadata(
+  steps?: any[],
+  existingSummary?: string,
+): { intersectionsCount: number; mainRoadSummary?: string } {
+  let intersectionsCount = 0;
+  const roadNames = new Set<string>();
+  if (steps && Array.isArray(steps)) {
+    for (const s of steps) {
+      intersectionsCount += s.intersections?.length || 1;
+      const ref = (s.ref || "").trim();
+      const name = (s.name || "").trim();
+      if (ref && ref.length >= 2 && !/^(rotatoria|uscita|rampa)/i.test(ref)) {
+        roadNames.add(ref);
+      } else if (
+        name &&
+        name.length >= 3 &&
+        !/^(rotatoria|uscita|rampa|svincolo|strada)/i.test(name)
+      ) {
+        roadNames.add(name);
+      }
+    }
+  }
+  const mainRoadsList = Array.from(roadNames).slice(0, 2);
+  const mainRoadSummary =
+    mainRoadsList.length > 0 ? mainRoadsList.join(" e ") : existingSummary;
+  return { intersectionsCount, mainRoadSummary };
+}
+
+async function ensureDrivingStorageLoaded(): Promise<void> {
+  if (drivingStorageLoaded) return;
+  if (drivingStorageLoadPromise) return drivingStorageLoadPromise;
+  drivingStorageLoadPromise = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(DRIVING_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const now = Date.now();
+        if (
+          parsed &&
+          typeof parsed.savedAt === "number" &&
+          now - parsed.savedAt < DRIVING_STORAGE_TTL_MS
+        ) {
+          if (parsed.origins && typeof parsed.origins === "object") {
+            for (const [k, v] of Object.entries<any>(parsed.origins)) {
+              if (v && typeof v.lat === "number" && typeof v.lon === "number" && !originCoordsCache.has(k)) {
+                originCoordsCache.set(k, v);
+              }
+            }
+          }
+          if (parsed.stations && typeof parsed.stations === "object") {
+            for (const [k, v] of Object.entries<any>(parsed.stations)) {
+              if (v && typeof v.lat === "number" && typeof v.lon === "number" && !stationCoordsCache.has(k)) {
+                stationCoordsCache.set(k, v);
+              }
+            }
+          }
+          if (parsed.routes && typeof parsed.routes === "object") {
+            for (const [k, v] of Object.entries<any>(parsed.routes)) {
+              if (
+                v &&
+                typeof v.durationSec === "number" &&
+                typeof v.distanceKm === "number" &&
+                !realRouteCache.has(k)
+              ) {
+                realRouteCache.set(k, {
+                  durationSec: v.durationSec,
+                  distanceKm: v.distanceKm,
+                  steps: [],
+                  mainRoadSummary: v.mainRoadSummary,
+                  intersectionsCount: v.intersectionsCount,
+                });
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+    drivingStorageLoaded = true;
+    drivingStorageLoadPromise = null;
+  })();
+  return drivingStorageLoadPromise;
+}
+
+async function persistDrivingCache(): Promise<void> {
+  try {
+    await ensureDrivingStorageLoaded();
+    const origins: Record<string, { lat: number; lon: number; name: string }> = {};
+    for (const [k, v] of Array.from(originCoordsCache.entries()).slice(-30)) {
+      origins[k] = v;
+    }
+    const stations: Record<string, { lat: number; lon: number; name: string }> = {};
+    for (const [k, v] of Array.from(stationCoordsCache.entries()).slice(-30)) {
+      stations[k] = v;
+    }
+    const routes: Record<string, Omit<RealRouteData, "steps">> = {};
+    for (const [k, v] of Array.from(realRouteCache.entries()).slice(-40)) {
+      const meta = summarizeStepsMetadata(v.steps, v.mainRoadSummary);
+      routes[k] = {
+        durationSec: v.durationSec,
+        distanceKm: v.distanceKm,
+        mainRoadSummary: meta.mainRoadSummary,
+        intersectionsCount: v.intersectionsCount ?? meta.intersectionsCount,
+      };
+    }
+    await AsyncStorage.setItem(
+      DRIVING_STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        origins,
+        stations,
+        routes,
+      }),
+    );
+  } catch {}
+}
 
 const STATION_CAL_LOC_STORAGE_KEY = "studici_station_cal_loc_v1";
 const STATION_CAL_FALLBACK_RETRY_MS = 5 * 60 * 1000;
@@ -1120,6 +1247,7 @@ export async function resolveOriginCoordinates(
   const clean = normalizeKey(originQuery);
   if (!clean) return null;
 
+  await ensureDrivingStorageLoaded();
   if (originCoordsCache.has(clean)) {
     return originCoordsCache.get(clean)!;
   }
@@ -1131,61 +1259,72 @@ export async function resolveOriginCoordinates(
     return exactTown;
   }
 
-  const containsKnownTown = Object.keys(KNOWN_TOWN_COORDINATES).some((t) =>
-    clean.includes(t),
-  );
-  const queryWithTown = containsKnownTown
-    ? originQuery.trim()
-    : `${originQuery.trim()}, Amelia`;
+  const existingInFlight = originCoordsInFlight.get(clean);
+  if (existingInFlight) return existingInFlight;
 
-  // Se il civico ha un suffisso letterale (es. "135c" -> "135"), genera la query col solo numero civico
-  const numericCivicQuery = queryWithTown
-    .replace(/\b(\d{1,4})\s?[a-zA-Z]\b/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
+  const task = (async (): Promise<{ lat: number; lon: number; name: string } | null> => {
+    const containsKnownTown = Object.keys(KNOWN_TOWN_COORDINATES).some((t) =>
+      clean.includes(t),
+    );
+    const queryWithTown = containsKnownTown
+      ? originQuery.trim()
+      : `${originQuery.trim()}, Amelia`;
 
-  // Estrai anche la versione senza numero civico nel caso OpenStreetMap non abbia mappato il singolo portone
-  const streetOnlyQuery = queryWithTown
-    .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
-    .replace(/\s*,\s*,/g, ",")
-    .replace(/\s+/g, " ")
-    .trim();
+    // Se il civico ha un suffisso letterale (es. "135c" -> "135"), genera la query col solo numero civico
+    const numericCivicQuery = queryWithTown
+      .replace(/\b(\d{1,4})\s?[a-zA-Z]\b/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim();
 
-  const candidates = Array.from(
-    new Set(
-      [
-        queryWithTown,
-        numericCivicQuery,
-        originQuery.trim(),
-        streetOnlyQuery,
-        originQuery
-          .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
-          .replace(/\s+/g, " ")
-          .trim(),
-      ].filter((q) => q.length >= 3),
-    ),
-  );
+    // Estrai anche la versione senza numero civico nel caso OpenStreetMap non abbia mappato il singolo portone
+    const streetOnlyQuery = queryWithTown
+      .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
+      .replace(/\s*,\s*,/g, ",")
+      .replace(/\s+/g, " ")
+      .trim();
 
-  for (const cand of candidates) {
-    const [photonRes, nomRes] = await Promise.all([
-      queryPhotonGeocode(cand, 3200),
-      queryNominatimGeocode(cand, 3200),
-    ]);
-    const best = nomRes || photonRes;
-    if (best) {
-      originCoordsCache.set(clean, best);
-      return best;
+    const candidates = Array.from(
+      new Set(
+        [
+          queryWithTown,
+          numericCivicQuery,
+          originQuery.trim(),
+          streetOnlyQuery,
+          originQuery
+            .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
+            .replace(/\s+/g, " ")
+            .trim(),
+        ].filter((q) => q.length >= 3),
+      ),
+    );
+
+    for (const cand of candidates) {
+      const [photonRes, nomRes] = await Promise.all([
+        queryPhotonGeocode(cand, 3200),
+        queryNominatimGeocode(cand, 3200),
+      ]);
+      const best = nomRes || photonRes;
+      if (best) {
+        originCoordsCache.set(clean, best);
+        void persistDrivingCache();
+        return best;
+      }
     }
-  }
 
-  for (const [k, coords] of Object.entries(KNOWN_TOWN_COORDINATES)) {
-    if (clean === k || clean.includes(k)) {
-      originCoordsCache.set(clean, coords);
-      return coords;
+    for (const [k, coords] of Object.entries(KNOWN_TOWN_COORDINATES)) {
+      if (clean === k || clean.includes(k)) {
+        originCoordsCache.set(clean, coords);
+        return coords;
+      }
     }
-  }
 
-  return null;
+    return null;
+  })().finally(() => {
+    originCoordsInFlight.delete(clean);
+  });
+
+  originCoordsInFlight.set(clean, task);
+  return task;
 }
 
 /**
@@ -1304,201 +1443,220 @@ async function fetchRealRoadRoute(
   originLon: number,
   rawDestLat: number,
   rawDestLon: number,
+  skipFrontSnap = false,
 ): Promise<RealRouteData | null> {
+  await ensureDrivingStorageLoaded();
   const routeKey = `${originLat.toFixed(4)},${originLon.toFixed(4)}_${rawDestLat.toFixed(4)},${rawDestLon.toFixed(4)}`;
   if (realRouteCache.has(routeKey)) {
     return realRouteCache.get(routeKey)!;
   }
 
-  // Aggancia genericamente QUALSIASI stazione al piazzale stradale frontale evitando il lato opposto dei binari
-  const snappedDest = await snapStationToFrontRoad(
-    rawDestLat,
-    rawDestLon,
-    originLat,
-    originLon,
-  );
-  const destLat = snappedDest.lat;
-  const destLon = snappedDest.lon;
+  const existingInFlight = realRouteInFlight.get(routeKey);
+  if (existingInFlight) return existingInFlight;
 
-  const fetchValhallaCandidates = async (): Promise<RealRouteData[]> => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    try {
-      const res = await fetch("https://valhalla1.openstreetmap.de/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          locations: [
-            { lat: originLat, lon: originLon, radius: 150 },
-            { lat: destLat, lon: destLon, radius: 90 },
-          ],
-          costing: "auto",
-          alternates: 2,
-          units: "kilometers",
-        }),
-      });
-      clearTimeout(timeout);
-      if (!res.ok) return [];
-      const json = await res.json();
-      const trips = [
-        json?.trip,
-        ...(json?.alternates?.map((a: any) => a?.trip) || []),
-      ].filter(Boolean);
-      const maxKm = trips.reduce(
-        (acc: number, t: any) => Math.max(acc, Number(t?.summary?.length || 0)),
-        0,
-      );
-      const list: RealRouteData[] = [];
+  const task = (async (): Promise<RealRouteData | null> => {
+    // Aggancia la stazione al piazzale stradale frontale evitando il lato opposto dei binari
+    // (saltato se la stazione fa già parte di KNOWN_STATION_COORDINATES con piazzale verificato)
+    const snappedDest = skipFrontSnap
+      ? { lat: rawDestLat, lon: rawDestLon }
+      : await snapStationToFrontRoad(
+          rawDestLat,
+          rawDestLon,
+          originLat,
+          originLon,
+        );
+    const destLat = snappedDest.lat;
+    const destLon = snappedDest.lon;
 
-      for (const t of trips) {
-        const summary = t?.summary;
-        if (
-          summary &&
-          typeof summary.length === "number" &&
-          typeof summary.time === "number"
-        ) {
-          const maneuvers = t?.legs?.[0]?.maneuvers || [];
-          const streetSet = new Set<string>();
-          for (const m of maneuvers) {
-            if (Array.isArray(m.street_names)) {
-              for (const sn of m.street_names) {
-                if (
-                  sn &&
-                  sn.length >= 3 &&
-                  !/^(rotatoria|rampa|uscita)/i.test(sn)
-                ) {
-                  streetSet.add(sn);
+    const fetchValhallaCandidates = async (): Promise<RealRouteData[]> => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch("https://valhalla1.openstreetmap.de/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            locations: [
+              { lat: originLat, lon: originLon, radius: 150 },
+              { lat: destLat, lon: destLon, radius: 90 },
+            ],
+            costing: "auto",
+            alternates: 2,
+            units: "kilometers",
+          }),
+        });
+        clearTimeout(timeout);
+        if (!res.ok) return [];
+        const json = await res.json();
+        const trips = [
+          json?.trip,
+          ...(json?.alternates?.map((a: any) => a?.trip) || []),
+        ].filter(Boolean);
+        const maxKm = trips.reduce(
+          (acc: number, t: any) => Math.max(acc, Number(t?.summary?.length || 0)),
+          0,
+        );
+        const list: RealRouteData[] = [];
+
+        for (const t of trips) {
+          const summary = t?.summary;
+          if (
+            summary &&
+            typeof summary.length === "number" &&
+            typeof summary.time === "number"
+          ) {
+            const maneuvers = t?.legs?.[0]?.maneuvers || [];
+            const streetSet = new Set<string>();
+            for (const m of maneuvers) {
+              if (Array.isArray(m.street_names)) {
+                for (const sn of m.street_names) {
+                  if (
+                    sn &&
+                    sn.length >= 3 &&
+                    !/^(rotatoria|rampa|uscita)/i.test(sn)
+                  ) {
+                    streetSet.add(sn);
+                  }
                 }
               }
             }
+            const km = +summary.length.toFixed(1);
+            let durSec = Math.round(summary.time * 0.96);
+            if (maxKm > 0 && km <= maxKm * 0.82) {
+              durSec = Math.min(durSec, Math.round((km / 49) * 3600));
+            }
+            list.push({
+              distanceKm: km,
+              durationSec: durSec,
+              steps: maneuvers,
+              mainRoadSummary:
+                Array.from(streetSet).slice(0, 2).join(" e ") || undefined,
+              intersectionsCount: maneuvers.length || 1,
+            });
           }
-          const km = +summary.length.toFixed(1);
-          let durSec = Math.round(summary.time * 0.96);
-          // Se un'alternativa provinciale diretta è >18% più corta di una deviazione su superstrada,
-          // evita la penalizzazione artificiale sulle strade provinciali (allineando la velocità a ~49 km/h)
-          if (maxKm > 0 && km <= maxKm * 0.82) {
-            durSec = Math.min(durSec, Math.round((km / 49) * 3600));
-          }
-          list.push({
-            distanceKm: km,
-            durationSec: durSec,
-            steps: maneuvers,
-            mainRoadSummary:
-              Array.from(streetSet).slice(0, 2).join(" e ") || undefined,
-          });
         }
+        return list;
+      } catch {
+        clearTimeout(timeout);
       }
-      return list;
-    } catch {
-      clearTimeout(timeout);
-    }
-    return [];
-  };
-
-  const fetchOsrmCandidates = async (
-    baseUrl: string,
-    timeoutMs = 4500,
-  ): Promise<RealRouteData[]> => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const url = `${baseUrl}/${originLon},${originLat};${destLon},${destLat}?alternatives=3&steps=true&overview=false`;
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { "User-Agent": "StudICI-Mobile/1.8 (Sapienza; iOS)" },
-      });
-      clearTimeout(timeout);
-      if (!res.ok) return [];
-      const json = await res.json();
-      const routes = Array.isArray(json?.routes) ? json.routes : [];
-      return routes
-        .filter(
-          (r: any) =>
-            typeof r?.distance === "number" && typeof r?.duration === "number",
-        )
-        .map((r: any) => {
-          const steps = r.legs?.[0]?.steps || [];
-          // Rileva caselli di pedaggio / barriere autostradali (rallentamenti reali di 2-3 minuti a barriera)
-          const tollStepsCount = steps.filter(
-            (s: any) =>
-              /casello|pedaggio|toll|barriera/i.test(s.name || "") ||
-              /casello|pedaggio|toll|barriera/i.test(s.ref || ""),
-          ).length;
-          const tollDelaySec = tollStepsCount * 75; // ~1.25 min per transito/rallentamento barriera
-
-          // Per percorsi autostradali lunghi (>60km), la velocità OSRM corrisponde esattamente al tempo reale di Google/Apple
-          // Per percorsi brevi/provinciali locali (<35km), il fattore 0.94 riflette la fluidità reale
-          const km = +(r.distance / 1000).toFixed(1);
-          const calibrationFactor = km > 60 ? 1.0 : km > 35 ? 0.96 : 0.94;
-          const adjustedSec =
-            Math.round(r.duration * calibrationFactor) + tollDelaySec;
-
-          return {
-            distanceKm: km,
-            durationSec: adjustedSec,
-            steps,
-          };
-        });
-    } catch {
-      clearTimeout(timeout);
-    }
-    return [];
-  };
-
-  const [valhallaList, osrmDeList] = await Promise.all([
-    fetchValhallaCandidates(),
-    fetchOsrmCandidates(
-      "https://routing.openstreetmap.de/routed-car/route/v1/driving",
-      4500,
-    ),
-  ]);
-
-  const allCandidates = [...valhallaList, ...osrmDeList];
-
-  if (allCandidates.length > 0) {
-    // Seleziona il percorso ottimale bilanciando tempo reale e distanza (evitando allungamenti >5km inutili)
-    allCandidates.sort(
-      (a, b) =>
-        a.durationSec / 60 +
-        a.distanceKm * 0.65 -
-        (b.durationSec / 60 + b.distanceKm * 0.65),
-    );
-    const best = allCandidates[0];
-    // Se l'OSRM equivalente ha steps dettagliati per lo stesso chilometraggio, arricchiscilo con i nomi strada Valhalla
-    const matchingValhalla = valhallaList.find(
-      (v) => Math.abs(v.distanceKm - best.distanceKm) <= 0.8,
-    );
-    const matchingOsrm = osrmDeList.find(
-      (o) => Math.abs(o.distanceKm - best.distanceKm) <= 0.8,
-    );
-
-    const finalRoute: RealRouteData = {
-      distanceKm: best.distanceKm,
-      durationSec:
-        matchingValhalla && matchingOsrm
-          ? Math.max(matchingValhalla.durationSec, matchingOsrm.durationSec)
-          : best.durationSec,
-      steps: matchingOsrm?.steps?.length ? matchingOsrm.steps : best.steps,
-      mainRoadSummary:
-        matchingValhalla?.mainRoadSummary || best.mainRoadSummary,
+      return [];
     };
 
-    realRouteCache.set(routeKey, finalRoute);
-    return finalRoute;
-  }
+    const fetchOsrmCandidates = async (
+      baseUrl: string,
+      timeoutMs = 4500,
+    ): Promise<RealRouteData[]> => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const url = `${baseUrl}/${originLon},${originLat};${destLon},${destLat}?alternatives=3&steps=true&overview=false`;
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { "User-Agent": "StudICI-Mobile/1.8 (Sapienza; iOS)" },
+        });
+        clearTimeout(timeout);
+        if (!res.ok) return [];
+        const json = await res.json();
+        const routes = Array.isArray(json?.routes) ? json.routes : [];
+        return routes
+          .filter(
+            (r: any) =>
+              typeof r?.distance === "number" && typeof r?.duration === "number",
+          )
+          .map((r: any) => {
+            const steps = r.legs?.[0]?.steps || [];
+            const tollStepsCount = steps.filter(
+              (s: any) =>
+                /casello|pedaggio|toll|barriera/i.test(s.name || "") ||
+                /casello|pedaggio|toll|barriera/i.test(s.ref || ""),
+            ).length;
+            const tollDelaySec = tollStepsCount * 75;
 
-  // Terzo motore di backup: OSRM Global
-  const osrmGlobalList = await fetchOsrmCandidates(
-    "https://router.project-osrm.org/route/v1/driving",
-    5500,
-  );
-  if (osrmGlobalList.length > 0) {
-    realRouteCache.set(routeKey, osrmGlobalList[0]);
-    return osrmGlobalList[0];
-  }
+            const km = +(r.distance / 1000).toFixed(1);
+            const calibrationFactor = km > 60 ? 1.0 : km > 35 ? 0.96 : 0.94;
+            const adjustedSec =
+              Math.round(r.duration * calibrationFactor) + tollDelaySec;
+            const meta = summarizeStepsMetadata(steps);
 
-  return null;
+            return {
+              distanceKm: km,
+              durationSec: adjustedSec,
+              steps,
+              mainRoadSummary: meta.mainRoadSummary,
+              intersectionsCount: meta.intersectionsCount,
+            };
+          });
+      } catch {
+        clearTimeout(timeout);
+      }
+      return [];
+    };
+
+    const [valhallaList, osrmDeList] = await Promise.all([
+      fetchValhallaCandidates(),
+      fetchOsrmCandidates(
+        "https://routing.openstreetmap.de/routed-car/route/v1/driving",
+        4500,
+      ),
+    ]);
+
+    const allCandidates = [...valhallaList, ...osrmDeList];
+
+    if (allCandidates.length > 0) {
+      allCandidates.sort(
+        (a, b) =>
+          a.durationSec / 60 +
+          a.distanceKm * 0.65 -
+          (b.durationSec / 60 + b.distanceKm * 0.65),
+      );
+      const best = allCandidates[0];
+      const matchingValhalla = valhallaList.find(
+        (v) => Math.abs(v.distanceKm - best.distanceKm) <= 0.8,
+      );
+      const matchingOsrm = osrmDeList.find(
+        (o) => Math.abs(o.distanceKm - best.distanceKm) <= 0.8,
+      );
+      const chosenSteps = matchingOsrm?.steps?.length ? matchingOsrm.steps : best.steps;
+      const stepMeta = summarizeStepsMetadata(
+        chosenSteps,
+        matchingValhalla?.mainRoadSummary || best.mainRoadSummary,
+      );
+
+      const finalRoute: RealRouteData = {
+        distanceKm: best.distanceKm,
+        durationSec:
+          matchingValhalla && matchingOsrm
+            ? Math.max(matchingValhalla.durationSec, matchingOsrm.durationSec)
+            : best.durationSec,
+        steps: chosenSteps,
+        mainRoadSummary: stepMeta.mainRoadSummary,
+        intersectionsCount: stepMeta.intersectionsCount,
+      };
+
+      realRouteCache.set(routeKey, finalRoute);
+      void persistDrivingCache();
+      return finalRoute;
+    }
+
+    // Terzo motore di backup: OSRM Global
+    const osrmGlobalList = await fetchOsrmCandidates(
+      "https://router.project-osrm.org/route/v1/driving",
+      5500,
+    );
+    if (osrmGlobalList.length > 0) {
+      realRouteCache.set(routeKey, osrmGlobalList[0]);
+      void persistDrivingCache();
+      return osrmGlobalList[0];
+    }
+
+    return null;
+  })().finally(() => {
+    realRouteInFlight.delete(routeKey);
+  });
+
+  realRouteInFlight.set(routeKey, task);
+  return task;
 }
 
 export interface RouteFluencyResult {
@@ -1710,6 +1868,7 @@ export function analyzeRouteFluency(options: {
   durationSec: number;
   steps?: any[];
   mainRoadSummary?: string;
+  intersectionsCount?: number;
   targetTimeStr?: string;
   targetDate?: Date;
   stationName?: string;
@@ -1720,6 +1879,7 @@ export function analyzeRouteFluency(options: {
     durationSec,
     steps,
     mainRoadSummary,
+    intersectionsCount,
     targetTimeStr,
     targetDate,
     stationName,
@@ -1739,10 +1899,11 @@ export function analyzeRouteFluency(options: {
   const baseMinutes = Math.max(2, Math.ceil(durationSec / 60));
   const speedKmh = Math.round(distanceKm / (baseMinutes / 60));
 
-  let totalIntersections = 0;
+  let totalIntersections = intersectionsCount || 0;
   const roadNames = new Set<string>();
 
-  if (steps && Array.isArray(steps)) {
+  if (steps && Array.isArray(steps) && steps.length > 0) {
+    totalIntersections = 0;
     for (const s of steps) {
       totalIntersections += s.intersections?.length || 1;
       const ref = (s.ref || "").trim();
@@ -1931,11 +2092,13 @@ export async function calculateDrivingEstimate(
         : null);
 
     if (coordsOrigin && coordsStation) {
+      const isKnownFrontPlaza = Boolean(findKnownStationInfo(station));
       const routeData = await fetchRealRoadRoute(
         coordsOrigin.lat,
         coordsOrigin.lon,
         coordsStation.lat,
         coordsStation.lon,
+        isKnownFrontPlaza,
       );
 
       if (routeData) {
@@ -1944,6 +2107,7 @@ export async function calculateDrivingEstimate(
           durationSec: routeData.durationSec,
           steps: routeData.steps,
           mainRoadSummary: routeData.mainRoadSummary,
+          intersectionsCount: routeData.intersectionsCount,
           targetTimeStr,
           targetDate,
           stationName: coordsStation.name,

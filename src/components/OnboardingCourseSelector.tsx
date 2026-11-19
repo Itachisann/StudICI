@@ -1822,13 +1822,15 @@ function PostDownloadScreen() {
                 <View style={styles.strikeAlertsCard}>
                   <Text style={styles.strikeAlertsDesc}>
                     {Platform.OS === "ios"
-                      ? "Crea automaticamente promemoria nell'app Apple Promemoria per gli scioperi che impattano la tua tratta."
-                      : "Invia notifiche automatiche per gli scioperi che impattano la tua tratta."}
+                      ? 'Crea automaticamente eventi tutto il giorno nel calendario "StudICI - Scioperi" per scioperi e manifestazioni che impattano la tua tratta.'
+                      : "Invia notifiche automatiche per scioperi e manifestazioni che impattano la tua tratta."}
                   </Text>
                   <View style={styles.strikeAlertDivider} />
                   <View style={styles.strikeAlertRow}>
                     <Text style={styles.strikeAlertTitle}>
-                      Promemoria 7 giorni prima
+                      {Platform.OS === "ios"
+                        ? "Avviso 7 giorni prima (09:00)"
+                        : "Avviso 7 giorni prima"}
                     </Text>
                     <Switch
                       value={notify7DaysBefore}
@@ -1844,7 +1846,9 @@ function PostDownloadScreen() {
                   <View style={styles.strikeAlertDivider} />
                   <View style={styles.strikeAlertRow}>
                     <Text style={styles.strikeAlertTitle}>
-                      Promemoria 1 giorno prima
+                      {Platform.OS === "ios"
+                        ? "Avviso 1 giorno prima (09:00)"
+                        : "Avviso 1 giorno prima"}
                     </Text>
                     <Switch
                       value={notify1DayBefore}

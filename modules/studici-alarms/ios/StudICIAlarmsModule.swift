@@ -14,6 +14,18 @@ struct StructuredLocationEntry: Record {
   @Field var longitude: Double = 0
 }
 
+struct StrikeReminderInput: Record {
+  @Field var existingId: String?
+  @Field var calendarId: String = ""
+  @Field var title: String = ""
+  @Field var notes: String?
+  @Field var url: String?
+  @Field var dueDateMs: Double = 0
+  @Field var timeZoneId: String?
+  @Field var priority: Int = 1
+  @Field var alarmRelativeOffsetsMinutes: [Int]?
+}
+
 private final class MapSuggestionCompleter: NSObject, MKLocalSearchCompleterDelegate {
   private var completer: MKLocalSearchCompleter?
   private let lock = NSLock()
@@ -537,6 +549,168 @@ public class StudICIAlarmsModule: Module {
         print("StudICIAlarms: updateEventCalendarMetadata save error for \(calendarId): \(error)")
         return false
       }
+    }
+
+    AsyncFunction("getStrikeReminders") { () -> [[String: Any]] in
+      guard self.isRemindersAuthorized(requireFull: true) else {
+        return []
+      }
+      let eventStore = EKEventStore()
+      eventStore.refreshSourcesIfNecessary()
+      let predicate = eventStore.predicateForReminders(in: nil)
+      let sem = DispatchSemaphore(value: 0)
+      var fetched: [EKReminder] = []
+      eventStore.fetchReminders(matching: predicate) { reminders in
+        if let reminders = reminders {
+          fetched = reminders
+        }
+        sem.signal()
+      }
+      _ = sem.wait(timeout: .now() + 5.0)
+
+      let gregorian = Calendar(identifier: .gregorian)
+      return fetched.map { rem in
+        var dueMs: Double = 0
+        if let comps = rem.dueDateComponents {
+          let cal = comps.calendar ?? gregorian
+          if let dt = cal.date(from: comps) {
+            dueMs = dt.timeIntervalSince1970 * 1000.0
+          }
+        }
+        let offsets: [Int] = (rem.alarms ?? []).compactMap { alarm -> Int? in
+          let relMins = Int((alarm.relativeOffset / 60.0).rounded())
+          if relMins < 0 {
+            return relMins
+          }
+          if let absDate = alarm.absoluteDate, dueMs > 0 {
+            let diffMin = Int(((absDate.timeIntervalSince1970 - (dueMs / 1000.0)) / 60.0).rounded())
+            if diffMin < -1 {
+              return diffMin
+            }
+          }
+          return nil
+        }.sorted()
+
+        return [
+          "id": rem.calendarItemIdentifier,
+          "calendarId": rem.calendar?.calendarIdentifier ?? "",
+          "title": rem.title ?? "",
+          "notes": rem.notes ?? "",
+          "url": rem.url?.absoluteString ?? "",
+          "completed": rem.isCompleted,
+          "priority": rem.priority,
+          "dueDateMs": dueMs,
+          "alarmOffsetsMinutes": offsets,
+        ]
+      }
+    }
+
+    AsyncFunction("upsertStrikeReminder") { (input: StrikeReminderInput) -> String? in
+      guard self.isRemindersAuthorized(requireFull: false) else {
+        return nil
+      }
+      let eventStore = EKEventStore()
+      eventStore.refreshSourcesIfNecessary()
+
+      var targetCal: EKCalendar?
+      if !input.calendarId.isEmpty,
+         let byId = eventStore.calendar(withIdentifier: input.calendarId),
+         byId.allowsContentModifications {
+        targetCal = byId
+      }
+      if targetCal == nil {
+        targetCal = eventStore.defaultCalendarForNewReminders()
+      }
+      guard let calendar = targetCal, calendar.allowsContentModifications else {
+        return nil
+      }
+
+      let reminder: EKReminder
+      if let existingId = input.existingId,
+         !existingId.isEmpty,
+         let existing = eventStore.calendarItem(withIdentifier: existingId) as? EKReminder {
+        reminder = existing
+      } else {
+        reminder = EKReminder(eventStore: eventStore)
+      }
+
+      reminder.calendar = calendar
+      reminder.title = input.title
+      let trimmedNotes = input.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+      reminder.notes = (trimmedNotes?.isEmpty == false) ? trimmedNotes : nil
+
+      if let rawUrl = input.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+         !rawUrl.isEmpty,
+         let parsedUrl = URL(string: rawUrl) {
+        reminder.url = parsedUrl
+      } else {
+        reminder.url = nil
+      }
+
+      reminder.isCompleted = false
+      reminder.priority = max(0, min(9, input.priority))
+
+      let tz = input.timeZoneId.flatMap { TimeZone(identifier: $0) } ?? TimeZone.current
+      var cal = Calendar(identifier: .gregorian)
+      cal.timeZone = tz
+      let dueDate = Date(timeIntervalSince1970: input.dueDateMs / 1000.0)
+      // Promemoria SENZA ORARIO (tutto il giorno): solo era/anno/mese/giorno senza hour/minute/second
+      var comps = cal.dateComponents(
+        [.era, .year, .month, .day],
+        from: dueDate
+      )
+      comps.calendar = cal
+      comps.timeZone = tz
+      reminder.startDateComponents = nil
+      reminder.dueDateComponents = comps
+      reminder.timeZone = tz
+
+      // Configura gli allarmi anticipati con relativeOffset negativo (es. -1 giorno / -7 giorni)
+      var newAlarms: [EKAlarm] = []
+      if let offsets = input.alarmRelativeOffsetsMinutes {
+        for offsetMin in offsets where offsetMin < 0 {
+          newAlarms.append(EKAlarm(relativeOffset: TimeInterval(offsetMin * 60)))
+        }
+      }
+      reminder.alarms = newAlarms.isEmpty ? nil : newAlarms
+
+      do {
+        try eventStore.save(reminder, commit: true)
+        return reminder.calendarItemIdentifier
+      } catch {
+        print("StudICIAlarms: upsertStrikeReminder save error: \(error)")
+        return nil
+      }
+    }
+
+    AsyncFunction("deleteStrikeReminder") { (reminderId: String) -> Bool in
+      guard self.isRemindersAuthorized(requireFull: false),
+            !reminderId.isEmpty else {
+        return false
+      }
+      let eventStore = EKEventStore()
+      guard let reminder = eventStore.calendarItem(withIdentifier: reminderId) as? EKReminder else {
+        return true
+      }
+      do {
+        try eventStore.remove(reminder, commit: true)
+        return true
+      } catch {
+        print("StudICIAlarms: deleteStrikeReminder error for \(reminderId): \(error)")
+        return false
+      }
+    }
+  }
+
+  private func isRemindersAuthorized(requireFull: Bool) -> Bool {
+    let status = EKEventStore.authorizationStatus(for: .reminder)
+    if #available(iOS 17.0, *) {
+      if requireFull {
+        return status == .fullAccess
+      }
+      return status == .fullAccess || status == .writeOnly
+    } else {
+      return status == .authorized
     }
   }
 

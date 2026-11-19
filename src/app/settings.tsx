@@ -43,6 +43,7 @@ import {
 } from "react-native";
 import Reanimated, { FadeOut, LinearTransition } from "react-native-reanimated";
 import {
+  initialWindowMetrics,
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
@@ -515,6 +516,11 @@ function CalendarAlertSection({
 
 export default function ProfiloScreen() {
   const insets = useSafeAreaInsets();
+  // Inset bloccati fin dal primo frame: se il provider restituisce ancora 0, usa le metriche iniziali sincrone
+  const stableTopInset =
+    insets.top > 0 ? insets.top : (initialWindowMetrics?.insets.top ?? 0);
+  const stableBottomInset =
+    insets.bottom > 0 ? insets.bottom : (initialWindowMetrics?.insets.bottom ?? 0);
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
   const isNativeIos =
     Platform.OS === "ios" &&
@@ -3011,15 +3017,26 @@ export default function ProfiloScreen() {
   }, [degrees, searchCourse]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View collapsable={false} style={styles.header}>
+    <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safeArea}>
+      <View
+        collapsable={false}
+        style={[
+          styles.header,
+          {
+            paddingTop: stableTopInset + 12,
+            height: stableTopInset + 12 + 41 + 16,
+          },
+        ]}
+      >
         <Text style={styles.largeTitle}>Profilo</Text>
       </View>
 
       <ScrollView
         style={styles.container}
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
         contentContainerStyle={{
-          paddingBottom: Math.max(20, insets.bottom + 14),
+          paddingBottom: Math.max(20, stableBottomInset + 14),
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -6860,6 +6877,7 @@ const styles = StyleSheet.create({
   },
   largeTitle: {
     fontSize: 34,
+    lineHeight: 41,
     fontWeight: "700",
     color: "#ffffff",
     letterSpacing: 0.35,

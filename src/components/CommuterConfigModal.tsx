@@ -400,11 +400,11 @@ function TrainPreferencesSection({
             marginBottom: 4,
           }}
         >
-          Consiglio rientro anticipato
+          Consiglio treno smart
         </Text>
         <Text style={[styles.switchDesc, { marginBottom: 10 }]}>
-          Minuti massimi di lezione che puoi perdere per anticipare un treno
-          vantaggioso
+          Minuti massimi di lezione che puoi perdere (entrando in ritardo o
+          uscendo prima) per un treno più comodo
         </Text>
         <View style={styles.trainPrefRow}>
           {EARLY_LEAVE_OPTIONS.map((mins) => {
@@ -3139,7 +3139,7 @@ function MainFormScreen() {
               </View>
             </View>
 
-            {/* 5. Promemoria Scioperi (-7 giorni e -1 giorno) */}
+            {/* 5. Avvisi Scioperi su Calendario (-7 giorni e -1 giorno) */}
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
                 <View
@@ -3155,8 +3155,8 @@ function MainFormScreen() {
 
               <Text style={[styles.switchDesc, { marginBottom: 14 }]}>
                 {Platform.OS === "ios"
-                  ? "Crea automaticamente promemoria nell'app Apple Promemoria per gli scioperi che impattano la tua tratta."
-                  : "Invia notifiche automatiche per gli scioperi che impattano la tua tratta."}
+                  ? 'Crea automaticamente eventi tutto il giorno nel calendario "StudICI - Scioperi" per scioperi e manifestazioni che impattano la tua tratta.'
+                  : "Invia notifiche automatiche per scioperi e manifestazioni che impattano la tua tratta."}
               </Text>
 
               <View style={styles.switchRow}>
@@ -3169,7 +3169,9 @@ function MainFormScreen() {
                     color: "#ffffff",
                   }}
                 >
-                  Promemoria 7 giorni prima
+                  {Platform.OS === "ios"
+                    ? "Avviso 7 giorni prima (09:00)"
+                    : "Avviso 7 giorni prima"}
                 </Text>
                 <Switch
                   value={
@@ -3204,7 +3206,9 @@ function MainFormScreen() {
                     color: "#ffffff",
                   }}
                 >
-                  Promemoria 1 giorno prima
+                  {Platform.OS === "ios"
+                    ? "Avviso 1 giorno prima (09:00)"
+                    : "Avviso 1 giorno prima"}
                 </Text>
                 <Switch
                   value={

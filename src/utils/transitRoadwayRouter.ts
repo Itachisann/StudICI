@@ -33,6 +33,11 @@ export interface TransitRoadwayRequest {
 
 // Cache in-memory delle polilinee stradali ad alta risoluzione risolte
 const roadwayCache = new Map<string, LatLngPoint[]>();
+const pedestrianCache = new Map<string, LatLngPoint[]>();
+const streetAccessCache = new Map<
+  string,
+  { lat: number; lng: number; distanceMeters: number; roadName: string } | null
+>();
 
 /**
  * Calcola la distanza in metri tra due coordinate geografiche
@@ -856,28 +861,91 @@ export function getTransitRoadwayPolylineSync(
   return deduplicateAdjacentPoints(stops, 0.5);
 }
 
-/**
- * Risolve il tragitto pedonale reale ad alta precisione lungo i marciapiedi e gli attraversamenti pedonali,
- * evitando linee rette che attraversano fabbricati, mura o parchi.
- * Motori: 1. Valhalla pedestrian, 2. OSRM routed-foot, 3. fallback lineare.
- */
-export async function resolvePedestrianRoadwayPolyline(
-  origin: LatLngPoint | { lat: number; lng: number },
-  destination: LatLngPoint | { lat: number; lng: number }
-): Promise<LatLngPoint[] | null> {
-  const oLat = 'latitude' in origin ? origin.latitude : origin.lat;
-  const oLng = 'longitude' in origin ? origin.longitude : origin.lng;
-  const dLat = 'latitude' in destination ? destination.latitude : destination.lat;
-  const dLng = 'longitude' in destination ? destination.longitude : destination.lng;
+function polylineLengthMeters(points: LatLngPoint[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += haversineMeters(points[i - 1], points[i]);
+  }
+  return total;
+}
 
-  const directDist = haversineMeters({ latitude: oLat, longitude: oLng }, { latitude: dLat, longitude: dLng });
-  if (directDist < 10) {
-    return [
-      { latitude: oLat, longitude: oLng },
-      { latitude: dLat, longitude: dLng },
-    ];
+/**
+ * Individua dinamicamente il punto di accesso carrabile/pedonale su strada pubblica più vicino
+ * (utile quando la coordinata cade all'interno di un cortile universitario chiuso o di un edificio OSM,
+ * es. RM018 -> Via del Castro Laurenziano a ~22m, evitando giri attorno all'isolato).
+ */
+export async function resolveDynamicPublicStreetAccess(
+  coord: LatLngPoint | { lat: number; lng: number }
+): Promise<{ lat: number; lng: number; distanceMeters: number; roadName: string } | null> {
+  const lat = 'latitude' in coord ? coord.latitude : coord.lat;
+  const lng = 'longitude' in coord ? coord.longitude : coord.lng;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  if (streetAccessCache.has(cacheKey)) {
+    return streetAccessCache.get(cacheKey) ?? null;
   }
 
+  const urls = [
+    `https://routing.openstreetmap.de/routed-car/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
+    `https://router.project-osrm.org/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2800);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'StudICI-Mobile/1.9 (StreetAccessSnap)' },
+      });
+      clearTimeout(timeout);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const wp = Array.isArray(data?.waypoints) ? data.waypoints[0] : null;
+      const loc = wp?.location;
+      const roadName = typeof wp?.name === 'string' ? wp.name.trim() : '';
+      if (
+        Array.isArray(loc) &&
+        loc.length >= 2 &&
+        typeof loc[0] === 'number' &&
+        typeof loc[1] === 'number'
+      ) {
+        const snapLat = loc[1];
+        const snapLng = loc[0];
+        const distanceMeters =
+          typeof wp.distance === 'number'
+            ? wp.distance
+            : haversineMeters({ latitude: lat, longitude: lng }, { latitude: snapLat, longitude: snapLng });
+
+        // Evita autostrade/tangenziali ad alto scorrimento prive di marciapiedi
+        const lowerName = roadName.toLowerCase();
+        const isMotorwayLike =
+          lowerName.includes('autostrada') ||
+          lowerName.includes('tangenziale') ||
+          lowerName.includes('raccordo');
+        const result = isMotorwayLike
+          ? null
+          : { lat: snapLat, lng: snapLng, distanceMeters, roadName };
+        streetAccessCache.set(cacheKey, result);
+        return result;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  streetAccessCache.set(cacheKey, null);
+  return null;
+}
+
+async function fetchPedestrianRoadwayRaw(
+  oLat: number,
+  oLng: number,
+  dLat: number,
+  dLng: number
+): Promise<LatLngPoint[] | null> {
   // Motore 1: Valhalla pedestrian routing (alta precisione sui marciapiedi e attraversamenti)
   try {
     const controller = new AbortController();
@@ -954,8 +1022,85 @@ export async function resolvePedestrianRoadwayPolyline(
     }
   }
 
-  return [
-    { latitude: oLat, longitude: oLng },
-    { latitude: dLat, longitude: dLng },
-  ];
+  return null;
+}
+
+/**
+ * Risolve il tragitto pedonale reale ad alta precisione lungo i marciapiedi e gli attraversamenti pedonali,
+ * evitando linee rette che attraversano fabbricati o falsi giri da cortili interni non connessi alla strada.
+ * Motori: 1. Valhalla pedestrian, 2. OSRM routed-foot + street-access bridge, 3. fallback lineare.
+ */
+export async function resolvePedestrianRoadwayPolyline(
+  origin: LatLngPoint | { lat: number; lng: number },
+  destination: LatLngPoint | { lat: number; lng: number }
+): Promise<LatLngPoint[] | null> {
+  const oLat = 'latitude' in origin ? origin.latitude : origin.lat;
+  const oLng = 'longitude' in origin ? origin.longitude : origin.lng;
+  const dLat = 'latitude' in destination ? destination.latitude : destination.lat;
+  const dLng = 'longitude' in destination ? destination.longitude : destination.lng;
+
+  const origPt: LatLngPoint = { latitude: oLat, longitude: oLng };
+  const destPt: LatLngPoint = { latitude: dLat, longitude: dLng };
+  const directDist = haversineMeters(origPt, destPt);
+  if (directDist < 10) {
+    return [origPt, destPt];
+  }
+
+  const pedKey = `${oLat.toFixed(5)},${oLng.toFixed(5)}_${dLat.toFixed(5)},${dLng.toFixed(5)}`;
+  const cachedPed = pedestrianCache.get(pedKey);
+  if (cachedPed && cachedPed.length >= 2) {
+    return cachedPed;
+  }
+
+  const rawPed = await fetchPedestrianRoadwayRaw(oLat, oLng, dLat, dLng);
+  const rawLen = rawPed && rawPed.length >= 2 ? polylineLengthMeters(rawPed) : Infinity;
+
+  // Rileva dinamicamente eventuali giri viziosi da cortili interni OSM (es. percorso > 1.5x linea d'aria)
+  if (!rawPed || (directDist >= 55 && rawLen > Math.max(210, directDist * 1.50))) {
+    const [origAccess, destAccess] = await Promise.all([
+      resolveDynamicPublicStreetAccess(origPt),
+      resolveDynamicPublicStreetAccess(destPt),
+    ]);
+
+    const useOrigSnap =
+      origAccess && origAccess.distanceMeters >= 5 && origAccess.distanceMeters <= 68;
+    const useDestSnap =
+      destAccess && destAccess.distanceMeters >= 5 && destAccess.distanceMeters <= 68;
+
+    if (useOrigSnap || useDestSnap) {
+      const sOLat = useOrigSnap ? origAccess.lat : oLat;
+      const sOLng = useOrigSnap ? origAccess.lng : oLng;
+      const sDLat = useDestSnap ? destAccess.lat : dLat;
+      const sDLng = useDestSnap ? destAccess.lng : dLng;
+
+      const snappedPed = await fetchPedestrianRoadwayRaw(sOLat, sOLng, sDLat, sDLng);
+      if (snappedPed && snappedPed.length >= 2) {
+        const bridgeStart = useOrigSnap ? origAccess.distanceMeters : 0;
+        const bridgeEnd = useDestSnap ? destAccess.distanceMeters : 0;
+        const totalSnappedLen = bridgeStart + polylineLengthMeters(snappedPed) + bridgeEnd;
+
+        if (!rawPed || totalSnappedLen < rawLen * 0.80) {
+          const stitched: LatLngPoint[] = [origPt];
+          if (useOrigSnap) {
+            stitched.push({ latitude: sOLat, longitude: sOLng });
+          }
+          stitched.push(...snappedPed.slice(1, -1));
+          if (useDestSnap) {
+            stitched.push({ latitude: sDLat, longitude: sDLng });
+          }
+          stitched.push(destPt);
+          const cleaned = deduplicateAdjacentPoints(stitched, 0.5);
+          pedestrianCache.set(pedKey, cleaned);
+          return cleaned;
+        }
+      }
+    }
+  }
+
+  if (rawPed && rawPed.length >= 2) {
+    pedestrianCache.set(pedKey, rawPed);
+    return rawPed;
+  }
+
+  return [origPt, destPt];
 }
