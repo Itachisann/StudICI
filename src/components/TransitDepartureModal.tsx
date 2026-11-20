@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import MapView, { Marker, Polyline, Region } from "react-native-maps";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import {
   calculateRealWalkMinutes,
   ensureContinuousTransitPolyline,
@@ -52,12 +52,31 @@ if (isNativeIosGlass) {
 }
 
 // Sistema cromatico adattivo ad alto contrasto:
-// - Tratti pedonali in blu intenso (#3b82f6, o ice-blue #93c5fd se una tratta bus/metro è già blu)
+// - Tratti pedonali standard in blu intenso (#3b82f6, o ice-blue #93c5fd se una tratta bus/metro è già blu)
+// - Tratti pedonali di cambio tra due mezzi in colore distinto ad alto contrasto (es. ambra/teal/fucsia)
+// - Attesa in fermata senza spostamento a piedi in grigio-ardesia neutro
 // - Arrivo finale a destinazione in smeraldo dedicato (#10b981 / #34d399, o coral se l'ultima tratta è verde)
 const WALK_BLUE_PRIMARY = "#3b82f6";
 const WALK_BLUE_TEXT_PRIMARY = "#60a5fa";
 const WALK_BLUE_ALT = "#93c5fd";
 const WALK_BLUE_TEXT_ALT = "#bfdbfe";
+
+const TRANSFER_WALK_CANDIDATES: {
+  stroke: string;
+  text: string;
+  icon: string;
+}[] = [
+  { stroke: "#f59e0b", text: "#fbbf24", icon: "#0f172a" },
+  { stroke: "#14b8a6", text: "#2dd4bf", icon: "#0f172a" },
+  { stroke: "#e879f9", text: "#f0abfc", icon: "#0f172a" },
+  { stroke: "#84cc16", text: "#a3e635", icon: "#0f172a" },
+  { stroke: "#fb7185", text: "#fda4af", icon: "#0f172a" },
+];
+
+const WAIT_RAIL_COLOR = "#64748b";
+const WAIT_NODE_BG = "#334155";
+const WAIT_NODE_BORDER = "#94a3b8";
+const WAIT_TEXT_COLOR = "#cbd5e1";
 
 const ARRIVAL_GREEN_BG = "#10b981";
 const ARRIVAL_GREEN_TEXT = "#34d399";
@@ -72,6 +91,79 @@ const LEG_CONTRAST_CANDIDATES = [
   "#10b981",
   "#ea580c",
 ];
+
+function clockDiffMins(startMins: number, endMins: number): number {
+  if (startMins < 0 || endMins < 0) return 0;
+  let diff = endMins - startMins;
+  if (diff < -720) diff += 1440;
+  return Math.max(0, diff);
+}
+
+function normalizeStopKey(name?: string): string {
+  return (name || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function computePolylineLengthMeters(pts?: LatLngPoint[]): number {
+  if (!pts || pts.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    total += haversineMeters(pts[i - 1], pts[i]);
+  }
+  return total;
+}
+
+function getCrowdingConfig(
+  level: "low" | "medium" | "high" | undefined,
+) {
+  switch (level) {
+    case "high":
+      return {
+        label: "Molto affollato • Vettura piena",
+        shortLabel: "Molto affollato",
+        color: "#ef4444",
+        bg: "rgba(239, 68, 68, 0.14)",
+        border: "rgba(239, 68, 68, 0.35)",
+        icon: "people" as const,
+      };
+    case "medium":
+      return {
+        label: "Mediamente affollato • Posti in piedi",
+        shortLabel: "Mediamente affollato",
+        color: "#f59e0b",
+        bg: "rgba(245, 158, 11, 0.14)",
+        border: "rgba(245, 158, 11, 0.35)",
+        icon: "people" as const,
+      };
+    case "low":
+    default:
+      return {
+        label: "Poco affollato • Posti disponibili",
+        shortLabel: "Poco affollato",
+        color: "#10b981",
+        bg: "rgba(16, 185, 129, 0.14)",
+        border: "rgba(16, 185, 129, 0.35)",
+        icon: "people-outline" as const,
+      };
+  }
+}
+
+function computeLegCrowdingLevel(
+  mode: "bus" | "metro" | "tram" | "rail",
+  depTimeStr?: string,
+  fallbackLevel?: "low" | "medium" | "high",
+): "low" | "medium" | "high" {
+  const hour = parseInt((depTimeStr || "").split(":")[0], 10);
+  if (isNaN(hour)) return fallbackLevel || "low";
+  const isPeakHour = (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
+  if (!isPeakHour) return "low";
+  return mode === "metro" ? "high" : "medium";
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const clean = (hex || "").replace("#", "").trim();
@@ -149,7 +241,23 @@ export interface TransitDepartureModalProps {
   onSelectDeparture?: (dep: TransitDepartureItem) => void;
 }
 
-export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
+export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = (
+  props,
+) => {
+  if (!props.visible || !props.departure) return null;
+  return (
+    <TransitDepartureModalContent {...props} departure={props.departure} />
+  );
+};
+
+interface TransitDepartureModalContentProps
+  extends Omit<TransitDepartureModalProps, "departure"> {
+  departure: TransitDepartureItem;
+}
+
+const TransitDepartureModalContent: React.FC<
+  TransitDepartureModalContentProps
+> = ({
   visible,
   departure,
   allDepartures,
@@ -168,6 +276,10 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
   >({});
   // Traccia pedonale calcolata con OSRM foot per il percorso dall'origine alla salita del mezzo
   const [osrmWalkBeforeCoordsById, setOsrmWalkBeforeCoordsById] = useState<
+    Record<string, LatLngPoint[]>
+  >({});
+  // Traccia pedonale di interscambio tra due mezzi diversi (solo se le fermate non coincidono)
+  const [osrmTransferWalkCoordsById, setOsrmTransferWalkCoordsById] = useState<
     Record<string, LatLngPoint[]>
   >({});
   // Traccia del mezzo calcolata con OSRM driving multi-stop ad alta precisione lungo la viabilita stradale
@@ -346,53 +458,13 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     return snapCoordinateToPolyline(toCoords, transitRouteCoords, 250);
   }, [isMultiLeg, multiLegRoutes, toCoords, transitRouteCoords]);
 
-  // Calcola il percorso pedonale reale (Valhalla pedestrian / OSRM foot) garantendo assoluta continuità
-  // tra i punti esatti di salita (snappedFrom) e discesa (snappedTo) e le posizioni di partenza e arrivo
+  // 1. Risolve la traiettoria stradale reale del mezzo (solo al cambio corsa, mai in loop su snappedFrom/snappedTo)
+  const departureId = departure.id;
   useEffect(() => {
     if (!visible || !departure) return;
     let cancelled = false;
     const depId = departure.id;
 
-    const needWalkBefore =
-      (departure.walkBeforeMinutes ?? 0) > 0 ||
-      (originCoords &&
-        haversineMeters(
-          { latitude: originCoords.lat, longitude: originCoords.lng },
-          snappedFrom,
-        ) > 25);
-
-    if (needWalkBefore && originCoords) {
-      resolvePedestrianRoadwayPolyline(originCoords, snappedFrom)
-        .then((mappedFoot) => {
-          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
-          setOsrmWalkBeforeCoordsById((prev) => ({
-            ...prev,
-            [depId]: mappedFoot,
-          }));
-        })
-        .catch(() => {});
-    }
-
-    const needWalkAfter =
-      (departure.walkAfterMinutes ?? 0) > 0 ||
-      haversineMeters(snappedTo, {
-        latitude: finalCoords.lat,
-        longitude: finalCoords.lng,
-      }) > 25;
-
-    if (needWalkAfter) {
-      resolvePedestrianRoadwayPolyline(snappedTo, finalCoords)
-        .then((mappedFoot) => {
-          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
-          setOsrmWalkAfterCoordsById((prev) => ({
-            ...prev,
-            [depId]: mappedFoot,
-          }));
-        })
-        .catch(() => {});
-    }
-
-    // Risolve la traiettoria stradale reale per autobus e tram via motore di routing stradale multi-stop
     if (departure.mode === "bus" || departure.mode === "tram") {
       resolveTransitRoadwayPolyline({
         id: depId,
@@ -408,10 +480,9 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
       })
         .then((roadPts) => {
           if (cancelled || !roadPts || roadPts.length < 2) return;
-          setRoadwayTransitCoordsById((prev) => ({
-            ...prev,
-            [depId]: roadPts,
-          }));
+          setRoadwayTransitCoordsById((prev) =>
+            prev[depId] === roadPts ? prev : { ...prev, [depId]: roadPts },
+          );
         })
         .catch(() => {});
     }
@@ -436,10 +507,9 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
           })
             .then((legPts) => {
               if (cancelled || !legPts || legPts.length < 2) return;
-              setRoadwayLegCoordsById((prev) => ({
-                ...prev,
-                [legKey]: legPts,
-              }));
+              setRoadwayLegCoordsById((prev) =>
+                prev[legKey] === legPts ? prev : { ...prev, [legKey]: legPts },
+              );
             })
             .catch(() => {});
         }
@@ -449,15 +519,168 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     return () => {
       cancelled = true;
     };
+  }, [visible, departureId, departure, fromCoords, toCoords]);
+
+  // 2. Risolve i percorsi pedonali solo se non già presenti e validi sulla corsa,
+  // usando chiavi primitive arrotondate (evita loop infiniti e doppie chiamate Valhalla/OSRM)
+  const walkBeforeReqKey = `${originCoords.lat.toFixed(4)},${originCoords.lng.toFixed(4)}->${snappedFrom.latitude.toFixed(4)},${snappedFrom.longitude.toFixed(4)}`;
+  const walkAfterReqKey = `${snappedTo.latitude.toFixed(4)},${snappedTo.longitude.toFixed(4)}->${finalCoords.lat.toFixed(4)},${finalCoords.lng.toFixed(4)}`;
+  const transferWalksReqKey = useMemo(() => {
+    if (!isMultiLeg || multiLegRoutes.length < 2) return "";
+    const parts: string[] = [];
+    for (let i = 0; i < multiLegRoutes.length - 1; i++) {
+      const prevPoly = multiLegRoutes[i].polyline;
+      const nextPoly = multiLegRoutes[i + 1].polyline;
+      const curTo = prevPoly.length > 0 ? prevPoly[prevPoly.length - 1] : null;
+      const nextFrom = nextPoly.length > 0 ? nextPoly[0] : null;
+      if (curTo && nextFrom) {
+        parts.push(
+          `${curTo.latitude.toFixed(4)},${curTo.longitude.toFixed(4)}->${nextFrom.latitude.toFixed(4)},${nextFrom.longitude.toFixed(4)}`,
+        );
+      }
+    }
+    return parts.join("|");
+  }, [isMultiLeg, multiLegRoutes]);
+
+  useEffect(() => {
+    if (!visible || !departure) return;
+    let cancelled = false;
+    const depId = departure.id;
+
+    const origPt: LatLngPoint = {
+      latitude: originCoords.lat,
+      longitude: originCoords.lng,
+    };
+    const hasExistingWalkBefore = Boolean(
+      departure.walkBeforePolyline &&
+        departure.walkBeforePolyline.length >= 4 &&
+        haversineMeters(origPt, departure.walkBeforePolyline[0]) < 60 &&
+        haversineMeters(
+          snappedFrom,
+          departure.walkBeforePolyline[departure.walkBeforePolyline.length - 1],
+        ) < 60,
+    );
+
+    const needWalkBefore =
+      !hasExistingWalkBefore &&
+      ((departure.walkBeforeMinutes ?? 0) > 0 ||
+        haversineMeters(origPt, snappedFrom) > 25);
+
+    if (needWalkBefore) {
+      resolvePedestrianRoadwayPolyline(originCoords, snappedFrom)
+        .then((mappedFoot) => {
+          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
+          setOsrmWalkBeforeCoordsById((prev) =>
+            prev[depId] === mappedFoot
+              ? prev
+              : { ...prev, [depId]: mappedFoot },
+          );
+        })
+        .catch(() => {});
+    }
+
+    const destPt: LatLngPoint = {
+      latitude: finalCoords.lat,
+      longitude: finalCoords.lng,
+    };
+    const hasExistingWalkAfter = Boolean(
+      departure.walkAfterPolyline &&
+        departure.walkAfterPolyline.length >= 4 &&
+        haversineMeters(snappedTo, departure.walkAfterPolyline[0]) < 60 &&
+        haversineMeters(
+          destPt,
+          departure.walkAfterPolyline[departure.walkAfterPolyline.length - 1],
+        ) < 60,
+    );
+
+    const needWalkAfter =
+      !hasExistingWalkAfter &&
+      ((departure.walkAfterMinutes ?? 0) > 0 ||
+        haversineMeters(snappedTo, destPt) > 25);
+
+    if (needWalkAfter) {
+      resolvePedestrianRoadwayPolyline(snappedTo, finalCoords)
+        .then((mappedFoot) => {
+          if (cancelled || !mappedFoot || mappedFoot.length < 2) return;
+          setOsrmWalkAfterCoordsById((prev) =>
+            prev[depId] === mappedFoot
+              ? prev
+              : { ...prev, [depId]: mappedFoot },
+          );
+        })
+        .catch(() => {});
+    }
+
+    // Risolve anche i tratti pedonali di interscambio (solo quando le fermate di cambio non coincidono)
+    if (isMultiLeg && multiLegRoutes.length > 1) {
+      for (let i = 0; i < multiLegRoutes.length - 1; i++) {
+        const curRoute = multiLegRoutes[i];
+        const nextRoute = multiLegRoutes[i + 1];
+        const curTo =
+          curRoute.polyline.length > 0
+            ? curRoute.polyline[curRoute.polyline.length - 1]
+            : curRoute.leg.toStopCoords
+              ? {
+                  latitude: curRoute.leg.toStopCoords.lat,
+                  longitude: curRoute.leg.toStopCoords.lng,
+                }
+              : null;
+        const nextFrom =
+          nextRoute.polyline.length > 0
+            ? nextRoute.polyline[0]
+            : nextRoute.leg.fromStopCoords
+              ? {
+                  latitude: nextRoute.leg.fromStopCoords.lat,
+                  longitude: nextRoute.leg.fromStopCoords.lng,
+                }
+              : null;
+        if (!curTo || !nextFrom) continue;
+
+        const existingTw = departure.transferWalkPolylines?.[i];
+        const directDist = haversineMeters(curTo, nextFrom);
+        const existingDist = computePolylineLengthMeters(existingTw);
+        const effectiveDist = Math.max(directDist, existingDist);
+        const sameName =
+          normalizeStopKey(curRoute.leg.toStop) !== "" &&
+          normalizeStopKey(curRoute.leg.toStop) ===
+            normalizeStopKey(nextRoute.leg.fromStop);
+        const sameSurface =
+          (curRoute.leg.mode === "bus" || curRoute.leg.mode === "tram") &&
+          (nextRoute.leg.mode === "bus" || nextRoute.leg.mode === "tram");
+        const isSameStop =
+          effectiveDist <= 35 || (sameName && sameSurface && effectiveDist <= 60);
+        if (isSameStop) continue;
+
+        const hasDetailedExisting = Boolean(
+          existingTw &&
+            existingTw.length >= 4 &&
+            haversineMeters(curTo, existingTw[0]) < 60 &&
+            haversineMeters(nextFrom, existingTw[existingTw.length - 1]) < 60,
+        );
+        if (!hasDetailedExisting && directDist > 35) {
+          const twKey = `${depId}_tw_${i}`;
+          resolvePedestrianRoadwayPolyline(curTo, nextFrom)
+            .then((mappedTw) => {
+              if (cancelled || !mappedTw || mappedTw.length < 2) return;
+              setOsrmTransferWalkCoordsById((prev) =>
+                prev[twKey] === mappedTw ? prev : { ...prev, [twKey]: mappedTw },
+              );
+            })
+            .catch(() => {});
+        }
+      }
+    }
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     visible,
-    departure,
-    toCoords,
-    finalCoords,
-    fromCoords,
-    originCoords,
-    snappedFrom,
-    snappedTo,
+    departureId,
+    walkBeforeReqKey,
+    walkAfterReqKey,
+    transferWalksReqKey,
   ]);
 
   const walkBeforeRouteCoords = useMemo<LatLngPoint[]>(() => {
@@ -494,7 +717,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
         snappedFrom,
       ];
     }
-    if (distToBus > 20) {
+    if (distToBus > 8) {
       return [origPt, snappedFrom];
     }
     return [];
@@ -545,42 +768,118 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     return [];
   }, [departure, finalCoords, osrmWalkAfterCoordsById, snappedTo]);
 
-  // Tratti a piedi di interscambio tra un mezzo e l'altro
-  const transferWalks = useMemo<LatLngPoint[][]>(() => {
-    if (!departure || !isMultiLeg || !multiLegRoutes.length) return [];
-    if (
-      departure.transferWalkPolylines &&
-      departure.transferWalkPolylines.length > 0
-    ) {
-      return departure.transferWalkPolylines.map((tw, idx) => {
-        if (tw.length >= 2 && multiLegRoutes[idx] && multiLegRoutes[idx + 1]) {
-          const res = [...tw];
-          const prevPoly = multiLegRoutes[idx].polyline;
-          const nextPoly = multiLegRoutes[idx + 1].polyline;
-          if (prevPoly.length > 0) res[0] = prevPoly[prevPoly.length - 1];
-          if (nextPoly.length > 0) res[res.length - 1] = nextPoly[0];
-          return res;
-        }
-        return tw;
+  // Analisi di ciascun interscambio tra tratte consecutive:
+  // distingue con precisione tra cambio alla stessa fermata (nessuna camminata) e cambio con percorso a piedi
+  const transferSegments = useMemo(() => {
+    if (!departure || !isMultiLeg || multiLegRoutes.length < 2) return [];
+    const segments: {
+      needsWalk: boolean;
+      polyline: LatLngPoint[];
+      directDistMeters: number;
+      effectiveDistMeters: number;
+      rawWalkMins: number;
+    }[] = [];
+
+    for (let i = 0; i < multiLegRoutes.length - 1; i++) {
+      const curRoute = multiLegRoutes[i];
+      const nextRoute = multiLegRoutes[i + 1];
+      const curTo: LatLngPoint | null =
+        curRoute.polyline.length > 0
+          ? curRoute.polyline[curRoute.polyline.length - 1]
+          : curRoute.leg.toStopCoords
+            ? {
+                latitude: curRoute.leg.toStopCoords.lat,
+                longitude: curRoute.leg.toStopCoords.lng,
+              }
+            : null;
+      const nextFrom: LatLngPoint | null =
+        nextRoute.polyline.length > 0
+          ? nextRoute.polyline[0]
+          : nextRoute.leg.fromStopCoords
+            ? {
+                latitude: nextRoute.leg.fromStopCoords.lat,
+                longitude: nextRoute.leg.fromStopCoords.lng,
+              }
+            : null;
+
+      if (!curTo || !nextFrom) {
+        segments.push({
+          needsWalk: false,
+          polyline: [],
+          directDistMeters: 0,
+          effectiveDistMeters: 0,
+          rawWalkMins: 0,
+        });
+        continue;
+      }
+
+      const twKey = `${departure.id}_tw_${i}`;
+      const osrmTw = osrmTransferWalkCoordsById[twKey];
+      const rawExisting = departure.transferWalkPolylines?.[i];
+      const basePoly =
+        osrmTw && osrmTw.length >= 2
+          ? osrmTw
+          : rawExisting && rawExisting.length >= 2
+            ? rawExisting
+            : [];
+
+      const directDistMeters = haversineMeters(curTo, nextFrom);
+      const polyDistMeters = computePolylineLengthMeters(basePoly);
+      const effectiveDistMeters = Math.max(directDistMeters, polyDistMeters);
+      const sameStopName =
+        normalizeStopKey(curRoute.leg.toStop) !== "" &&
+        normalizeStopKey(curRoute.leg.toStop) ===
+          normalizeStopKey(nextRoute.leg.fromStop);
+      const sameSurfaceMode =
+        (curRoute.leg.mode === "bus" || curRoute.leg.mode === "tram") &&
+        (nextRoute.leg.mode === "bus" || nextRoute.leg.mode === "tram");
+
+      // Se discesa e ripartenza coincidono fisicamente (<= 35m, o stessa fermata di superficie <= 60m),
+      // non c'è nessuna camminata intermedia da disegnare o indicare.
+      const needsWalk = !(
+        effectiveDistMeters <= 35 ||
+        (sameStopName && sameSurfaceMode && effectiveDistMeters <= 60)
+      );
+
+      if (!needsWalk) {
+        segments.push({
+          needsWalk: false,
+          polyline: [],
+          directDistMeters,
+          effectiveDistMeters,
+          rawWalkMins: 0,
+        });
+        continue;
+      }
+
+      const snappedPoly: LatLngPoint[] =
+        basePoly.length >= 2
+          ? [curTo, ...basePoly.slice(1, -1), nextFrom]
+          : [curTo, nextFrom];
+      const realWalkMins = Math.max(
+        1,
+        calculateRealWalkMinutes(curTo, nextFrom, snappedPoly).minutes,
+      );
+
+      segments.push({
+        needsWalk: true,
+        polyline: snappedPoly,
+        directDistMeters,
+        effectiveDistMeters,
+        rawWalkMins: realWalkMins,
       });
     }
-    const walks: LatLngPoint[][] = [];
-    for (let i = 0; i < multiLegRoutes.length - 1; i++) {
-      const prevPoly = multiLegRoutes[i].polyline;
-      const nextPoly = multiLegRoutes[i + 1].polyline;
-      const curTo = prevPoly.length > 0 ? prevPoly[prevPoly.length - 1] : null;
-      const nextFrom = nextPoly.length > 0 ? nextPoly[0] : null;
-      if (curTo && nextFrom) {
-        const dist =
-          Math.abs(curTo.latitude - nextFrom.latitude) +
-          Math.abs(curTo.longitude - nextFrom.longitude);
-        if (dist > 0.00005) {
-          walks.push([curTo, nextFrom]);
-        }
-      }
-    }
-    return walks;
-  }, [departure, isMultiLeg, multiLegRoutes]);
+
+    return segments;
+  }, [departure, isMultiLeg, multiLegRoutes, osrmTransferWalkCoordsById]);
+
+  const transferWalks = useMemo<LatLngPoint[][]>(
+    () =>
+      transferSegments
+        .filter((s) => s.needsWalk && s.polyline.length >= 2)
+        .map((s) => s.polyline),
+    [transferSegments],
+  );
 
   const mapRegion = useMemo(() => {
     const allPts: LatLngPoint[] = [
@@ -653,27 +952,32 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     transferWalks,
   ]);
 
-  const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
+  const getZoomBucket = (delta: number): 0 | 1 | 2 | 3 => {
+    if (delta > 0.02) return 0;
+    if (delta > 0.01) return 1;
+    if (delta > 0.005) return 2;
+    return 3;
+  };
+  const [zoomBucket, setZoomBucket] = useState<0 | 1 | 2 | 3 | null>(null);
 
   // Scaling proporzionale allo zoom per il tracciato a piedi:
-  // evita che i pallini risultino spropositati quando la mappa è vista da lontano
+  // aggiorna lo stato solo al cambio fascia di zoom (0 re-render durante il pan)
   const walkingStrokeProps = useMemo(() => {
-    const delta =
-      currentRegion?.latitudeDelta ?? mapRegion.latitudeDelta ?? 0.012;
+    const bucket = zoomBucket ?? getZoomBucket(mapRegion.latitudeDelta ?? 0.012);
     const isIos = Platform.OS === "ios";
-    if (delta > 0.02) {
+    if (bucket === 0) {
       return {
         strokeWidth: 2.2,
         lineDashPattern: isIos ? [2, 5] : [0.1, 6],
       };
     }
-    if (delta > 0.01) {
+    if (bucket === 1) {
       return {
         strokeWidth: 2.8,
         lineDashPattern: isIos ? [3, 6] : [0.1, 7],
       };
     }
-    if (delta > 0.005) {
+    if (bucket === 2) {
       return {
         strokeWidth: 3.4,
         lineDashPattern: isIos ? [3.5, 7] : [0.1, 9],
@@ -683,9 +987,20 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
       strokeWidth: 4,
       lineDashPattern: isIos ? [4, 8] : [0.1, 11],
     };
-  }, [currentRegion?.latitudeDelta, mapRegion.latitudeDelta]);
+  }, [zoomBucket, mapRegion.latitudeDelta]);
 
-  if (!departure) return null;
+  const snappedIntermediateStops = useMemo(() => {
+    if (!departure.intermediateStopCoords || departure.intermediateStopCoords.length === 0) {
+      return [];
+    }
+    return departure.intermediateStopCoords.map((stop) => ({
+      name: stop.name,
+      snapped: snapCoordinateToPolyline(
+        { latitude: stop.lat, longitude: stop.lng },
+        transitRouteCoords,
+      ),
+    }));
+  }, [departure.intermediateStopCoords, transitRouteCoords]);
 
   const isWeb = Platform.OS === "web";
   const lineColor = getLineBadgeColor(departure.line, departure.mode);
@@ -766,6 +1081,28 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     ? "rgba(147, 197, 253, 0.34)"
     : "rgba(59, 130, 246, 0.36)";
 
+  // Colore dedicato ad alto contrasto per l'eventuale tratto a piedi al cambio,
+  // distinto sia dal colore pedonale standard sia dai colori delle tratte dei mezzi
+  const effectiveTransferWalk = (() => {
+    const avoidColors = [effectiveWalkColor, ...activeTransitColors];
+    const picked = TRANSFER_WALK_CANDIDATES.find((cand) =>
+      avoidColors.every((u) => rgbDistance(cand.stroke, u) >= 110),
+    );
+    if (picked) return picked;
+    let best = TRANSFER_WALK_CANDIDATES[0];
+    let bestMinDist = -1;
+    for (const cand of TRANSFER_WALK_CANDIDATES) {
+      const minD = Math.min(
+        ...avoidColors.map((u) => rgbDistance(cand.stroke, u)),
+      );
+      if (minD > bestMinDist) {
+        bestMinDist = minD;
+        best = cand;
+      }
+    }
+    return best;
+  })();
+
   const lastTransitColor =
     activeTransitColors[activeTransitColors.length - 1] || lineColor;
   const isLastLegGreen =
@@ -779,38 +1116,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
     ? "rgba(244, 63, 94, 0.32)"
     : "rgba(16, 185, 129, 0.32)";
 
-  const crowdingConfig = (() => {
-    switch (departure.crowdingLevel) {
-      case "high":
-        return {
-          label: "Molto affollato • Vettura piena",
-          shortLabel: "Molto affollato",
-          color: "#ef4444",
-          bg: "rgba(239, 68, 68, 0.14)",
-          border: "rgba(239, 68, 68, 0.35)",
-          icon: "people" as const,
-        };
-      case "medium":
-        return {
-          label: "Mediamente affollato • Posti in piedi",
-          shortLabel: "Mediamente affollato",
-          color: "#f59e0b",
-          bg: "rgba(245, 158, 11, 0.14)",
-          border: "rgba(245, 158, 11, 0.35)",
-          icon: "people" as const,
-        };
-      case "low":
-      default:
-        return {
-          label: "Poco affollato • Posti disponibili",
-          shortLabel: "Poco affollato",
-          color: "#10b981",
-          bg: "rgba(16, 185, 129, 0.14)",
-          border: "rgba(16, 185, 129, 0.35)",
-          icon: "people-outline" as const,
-        };
-    }
-  })();
+  const crowdingConfig = getCrowdingConfig(departure.crowdingLevel);
 
   const handleOpenStopNavigation = (
     provider: "apple" | "google",
@@ -920,36 +1226,193 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
       : calculateRealWalkMinutes(toCoords, finalCoords, walkAfterRouteCoords)
           .minutes;
 
-  const inVehicleMins =
-    typeof departure.inVehicleMinutes === "number" &&
-    departure.inVehicleMinutes > 0
+  const depMinsParsed = parseHHMMToMins(displayDepTime);
+
+  // Modello cronologico normalizzato al minuto (HH:MM) per corse con cambio:
+  // garantisce che somma delle tratte + attese/camminate al cambio === durata lista mezzi (salita -> ultima discesa)
+  // e che somma di tutti gli step in "IL TUO VIAGGIO" === differenza esatta ARRIVO - PARTENZA.
+  const multiLegJourney = useMemo(() => {
+    if (!isMultiLeg || multiLegRoutes.length === 0) return null;
+
+    const normalizedLegs: {
+      route: (typeof multiLegRoutes)[number];
+      boardMins: number;
+      alightMins: number;
+      boardTimeStr: string;
+      alightTimeStr: string;
+      durationMinutes: number;
+    }[] = [];
+
+    for (let i = 0; i < multiLegRoutes.length; i++) {
+      const route = multiLegRoutes[i];
+      const leg = route.leg;
+      const rawBoardM = parseHHMMToMins(leg.departureTime || "");
+      const rawAlightM = parseHHMMToMins(leg.arrivalTime || "");
+
+      let boardM: number;
+      let alightM: number;
+
+      if (i === 0) {
+        boardM = depMinsParsed >= 0 ? depMinsParsed : rawBoardM;
+        const rawDur =
+          rawBoardM >= 0 && rawAlightM >= 0
+            ? Math.max(1, clockDiffMins(rawBoardM, rawAlightM))
+            : Math.max(1, leg.durationMinutes || 1);
+        if (rawBoardM >= 0 && rawAlightM >= 0 && boardM === rawBoardM) {
+          alightM = rawAlightM;
+        } else if (boardM >= 0) {
+          alightM = (boardM + rawDur) % 1440;
+        } else {
+          alightM = rawAlightM;
+        }
+      } else {
+        const prevAlightM = normalizedLegs[i - 1].alightMins;
+        let candidateBoardM =
+          rawBoardM >= 0
+            ? rawBoardM
+            : prevAlightM >= 0
+              ? (prevAlightM + 2) % 1440
+              : -1;
+        const rawDur =
+          rawBoardM >= 0 && rawAlightM >= 0
+            ? Math.max(1, clockDiffMins(rawBoardM, rawAlightM))
+            : Math.max(1, leg.durationMinutes || 1);
+        let shiftedDueToOverlap = false;
+        if (prevAlightM >= 0 && candidateBoardM >= 0) {
+          let signedDelta = candidateBoardM - prevAlightM;
+          if (signedDelta < -720) signedDelta += 1440;
+          if (signedDelta > 720) signedDelta -= 1440;
+          if (signedDelta < 0 && signedDelta > -60) {
+            candidateBoardM = prevAlightM;
+            shiftedDueToOverlap = true;
+          }
+        }
+        boardM = candidateBoardM;
+        alightM =
+          !shiftedDueToOverlap && rawAlightM >= 0
+            ? rawAlightM
+            : boardM >= 0
+              ? (boardM + rawDur) % 1440
+              : -1;
+      }
+
+      const durMins =
+        boardM >= 0 && alightM >= 0
+          ? Math.max(1, clockDiffMins(boardM, alightM))
+          : Math.max(1, leg.durationMinutes || 1);
+      if (boardM >= 0 && alightM < 0) {
+        alightM = (boardM + durMins) % 1440;
+      }
+
+      normalizedLegs.push({
+        route,
+        boardMins: boardM,
+        alightMins: alightM,
+        boardTimeStr: boardM >= 0 ? minsToHHMM(boardM) : leg.departureTime || "",
+        alightTimeStr: alightM >= 0 ? minsToHHMM(alightM) : leg.arrivalTime || "",
+        durationMinutes: durMins,
+      });
+    }
+
+    const transfers = normalizedLegs.slice(0, -1).map((curLeg, idx) => {
+      const nextLeg = normalizedLegs[idx + 1];
+      const seg = transferSegments[idx];
+      const rawGap =
+        curLeg.alightMins >= 0 && nextLeg.boardMins >= 0
+          ? clockDiffMins(curLeg.alightMins, nextLeg.boardMins)
+          : 0;
+      const gapMins = rawGap < 180 ? rawGap : 0;
+      const needsWalk = Boolean(seg?.needsWalk && seg.polyline.length >= 2);
+      const walkMins = needsWalk
+        ? gapMins > 0
+          ? Math.min(Math.max(1, seg.rawWalkMins), gapMins)
+          : Math.max(1, seg.rawWalkMins)
+        : 0;
+      const waitMins = needsWalk ? Math.max(0, gapMins - walkMins) : gapMins;
+
+      return {
+        needsWalk,
+        polyline: needsWalk ? seg.polyline : [],
+        gapMins,
+        walkMins,
+        waitMins,
+      };
+    });
+
+    const sumParts =
+      normalizedLegs.reduce((acc, l) => acc + l.durationMinutes, 0) +
+      transfers.reduce((acc, t) => acc + t.walkMins + t.waitMins, 0);
+    const firstBoard = normalizedLegs[0]?.boardMins ?? -1;
+    const lastAlight = normalizedLegs[normalizedLegs.length - 1]?.alightMins ?? -1;
+    const clockSpan =
+      firstBoard >= 0 && lastAlight >= 0
+        ? clockDiffMins(firstBoard, lastAlight)
+        : sumParts;
+    const transitSpanMins = Math.max(1, clockSpan > 0 && clockSpan < 360 ? clockSpan : sumParts);
+
+    return {
+      legs: normalizedLegs,
+      transfers,
+      transitSpanMins,
+      firstBoardMins: firstBoard,
+      lastAlightMins: lastAlight,
+      hasAnyTransferWalk: transfers.some(
+        (t) => t.needsWalk && t.polyline.length >= 2,
+      ),
+    };
+  }, [isMultiLeg, multiLegRoutes, depMinsParsed, transferSegments]);
+
+  const inVehicleMins = multiLegJourney
+    ? multiLegJourney.transitSpanMins
+    : typeof departure.inVehicleMinutes === "number" &&
+        departure.inVehicleMinutes > 0
       ? departure.inVehicleMinutes
       : Math.max(1, departure.durationMinutes - walkAfterMins);
 
-  // Durata totale door-to-door allineata esattamente al badge della lista mezzi (walkBefore + a bordo + walkAfter)
+  // Durata totale door-to-door ("IL TUO VIAGGIO": walkBefore + tratte & cambi/attese + walkAfter)
   const totalDoorToDoorMinutes = Math.max(
     1,
     walkBeforeMins + inVehicleMins + walkAfterMins,
   );
 
-  const depMinsParsed = parseHHMMToMins(displayDepTime);
+  const effectiveFirstBoardMins =
+    multiLegJourney && multiLegJourney.firstBoardMins >= 0
+      ? multiLegJourney.firstBoardMins
+      : depMinsParsed;
+  const effectiveLastAlightMins =
+    multiLegJourney && multiLegJourney.lastAlightMins >= 0
+      ? multiLegJourney.lastAlightMins
+      : depMinsParsed >= 0
+        ? (depMinsParsed + inVehicleMins) % 1440
+        : -1;
+
   const leaveOriginTimeDisplay =
-    depMinsParsed >= 0 ? minsToHHMM(depMinsParsed - walkBeforeMins) : "";
+    effectiveFirstBoardMins >= 0
+      ? minsToHHMM(effectiveFirstBoardMins - walkBeforeMins)
+      : "";
+  const alightingTimeDisplay =
+    multiLegJourney && multiLegJourney.legs.length > 0
+      ? multiLegJourney.legs[multiLegJourney.legs.length - 1].alightTimeStr
+      : effectiveLastAlightMins >= 0
+        ? minsToHHMM(effectiveLastAlightMins)
+        : departure.alightingTime || departure.arrivalTime || "";
   const arrivalTimeDisplay =
-    depMinsParsed >= 0
-      ? minsToHHMM(depMinsParsed + inVehicleMins + walkAfterMins)
+    effectiveLastAlightMins >= 0
+      ? minsToHHMM(effectiveLastAlightMins + walkAfterMins)
       : departure.arrivalTime || "";
 
-  const alightingTimeDisplay =
-    depMinsParsed >= 0
-      ? minsToHHMM(depMinsParsed + inVehicleMins)
-      : departure.alightingTime || arrivalTimeDisplay;
+  const hasStandardWalk =
+    walkBeforeMins > 0 ||
+    walkAfterMins > 0 ||
+    walkBeforeRouteCoords.length >= 2 ||
+    walkAfterRouteCoords.length >= 2;
+  const hasAnyTransferWalk = Boolean(multiLegJourney?.hasAnyTransferWalk);
 
   return (
     <NativeSheetModal
       visible={visible}
       onClose={onClose}
-      title={`Dettaglio ${departure.line.toLowerCase().includes("metro") ? departure.line : `Linea ${departure.line}`}`}
+      title={`Dettaglio ${isMultiLeg || departure.line.toLowerCase().includes("metro") ? departure.line : `Linea ${departure.line}`}`}
       backgroundColor={UNIFORM_MODAL_BG}
       sheetAllowedDetents={[0.88, 1.0]}
       sheetInitialDetentIndex={0}
@@ -1014,8 +1477,9 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 style={{ marginRight: 6 }}
               />
               <Text style={styles.heroTransferBannerText}>
-                Soluzione con {departure.transfersCount || 1} cambio:{" "}
-                {departure.transferSummary || "Metro + Bus"}
+                Soluzione con {departure.transfersCount || 1}{" "}
+                {(departure.transfersCount || 1) === 1 ? "cambio" : "cambi"} (
+                {inVehicleMins}m): {departure.transferSummary || "Metro + Bus"}
               </Text>
             </View>
           )}
@@ -1087,7 +1551,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 </View>
               </View>
 
-              {/* Barra proporzionale continua: tratti a piedi in blu unico + tratte sui mezzi con colori distinti */}
+              {/* Barra proporzionale continua: tratti a piedi standard, tratte sui mezzi, eventuale cambio a piedi e attese */}
               <View style={styles.heroSegmentBarTrack}>
                 {walkBeforeMins > 0 &&
                   renderWalkSolidBar(
@@ -1095,41 +1559,39 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                     "seg-walk-before",
                     effectiveWalkColor,
                   )}
-                {isMultiLeg && multiLegRoutes.length > 0
-                  ? multiLegRoutes.map((ml, mlIdx) => {
-                      const nextMl =
-                        mlIdx < multiLegRoutes.length - 1
-                          ? multiLegRoutes[mlIdx + 1]
+                {isMultiLeg && multiLegJourney && multiLegJourney.legs.length > 0
+                  ? multiLegJourney.legs.map((legItem, mlIdx) => {
+                      const transfer =
+                        mlIdx < multiLegJourney.transfers.length
+                          ? multiLegJourney.transfers[mlIdx]
                           : null;
-                      let transferGapMins = 0;
-                      if (nextMl?.leg.departureTime && ml.leg.arrivalTime) {
-                        const aM = parseHHMMToMins(ml.leg.arrivalTime);
-                        const dM = parseHHMMToMins(nextMl.leg.departureTime);
-                        if (aM >= 0 && dM >= 0) {
-                          let diff = dM - aM;
-                          if (diff < -720) diff += 1440;
-                          if (diff > 0 && diff < 120) transferGapMins = diff;
-                        }
-                      }
-                      const legMins = Math.max(1, ml.leg.durationMinutes || 1);
                       return (
                         <React.Fragment key={`seg-leg-wrap-${mlIdx}`}>
                           <View
                             style={[
                               styles.heroSegmentSlice,
                               {
-                                flexGrow: legMins,
+                                flexGrow: Math.max(1, legItem.durationMinutes),
                                 flexShrink: 1,
                                 flexBasis: 0,
-                                backgroundColor: ml.color,
+                                backgroundColor: legItem.route.color,
                               },
                             ]}
                           />
-                          {transferGapMins > 0 &&
+                          {transfer &&
+                            transfer.needsWalk &&
+                            transfer.walkMins > 0 &&
                             renderWalkSolidBar(
-                              transferGapMins,
+                              transfer.walkMins,
                               `seg-walk-transfer-${mlIdx}`,
-                              effectiveWalkColor,
+                              effectiveTransferWalk.stroke,
+                            )}
+                          {transfer &&
+                            transfer.waitMins > 0 &&
+                            renderWalkSolidBar(
+                              transfer.waitMins,
+                              `seg-wait-transfer-${mlIdx}`,
+                              WAIT_RAIL_COLOR,
                             )}
                         </React.Fragment>
                       );
@@ -1204,20 +1666,36 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 )}
 
                 {/* 2. Tratte mezzi (multi-tratta o corsa diretta) */}
-                {isMultiLeg && multiLegRoutes.length > 0 ? (
-                  multiLegRoutes.map((ml, lIdx) => {
+                {isMultiLeg && multiLegJourney && multiLegJourney.legs.length > 0 ? (
+                  multiLegJourney.legs.map((legItem, lIdx) => {
+                    const ml = legItem.route;
                     const isFirstLeg = lIdx === 0;
-                    const isLastLeg = lIdx === multiLegRoutes.length - 1;
+                    const isLastLeg = lIdx === multiLegJourney.legs.length - 1;
                     const legColor = ml.color;
                     const lIcon = getTransitModeIcon(ml.leg.mode, ml.leg.line);
-                    const nextMl = !isLastLeg ? multiLegRoutes[lIdx + 1] : null;
-                    const boardTimeStr = isFirstLeg
-                      ? displayDepTime
-                      : ml.leg.departureTime || "";
-                    const alightTimeStr = isLastLeg
-                      ? alightingTimeDisplay
-                      : ml.leg.arrivalTime || "";
-                    const hasWalkAbove = !isFirstLeg || walkBeforeMins > 0;
+                    const nextLegItem = !isLastLeg
+                      ? multiLegJourney.legs[lIdx + 1]
+                      : null;
+                    const transfer = !isLastLeg
+                      ? multiLegJourney.transfers[lIdx]
+                      : null;
+                    const prevTransfer =
+                      lIdx > 0 ? multiLegJourney.transfers[lIdx - 1] : null;
+                    const boardTimeStr = legItem.boardTimeStr;
+                    const alightTimeStr = legItem.alightTimeStr;
+                    const hasConnectorAbove = !isFirstLeg || walkBeforeMins > 0;
+                    const aboveRailColor = isFirstLeg
+                      ? effectiveWalkColor
+                      : prevTransfer &&
+                          prevTransfer.needsWalk &&
+                          prevTransfer.waitMins === 0
+                        ? effectiveTransferWalk.stroke
+                        : WAIT_RAIL_COLOR;
+                    const belowDiscesaRailColor = isLastLeg
+                      ? effectiveWalkColor
+                      : transfer?.needsWalk
+                        ? effectiveTransferWalk.stroke
+                        : WAIT_RAIL_COLOR;
                     const legStopsCount =
                       ml.leg.intermediateStopsCount ??
                       (ml.leg.intermediateStopNames
@@ -1230,8 +1708,8 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                         <View style={styles.tlLegHeaderRow}>
                           <View style={styles.tlTimeEmpty} />
                           <View style={styles.tlRailCol}>
-                            {hasWalkAbove &&
-                              renderVerticalDashedRail(effectiveWalkColor, 3)}
+                            {hasConnectorAbove &&
+                              renderVerticalDashedRail(aboveRailColor, 3)}
                           </View>
                           <View style={styles.tlLegBadgeGroup}>
                             <View
@@ -1247,7 +1725,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                                 style={{ marginRight: 4 }}
                               />
                               <Text style={styles.unifiedLegBadgeText}>
-                                {ml.leg.line} - {ml.leg.durationMinutes} min
+                                {ml.leg.line} - {legItem.durationMinutes} min
                               </Text>
                             </View>
                             {legStopsCount > 0 && (
@@ -1285,7 +1763,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                             {boardTimeStr}
                           </Text>
                           <View style={styles.tlRailCol}>
-                            {hasWalkAbove ? (
+                            {hasConnectorAbove ? (
                               <View style={{ height: 1.5 }} />
                             ) : (
                               <View style={styles.tlRailSpacerTop} />
@@ -1370,8 +1848,8 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                             <View style={styles.tlRailGrow}>
                               {(!isLastLeg || walkAfterMins > 0) &&
                                 renderVerticalDashedRail(
-                                  effectiveWalkColor,
-                                  !isLastLeg && nextMl ? 3 : 2,
+                                  belowDiscesaRailColor,
+                                  !isLastLeg && nextLegItem ? 3 : 2,
                                 )}
                             </View>
                           </View>
@@ -1386,36 +1864,18 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                             <Text style={styles.tlTitleText}>
                               {ml.leg.toStop}
                             </Text>
-                            {!isLastLeg && nextMl && (
+                            {!isLastLeg && nextLegItem && (
                               <Text style={styles.tlSubText}>
-                                Cambio → prendi {nextMl.leg.line}
+                                Cambio → prendi {nextLegItem.route.leg.line}
                               </Text>
                             )}
                           </View>
                         </View>
 
-                        {/* Tratto a piedi di interscambio (senza orario duplicato rispetto alla discesa) */}
-                        {!isLastLeg &&
-                          nextMl &&
-                          transferWalks[lIdx] &&
-                          transferWalks[lIdx].length >= 2 &&
-                          (() => {
-                            let twMins = 2;
-                            if (
-                              ml.leg.arrivalTime &&
-                              nextMl.leg.departureTime
-                            ) {
-                              const aM = parseHHMMToMins(ml.leg.arrivalTime);
-                              const dM = parseHHMMToMins(
-                                nextMl.leg.departureTime,
-                              );
-                              if (aM >= 0 && dM >= 0) {
-                                let diff = dM - aM;
-                                if (diff < -720) diff += 1440;
-                                if (diff > 0 && diff < 120) twMins = diff;
-                              }
-                            }
-                            return (
+                        {/* Step interscambio: camminata con colore dedicato (se fermate diverse) e/o attesa alla fermata */}
+                        {!isLastLeg && transfer && (
+                          <>
+                            {transfer.needsWalk && transfer.walkMins > 0 && (
                               <View style={styles.tlRow}>
                                 <View style={styles.tlTimeEmpty} />
                                 <View style={styles.tlRailCol}>
@@ -1424,20 +1884,23 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                                     style={[
                                       styles.tlWalkNode,
                                       {
-                                        backgroundColor: effectiveWalkColor,
-                                        borderColor: effectiveWalkTextColor,
+                                        backgroundColor:
+                                          effectiveTransferWalk.stroke,
+                                        borderColor: effectiveTransferWalk.text,
                                       },
                                     ]}
                                   >
                                     <Ionicons
                                       name="walk"
                                       size={10}
-                                      color={effectiveWalkMarkerIcon}
+                                      color={effectiveTransferWalk.icon}
                                     />
                                   </View>
                                   <View style={styles.tlRailGrow}>
                                     {renderVerticalDashedRail(
-                                      effectiveWalkColor,
+                                      transfer.waitMins > 0
+                                        ? WAIT_RAIL_COLOR
+                                        : effectiveTransferWalk.stroke,
                                       1,
                                     )}
                                   </View>
@@ -1451,15 +1914,63 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                                   <Text
                                     style={[
                                       styles.tlTitleText,
-                                      { color: effectiveWalkTextColor },
+                                      { color: effectiveTransferWalk.text },
                                     ]}
                                   >
-                                    {twMins} min a piedi
+                                    {transfer.walkMins} min a piedi
                                   </Text>
                                 </View>
                               </View>
-                            );
-                          })()}
+                            )}
+
+                            {(transfer.waitMins > 0 || !transfer.needsWalk) && (
+                              <View style={styles.tlRow}>
+                                <View style={styles.tlTimeEmpty} />
+                                <View style={styles.tlRailCol}>
+                                  <View style={{ height: 1 }} />
+                                  <View
+                                    style={[
+                                      styles.tlWalkNode,
+                                      {
+                                        backgroundColor: WAIT_NODE_BG,
+                                        borderColor: WAIT_NODE_BORDER,
+                                      },
+                                    ]}
+                                  >
+                                    <Ionicons
+                                      name="time-outline"
+                                      size={10}
+                                      color="#ffffff"
+                                    />
+                                  </View>
+                                  <View style={styles.tlRailGrow}>
+                                    {renderVerticalDashedRail(
+                                      WAIT_RAIL_COLOR,
+                                      1,
+                                    )}
+                                  </View>
+                                </View>
+                                <View
+                                  style={[
+                                    styles.tlBodyCol,
+                                    { paddingBottom: 8 },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.tlTitleText,
+                                      { color: WAIT_TEXT_COLOR },
+                                    ]}
+                                  >
+                                    {transfer.waitMins > 0
+                                      ? `Attendi ${transfer.waitMins} min`
+                                      : "Cambio immediato"}
+                                  </Text>
+                                </View>
+                              </View>
+                            )}
+                          </>
+                        )}
                       </React.Fragment>
                     );
                   })
@@ -1702,7 +2213,250 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
               </View>
             </View>
 
-            {/* 2. Riquadro Colorato Corsa Mezzo: Badge Linea + Affollamento + Orari con minutaggio sulla freccia + Direzione/Fermate */}
+            {/* 2. Riquadro/i Colorati Corsa Mezzo: 1 card per ciascun mezzo nelle tratte con cambio, oppure card singola per corsa diretta */}
+            {isMultiLeg && multiLegJourney && multiLegJourney.legs.length > 0 ? (
+              multiLegJourney.legs.map((legItem, legIdx) => {
+                const ml = legItem.route;
+                const legColor = ml.color;
+                const legIcon = getTransitModeIcon(ml.leg.mode, ml.leg.line);
+                const legCrowding = getCrowdingConfig(
+                  computeLegCrowdingLevel(
+                    ml.leg.mode,
+                    legItem.boardTimeStr,
+                    departure.crowdingLevel,
+                  ),
+                );
+                const isLegDelayed =
+                  legIdx === 0
+                    ? isDelayed
+                    : Boolean(
+                        isLiveContext &&
+                          ml.leg.isLive &&
+                          (ml.leg.delayMinutes ?? 0) > 1,
+                      );
+                const legScheduledStr =
+                  legIdx === 0
+                    ? departure.scheduledTime
+                    : ml.leg.scheduledDepartureTime;
+                const showLegStrike = Boolean(
+                  isLegDelayed &&
+                    legScheduledStr &&
+                    legItem.boardTimeStr &&
+                    legScheduledStr !== legItem.boardTimeStr,
+                );
+                const legDirection =
+                  ml.leg.headsign ||
+                  (legIdx === 0 ? departure.headsign : "") ||
+                  ml.leg.toStop;
+
+                return (
+                  <View
+                    key={`vehicle-leg-card-${legIdx}`}
+                    style={[
+                      styles.heroVehicleStrip,
+                      {
+                        backgroundColor: `${legColor}18`,
+                        borderColor: `${legColor}4D`,
+                        borderLeftColor: legColor,
+                      },
+                    ]}
+                  >
+                    <View style={styles.heroVehicleHeaderRow}>
+                      <View style={styles.heroVehicleHeaderLeft}>
+                        <View
+                          style={[
+                            styles.heroVehicleLinePill,
+                            { backgroundColor: legColor },
+                          ]}
+                        >
+                          <Ionicons name={legIcon} size={11} color="#ffffff" />
+                          <Text style={styles.heroVehicleLinePillText}>
+                            {ml.leg.line}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.heroVehicleLegTag,
+                            {
+                              backgroundColor: `${legColor}22`,
+                              borderColor: `${legColor}55`,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.heroVehicleLegTagText,
+                              { color: "#e2e8f0" },
+                            ]}
+                          >
+                            TRATTA {legIdx + 1}/{multiLegJourney.legs.length}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.heroCrowdingBadge,
+                            {
+                              backgroundColor: legCrowding.bg,
+                              borderColor: legCrowding.border,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={legCrowding.icon}
+                            size={11}
+                            color={legCrowding.color}
+                          />
+                          <Text
+                            style={[
+                              styles.heroCrowdingBadgeText,
+                              { color: legCrowding.color },
+                            ]}
+                          >
+                            {legCrowding.shortLabel}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.heroVehicleTimesRow}>
+                      <View style={styles.heroVehicleTimeItem}>
+                        <Text style={styles.heroVehicleLabel}>PARTENZA</Text>
+                        <View style={styles.heroTimeValueRow}>
+                          <Text
+                            style={[
+                              styles.heroVehicleTimeValue,
+                              isLegDelayed && { color: "#fb923c" },
+                            ]}
+                          >
+                            {legItem.boardTimeStr}
+                          </Text>
+                          {showLegStrike && (
+                            <Text style={styles.heroVehicleStrike}>
+                              {legScheduledStr}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+
+                      <View style={styles.heroVehicleArrowCol}>
+                        <Text
+                          style={[
+                            styles.heroVehicleArrowDur,
+                            { color: legColor },
+                          ]}
+                        >
+                          {legItem.durationMinutes}m
+                        </Text>
+                        <Ionicons
+                          name="arrow-forward"
+                          size={13}
+                          color={legColor}
+                          style={{ marginTop: 1 }}
+                        />
+                      </View>
+
+                      <View
+                        style={[
+                          styles.heroVehicleTimeItem,
+                          { alignItems: "flex-end" },
+                        ]}
+                      >
+                        <Text style={styles.heroVehicleLabel}>ARRIVO</Text>
+                        <Text style={styles.heroVehicleTimeValue}>
+                          {legItem.alightTimeStr}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.vehicleDetailsDivider,
+                        { backgroundColor: `${legColor}33` },
+                      ]}
+                    />
+
+                    <View style={styles.vehicleDetailBlock}>
+                      <View
+                        style={[
+                          styles.vehicleDetailIconCircle,
+                          { backgroundColor: `${legColor}22` },
+                        ]}
+                      >
+                        <Ionicons
+                          name="compass-outline"
+                          size={14}
+                          color={legColor}
+                        />
+                      </View>
+                      <View style={styles.detailTextCol}>
+                        <Text style={styles.detailFieldLabel}>DIREZIONE</Text>
+                        <Text style={styles.detailFieldValue}>
+                          {legDirection}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.vehicleDetailsDivider,
+                        { backgroundColor: `${legColor}22` },
+                      ]}
+                    />
+
+                    <View style={styles.vehicleDetailBlock}>
+                      <View
+                        style={[
+                          styles.vehicleDetailIconCircle,
+                          { backgroundColor: `${legColor}22` },
+                        ]}
+                      >
+                        <Ionicons
+                          name="location-outline"
+                          size={14}
+                          color={legColor}
+                        />
+                      </View>
+                      <View style={styles.detailTextCol}>
+                        <Text style={styles.detailFieldLabel}>
+                          FERMATA DI PARTENZA
+                        </Text>
+                        <Text style={styles.detailFieldValue}>
+                          {ml.leg.fromStop}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.vehicleDetailsDivider,
+                        { backgroundColor: `${legColor}22` },
+                      ]}
+                    />
+
+                    <View style={styles.vehicleDetailBlock}>
+                      <View
+                        style={[
+                          styles.vehicleDetailIconCircle,
+                          { backgroundColor: `${legColor}22` },
+                        ]}
+                      >
+                        <Ionicons name="flag" size={13} color={legColor} />
+                      </View>
+                      <View style={styles.detailTextCol}>
+                        <Text style={styles.detailFieldLabel}>
+                          FERMATA DI DISCESA
+                        </Text>
+                        <Text style={styles.detailFieldValue}>
+                          {ml.leg.toStop}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            ) : (
             <View
               style={[
                 styles.heroVehicleStrip,
@@ -1885,6 +2639,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 </View>
               </View>
             </View>
+            )}
           </View>
         </View>
 
@@ -1902,7 +2657,10 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 key={`transit-route-map-${departure.id}-${fromCoords.lat.toFixed(4)}-${toCoords.lat.toFixed(4)}`}
                 style={styles.mapView}
                 initialRegion={mapRegion}
-                onRegionChangeComplete={(r) => setCurrentRegion(r)}
+                onRegionChangeComplete={(r) => {
+                  const nextBucket = getZoomBucket(r.latitudeDelta);
+                  setZoomBucket((prev) => (prev === nextBucket ? prev : nextBucket));
+                }}
                 scrollEnabled={true}
                 zoomEnabled={true}
                 pitchEnabled={false}
@@ -1925,6 +2683,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                       coordinate={walkBeforeRouteCoords[0]}
                       title="Punto di partenza"
                       description={`${walkBeforeMins} min a piedi fino alla fermata ${departure.fromStop}`}
+                      tracksViewChanges={false}
                     >
                       <View style={styles.markerWrapper}>
                         <View
@@ -1989,6 +2748,15 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                           legPolyline,
                         );
 
+                      const legModel = multiLegJourney?.legs[mlIdx];
+                      const curTransfer = !isLast
+                        ? multiLegJourney?.transfers[mlIdx]
+                        : null;
+                      const prevTransfer =
+                        mlIdx > 0 ? multiLegJourney?.transfers[mlIdx - 1] : null;
+                      const showSeparateBoardingPin =
+                        isFirst || Boolean(prevTransfer?.needsWalk);
+
                       return (
                         <React.Fragment key={`multi-leg-${mlIdx}`}>
                           {/* Percorso del mezzo per questa tratta */}
@@ -2011,60 +2779,72 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                             </>
                           )}
 
-                          {/* Marker di salita della tratta (agganciato matematicamente alla linea) */}
-                          <Marker
-                            coordinate={{
-                              latitude: legSnapFrom.latitude,
-                              longitude: legSnapFrom.longitude,
-                            }}
-                            title={
-                              isFirst
-                                ? `Salita: ${ml.leg.fromStop}`
-                                : `Cambio: prendi ${ml.leg.line} a ${ml.leg.fromStop}`
-                            }
-                            description={
-                              isFirst
-                                ? `Linea ${ml.leg.line} (${displayDepTime}) • Dir. ${ml.leg.headsign || departure.headsign}`
-                                : `Direzione ${ml.leg.headsign || "corsa"}`
-                            }
-                          >
-                            <View style={styles.markerWrapper}>
-                              <View
-                                style={[
-                                  styles.markerHalo,
-                                  { backgroundColor: `${ml.color}44` },
-                                ]}
-                              />
-                              <View
-                                style={[
-                                  styles.markerPin,
-                                  { backgroundColor: ml.color },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={
-                                    ml.leg.mode === "metro"
-                                      ? "subway"
-                                      : isFirst
-                                        ? "bus"
-                                        : "swap-horizontal"
-                                  }
-                                  size={9}
-                                  color="#ffffff"
+                          {/* Marker di salita della tratta (omesso se la salita coincide con la fermata di discesa precedente) */}
+                          {showSeparateBoardingPin && (
+                            <Marker
+                              coordinate={{
+                                latitude: legSnapFrom.latitude,
+                                longitude: legSnapFrom.longitude,
+                              }}
+                              title={
+                                isFirst
+                                  ? `Salita: ${ml.leg.fromStop}`
+                                  : `Cambio: prendi ${ml.leg.line} a ${ml.leg.fromStop}`
+                              }
+                              description={
+                                isFirst
+                                  ? `Linea ${ml.leg.line} (${legModel?.boardTimeStr || displayDepTime}) • Dir. ${ml.leg.headsign || departure.headsign}`
+                                  : `Linea ${ml.leg.line} (${legModel?.boardTimeStr || ""}) • Dir. ${ml.leg.headsign || ml.leg.toStop}`
+                              }
+                              tracksViewChanges={false}
+                            >
+                              <View style={styles.markerWrapper}>
+                                <View
+                                  style={[
+                                    styles.markerHalo,
+                                    { backgroundColor: `${ml.color}44` },
+                                  ]}
                                 />
+                                <View
+                                  style={[
+                                    styles.markerPin,
+                                    { backgroundColor: ml.color },
+                                  ]}
+                                >
+                                  <Ionicons
+                                    name={
+                                      ml.leg.mode === "metro"
+                                        ? "subway"
+                                        : isFirst
+                                          ? "bus"
+                                          : "swap-horizontal"
+                                    }
+                                    size={9}
+                                    color="#ffffff"
+                                  />
+                                </View>
                               </View>
-                            </View>
-                          </Marker>
+                            </Marker>
+                          )}
 
-                          {/* Se non è l'ultima tratta, marker di discesa per cambio (colore della tratta da cui si scende) */}
+                          {/* Se non è l'ultima tratta, marker di discesa / cambio */}
                           {!isLast && (
                             <Marker
                               coordinate={{
                                 latitude: legSnapTo.latitude,
                                 longitude: legSnapTo.longitude,
                               }}
-                              title={`Discesa per cambio: ${ml.leg.toStop}`}
-                              description={`Scendi da ${ml.leg.line} per prendere ${multiLegRoutes[mlIdx + 1]?.leg.line || "mezzo successivo"}`}
+                              title={
+                                curTransfer?.needsWalk
+                                  ? `Discesa per cambio: ${ml.leg.toStop}`
+                                  : `Cambio alla fermata: ${ml.leg.toStop}`
+                              }
+                              description={
+                                curTransfer?.needsWalk
+                                  ? `Scendi da ${ml.leg.line} e raggiungi a piedi ${multiLegRoutes[mlIdx + 1]?.leg.fromStop || "fermata successiva"}`
+                                  : `Scendi da ${ml.leg.line} • ${curTransfer && curTransfer.waitMins > 0 ? `Attendi ${curTransfer.waitMins} min per` : "Prendi"} ${multiLegRoutes[mlIdx + 1]?.leg.line || "mezzo successivo"}`
+                              }
+                              tracksViewChanges={false}
                             >
                               <View style={styles.markerWrapper}>
                                 <View
@@ -2080,7 +2860,11 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                                   ]}
                                 >
                                   <Ionicons
-                                    name="git-branch"
+                                    name={
+                                      curTransfer?.needsWalk
+                                        ? "git-branch"
+                                        : "swap-horizontal"
+                                    }
                                     size={9}
                                     color="#ffffff"
                                   />
@@ -2098,6 +2882,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                               }}
                               title={`Fermata di discesa finale: ${ml.leg.toStop}`}
                               description={`Arrivo mezzo ore ${alightingTimeDisplay}`}
+                              tracksViewChanges={false}
                             >
                               <View style={styles.discesaFlagWrapper}>
                                 <View
@@ -2125,14 +2910,14 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                       );
                     })}
 
-                    {/* Tratti a piedi di interscambio tra le tratte (blu ad alto contrasto tratteggiato) */}
+                    {/* Tratti a piedi di interscambio tra mezzi con fermate distinte (colore dedicato distinto dal pedonale standard) */}
                     {transferWalks.map((twCoords, twIdx) => {
                       if (twCoords.length < 2) return null;
                       return (
                         <Polyline
                           key={`transfer-walk-${twIdx}`}
                           coordinates={twCoords}
-                          strokeColor={effectiveWalkColor}
+                          strokeColor={effectiveTransferWalk.stroke}
                           strokeWidth={walkingStrokeProps.strokeWidth}
                           lineCap="round"
                           lineJoin="round"
@@ -2164,31 +2949,26 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                     )}
 
                     {/* Fermate intermedie lungo la linea (pallini ridotti a 5x5 e agganciati alla linea) */}
-                    {departure.intermediateStopCoords?.map((stop, idx) => {
-                      const snapped = snapCoordinateToPolyline(
-                        { latitude: stop.lat, longitude: stop.lng },
-                        transitRouteCoords,
-                      );
-                      return (
-                        <Marker
-                          key={`map-int-stop-${idx}`}
-                          coordinate={{
-                            latitude: snapped.latitude,
-                            longitude: snapped.longitude,
-                          }}
-                          title={stop.name}
-                          description={`Fermata intermedia (${departure.line})`}
-                          anchor={{ x: 0.5, y: 0.5 }}
-                        >
-                          <View
-                            style={[
-                              styles.intermediateMapDot,
-                              { borderColor: lineColor },
-                            ]}
-                          />
-                        </Marker>
-                      );
-                    })}
+                    {snappedIntermediateStops.map(({ name, snapped }, idx) => (
+                      <Marker
+                        key={`map-int-stop-${idx}`}
+                        coordinate={{
+                          latitude: snapped.latitude,
+                          longitude: snapped.longitude,
+                        }}
+                        title={name}
+                        description={`Fermata intermedia (${departure.line})`}
+                        anchor={{ x: 0.5, y: 0.5 }}
+                        tracksViewChanges={false}
+                      >
+                        <View
+                          style={[
+                            styles.intermediateMapDot,
+                            { borderColor: lineColor },
+                          ]}
+                        />
+                      </Marker>
+                    ))}
 
                     {/* Marker Fermata di Salita (agganciato alla linea) */}
                     <Marker
@@ -2198,6 +2978,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                       }}
                       title={`Salita: ${departure.fromStop}`}
                       description={`Linea ${departure.line} (${displayDepTime}) • Dir. ${departure.headsign}`}
+                      tracksViewChanges={false}
                     >
                       <View style={styles.markerWrapper}>
                         <View
@@ -2229,6 +3010,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                       }}
                       title={`Dove scendi: ${departure.toStop}`}
                       description={`Arrivo mezzo ore ${alightingTimeDisplay}`}
+                      tracksViewChanges={false}
                     >
                       <View style={styles.discesaFlagWrapper}>
                         <View
@@ -2271,6 +3053,7 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                     }}
                     title={departure.finalDestinationName || "Destinazione"}
                     description={`${walkAfterMins} min a piedi da ${departure.toStop} (arrivo ${arrivalTimeDisplay})`}
+                    tracksViewChanges={false}
                   >
                     <View style={styles.markerWrapper}>
                       <View
@@ -2384,9 +3167,9 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
             </View>
           </View>
 
-          {/* Legenda Mappa: Tratto a piedi salita + Percorso mezzi (multi o singolo) + Tratto a piedi discesa */}
+          {/* Legenda Mappa: A piedi unificato (senza durata) + eventuale Cambio a piedi in colore dedicato + Tratte mezzi */}
           <View style={styles.mapLegendRow}>
-            {walkBeforeMins > 0 && (
+            {hasStandardWalk && (
               <View style={styles.mapLegendItem}>
                 <View style={styles.legendDotsRow}>
                   <View
@@ -2408,54 +3191,50 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                     ]}
                   />
                 </View>
-                <Text style={styles.mapLegendText}>
-                  A piedi alla salita ({walkBeforeMins} min)
-                </Text>
+                <Text style={styles.mapLegendText}>A piedi</Text>
               </View>
             )}
 
-            {isMultiLeg ? (
-              multiLegRoutes.map((ml, mlIdx) => (
-                <React.Fragment key={`legend-leg-${mlIdx}`}>
-                  <View style={styles.mapLegendItem}>
-                    <View
-                      style={[
-                        styles.legendSolidBar,
-                        { backgroundColor: ml.color },
-                      ]}
-                    />
-                    <Text style={styles.mapLegendText}>
-                      Tratta {ml.leg.line} ({ml.leg.durationMinutes} min)
-                    </Text>
-                  </View>
-                  {mlIdx < multiLegRoutes.length - 1 && (
-                    <View style={styles.mapLegendItem}>
-                      <View style={styles.legendDotsRow}>
-                        <View
-                          style={[
-                            styles.legendDot,
-                            { backgroundColor: effectiveWalkColor },
-                          ]}
-                        />
-                        <View
-                          style={[
-                            styles.legendDot,
-                            { backgroundColor: effectiveWalkColor },
-                          ]}
-                        />
-                        <View
-                          style={[
-                            styles.legendDot,
-                            { backgroundColor: effectiveWalkColor },
-                          ]}
-                        />
-                      </View>
-                      <Text style={styles.mapLegendText}>
-                        A piedi al cambio
-                      </Text>
-                    </View>
-                  )}
-                </React.Fragment>
+            {hasAnyTransferWalk && (
+              <View style={styles.mapLegendItem}>
+                <View style={styles.legendDotsRow}>
+                  <View
+                    style={[
+                      styles.legendDot,
+                      { backgroundColor: effectiveTransferWalk.stroke },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.legendDot,
+                      { backgroundColor: effectiveTransferWalk.stroke },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.legendDot,
+                      { backgroundColor: effectiveTransferWalk.stroke },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.mapLegendText}>Cambio a piedi</Text>
+              </View>
+            )}
+
+            {isMultiLeg && multiLegJourney ? (
+              multiLegJourney.legs.map((legItem, mlIdx) => (
+                <View key={`legend-leg-${mlIdx}`} style={styles.mapLegendItem}>
+                  <View
+                    style={[
+                      styles.legendSolidBar,
+                      { backgroundColor: legItem.route.color },
+                    ]}
+                  />
+                  <Text style={styles.mapLegendText}>
+                    Tratta {legItem.route.leg.line} ({legItem.durationMinutes}{" "}
+                    min)
+                  </Text>
+                </View>
               ))
             ) : (
               <View style={styles.mapLegendItem}>
@@ -2467,34 +3246,6 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
                 />
                 <Text style={styles.mapLegendText}>
                   Tragitto {departure.line} ({inVehicleMins} min)
-                </Text>
-              </View>
-            )}
-
-            {walkAfterMins > 0 && (
-              <View style={styles.mapLegendItem}>
-                <View style={styles.legendDotsRow}>
-                  <View
-                    style={[
-                      styles.legendDot,
-                      { backgroundColor: effectiveWalkColor },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.legendDot,
-                      { backgroundColor: effectiveWalkColor },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.legendDot,
-                      { backgroundColor: effectiveWalkColor },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.mapLegendText}>
-                  A piedi a destinazione ({walkAfterMins} min)
                 </Text>
               </View>
             )}
@@ -2581,8 +3332,10 @@ export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = ({
               numberOfLines={1}
               ellipsizeMode="tail"
             >
-              Percorso regolare • Nessuna deviazione per la linea{" "}
-              {departure.line}
+              Percorso regolare • Nessuna deviazione{" "}
+              {isMultiLeg
+                ? `sulle linee ${departure.line}`
+                : `per la linea ${departure.line}`}
             </Text>
           </View>
         )}
@@ -2908,6 +3661,17 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 11,
     fontWeight: "800",
+  },
+  heroVehicleLegTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  heroVehicleLegTagText: {
+    fontSize: 9.5,
+    fontWeight: "800",
+    letterSpacing: 0.35,
   },
   heroCrowdingBadge: {
     flexDirection: "row",

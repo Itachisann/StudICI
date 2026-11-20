@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -7,6 +8,7 @@ import {
   Easing,
   LayoutChangeEvent,
 } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { AppTheme, CARD_RADIUS, DEFAULT_THEME } from "@/constants/theme";
 import { LiveTrainInfo, LiveTrainStop } from "@/types/commuter";
@@ -42,16 +44,20 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
   theme = DEFAULT_THEME,
 }) => {
   const contrast = theme.routeContrast || DEFAULT_THEME.routeContrast;
+  const isFocused = useIsFocused();
+  const [isAppActive, setIsAppActive] = useState(
+    () => AppState.currentState === "active"
+  );
   const [trackWidth, setTrackWidth] = useState<number>(0);
   const [badgeWidth, setBadgeWidth] = useState<number>(100);
-
-  // Timer reattivo in tempo reale continuo (1 secondo) per uno scorrimento fluido del treno in marcia
   const [nowDate, setNowDate] = useState(() => new Date());
+
   useEffect(() => {
-    if (!isToday) return;
-    const timer = setInterval(() => setNowDate(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, [isToday]);
+    const sub = AppState.addEventListener("change", (nextState) => {
+      setIsAppActive(nextState === "active");
+    });
+    return () => sub.remove();
+  }, []);
 
   const rawOrigin = (
     liveTrain.originStationName ||
@@ -246,6 +252,36 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     isOriginCommuter,
   ]);
 
+  const isTrainCancelled = Boolean(
+    liveTrain.trainStatusType === "cancelled" ||
+      liveTrain.statusDescription?.toLowerCase().includes("soppress")
+  );
+  const isTrainArrived = Boolean(
+    liveTrain.isArrivedAtDestination ||
+      liveTrain.trainStatusType === "arrived" ||
+      liveTrain.statusDescription?.toLowerCase().includes("arrivato")
+  );
+  const shouldTickLive = Boolean(
+    isToday &&
+      isFocused &&
+      isAppActive &&
+      isTrainDeparted &&
+      !isTrainArrived &&
+      !isTrainCancelled &&
+      !liveTrain.isStoppedInStation
+  );
+
+  // Timer attivo SOLO quando la tab è visibile, l'app è in primo piano e il convoglio è realmente in marcia
+  useEffect(() => {
+    if (!shouldTickLive) return;
+    const immediateId = setTimeout(() => setNowDate(new Date()), 0);
+    const timer = setInterval(() => setNowDate(new Date()), 10000);
+    return () => {
+      clearTimeout(immediateId);
+      clearInterval(timer);
+    };
+  }, [shouldTickLive]);
+
   // Calcolo continuo e proporzionato della posizione del convoglio (0.0 a 1.0)
   const trainProgress = useMemo(() => {
     if (!isToday || !isTrainDeparted) return 0.0;
@@ -337,7 +373,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     isOriginCommuter,
   ]);
 
-  // Fermate intermedie minori lungo la tratta del convoglio (escluse origine, arrivo e stazione di salita)
+  // Fermate intermedie minori lungo la tratta del convoglio (struttura statica separata dal tick live di trainProgress)
   const minorStops = useMemo<{
     name: string;
     proportion: number;
@@ -385,7 +421,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
       result.push({
         name: sName,
         proportion: prop,
-        isPassed: Boolean(stop.isPassed || (isToday && isTrainDeparted && trainProgress >= prop)),
+        isPassed: Boolean(stop.isPassed),
         isExtraordinary: Boolean(stop.isExtraordinary),
       });
     }
@@ -400,9 +436,6 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     arrivalName,
     isOriginCommuter,
     pDep,
-    isToday,
-    isTrainDeparted,
-    trainProgress,
   ]);
 
   // Animazione per lo scorrimento del convoglio con accelerazione hardware nativa (useNativeDriver: true)
@@ -418,14 +451,32 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
   }
 
   useEffect(() => {
-    // Se è il medesimo convoglio in marcia nel tempo reale, anima in modo continuo ed elastico
+    // Se è il medesimo convoglio in marcia nel tempo reale, anima in modo fluido sul passo di 10s
     Animated.timing(progressAnim, {
       toValue: trainProgress,
-      duration: 1000,
+      duration: shouldTickLive ? 10000 : 600,
       easing: Easing.linear,
       useNativeDriver: true,
     }).start();
-  }, [trainProgress, progressAnim]);
+  }, [trainProgress, progressAnim, shouldTickLive]);
+
+  const railTranslateX = useMemo(
+    () =>
+      progressAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-trackWidth, 0],
+      }),
+    [progressAnim, trackWidth]
+  );
+
+  const cursorTranslateX = useMemo(
+    () =>
+      progressAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, trackWidth],
+      }),
+    [progressAnim, trackWidth]
+  );
 
   const handleLayout = (e: LayoutChangeEvent) => {
     const width = e.nativeEvent.layout.width;
@@ -644,10 +695,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
                   width: trackWidth,
                   transform: [
                     {
-                      translateX: progressAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [-trackWidth, 0],
-                      }),
+                      translateX: railTranslateX,
                     },
                   ],
                 },
@@ -792,10 +840,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
               {
                 transform: [
                   {
-                    translateX: progressAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, trackWidth],
-                    }),
+                    translateX: cursorTranslateX,
                   },
                 ],
               },

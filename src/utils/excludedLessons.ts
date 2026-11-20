@@ -19,6 +19,16 @@ export interface ExcludedLessonRecord {
 }
 
 const excludedListeners = new Set<() => void>();
+const excludedMemoryCache = new Map<string, ExcludedLessonRecord[]>();
+
+export function clearExcludedLessonsMemoryCache(): void {
+  excludedMemoryCache.clear();
+}
+
+export function getCachedExcludedLessons(courseUrl?: string | null): ExcludedLessonRecord[] | null {
+  const key = `${EXCLUDED_LESSONS_PREFIX}${courseUrl || 'default'}`;
+  return excludedMemoryCache.get(key) ?? null;
+}
 
 export function subscribeToExcludedLessonsChanges(cb: () => void): () => void {
   excludedListeners.add(cb);
@@ -90,10 +100,17 @@ export async function getExcludedLessons(
 ): Promise<ExcludedLessonRecord[]> {
   try {
     const key = await getExcludedLessonsKey(courseUrl);
+    const cached = excludedMemoryCache.get(key);
+    if (cached) return cached;
     const raw = await AsyncStorage.getItem(key);
-    if (!raw) return [];
+    if (!raw) {
+      excludedMemoryCache.set(key, []);
+      return [];
+    }
     const list: ExcludedLessonRecord[] = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
+    const resolved = Array.isArray(list) ? list : [];
+    excludedMemoryCache.set(key, resolved);
+    return resolved;
   } catch (err) {
     console.error('Errore lettura lezioni barrate:', err);
     return [];
@@ -107,6 +124,7 @@ export async function saveExcludedLessonsList(
 ): Promise<void> {
   try {
     const key = await getExcludedLessonsKey(courseUrl);
+    excludedMemoryCache.set(key, records);
     await AsyncStorage.setItem(key, JSON.stringify(records));
     if (!silent) {
       notifyExcludedLessonsChanged();
@@ -274,6 +292,9 @@ export async function saveAllExcludedLessonsAcrossCourses(
       JSON.stringify(records),
     ]);
     if (pairs.length > 0) {
+      for (const [courseUrl, records] of Object.entries(map)) {
+        excludedMemoryCache.set(`${EXCLUDED_LESSONS_PREFIX}${courseUrl}`, records);
+      }
       await AsyncStorage.multiSet(pairs);
       if (!silent) {
         notifyExcludedLessonsChanged();

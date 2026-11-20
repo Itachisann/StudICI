@@ -30,6 +30,21 @@ export interface AppNote {
 }
 
 const notesListeners = new Set<() => void>();
+let notesMemoryCache: AppNote[] | null = null;
+
+export function clearNotesMemoryCache(): void {
+  notesMemoryCache = null;
+}
+
+export function getCachedNotes(): AppNote[] | null {
+  return notesMemoryCache;
+}
+
+function sortNotesDesc(list: AppNote[]): AppNote[] {
+  return [...list].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
 
 export function subscribeToNotesChanges(cb: () => void): () => void {
   notesListeners.add(cb);
@@ -200,36 +215,37 @@ export async function syncAppleRemindersWithNotes(): Promise<AppNote[]> {
     const granted = await requestAppleRemindersPermissions();
     if (!granted) return getNotes();
 
-    const allNotes = await getNotes();
+    const allNotes = (await getNotes()).map((n) => ({ ...n }));
     let hasChanges = false;
 
-    for (let i = 0; i < allNotes.length; i++) {
-      const note = allNotes[i];
-      if (note.appleReminderId) {
-        try {
-          const reminder = await Calendar.getReminderAsync(note.appleReminderId);
-          if (!reminder) {
+    const notesWithAppleIds = allNotes.filter((n) => Boolean(n.appleReminderId));
+    if (notesWithAppleIds.length > 0) {
+      await Promise.all(
+        notesWithAppleIds.map(async (note) => {
+          try {
+            const reminder = await Calendar.getReminderAsync(note.appleReminderId!);
+            if (!reminder) {
+              note.reminderEnabled = false;
+              note.reminderDate = undefined;
+              note.appleReminderId = undefined;
+              hasChanges = true;
+            } else if (Boolean(reminder.completed) !== Boolean(note.isCompleted)) {
+              note.isCompleted = Boolean(reminder.completed);
+              hasChanges = true;
+            }
+          } catch {
+            // L'ID del promemoria non esiste più in Apple Reminders (eliminato dall'utente)
             note.reminderEnabled = false;
             note.reminderDate = undefined;
             note.appleReminderId = undefined;
             hasChanges = true;
-          } else {
-            if (Boolean(reminder.completed) !== Boolean(note.isCompleted)) {
-              note.isCompleted = Boolean(reminder.completed);
-              hasChanges = true;
-            }
           }
-        } catch {
-          // L'ID del promemoria non esiste più in Apple Reminders (eliminato dall'utente)
-          note.reminderEnabled = false;
-          note.reminderDate = undefined;
-          note.appleReminderId = undefined;
-          hasChanges = true;
-        }
-      }
+        })
+      );
     }
 
     if (hasChanges) {
+      notesMemoryCache = sortNotesDesc(allNotes);
       await Promise.all([
         AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(allNotes)),
         AsyncStorage.setItem(NOTES_MODIFIED_KEY, String(Date.now())),
@@ -245,12 +261,22 @@ export async function syncAppleRemindersWithNotes(): Promise<AppNote[]> {
 }
 
 export async function getNotes(): Promise<AppNote[]> {
+  if (notesMemoryCache !== null) {
+    return notesMemoryCache;
+  }
   try {
     const raw = await AsyncStorage.getItem(NOTES_STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) {
+      notesMemoryCache = [];
+      return [];
+    }
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    if (!Array.isArray(parsed)) {
+      notesMemoryCache = [];
+      return [];
+    }
+    notesMemoryCache = sortNotesDesc(parsed);
+    return notesMemoryCache;
   } catch (err) {
     console.warn('Errore caricamento note:', err);
     return [];
@@ -290,6 +316,7 @@ export async function setAllNotes(
   silent: boolean = false
 ): Promise<void> {
   const now = modifiedAt || Date.now();
+  notesMemoryCache = sortNotesDesc(notes);
   const ops: Promise<void>[] = [
     AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(notes)),
     AsyncStorage.setItem(NOTES_MODIFIED_KEY, String(now)),
@@ -308,7 +335,7 @@ const DAYS_LIST = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 
 export async function saveNote(
   noteData: Omit<AppNote, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
 ): Promise<AppNote> {
-  const allNotes = await getNotes();
+  const allNotes = [...(await getNotes())];
   const nowIso = new Date().toISOString();
 
   let computedDayIndex = noteData.dayIndex;
@@ -376,6 +403,7 @@ export async function saveNote(
     allNotes.unshift(finalNote);
   }
 
+  notesMemoryCache = sortNotesDesc(allNotes);
   await Promise.all([
     AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(allNotes)),
     AsyncStorage.setItem(NOTES_MODIFIED_KEY, String(Date.now())),
@@ -396,6 +424,7 @@ export async function deleteNote(noteId: string): Promise<boolean> {
     const now = Date.now();
     tombstones[noteId] = now;
 
+    notesMemoryCache = sortNotesDesc(filtered);
     await Promise.all([
       AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(filtered)),
       AsyncStorage.setItem(NOTES_TOMBSTONES_KEY, JSON.stringify(tombstones)),
@@ -411,7 +440,7 @@ export async function deleteNote(noteId: string): Promise<boolean> {
 
 export async function toggleNoteCompleted(noteId: string): Promise<boolean> {
   try {
-    const allNotes = await getNotes();
+    const allNotes = (await getNotes()).map((n) => ({ ...n }));
     const index = allNotes.findIndex((n) => n.id === noteId);
     if (index === -1) return false;
     allNotes[index].isCompleted = !allNotes[index].isCompleted;
@@ -429,6 +458,7 @@ export async function toggleNoteCompleted(noteId: string): Promise<boolean> {
       }
     }
 
+    notesMemoryCache = sortNotesDesc(allNotes);
     await Promise.all([
       AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(allNotes)),
       AsyncStorage.setItem(NOTES_MODIFIED_KEY, String(Date.now())),

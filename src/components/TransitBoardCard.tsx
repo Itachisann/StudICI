@@ -1,5 +1,6 @@
 import { AppTheme, CARD_RADIUS } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native";
 import * as Location from "expo-location";
 import React, {
   useCallback,
@@ -20,6 +21,7 @@ import {
   getLineBadgeColor,
   getStationTransitBoard,
   getTransitModeIcon,
+  minsToHHMM,
   parseHHMMToMins,
   TransitBoardResult,
   TransitDepartureItem,
@@ -31,26 +33,124 @@ export interface OptimalTransitTimingUpdate {
   endTime: string;
   durationMinutes: number;
   walkBeforeMinutes?: number;
+  inVehicleMinutes?: number;
+  walkAfterMinutes?: number;
+  busDepartureTime?: string;
+  busAlightingTime?: string;
+  coincidenceAvailableFromTime?: string;
+  firstAvailableDepartureTime?: string;
   line: string;
   directLines?: string[];
   lastUsefulDeparture?: TransitDepartureItem;
   isLiveContext?: boolean;
 }
 
+function getDepartureTransitSpanMinutes(dep: TransitDepartureItem): number {
+  if (dep.legs && dep.legs.length > 1) {
+    const firstDepM = parseHHMMToMins(
+      dep.legs[0]?.departureTime || dep.estimatedTime || dep.scheduledTime,
+    );
+    const lastArrM = parseHHMMToMins(
+      dep.legs[dep.legs.length - 1]?.arrivalTime || dep.alightingTime,
+    );
+    if (firstDepM >= 0 && lastArrM >= 0) {
+      let diff = lastArrM - firstDepM;
+      if (diff < -720) diff += 1440;
+      if (diff > 0 && diff < 360) return diff;
+    }
+  }
+  return typeof dep.inVehicleMinutes === "number" && dep.inVehicleMinutes > 0
+    ? dep.inVehicleMinutes
+    : Math.max(1, dep.durationMinutes - (dep.walkAfterMinutes || 0));
+}
+
 function toOptimalTimingUpdate(
   board: TransitBoardResult,
   useLive: boolean,
   visibleLines?: string[],
+  minDepartureTime?: string,
+  visibleDepartures?: TransitDepartureItem[],
 ): OptimalTransitTimingUpdate | null {
   const opt = board.optimalDeparture || board.departures[0];
   if (!opt) return null;
+  const busDepTime = useLive
+    ? opt.estimatedTime || opt.scheduledTime
+    : opt.scheduledTime;
+  const walkBefore = Math.max(0, opt.walkBeforeMinutes || 0);
+  const walkAfter = Math.max(0, opt.walkAfterMinutes || 0);
+  const inVehicle =
+    typeof opt.inVehicleMinutes === "number" && opt.inVehicleMinutes > 0
+      ? opt.inVehicleMinutes
+      : Math.max(1, opt.durationMinutes - walkAfter);
+  const busDepMins = parseHHMMToMins(busDepTime);
+  const userStartTime =
+    busDepMins >= 0 && walkBefore > 0
+      ? minsToHHMM(busDepMins - walkBefore)
+      : busDepTime;
+  const busAlightTime =
+    busDepMins >= 0
+      ? minsToHHMM(busDepMins + inVehicle)
+      : opt.alightingTime || opt.arrivalTime;
+  const totalDoorToDoor =
+    typeof opt.totalDoorToDoorMinutes === "number" &&
+    opt.totalDoorToDoorMinutes > 0
+      ? opt.totalDoorToDoorMinutes
+      : walkBefore + inVehicle + walkAfter;
+
+  const listForFirst =
+    visibleDepartures && visibleDepartures.length > 0
+      ? visibleDepartures
+      : board.departures;
+  let earliestBusMins = busDepMins >= 0 ? busDepMins : Infinity;
+  let earliestUserLeaveMins =
+    busDepMins >= 0 ? Math.max(0, busDepMins - walkBefore) : Infinity;
+  let firstAvailDepStr = busDepTime;
+
+  for (const dep of listForFirst) {
+    const dStr = useLive
+      ? dep.estimatedTime || dep.scheduledTime
+      : dep.scheduledTime;
+    const dM = parseHHMMToMins(dStr);
+    if (dM < 0) continue;
+    const dWalkBefore = Math.max(0, dep.walkBeforeMinutes || 0);
+    const dLeaveM = Math.max(0, dM - dWalkBefore);
+    if (dM < earliestBusMins) {
+      earliestBusMins = dM;
+      firstAvailDepStr = dStr;
+    }
+    if (dLeaveM < earliestUserLeaveMins) {
+      earliestUserLeaveMins = dLeaveM;
+    }
+  }
+
+  const minDepAnchorMins = minDepartureTime
+    ? parseHHMMToMins(minDepartureTime)
+    : -1;
+  const windowAnchorMins =
+    minDepAnchorMins >= 0
+      ? Math.min(
+          minDepAnchorMins,
+          Number.isFinite(earliestUserLeaveMins)
+            ? earliestUserLeaveMins
+            : minDepAnchorMins,
+        )
+      : Number.isFinite(earliestUserLeaveMins)
+        ? earliestUserLeaveMins
+        : busDepMins;
+  const coincidenceAvailableFromTime =
+    windowAnchorMins >= 0 ? minsToHHMM(windowAnchorMins) : userStartTime;
+
   return {
-    startTime: useLive
-      ? opt.estimatedTime || opt.scheduledTime
-      : opt.scheduledTime,
+    startTime: userStartTime,
     endTime: opt.arrivalTime,
-    durationMinutes: opt.durationMinutes,
-    walkBeforeMinutes: opt.walkBeforeMinutes,
+    durationMinutes: totalDoorToDoor,
+    walkBeforeMinutes: walkBefore,
+    inVehicleMinutes: inVehicle,
+    walkAfterMinutes: walkAfter,
+    busDepartureTime: busDepTime,
+    busAlightingTime: busAlightTime,
+    coincidenceAvailableFromTime,
+    firstAvailableDepartureTime: firstAvailDepStr,
     line: opt.line,
     directLines:
       visibleLines && visibleLines.length > 0
@@ -151,8 +251,44 @@ interface TransitBoardCardProps {
 
 export type ExpansionLevel = "collapsed" | "half_hour" | "full";
 
-// In-memory cache per cambi istantanei (0ms) tra andata/ritorno e lezioni target
-const transitBoardMemoryCache = new Map<string, TransitBoardResult>();
+// In-memory cache LRU con TTL per cambi istantanei (0ms) tra andata/ritorno e lezioni target
+const MAX_TRANSIT_CARD_CACHE_ENTRIES = 20;
+const transitBoardMemoryCache = new Map<
+  string,
+  { data: TransitBoardResult; ts: number }
+>();
+
+function getTransitCardMemoryCache(
+  key: string,
+  isLive: boolean,
+): TransitBoardResult | null {
+  const entry = transitBoardMemoryCache.get(key);
+  if (!entry) return null;
+  const ttl = isLive ? 45_000 : 600_000;
+  if (Date.now() - entry.ts >= ttl) {
+    transitBoardMemoryCache.delete(key);
+    return null;
+  }
+  // Aggiorna ordine LRU
+  transitBoardMemoryCache.delete(key);
+  transitBoardMemoryCache.set(key, entry);
+  return entry.data;
+}
+
+function setTransitCardMemoryCache(
+  key: string,
+  data: TransitBoardResult,
+): void {
+  if (transitBoardMemoryCache.has(key)) {
+    transitBoardMemoryCache.delete(key);
+  }
+  transitBoardMemoryCache.set(key, { data, ts: Date.now() });
+  while (transitBoardMemoryCache.size > MAX_TRANSIT_CARD_CACHE_ENTRIES) {
+    const oldestKey = transitBoardMemoryCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    transitBoardMemoryCache.delete(oldestKey);
+  }
+}
 
 export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   stationName,
@@ -174,6 +310,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   prefetchedBoard,
   onOptimalDepartureResolved,
 }) => {
+  const isFocused = useIsFocused();
   const effectiveArrivalBuffer = Math.max(
     0,
     typeof arrivalBufferMinutes === "number"
@@ -393,6 +530,11 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           };
           commitCoordsIfMoved(cached);
           resolveLocationName(cached.lat, cached.lng);
+          // Se il fix nella cache di sistema è recente (<60s) e preciso (<=100m), evita la doppia chiamata GPS + doppia fetch tabellone
+          const cachedAcc = lastKnown.coords.accuracy ?? 999;
+          if (cachedAcc <= 100) {
+            return;
+          }
         }
 
         // 3. Rilevazione live della posizione GPS attuale (Balanced per fix rapido anche al chiuso, timeout 12s)
@@ -549,7 +691,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     const cacheKey = `${direction}_${cacheStationPart}_${cacheTargetPart}_${canUseLive ? "live" : targetTime || "now"}_${targetDate || ""}_${constraintTime || ""}_${minDepartureTime || ""}_buf${effectiveArrivalBuffer}_${preferLatestBeforeDeadline ? "late" : "std"}_${isCurrentLoc ? gpsKeyPart : "default"}`;
 
     const prevPrefetched = prevPrefetchedBoardRef.current;
+    const refreshTickChanged =
+      refreshTimestamp !== prevRefreshTimestampRef.current;
     prevRefreshTimestampRef.current = refreshTimestamp;
+
+    // Quando la tab Viaggio non è in focus, non eseguire refetch in background su tick periodici
+    if (!isFocused && !isManualForce && refreshTickChanged) {
+      return;
+    }
 
     const currentQueryKey = `${direction}|${cacheStationPart}|${cacheTargetPart}|${targetDate || ""}|${canUseLive ? "live" : targetTime || "now"}|${constraintTime || ""}|${minDepartureTime || ""}|buf:${effectiveArrivalBuffer}|${preferLatestBeforeDeadline ? "late" : "std"}`;
 
@@ -573,7 +722,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     if (canConsumePrefetched && prefetchedBoard) {
       prevPrefetchedBoardRef.current = prefetchedBoard;
       lastPrefetchedQueryKeyRef.current = currentQueryKey;
-      transitBoardMemoryCache.set(cacheKey, prefetchedBoard);
+      setTransitCardMemoryCache(cacheKey, prefetchedBoard);
       queueMicrotask(() => {
         if (!isMounted) return;
         setLoading(false);
@@ -587,19 +736,26 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       prevPrefetchedBoardRef.current = prefetchedBoard;
     }
 
-    const hasMemoryHit = transitBoardMemoryCache.has(cacheKey);
-    if (!isManualForce && hasMemoryHit) {
-      const cached = transitBoardMemoryCache.get(cacheKey)!;
+    const freshCached = !isManualForce
+      ? getTransitCardMemoryCache(cacheKey, canUseLive)
+      : null;
+    if (freshCached) {
       queueMicrotask(() => {
         if (!isMounted) return;
         setFetchedBoardEntry({
           queryKey: currentQueryKey,
           prefetchedSource: prefetchedBoard,
-          data: cached,
+          data: freshCached,
         });
         setLoading(false);
       });
-    } else if (!isManualForce) {
+      // Cache valida e fresca entro TTL (45s live / 10m programmato): evita la refetch ridondante
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    if (!isManualForce) {
       queueMicrotask(() => {
         if (!isMounted) return;
         setLoading(true);
@@ -616,6 +772,8 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       const relC = cM < nM && nM - cM > 720 ? cM + 1440 : cM;
       return relC > nM ? constraintTime : undefined;
     })();
+
+    const abortController = new AbortController();
 
     getStationTransitBoard({
       stationName: qStationName,
@@ -637,13 +795,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         ? false
         : preferLatestBeforeDeadline,
       forceRefresh: isManualForce,
+      signal: abortController.signal,
     })
       .then((data) => {
-        if (!isMounted) return;
+        if (!isMounted || abortController.signal.aborted) return;
         // Se il refresh fallisce (es. timeout o errore temporaneo) e abbiamo già corse valide in memoria/stato,
         // non cancellare le corse già visualizzate.
         if (data.fetchFailed) {
-          const existing = transitBoardMemoryCache.get(cacheKey);
+          const existing = transitBoardMemoryCache.get(cacheKey)?.data;
           if (existing && existing.departures.length > 0) {
             setLoading(false);
             return;
@@ -682,7 +841,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           return;
         }
 
-        transitBoardMemoryCache.set(cacheKey, data);
+        setTransitCardMemoryCache(cacheKey, data);
         setFetchedBoardEntry({
           queryKey: currentQueryKey,
           prefetchedSource: prefetchedBoard,
@@ -691,15 +850,17 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         setLoading(false);
       })
       .catch(() => {
-        if (isMounted) {
+        if (isMounted && !abortController.signal.aborted) {
           setLoading(false);
         }
       });
 
     return () => {
       isMounted = false;
+      abortController.abort();
     };
   }, [
+    isFocused,
     stationName,
     stLat,
     stLng,
@@ -833,6 +994,8 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       boardData,
       canUseLive,
       visibleDirectLines,
+      minDepartureTime,
+      unfilteredDisplayedDepartures,
     );
     if (!update) return;
     const sig = [
@@ -840,6 +1003,12 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       update.endTime,
       update.durationMinutes,
       String(update.walkBeforeMinutes ?? ""),
+      String(update.inVehicleMinutes ?? ""),
+      String(update.walkAfterMinutes ?? ""),
+      update.busDepartureTime || "",
+      update.busAlightingTime || "",
+      update.coincidenceAvailableFromTime || "",
+      update.firstAvailableDepartureTime || "",
       update.line,
       (update.directLines || []).join(","),
       update.lastUsefulDeparture?.id || "",
@@ -857,6 +1026,8 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     activeQueryKey,
     canUseLive,
     visibleDirectLines,
+    minDepartureTime,
+    unfilteredDisplayedDepartures,
     onOptimalDepartureResolved,
   ]);
 
@@ -1524,7 +1695,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                         {displayTime}
                       </Text>
 
-                      {/* Durata totale door-to-door del viaggio (identica al modale di dettaglio) */}
+                      {/* Durata effettiva della tratta sui mezzi (dalla prima salita all'ultima discesa, inclusi eventuali cambi) */}
                       <View style={styles.durationInlineBadge}>
                         <Ionicons
                           name="time-outline"
@@ -1533,18 +1704,13 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                           style={{ marginRight: 3 }}
                         />
                         <Text style={styles.durationInlineBadgeText}>
-                          {typeof dep.totalDoorToDoorMinutes === "number" &&
-                          dep.totalDoorToDoorMinutes > 0
-                            ? dep.totalDoorToDoorMinutes
-                            : (dep.walkBeforeMinutes || 0) +
-                              dep.durationMinutes}
-                          m
+                          {getDepartureTransitSpanMinutes(dep)}m
                         </Text>
                       </View>
                     </View>
 
-                    {/* Badge "tra xm" posizionato SOTTO quello della durata (stessa dimensione), allineato a destra */}
-                    {isLiveTrip && countdown && (
+                    {/* Badge "tra xm" posizionato SOTTO quello della durata (escluso su ULTIMA CORSA) */}
+                    {isLiveTrip && countdown && !isLastUseful && (
                       <View style={styles.countdownBadge}>
                         <Ionicons
                           name="time-outline"
@@ -1607,13 +1773,19 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           const lastDep = boardData.lastUsefulDeparture!;
           const lastLiveInfo = getDepartureLiveInfo(lastDep, -1);
           const lastDepTime = lastLiveInfo.displayTime;
+          const lastRideMins = getDepartureTransitSpanMinutes(lastDep);
+          const lastDepMinsParsed = parseHHMMToMins(lastDepTime);
+          const lastBusAlightingTime =
+            lastDepMinsParsed >= 0
+              ? minsToHHMM(lastDepMinsParsed + lastRideMins)
+              : lastDep.alightingTime || lastDep.arrivalTime;
           return (
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={() => setSelectedDepartureModal(lastDep)}
               style={styles.lastUsefulSummaryBar}
             >
-              {/* Riga 1: Etichetta informativa Ultima Corsa + Scadenza a sinistra, Orario e Countdown a destra */}
+              {/* Riga 1: Etichetta informativa Ultima Corsa a sinistra, Orario partenza -> discesa mezzo a destra */}
               <View style={styles.lastUsefulBarTopRow}>
                 <View style={styles.lastUsefulSummaryLeft}>
                   <View style={styles.lastUsefulRolePill}>
@@ -1632,13 +1804,8 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                 <View style={styles.lastUsefulSummaryRight}>
                   <Text style={styles.lastUsefulSummaryTime}>
                     {lastDepTime}
-                    {lastDep.arrivalTime ? ` → ${lastDep.arrivalTime}` : ""}
+                    {lastBusAlightingTime ? ` → ${lastBusAlightingTime}` : ""}
                   </Text>
-                  {lastLiveInfo.isLiveActive && lastLiveInfo.countdownText ? (
-                    <Text style={styles.lastUsefulSummaryCountdown}>
-                      {lastLiveInfo.countdownText}
-                    </Text>
-                  ) : null}
                 </View>
               </View>
 

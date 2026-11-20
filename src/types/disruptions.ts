@@ -24,8 +24,10 @@ export interface DisruptionEvent {
   unions?: string; // Sindacati
   notes?: string;
   isNocturnal?: boolean; // Se si tratta di evento/lavori puramente notturni (es. ore 22-06)
+  aiImpactsPassengerService?: boolean; // Valutazione AI (Gemini): false se riguarda solo merci, pulizie/appalti non circolazione, uffici o zone/aziende estranee al trasporto passeggeri del pendolare
+  aiNonImpactReason?: string; // Spiegazione sintetica del motivo di esclusione o pertinenza (es. "Solo trasporto merci")
   isCommuterRelevant?: boolean; // Se impatta direttamente la tratta del pendolare (Trenitalia / RFI / corridor Sapienza)
   isWalkRelevant?: boolean; // Se impatta specificamente il corridoio pedonale stazione <-> aule
-  sourceName: 'Ministero dei Trasporti (MIT)' | 'Luceverde Roma' | 'Roma Mobilità';
+  sourceName: 'Ministero dei Trasporti (MIT)' | 'Luceverde Roma' | 'Roma Mobilità' | 'Roma Mobilità · MIT';
   sourceUrl?: string;
 }

@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
+  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -132,6 +133,16 @@ function PastAttendanceModalContent({
   const [draftRecords, setDraftRecords] = useState<AttendanceRecord[]>(() => [...attendanceRecords]);
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<SelectionMode>('single');
+  const todayDate = useMemo(() => new Date(), []);
+
+  // Indice O(1) delle presenze in bozza (evita scan O(N^2) ad ogni render/toggle)
+  const attendedKeySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of draftRecords) {
+      set.add(`${r.date}|${r.subject.trim().toLowerCase()}|${r.startTime}`);
+    }
+    return set;
+  }, [draftRecords]);
 
   // Modalità Singola: default ieri
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
@@ -213,24 +224,19 @@ function PastAttendanceModalContent({
     return rangeDays.filter((d) => d.classes.length > 0);
   }, [rangeDays]);
 
-  // Statistiche presenze dell'intervallo basate sullo stato bozza (draftRecords)
+  // Statistiche presenze dell'intervallo basate sullo stato bozza (O(1) lookup via Set)
   const { totalRangeClasses, attendedRangeClasses } = useMemo(() => {
     let total = 0;
     let attended = 0;
     rangeDays.forEach((day) => {
       day.classes.forEach((cls) => {
         total++;
-        const isPres = draftRecords.some(
-          (r) =>
-            r.date === day.dateStr &&
-            r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
-            r.startTime === cls.startTime
-        );
-        if (isPres) attended++;
+        const k = `${day.dateStr}|${cls.subject.trim().toLowerCase()}|${cls.startTime}`;
+        if (attendedKeySet.has(k)) attended++;
       });
     });
     return { totalRangeClasses: total, attendedRangeClasses: attended };
-  }, [rangeDays, draftRecords]);
+  }, [rangeDays, attendedKeySet]);
 
   // Toggle presenza in memoria (bozza locale fino al tocco del tick di salvataggio)
   const handleToggle = useCallback((
@@ -240,12 +246,8 @@ function PastAttendanceModalContent({
     dayIndex: number,
     dayName: string
   ) => {
-    const isPres = draftRecords.some(
-      (r) =>
-        r.date === dateStr &&
-        r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
-        r.startTime === cls.startTime
-    );
+    const key = `${dateStr}|${cls.subject.trim().toLowerCase()}|${cls.startTime}`;
+    const isPres = attendedKeySet.has(key);
     if (isPres) {
       setDraftRecords((prev) =>
         prev.filter(
@@ -276,7 +278,7 @@ function PastAttendanceModalContent({
       };
       setDraftRecords((prev) => [...prev, newRecord]);
     }
-  }, [draftRecords]);
+  }, [attendedKeySet]);
 
   // Navigazione rapida data singola
   const handleOffsetSingleDays = (days: number) => {
@@ -381,11 +383,8 @@ function PastAttendanceModalContent({
       ? getManualSubjectColor(cls.subject)
       : getSubjectColor(cls.subject);
 
-    const isAttended = draftRecords.some(
-      (r) =>
-        r.date === dateStr &&
-        r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
-        r.startTime === cls.startTime
+    const isAttended = attendedKeySet.has(
+      `${dateStr}|${cls.subject.trim().toLowerCase()}|${cls.startTime}`
     );
 
     return (
@@ -489,6 +488,299 @@ function PastAttendanceModalContent({
     );
   };
 
+  const headerControls = (
+    <>
+      {/* ── 1. SEGMENTED CONTROL NATIVO: DATA SINGOLA vs INTERVALLO ── */}
+      <View style={styles.segmentedWrapper}>
+        <SegmentedControl
+          values={['Data singola', 'Intervallo date']}
+          selectedIndex={mode === 'single' ? 0 : 1}
+          onChange={(e) => {
+            const idx = e.nativeEvent.selectedSegmentIndex;
+            setMode(idx === 0 ? 'single' : 'range');
+          }}
+          appearance="dark"
+          tintColor={theme.primary}
+          style={styles.nativeSegmentedControl}
+        />
+      </View>
+
+      {/* ── 2. SELETTORE DATA / DATE CON LAYOUT SPAZIATO SENZA SOVRAPPOSIZIONI ── */}
+      {mode === 'single' ? (
+        /* Card Data Singola */
+        <View style={styles.pickerSectionCard}>
+          <View style={styles.singlePickerTopRow}>
+            <View style={styles.singlePickerLabelWrapper}>
+              <Ionicons
+                name="calendar-outline"
+                size={13}
+                color={theme.primary}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.pickerInfoLabel}>DATA SELEZIONATA</Text>
+            </View>
+            <View style={styles.singleNativePickerBox}>
+              <DateTimePicker
+                value={selectedDate}
+                mode="date"
+                display="compact"
+                locale="it_IT"
+                themeVariant="dark"
+                accentColor={theme.primary}
+                maximumDate={todayDate}
+                style={styles.pickerNativeControl}
+                onValueChange={(event: any) => {
+                  setActiveSinglePreset(null);
+                  const ts = event?.nativeEvent?.timestamp;
+                  if (ts) {
+                    const d = new Date(ts);
+                    if (!isNaN(d.getTime())) setSelectedDate(d);
+                  }
+                }}
+              />
+            </View>
+          </View>
+
+          <View style={styles.singlePickerDateRow}>
+            <Text style={styles.singleDayNameText}>{singleDateInfo.dayName}</Text>
+            <Text style={styles.singleDisplayDateText}>{singleDateInfo.displayDate}</Text>
+          </View>
+
+          {/* Scorciatoie Rapide Data Singola */}
+          <View style={styles.shortcutsRow}>
+            {[
+              { label: '-1 giorno', days: -1, icon: 'calendar-outline' },
+              { label: '-1 settimana', days: -7, icon: 'calendar-outline' },
+              { label: '-2 settimane', days: -14, icon: 'calendar-outline' },
+            ].map((p) => {
+              const isSelected = activeSinglePreset === p.days;
+              return (
+                <TouchableOpacity
+                  key={p.label}
+                  style={[
+                    styles.shortcutChip,
+                    isSelected && [
+                      styles.shortcutChipActive,
+                      {
+                        backgroundColor: `${theme.primary}25`,
+                        borderColor: theme.primary,
+                        shadowColor: theme.primary,
+                      },
+                    ],
+                  ]}
+                  onPress={() => handleOffsetSingleDays(p.days)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={isSelected ? 'checkmark-circle' : (p.icon as any)}
+                    size={12}
+                    color={isSelected ? theme.accent : '#8e8e93'}
+                    style={{ marginRight: 3 }}
+                  />
+                  <Text
+                    style={[
+                      styles.shortcutChipText,
+                      isSelected && { color: theme.accent, fontWeight: '700' },
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      ) : (
+        /* Card Intervallo Date: layout pulito a 2 colonne affiancate perfettamente allineate */
+        <View style={styles.pickerSectionCard}>
+          <View style={styles.rangeTopRow}>
+            <View style={styles.rangeLabelWrapper}>
+              <Ionicons
+                name="calendar-outline"
+                size={13}
+                color={theme.primary}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.pickerInfoLabel}>INTERVALLO DATE SELEZIONATO</Text>
+            </View>
+          </View>
+
+          <View style={styles.rangeColumnsRow}>
+            {/* Box DAL */}
+            <View style={styles.rangeColumnBox}>
+              <Text style={styles.rangeColumnTitle}>DAL (INIZIO)</Text>
+              <View style={styles.rangeNativePickerBox}>
+                <DateTimePicker
+                  value={startDate}
+                  mode="date"
+                  display="compact"
+                  locale="it_IT"
+                  themeVariant="dark"
+                  accentColor={theme.primary}
+                  maximumDate={endDate < todayDate ? endDate : todayDate}
+                  style={styles.pickerNativeControl}
+                  onValueChange={(event: any) => {
+                    setActiveRangePreset(null);
+                    const ts = event?.nativeEvent?.timestamp;
+                    if (ts) {
+                      const d = new Date(ts);
+                      if (!isNaN(d.getTime())) {
+                        setStartDate(d);
+                        if (d > endDate) setEndDate(d);
+                      }
+                    }
+                  }}
+                />
+              </View>
+            </View>
+
+            {/* Freccia centrale di intervallo perfettamente allineata all'altezza dei pickers */}
+            <View style={styles.rangeArrowWrapper}>
+              <Ionicons name="arrow-forward" size={16} color="#94a3b8" />
+            </View>
+
+            {/* Box AL */}
+            <View style={styles.rangeColumnBox}>
+              <Text style={styles.rangeColumnTitle}>AL (FINE)</Text>
+              <View style={styles.rangeNativePickerBox}>
+                <DateTimePicker
+                  value={endDate}
+                  mode="date"
+                  display="compact"
+                  locale="it_IT"
+                  themeVariant="dark"
+                  accentColor={theme.primary}
+                  minimumDate={startDate}
+                  maximumDate={todayDate}
+                  style={styles.pickerNativeControl}
+                  onValueChange={(event: any) => {
+                    setActiveRangePreset(null);
+                    const ts = event?.nativeEvent?.timestamp;
+                    if (ts) {
+                      const d = new Date(ts);
+                      if (!isNaN(d.getTime())) {
+                        setEndDate(d);
+                        if (d < startDate) setStartDate(d);
+                      }
+                    }
+                  }}
+                />
+              </View>
+            </View>
+          </View>
+
+          {/* Scorciatoie Rapide Intervallo */}
+          <View style={styles.shortcutsRow}>
+            {[
+              { label: 'Settimana scorsa', key: 'lastWeek' as const },
+              { label: '2 settimane fa', key: 'twoWeeksAgo' as const },
+              { label: 'Questa settimana', key: 'thisWeek' as const },
+              { label: 'Ultimi 7 giorni', key: 'last7Days' as const },
+            ].map((p) => {
+              const isSelected = activeRangePreset === p.key;
+              return (
+                <TouchableOpacity
+                  key={p.label}
+                  style={[
+                    styles.shortcutChip,
+                    isSelected && [
+                      styles.shortcutChipActive,
+                      {
+                        backgroundColor: `${theme.primary}25`,
+                        borderColor: theme.primary,
+                        shadowColor: theme.primary,
+                      },
+                    ],
+                  ]}
+                  onPress={() => handleSetRangePreset(p.key)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={isSelected ? 'checkmark-circle' : 'calendar-outline'}
+                    size={12}
+                    color={isSelected ? theme.accent : '#8e8e93'}
+                    style={{ marginRight: 3 }}
+                  />
+                  <Text
+                    style={[
+                      styles.shortcutChipText,
+                      isSelected && { color: theme.accent, fontWeight: '700' },
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
+      {/* ── 3. AZIONI CALL STACK PER BATCH PRESENZE (INTERVALLO) ── */}
+      {mode === 'range' && totalRangeClasses > 0 && (
+        <View style={styles.callstackActionSection}>
+          <View style={styles.rangeStatsRow}>
+            <Ionicons name="calendar" size={13} color="#94a3b8" style={{ marginRight: 5 }} />
+            <Text style={styles.rangeStatsText}>
+              {rangeDaysWithClasses.length} giorni con lezioni · {attendedRangeClasses}/{totalRangeClasses} presenze registrate
+            </Text>
+          </View>
+
+          <NativeActionButton
+            label={
+              attendedRangeClasses === totalRangeClasses
+                ? "Deseleziona tutte le presenze"
+                : "Segna tutte le presenze"
+            }
+            onPress={handleBatchToggleRange}
+            variant={attendedRangeClasses === totalRangeClasses ? "glass" : "filled"}
+            accentColor={attendedRangeClasses === totalRangeClasses ? "#71717a" : theme.primary}
+            glow={true}
+            glowColor={
+              attendedRangeClasses === totalRangeClasses
+                ? "rgba(148, 163, 184, 0.45)"
+                : undefined
+            }
+            icon={
+              <Ionicons
+                name={
+                  attendedRangeClasses === totalRangeClasses
+                    ? "close-circle-outline"
+                    : "checkmark-done"
+                }
+                size={17}
+                color="#ffffff"
+              />
+            }
+            style={{
+              height: 44,
+              borderRadius: 22,
+              marginTop: 2,
+            }}
+            pillStyle={{
+              height: 44,
+              borderRadius: 22,
+              backgroundColor:
+                attendedRangeClasses === totalRangeClasses
+                  ? "rgba(113, 113, 122, 0.22)"
+                  : theme.primary,
+              borderColor:
+                attendedRangeClasses === totalRangeClasses
+                  ? "rgba(148, 163, 184, 0.35)"
+                  : "transparent",
+              borderWidth: attendedRangeClasses === totalRangeClasses ? 1 : 0,
+            }}
+            textStyle={{
+              fontSize: 14,
+              fontWeight: '700',
+              color: '#ffffff',
+            }}
+          />
+        </View>
+      )}
+    </>
+  );
+
   return (
     <NativeSheetModal
       visible={visible}
@@ -508,303 +800,13 @@ function PastAttendanceModalContent({
       ]}
     >
       <View collapsable={false} style={{ flex: 1, backgroundColor: UNIFORM_MODAL_BG }}>
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-        {/* ── 1. SEGMENTED CONTROL NATIVO: DATA SINGOLA vs INTERVALLO ── */}
-        <View style={styles.segmentedWrapper}>
-          <SegmentedControl
-            values={['Data singola', 'Intervallo date']}
-            selectedIndex={mode === 'single' ? 0 : 1}
-            onChange={(e) => {
-              const idx = e.nativeEvent.selectedSegmentIndex;
-              setMode(idx === 0 ? 'single' : 'range');
-            }}
-            appearance="dark"
-            tintColor={theme.primary}
-            style={styles.nativeSegmentedControl}
-          />
-        </View>
-
-        {/* ── 2. SELETTORE DATA / DATE CON LAYOUT SPAZIATO SENZA SOVRAPPOSIZIONI ── */}
         {mode === 'single' ? (
-          /* Card Data Singola */
-          <View style={styles.pickerSectionCard}>
-            <View style={styles.singlePickerTopRow}>
-              <View style={styles.singlePickerLabelWrapper}>
-                <Ionicons
-                  name="calendar-outline"
-                  size={13}
-                  color={theme.primary}
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={styles.pickerInfoLabel}>DATA SELEZIONATA</Text>
-              </View>
-              <View style={styles.singleNativePickerBox}>
-                <DateTimePicker
-                  value={selectedDate}
-                  mode="date"
-                  display="compact"
-                  locale="it_IT"
-                  themeVariant="dark"
-                  accentColor={theme.primary}
-                  maximumDate={new Date()}
-                  style={styles.pickerNativeControl}
-                  onValueChange={(event: any) => {
-                    setActiveSinglePreset(null);
-                    const ts = event?.nativeEvent?.timestamp;
-                    if (ts) {
-                      const d = new Date(ts);
-                      if (!isNaN(d.getTime())) setSelectedDate(d);
-                    }
-                  }}
-                />
-              </View>
-            </View>
-
-            <View style={styles.singlePickerDateRow}>
-              <Text style={styles.singleDayNameText}>{singleDateInfo.dayName}</Text>
-              <Text style={styles.singleDisplayDateText}>{singleDateInfo.displayDate}</Text>
-            </View>
-
-            {/* Scorciatoie Rapide Data Singola */}
-            <View style={styles.shortcutsRow}>
-              {[
-                { label: '-1 giorno', days: -1, icon: 'calendar-outline' },
-                { label: '-1 settimana', days: -7, icon: 'calendar-outline' },
-                { label: '-2 settimane', days: -14, icon: 'calendar-outline' },
-              ].map((p) => {
-                const isSelected = activeSinglePreset === p.days;
-                return (
-                  <TouchableOpacity
-                    key={p.label}
-                    style={[
-                      styles.shortcutChip,
-                      isSelected && [
-                        styles.shortcutChipActive,
-                        {
-                          backgroundColor: `${theme.primary}25`,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                    onPress={() => handleOffsetSingleDays(p.days)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={isSelected ? 'checkmark-circle' : (p.icon as any)}
-                      size={12}
-                      color={isSelected ? theme.accent : '#8e8e93'}
-                      style={{ marginRight: 3 }}
-                    />
-                    <Text
-                      style={[
-                        styles.shortcutChipText,
-                        isSelected && { color: theme.accent, fontWeight: '700' },
-                      ]}
-                    >
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        ) : (
-          /* Card Intervallo Date: layout pulito a 2 colonne affiancate perfettamente allineate */
-          <View style={styles.pickerSectionCard}>
-            <View style={styles.rangeTopRow}>
-              <View style={styles.rangeLabelWrapper}>
-                <Ionicons
-                  name="calendar-outline"
-                  size={13}
-                  color={theme.primary}
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={styles.pickerInfoLabel}>INTERVALLO DATE SELEZIONATO</Text>
-              </View>
-            </View>
-
-            <View style={styles.rangeColumnsRow}>
-              {/* Box DAL */}
-              <View style={styles.rangeColumnBox}>
-                <Text style={styles.rangeColumnTitle}>DAL (INIZIO)</Text>
-                <View style={styles.rangeNativePickerBox}>
-                  <DateTimePicker
-                    value={startDate}
-                    mode="date"
-                    display="compact"
-                    locale="it_IT"
-                    themeVariant="dark"
-                    accentColor={theme.primary}
-                    maximumDate={endDate < new Date() ? endDate : new Date()}
-                    style={styles.pickerNativeControl}
-                    onValueChange={(event: any) => {
-                      setActiveRangePreset(null);
-                      const ts = event?.nativeEvent?.timestamp;
-                      if (ts) {
-                        const d = new Date(ts);
-                        if (!isNaN(d.getTime())) {
-                          setStartDate(d);
-                          if (d > endDate) setEndDate(d);
-                        }
-                      }
-                    }}
-                  />
-                </View>
-              </View>
-
-              {/* Freccia centrale di intervallo perfettamente allineata all'altezza dei pickers */}
-              <View style={styles.rangeArrowWrapper}>
-                <Ionicons name="arrow-forward" size={16} color="#94a3b8" />
-              </View>
-
-              {/* Box AL */}
-              <View style={styles.rangeColumnBox}>
-                <Text style={styles.rangeColumnTitle}>AL (FINE)</Text>
-                <View style={styles.rangeNativePickerBox}>
-                  <DateTimePicker
-                    value={endDate}
-                    mode="date"
-                    display="compact"
-                    locale="it_IT"
-                    themeVariant="dark"
-                    accentColor={theme.primary}
-                    minimumDate={startDate}
-                    maximumDate={new Date()}
-                    style={styles.pickerNativeControl}
-                    onValueChange={(event: any) => {
-                      setActiveRangePreset(null);
-                      const ts = event?.nativeEvent?.timestamp;
-                      if (ts) {
-                        const d = new Date(ts);
-                        if (!isNaN(d.getTime())) {
-                          setEndDate(d);
-                          if (d < startDate) setStartDate(d);
-                        }
-                      }
-                    }}
-                  />
-                </View>
-              </View>
-            </View>
-
-            {/* Scorciatoie Rapide Intervallo */}
-            <View style={styles.shortcutsRow}>
-              {[
-                { label: 'Settimana scorsa', key: 'lastWeek' as const },
-                { label: '2 settimane fa', key: 'twoWeeksAgo' as const },
-                { label: 'Questa settimana', key: 'thisWeek' as const },
-                { label: 'Ultimi 7 giorni', key: 'last7Days' as const },
-              ].map((p) => {
-                const isSelected = activeRangePreset === p.key;
-                return (
-                  <TouchableOpacity
-                    key={p.label}
-                    style={[
-                      styles.shortcutChip,
-                      isSelected && [
-                        styles.shortcutChipActive,
-                        {
-                          backgroundColor: `${theme.primary}25`,
-                          borderColor: theme.primary,
-                          shadowColor: theme.primary,
-                        },
-                      ],
-                    ]}
-                    onPress={() => handleSetRangePreset(p.key)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={isSelected ? 'checkmark-circle' : 'calendar-outline'}
-                      size={12}
-                      color={isSelected ? theme.accent : '#8e8e93'}
-                      style={{ marginRight: 3 }}
-                    />
-                    <Text
-                      style={[
-                        styles.shortcutChipText,
-                        isSelected && { color: theme.accent, fontWeight: '700' },
-                      ]}
-                    >
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* ── 3. AZIONI CALL STACK PER BATCH PRESENZE (INTERVALLO) ── */}
-        {mode === 'range' && totalRangeClasses > 0 && (
-          <View style={styles.callstackActionSection}>
-            <View style={styles.rangeStatsRow}>
-              <Ionicons name="calendar" size={13} color="#94a3b8" style={{ marginRight: 5 }} />
-              <Text style={styles.rangeStatsText}>
-                {rangeDaysWithClasses.length} giorni con lezioni · {attendedRangeClasses}/{totalRangeClasses} presenze registrate
-              </Text>
-            </View>
-
-            <NativeActionButton
-              label={
-                attendedRangeClasses === totalRangeClasses
-                  ? "Deseleziona tutte le presenze"
-                  : "Segna tutte le presenze"
-              }
-              onPress={handleBatchToggleRange}
-              variant={attendedRangeClasses === totalRangeClasses ? "glass" : "filled"}
-              accentColor={attendedRangeClasses === totalRangeClasses ? "#71717a" : theme.primary}
-              glow={true}
-              glowColor={
-                attendedRangeClasses === totalRangeClasses
-                  ? "rgba(148, 163, 184, 0.45)"
-                  : undefined
-              }
-              icon={
-                <Ionicons
-                  name={
-                    attendedRangeClasses === totalRangeClasses
-                      ? "close-circle-outline"
-                      : "checkmark-done"
-                  }
-                  size={17}
-                  color="#ffffff"
-                />
-              }
-              style={{
-                height: 44,
-                borderRadius: 22,
-                marginTop: 2,
-              }}
-              pillStyle={{
-                height: 44,
-                borderRadius: 22,
-                backgroundColor:
-                  attendedRangeClasses === totalRangeClasses
-                    ? "rgba(113, 113, 122, 0.22)"
-                    : theme.primary,
-                borderColor:
-                  attendedRangeClasses === totalRangeClasses
-                    ? "rgba(148, 163, 184, 0.35)"
-                    : "transparent",
-                borderWidth: attendedRangeClasses === totalRangeClasses ? 1 : 0,
-              }}
-              textStyle={{
-                fontSize: 14,
-                fontWeight: '700',
-                color: '#ffffff',
-              }}
-            />
-          </View>
-        )}
-
-        {/* ── 4. LISTA LEZIONI PROGRAMMATE ── */}
-        {mode === 'single' ? (
-          <>
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {headerControls}
             <View style={styles.listSectionHeader}>
               <Text style={styles.listSectionTitle}>
                 LEZIONI DEL GIORNO ({singleDayClasses.length})
@@ -842,11 +844,21 @@ function PastAttendanceModalContent({
                 )
               )
             )}
-          </>
+          </ScrollView>
         ) : (
-          /* Modalità Intervallo Date: Raggruppamento per Giorno */
-          <>
-            {rangeDaysWithClasses.length === 0 ? (
+          /* Modalità Intervallo Date virtualizzata via FlatList */
+          <FlatList
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            data={rangeDaysWithClasses}
+            keyExtractor={(day) => day.dateStr}
+            ListHeaderComponent={headerControls}
+            initialNumToRender={5}
+            maxToRenderPerBatch={5}
+            windowSize={5}
+            removeClippedSubviews={true}
+            ListEmptyComponent={
               <View style={styles.emptyCard}>
                 <Ionicons name="calendar-clear-outline" size={30} color="#64748b" />
                 <Text style={styles.emptyCardTitle}>Nessuna Lezione nel Periodo</Text>
@@ -854,74 +866,74 @@ function PastAttendanceModalContent({
                   Nessun orario di lezione programmato nell&apos;intervallo selezionato.
                 </Text>
               </View>
-            ) : (
-              rangeDaysWithClasses.map((day) => {
-                const dayAttended = day.classes.filter((cls) =>
-                  draftRecords.some(
-                    (r) =>
-                      r.date === day.dateStr &&
-                      r.subject.trim().toLowerCase() === cls.subject.trim().toLowerCase() &&
-                      r.startTime === cls.startTime
+            }
+            renderItem={({ item: day }) => {
+              let dayAttended = 0;
+              for (const cls of day.classes) {
+                if (
+                  attendedKeySet.has(
+                    `${day.dateStr}|${cls.subject.trim().toLowerCase()}|${cls.startTime}`
                   )
-                ).length;
-                const isAllDayAttended =
-                  day.classes.length > 0 && dayAttended === day.classes.length;
+                ) {
+                  dayAttended++;
+                }
+              }
+              const isAllDayAttended =
+                day.classes.length > 0 && dayAttended === day.classes.length;
 
-                return (
-                  <View key={day.dateStr} style={styles.dayGroupBlock}>
-                    {/* Header Giorno dell'Intervallo con data calcolata esatta */}
-                    <View style={styles.dayGroupHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.dayGroupTitle}>
-                          {day.dayName} · {day.date.getDate()}{' '}
-                          {MONTHS_IT[day.date.getMonth()].slice(0, 3).toUpperCase()}
-                        </Text>
-                      </View>
-                      <View
+              return (
+                <View style={styles.dayGroupBlock}>
+                  {/* Header Giorno dell'Intervallo con data calcolata esatta */}
+                  <View style={styles.dayGroupHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.dayGroupTitle}>
+                        {day.dayName} · {day.date.getDate()}{' '}
+                        {MONTHS_IT[day.date.getMonth()].slice(0, 3).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.dayGroupBadge,
+                        isAllDayAttended
+                          ? {
+                              backgroundColor: 'rgba(16, 185, 129, 0.18)',
+                              borderColor: 'rgba(16, 185, 129, 0.4)',
+                            }
+                          : {
+                              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                              borderColor: 'rgba(255, 255, 255, 0.1)',
+                            },
+                      ]}
+                    >
+                      <Text
                         style={[
-                          styles.dayGroupBadge,
+                          styles.dayGroupBadgeText,
                           isAllDayAttended
-                            ? {
-                                backgroundColor: 'rgba(16, 185, 129, 0.18)',
-                                borderColor: 'rgba(16, 185, 129, 0.4)',
-                              }
-                            : {
-                                backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                                borderColor: 'rgba(255, 255, 255, 0.1)',
-                              },
+                            ? { color: '#34d399' }
+                            : { color: '#94a3b8' },
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.dayGroupBadgeText,
-                            isAllDayAttended
-                              ? { color: '#34d399' }
-                              : { color: '#94a3b8' },
-                          ]}
-                        >
-                          {dayAttended}/{day.classes.length} presenze
-                        </Text>
-                      </View>
+                        {dayAttended}/{day.classes.length} presenze
+                      </Text>
                     </View>
-
-                    {/* Lezioni del giorno */}
-                    {day.classes.map((cls, idx) =>
-                      renderClassCard(
-                        cls,
-                        day.dateStr,
-                        day.displayDate,
-                        day.dayIndex,
-                        day.dayName,
-                        String(idx)
-                      )
-                    )}
                   </View>
-                );
-              })
-            )}
-          </>
+
+                  {/* Lezioni del giorno */}
+                  {day.classes.map((cls, idx) =>
+                    renderClassCard(
+                      cls,
+                      day.dateStr,
+                      day.displayDate,
+                      day.dayIndex,
+                      day.dayName,
+                      String(idx)
+                    )
+                  )}
+                </View>
+              );
+            }}
+          />
         )}
-        </ScrollView>
       </View>
     </NativeSheetModal>
   );

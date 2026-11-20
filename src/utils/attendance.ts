@@ -3,6 +3,16 @@ import { ClassEvent } from './scraper';
 
 const ATTENDANCE_STORAGE_KEY = 'studici_attendance_records';
 const TOMBSTONES_KEY = 'studici_attendance_tombstones';
+const attendanceMemoryCache = new Map<string, AttendanceRecord[]>();
+
+export function clearAttendanceMemoryCache(): void {
+  attendanceMemoryCache.clear();
+}
+
+export function getCachedAttendanceRecords(courseUrl?: string | null): AttendanceRecord[] | null {
+  const key = courseUrl ? `${ATTENDANCE_STORAGE_KEY}_${courseUrl}` : ATTENDANCE_STORAGE_KEY;
+  return attendanceMemoryCache.get(key) ?? null;
+}
 
 export async function getAttendanceStorageKey(courseUrl?: string): Promise<string> {
   const url = courseUrl || (await AsyncStorage.getItem('selectedDegreeUrl'));
@@ -85,6 +95,8 @@ export function generateAttendanceId(dateStr: string, subject: string, startTime
 export async function getAttendanceRecords(courseUrl?: string): Promise<AttendanceRecord[]> {
   try {
     const key = await getAttendanceStorageKey(courseUrl);
+    const cached = attendanceMemoryCache.get(key);
+    if (cached) return cached;
     let raw = await AsyncStorage.getItem(key);
 
     // Se la chiave specifica per il corso non esiste ancora, controlla se c'è una migrazione
@@ -103,9 +115,14 @@ export async function getAttendanceRecords(courseUrl?: string): Promise<Attendan
       }
     }
 
-    if (!raw) return [];
+    if (!raw) {
+      attendanceMemoryCache.set(key, []);
+      return [];
+    }
     const list: AttendanceRecord[] = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
+    const resolved = Array.isArray(list) ? list : [];
+    attendanceMemoryCache.set(key, resolved);
+    return resolved;
   } catch (err) {
     console.error('Errore lettura presenze:', err);
     return [];
@@ -117,6 +134,7 @@ export async function getAttendanceRecords(courseUrl?: string): Promise<Attendan
  */
 export async function saveAttendanceList(records: AttendanceRecord[], courseUrl?: string): Promise<void> {
   const key = await getAttendanceStorageKey(courseUrl);
+  attendanceMemoryCache.set(key, records);
   await AsyncStorage.setItem(key, JSON.stringify(records));
   notifyAttendanceChanged();
 }
@@ -449,7 +467,8 @@ export async function getAllAttendanceAcrossCourses(): Promise<Record<string, At
  * Salva presenze multi-corso (usato per ripristino backup e cloud sync).
  */
 export async function saveAllAttendanceAcrossCourses(
-  map: Record<string, AttendanceRecord[]>
+  map: Record<string, AttendanceRecord[]>,
+  silent = false
 ): Promise<void> {
   if (!map) return;
   try {
@@ -458,8 +477,13 @@ export async function saveAllAttendanceAcrossCourses(
       JSON.stringify(records),
     ]);
     if (pairs.length > 0) {
+      for (const [courseUrl, records] of Object.entries(map)) {
+        attendanceMemoryCache.set(`${ATTENDANCE_STORAGE_KEY}_${courseUrl}`, records);
+      }
       await AsyncStorage.multiSet(pairs);
-      notifyAttendanceChanged();
+      if (!silent) {
+        notifyAttendanceChanged();
+      }
     }
   } catch (err) {
     console.error('Errore ripristino presenze multi-corso:', err);

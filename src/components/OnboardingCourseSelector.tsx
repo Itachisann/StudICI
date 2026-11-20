@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -59,12 +59,14 @@ import {
   Degree,
   fetchAllCourseData,
   fetchDegrees,
+  notifyDegreeChanged,
   Tab,
 } from "../utils/scraper";
 import {
   ALL_STATIONS,
   POPULAR_STATIONS,
   searchStations,
+  searchStationsLocal,
 } from "../utils/trenitaliaApi";
 import { CourseDownloadView } from "./CourseDownloadView";
 import { parseTabHierarchy } from "./YearChannelSelector";
@@ -91,6 +93,50 @@ const QUICK_ARRIVAL_CODES = [
   "S08408", // Roma Tuscolana
   "S08402", // Roma S. Pietro
 ];
+
+const ONBOARDING_STATION_ROW_HEIGHT = 72;
+
+const OnboardingStationRow = React.memo(function OnboardingStationRow({
+  station,
+  subtleBg,
+  primaryColor,
+  onSelect,
+}: {
+  station: StationInfo;
+  subtleBg: string;
+  primaryColor: string;
+  onSelect: (st: StationInfo) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.stationListItem}
+      activeOpacity={0.75}
+      onPress={() => onSelect(station)}
+    >
+      <View style={[styles.stationIconBadge, { backgroundColor: subtleBg }]}>
+        <Ionicons name="train" size={16} color={primaryColor} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.stationRowName} numberOfLines={1}>
+          {station.shortName || station.name}
+        </Text>
+        <Text style={styles.stationRowCode} numberOfLines={1}>
+          Codice RFI: {station.code}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="#71717a" />
+    </TouchableOpacity>
+  );
+});
+
+const getOnboardingStationItemLayout = (
+  _data: ArrayLike<StationInfo> | null | undefined,
+  index: number,
+) => ({
+  length: ONBOARDING_STATION_ROW_HEIGHT,
+  offset: ONBOARDING_STATION_ROW_HEIGHT * index,
+  index,
+});
 
 const STATION_SHORT_NAMES: Record<string, string> = {
   S06421: "Firenze SMN",
@@ -1995,6 +2041,7 @@ function PostDownloadScreen() {
       </KeyboardAvoidingView>
 
       {/* ── SELEZIONE STAZIONI CON NativeSheetModal (headerSearchBarOptions nativo) ── */}
+      {stationPickerType !== null && (
       <NativeSheetModal
         visible={stationPickerType !== null}
         onClose={() => {
@@ -2046,6 +2093,7 @@ function PostDownloadScreen() {
           <FlatList
             data={stationResults}
             keyExtractor={(st) => `${st.code}_${st.name}`}
+            getItemLayout={getOnboardingStationItemLayout}
             style={{ flex: 1, width: "100%" }}
             contentContainerStyle={{
               paddingHorizontal: 16,
@@ -2057,34 +2105,19 @@ function PostDownloadScreen() {
             initialNumToRender={20}
             maxToRenderPerBatch={25}
             windowSize={7}
+            removeClippedSubviews={true}
             renderItem={({ item: st }) => (
-              <TouchableOpacity
-                style={styles.stationListItem}
-                activeOpacity={0.75}
-                onPress={() => selectStationFromSearch(st)}
-              >
-                <View
-                  style={[
-                    styles.stationIconBadge,
-                    { backgroundColor: theme.subtle },
-                  ]}
-                >
-                  <Ionicons name="train" size={16} color={theme.primary} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.stationRowName}>
-                    {st.shortName || st.name}
-                  </Text>
-                  <Text style={styles.stationRowCode}>
-                    Codice RFI: {st.code}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#71717a" />
-              </TouchableOpacity>
+              <OnboardingStationRow
+                station={st}
+                subtleBg={theme.subtle}
+                primaryColor={theme.primary}
+                onSelect={selectStationFromSearch}
+              />
             )}
           />
         </View>
       </NativeSheetModal>
+      )}
     </View>
   );
 }
@@ -2280,12 +2313,14 @@ export function OnboardingCourseSelector({
     if (
       !pendingDegree ||
       carMode !== "yes" ||
+      placeSearchActive ||
       originAddress.trim().length < 2 ||
       !departureStation
     ) {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const fetchDriveEstimate = async () => {
       setCalculatingDriving(true);
       try {
@@ -2294,8 +2329,10 @@ export function OnboardingCourseSelector({
           departureStation.shortName || departureStation.name,
           undefined,
           originCoords,
+          undefined,
+          controller.signal,
         );
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setDrivingEstimate(est);
         }
       } catch {}
@@ -2304,9 +2341,17 @@ export function OnboardingCourseSelector({
     const timer = setTimeout(fetchDriveEstimate, 320);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
-  }, [pendingDegree, carMode, originAddress, originCoords, departureStation]);
+  }, [
+    pendingDegree,
+    carMode,
+    placeSearchActive,
+    originAddress,
+    originCoords,
+    departureStation,
+  ]);
 
   useEffect(() => {
     if (!placeSearchActive || originAddress.trim().length < 3) return;
@@ -2481,6 +2526,7 @@ export function OnboardingCourseSelector({
 
       await AsyncStorage.setItem("selectedDegreeName", pendingDegree.name);
       await AsyncStorage.setItem("selectedDegreeUrl", pendingDegree.url);
+      notifyDegreeChanged(pendingDegree.url, pendingDegree.name);
 
       if (downloadedTabs.length > 0) {
         await AsyncStorage.setItem(
@@ -2521,17 +2567,69 @@ export function OnboardingCourseSelector({
     }
   };
 
-  const handleStationSearchChange = async (query: string) => {
+  const stationSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const stationSearchAbortRef = useRef<AbortController | null>(null);
+  const stationSearchSeqRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (stationSearchTimerRef.current) {
+        clearTimeout(stationSearchTimerRef.current);
+      }
+      stationSearchAbortRef.current?.abort();
+    };
+  }, []);
+
+  const handleStationSearchChange = useCallback((query: string) => {
     setStationSearchQuery(query);
-    if (!query.trim()) {
+    if (stationSearchTimerRef.current) {
+      clearTimeout(stationSearchTimerRef.current);
+      stationSearchTimerRef.current = null;
+    }
+    stationSearchAbortRef.current?.abort();
+    stationSearchAbortRef.current = null;
+
+    const trimmed = query.trim();
+    const seq = ++stationSearchSeqRef.current;
+
+    if (!trimmed) {
       setStationResults(ALL_STATIONS);
+      setSearchingStations(false);
       return;
     }
+
+    // Risultati locali immediati (0ms, zero rete)
+    const localHits = searchStationsLocal(trimmed);
+    setStationResults(localHits.matches);
+
+    if (trimmed.length < 2 || localHits.strongCount >= 5) {
+      setSearchingStations(false);
+      return;
+    }
+
     setSearchingStations(true);
-    const filtered = await searchStations(query);
-    setStationResults(filtered);
-    setSearchingStations(false);
-  };
+    stationSearchTimerRef.current = setTimeout(() => {
+      const controller = new AbortController();
+      stationSearchAbortRef.current = controller;
+      searchStations(trimmed, controller.signal)
+        .then((filtered) => {
+          if (
+            !controller.signal.aborted &&
+            seq === stationSearchSeqRef.current
+          ) {
+            setStationResults(filtered);
+            setSearchingStations(false);
+          }
+        })
+        .catch(() => {
+          if (seq === stationSearchSeqRef.current) {
+            setSearchingStations(false);
+          }
+        });
+    }, 250);
+  }, []);
 
   const selectStationFromSearch = (station: StationInfo) => {
     if (stationPickerType === "departure") {
@@ -2600,11 +2698,15 @@ export function OnboardingCourseSelector({
     } catch {}
   };
 
-  const filteredDegrees = degrees.filter(
-    (d) =>
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
-      (d.className && d.className.toLowerCase().includes(search.toLowerCase())),
-  );
+  const filteredDegrees = useMemo(() => {
+    const q = search.toLowerCase();
+    if (!q) return degrees;
+    return degrees.filter(
+      (d) =>
+        d.name.toLowerCase().includes(q) ||
+        (d.className && d.className.toLowerCase().includes(q)),
+    );
+  }, [degrees, search]);
 
   const missingSelectionMessage = useMemo(() => {
     const missingYear = hasMultipleYears && !selectedYear;
@@ -3555,7 +3657,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.04)",
-    padding: 13,
+    height: 64,
+    paddingHorizontal: 13,
     borderRadius: CARD_RADIUS.card,
     marginBottom: 8,
     borderWidth: 1,

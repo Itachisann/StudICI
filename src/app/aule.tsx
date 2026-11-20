@@ -8,7 +8,12 @@ import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchAllCourseData, Tab, ScheduleData } from '../utils/scraper';
+import {
+  fetchAllCourseData,
+  getWarmCourseStartupSnapshot,
+  Tab,
+  ScheduleData,
+} from '../utils/scraper';
 import {
   resolveClassroom,
   ResolvedClassroom,
@@ -18,6 +23,7 @@ import {
   SAPIENZA_BUILDINGS,
 } from '../utils/classroomLocations';
 import {
+  getCachedManualEvents,
   getManualEvents,
   subscribeToManualEventsChanges,
   ManualClassEvent,
@@ -226,19 +232,39 @@ function extractRoomEntries(
 
 export default function AuleScreen() {
   const { theme } = useTheme();
-  const [loading, setLoading] = useState(true);
+  const [initialCourseSeed] = useState(() => getWarmCourseStartupSnapshot());
+  const [initialManuals] = useState<ManualClassEvent[]>(
+    () => getCachedManualEvents(initialCourseSeed?.degreeUrl) ?? [],
+  );
+  const [loading, setLoading] = useState(() => !initialCourseSeed);
   const [refreshing, setRefreshing] = useState(false);
-  const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
-  const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>({});
-  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
-  const [roomEntries, setRoomEntries] = useState<RoomEntry[]>([]);
+  const [degreeUrl, setDegreeUrl] = useState<string | null>(
+    () => initialCourseSeed?.degreeUrl ?? null,
+  );
+  const [tabs, setTabs] = useState<Tab[]>(() => initialCourseSeed?.tabs ?? []);
+  const [selectedTab, setSelectedTab] = useState<Tab | null>(
+    () => initialCourseSeed?.selectedTab ?? null,
+  );
+  const [schedulesMap, setSchedulesMap] = useState<Record<string, ScheduleData>>(
+    () => initialCourseSeed?.schedules ?? {},
+  );
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>(
+    () => initialManuals,
+  );
+  const [roomEntries, setRoomEntries] = useState<RoomEntry[]>(() =>
+    initialCourseSeed?.selectedSchedule
+      ? extractRoomEntries(
+          initialCourseSeed.selectedSchedule,
+          initialManuals,
+          initialCourseSeed.selectedTab.url,
+        )
+      : [],
+  );
   const [selectedRoomModal, setSelectedRoomModal] = useState<RoomEntry | null>(null);
   const insets = useSafeAreaInsets();
-  const degreeUrlRef = useRef<string | null>(null);
-  const selectedTabRef = useRef<Tab | null>(null);
-  const tabsLengthRef = useRef<number>(0);
+  const degreeUrlRef = useRef<string | null>(initialCourseSeed?.degreeUrl ?? null);
+  const selectedTabRef = useRef<Tab | null>(initialCourseSeed?.selectedTab ?? null);
+  const tabsLengthRef = useRef<number>(initialCourseSeed?.tabs.length ?? 0);
 
   useEffect(() => {
     degreeUrlRef.current = degreeUrl;
@@ -252,7 +278,23 @@ export default function AuleScreen() {
     tabsLengthRef.current = tabs.length;
   }, [tabs.length]);
 
+  const manualEventsRef = useRef<ManualClassEvent[]>(initialManuals);
+  useEffect(() => {
+    manualEventsRef.current = manualEvents;
+  }, [manualEvents]);
+
+  const schedulesMapRef = useRef<Record<string, ScheduleData>>(
+    initialCourseSeed?.schedules ?? {},
+  );
+  useEffect(() => {
+    schedulesMapRef.current = schedulesMap;
+  }, [schedulesMap]);
+
+  const loadInFlightRef = useRef(false);
+
   const loadData = useCallback(async (force = false) => {
+    if (!force && loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     try {
       const storagePairs = await AsyncStorage.multiGet(['selectedDegreeUrl', 'defaultTabUrl']);
       const storedUrl = storagePairs[0]?.[1] || null;
@@ -287,18 +329,32 @@ export default function AuleScreen() {
         getManualEvents(storedUrl || undefined),
       ]);
 
+      const { tabs: fetchedTabs, schedules } = courseData;
+      const curSelected = selectedTabRef.current;
+      const currentActive = curSelected && fetchedTabs.find(t => t.url === curSelected.url);
+      const target = currentActive || fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
+
+      // Fast-skip su ritorno tab se corso, canale, orario e lezioni manuali sono identici in RAM
+      if (
+        !force &&
+        storedUrl === prevDegreeUrl &&
+        target &&
+        curSelected &&
+        target.url === curSelected.url &&
+        fetchedTabs.length === tabsLengthRef.current &&
+        schedules[target.url] === schedulesMapRef.current[target.url] &&
+        fetchedManual === manualEventsRef.current
+      ) {
+        setLoading(false);
+        return;
+      }
+
       setManualEvents(fetchedManual);
 
-      const { tabs: fetchedTabs, schedules } = courseData;
-
-      if (fetchedTabs.length > 0) {
+      if (fetchedTabs.length > 0 && target) {
         tabsLengthRef.current = fetchedTabs.length;
         setTabs(fetchedTabs);
         setSchedulesMap(schedules);
-
-        const curSelected = selectedTabRef.current;
-        const currentActive = curSelected && fetchedTabs.find(t => t.url === curSelected.url);
-        const target = currentActive || fetchedTabs.find(t => t.url === storedDefaultTab) || fetchedTabs[0];
 
         selectedTabRef.current = target;
         setSelectedTab(target);
@@ -310,8 +366,19 @@ export default function AuleScreen() {
     } catch (e) {
       console.error(e);
       setLoading(false);
+    } finally {
+      loadInFlightRef.current = false;
     }
   }, []);
+
+  // Pre-idrata le aule dalla cache locale al mount iniziale (lazy: false, 0 byte di rete)
+  // così il primo passaggio sulla tab "Aule" è già popolato e privo di spinner.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadData(false);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadData]);
 
   useFocusEffect(
     useCallback(() => {
@@ -325,28 +392,32 @@ export default function AuleScreen() {
       const storedUrl = await AsyncStorage.getItem('selectedDegreeUrl');
       const list = await getManualEvents(storedUrl || undefined);
       setManualEvents(list);
-      if (selectedTab && schedulesMap[selectedTab.url]) {
-        setRoomEntries(extractRoomEntries(schedulesMap[selectedTab.url], list, selectedTab.url));
+      const curTab = selectedTabRef.current;
+      const curMap = schedulesMapRef.current;
+      if (curTab && curMap[curTab.url]) {
+        setRoomEntries(extractRoomEntries(curMap[curTab.url], list, curTab.url));
       }
     });
     return unsub;
-  }, [selectedTab, schedulesMap]);
+  }, []);
 
-  // Ascolta la sincronizzazione cloud live per aggiornare le aule su altri dispositivi
+  // Ascolta la sincronizzazione cloud live per aggiornare le aule su altri dispositivi (registrato una sola volta)
   useEffect(() => {
-    const unsubSync = subscribeToLiveSync((status, updated) => {
+    const unsubSync = subscribeToLiveSync((_status, updated) => {
       if (updated) {
         AsyncStorage.getItem('selectedDegreeUrl').then(async (storedUrl) => {
           const list = await getManualEvents(storedUrl || undefined);
           setManualEvents(list);
-          if (selectedTab && schedulesMap[selectedTab.url]) {
-            setRoomEntries(extractRoomEntries(schedulesMap[selectedTab.url], list, selectedTab.url));
+          const curTab = selectedTabRef.current;
+          const curMap = schedulesMapRef.current;
+          if (curTab && curMap[curTab.url]) {
+            setRoomEntries(extractRoomEntries(curMap[curTab.url], list, curTab.url));
           }
         }).catch(() => {});
       }
     });
     return unsubSync;
-  }, [selectedTab, schedulesMap]);
+  }, []);
 
   const onRefresh = useCallback(async () => {
     if (!degreeUrl) return;

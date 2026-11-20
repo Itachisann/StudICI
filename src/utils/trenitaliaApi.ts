@@ -103,17 +103,25 @@ async function ensureTrainOriginStorageLoaded(): Promise<void> {
   return trainOriginStorageLoadPromise;
 }
 
-async function persistTrainOriginCache(): Promise<void> {
-  try {
-    const entries: Record<string, { originCode: string; departureMillis?: number }[]> = {};
-    for (const [k, v] of Array.from(trainOriginInfoCache.entries()).slice(-80)) {
-      if (v && v.length > 0) entries[k] = v;
-    }
-    await AsyncStorage.setItem(
-      TRAIN_ORIGIN_STORAGE_KEY,
-      JSON.stringify({ savedAt: Date.now(), entries })
-    );
-  } catch {}
+let persistOriginTimer: ReturnType<typeof setTimeout> | null = null;
+let persistFullDayTimer: ReturnType<typeof setTimeout> | null = null;
+let persistPlatformTimer: ReturnType<typeof setTimeout> | null = null;
+
+function persistTrainOriginCache(): void {
+  if (persistOriginTimer) return;
+  persistOriginTimer = setTimeout(() => {
+    persistOriginTimer = null;
+    try {
+      const entries: Record<string, { originCode: string; departureMillis?: number }[]> = {};
+      for (const [k, v] of Array.from(trainOriginInfoCache.entries()).slice(-80)) {
+        if (v && v.length > 0) entries[k] = v;
+      }
+      AsyncStorage.setItem(
+        TRAIN_ORIGIN_STORAGE_KEY,
+        JSON.stringify({ savedAt: Date.now(), entries })
+      ).catch(() => {});
+    } catch {}
+  }, 300);
 }
 
 async function ensureFullDayStorageLoaded(): Promise<void> {
@@ -151,16 +159,22 @@ async function persistFullDayRailEntry(key: string, trains: LiveTrainInfo[]): Pr
   try {
     await ensureFullDayStorageLoaded();
     fullDayRailCache.set(key, { timestamp: Date.now(), trains });
-    const now = Date.now();
-    const entries = Array.from(fullDayRailCache.entries())
-      .filter(([, val]) => val.trains.length > 0 && now - val.timestamp < FULL_DAY_CACHE_TTL_MS)
-      .sort((a, b) => b[1].timestamp - a[1].timestamp)
-      .slice(0, 20);
-    const payload: Record<string, { timestamp: number; trains: LiveTrainInfo[] }> = {};
-    for (const [k, v] of entries) {
-      payload[k] = v;
-    }
-    await AsyncStorage.setItem(FULL_DAY_RAIL_STORAGE_KEY, JSON.stringify(payload));
+    if (persistFullDayTimer) return;
+    persistFullDayTimer = setTimeout(() => {
+      persistFullDayTimer = null;
+      try {
+        const now = Date.now();
+        const entries = Array.from(fullDayRailCache.entries())
+          .filter(([, val]) => val.trains.length > 0 && now - val.timestamp < FULL_DAY_CACHE_TTL_MS)
+          .sort((a, b) => b[1].timestamp - a[1].timestamp)
+          .slice(0, 20);
+        const payload: Record<string, { timestamp: number; trains: LiveTrainInfo[] }> = {};
+        for (const [k, v] of entries) {
+          payload[k] = v;
+        }
+        AsyncStorage.setItem(FULL_DAY_RAIL_STORAGE_KEY, JSON.stringify(payload)).catch(() => {});
+      } catch {}
+    }, 300);
   } catch {}
 }
 
@@ -199,16 +213,22 @@ async function persistPlatformEntry(key: string, platform: string): Promise<void
   try {
     await ensurePlatformStorageLoaded();
     plannedPlatformCache.set(key, { timestamp: Date.now(), platform });
-    const now = Date.now();
-    const entries = Array.from(plannedPlatformCache.entries())
-      .filter(([, val]) => Boolean(val.platform) && now - val.timestamp < PLATFORM_CACHE_TTL_MS)
-      .sort((a, b) => b[1].timestamp - a[1].timestamp)
-      .slice(0, 100);
-    const payload: Record<string, { timestamp: number; platform: string }> = {};
-    for (const [k, v] of entries) {
-      payload[k] = v;
-    }
-    await AsyncStorage.setItem(PLATFORM_STORAGE_KEY, JSON.stringify(payload));
+    if (persistPlatformTimer) return;
+    persistPlatformTimer = setTimeout(() => {
+      persistPlatformTimer = null;
+      try {
+        const now = Date.now();
+        const entries = Array.from(plannedPlatformCache.entries())
+          .filter(([, val]) => Boolean(val.platform) && now - val.timestamp < PLATFORM_CACHE_TTL_MS)
+          .sort((a, b) => b[1].timestamp - a[1].timestamp)
+          .slice(0, 100);
+        const payload: Record<string, { timestamp: number; platform: string }> = {};
+        for (const [k, v] of entries) {
+          payload[k] = v;
+        }
+        AsyncStorage.setItem(PLATFORM_STORAGE_KEY, JSON.stringify(payload)).catch(() => {});
+      } catch {}
+    }, 300);
   } catch {}
 }
 
@@ -486,17 +506,48 @@ function computeLevenshtein(a: string, b: string): number {
   return row[b.length];
 }
 
-function calculateStationScore(
-  s: StationInfo,
+interface IndexedStationEntry {
+  station: StationInfo;
+  upperName: string;
+  upperShort: string;
+  normName: string;
+  normShort: string;
+  words: string[];
+}
+
+let cachedIndexedStations: IndexedStationEntry[] | null = null;
+const remoteStationAutocompleteCache = new Map<
+  string,
+  { ts: number; results: StationInfo[] }
+>();
+const REMOTE_STATION_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function getIndexedStations(): IndexedStationEntry[] {
+  if (!cachedIndexedStations) {
+    cachedIndexedStations = ALL_STATIONS.map((station) => {
+      const upperName = station.name.toUpperCase();
+      const upperShort = (station.shortName || '').toUpperCase();
+      return {
+        station,
+        upperName,
+        upperShort,
+        normName: normalizeStationKey(station.name),
+        normShort: normalizeStationKey(station.shortName),
+        words: upperName.split(/[\s\-_/.]+/).filter(Boolean),
+      };
+    });
+  }
+  return cachedIndexedStations;
+}
+
+function calculateIndexedStationScoreFast(
+  entry: IndexedStationEntry,
   cleanQ: string,
   normQ: string
 ): number {
-  const name = s.name.toUpperCase();
-  const shortName = (s.shortName || '').toUpperCase();
-  const normName = normalizeStationKey(s.name);
-  const normShort = normalizeStationKey(s.shortName);
+  const { upperName: name, upperShort: shortName, normName, normShort, words } = entry;
 
-  // 1. Corrispondenza ESATTA al 100% (Nome completo o ShortName) -> Priorità assoluta #1
+  // 1. Corrispondenza ESATTA al 100%
   if (name === cleanQ || shortName === cleanQ) {
     return 100000;
   }
@@ -504,7 +555,7 @@ function calculateStationScore(
     return 95000;
   }
 
-  // 2. Inizia esattamente con la query (Prefisso del nome o shortName)
+  // 2. Prefisso esatto
   if (name.startsWith(cleanQ) || shortName.startsWith(cleanQ)) {
     return 80000 - Math.abs(name.length - cleanQ.length) * 10;
   }
@@ -512,18 +563,15 @@ function calculateStationScore(
     return 75000 - Math.abs(normName.length - normQ.length) * 10;
   }
 
-  // 3. Una parola interna inizia esattamente con la query (es. "TERMINI" per "ROMA TERMINI")
-  const words = name.split(/[\s\-_/.]+/).filter(Boolean);
-  const exactWordMatch = words.some((w) => w === cleanQ);
-  if (exactWordMatch) {
+  // 3. Parola interna
+  if (words.some((w) => w === cleanQ)) {
     return 60000 - name.length * 5;
   }
-  const prefixWordMatch = words.some((w) => w.startsWith(cleanQ));
-  if (prefixWordMatch) {
+  if (words.some((w) => w.startsWith(cleanQ))) {
     return 50000 - name.length * 5;
   }
 
-  // 4. Substring inclusa nel nome o shortName
+  // 4. Substring inclusa
   if (name.includes(cleanQ) || shortName.includes(cleanQ)) {
     const idx = Math.min(
       name.includes(cleanQ) ? name.indexOf(cleanQ) : 99,
@@ -535,42 +583,79 @@ function calculateStationScore(
     return 25000 - normName.length * 5;
   }
 
-  // 5. Corrispondenza fuzzy / per somiglianza (typo tolerance)
-  if (cleanQ.length >= 3) {
-    let minWordDist = 99;
-    for (const w of words) {
-      const sliceLen = Math.min(w.length, cleanQ.length + 1);
-      const dist = computeLevenshtein(cleanQ, w.slice(0, sliceLen));
-      if (dist < minWordDist) minWordDist = dist;
-    }
+  return -1;
+}
 
-    const wholeDist = computeLevenshtein(cleanQ, name.slice(0, cleanQ.length + 2));
-    const bestDist = Math.min(minWordDist, wholeDist);
-
-    const maxAllowed = cleanQ.length <= 4 ? 1 : cleanQ.length <= 7 ? 2 : 3;
-    if (bestDist <= maxAllowed) {
-      return 15000 - bestDist * 3000 - name.length * 5;
+function calculateIndexedStationFuzzyScore(
+  entry: IndexedStationEntry,
+  cleanQ: string
+): number {
+  if (cleanQ.length < 3) return -1;
+  const maxAllowed = cleanQ.length <= 4 ? 1 : cleanQ.length <= 7 ? 2 : 3;
+  let minWordDist = 99;
+  for (const w of entry.words) {
+    if (w.length + maxAllowed < cleanQ.length) continue;
+    const sliceLen = Math.min(w.length, cleanQ.length + 1);
+    const dist = computeLevenshtein(cleanQ, w.slice(0, sliceLen));
+    if (dist < minWordDist) {
+      minWordDist = dist;
+      if (minWordDist <= 1) break;
     }
   }
 
+  const wholeSlice = entry.upperName.slice(0, cleanQ.length + 2);
+  const wholeDist =
+    Math.abs(wholeSlice.length - cleanQ.length) <= maxAllowed + 2
+      ? computeLevenshtein(cleanQ, wholeSlice)
+      : 99;
+  const bestDist = Math.min(minWordDist, wholeDist);
+
+  if (bestDist <= maxAllowed) {
+    return 15000 - bestDist * 3000 - entry.upperName.length * 5;
+  }
   return -1;
 }
 
 /**
- * Cerca stazioni dando priorità alla corrispondenza esatta, poi prefissi, parole e somiglianza
+ * Ricerca locale sincronizzata istantanea (<2ms) su indice pre-normalizzato,
+ * eseguendo Levenshtein solo se i match diretti/prefissi/substring sono < 15.
  */
-export async function searchStations(query: string): Promise<StationInfo[]> {
+export function searchStationsLocal(query: string): {
+  matches: StationInfo[];
+  topScore: number;
+  strongCount: number;
+} {
   const cleanQ = query.trim().toUpperCase();
-  if (!cleanQ) return ALL_STATIONS;
+  if (!cleanQ) {
+    return { matches: ALL_STATIONS, topScore: 100000, strongCount: ALL_STATIONS.length };
+  }
 
   const normQ = normalizeStationKey(cleanQ);
-
-  // Calcola i punteggi locali
+  const indexed = getIndexedStations();
   const scoredLocal: { station: StationInfo; score: number }[] = [];
-  for (const st of ALL_STATIONS) {
-    const score = calculateStationScore(st, cleanQ, normQ);
+  const unmatched: IndexedStationEntry[] = [];
+  let topScore = -1;
+  let strongCount = 0;
+
+  for (const entry of indexed) {
+    const score = calculateIndexedStationScoreFast(entry, cleanQ, normQ);
     if (score >= 0) {
-      scoredLocal.push({ station: st, score });
+      scoredLocal.push({ station: entry.station, score });
+      if (score > topScore) topScore = score;
+      if (score >= 50000) strongCount++;
+    } else if (cleanQ.length >= 3) {
+      unmatched.push(entry);
+    }
+  }
+
+  // Esegui fuzzy matching Levenshtein solo quando i match diretti sono pochi (< 15)
+  if (cleanQ.length >= 3 && scoredLocal.length < 15) {
+    for (const entry of unmatched) {
+      const fuzzy = calculateIndexedStationFuzzyScore(entry, cleanQ);
+      if (fuzzy >= 0) {
+        scoredLocal.push({ station: entry.station, score: fuzzy });
+        if (fuzzy > topScore) topScore = fuzzy;
+      }
     }
   }
 
@@ -582,10 +667,49 @@ export async function searchStations(query: string): Promise<StationInfo[]> {
     return a.station.name.localeCompare(b.station.name);
   });
 
-  const localMatches = scoredLocal.map((item) => item.station);
+  return {
+    matches: scoredLocal.map((item) => item.station),
+    topScore,
+    strongCount,
+  };
+}
 
-  if (cleanQ.length < 3) {
+/**
+ * Cerca stazioni dando priorità alla corrispondenza esatta, poi prefissi, parole e somiglianza.
+ * Evita chiamate HTTP remote inutili quando esistono già match locali forti e supporta AbortSignal + cache.
+ */
+export async function searchStations(
+  query: string,
+  signal?: AbortSignal
+): Promise<StationInfo[]> {
+  const cleanQ = query.trim().toUpperCase();
+  if (!cleanQ) return ALL_STATIONS;
+
+  const { matches: localMatches, topScore, strongCount } = searchStationsLocal(cleanQ);
+
+  // Se la query è breve o il database locale ha già un match esatto o >= 5 match forti, evita rete
+  if (cleanQ.length < 3 || topScore >= 100000 || strongCount >= 5) {
     return localMatches;
+  }
+  if (signal?.aborted) {
+    return localMatches;
+  }
+
+  const cachedRemote = remoteStationAutocompleteCache.get(cleanQ);
+  if (cachedRemote && Date.now() - cachedRemote.ts < REMOTE_STATION_CACHE_TTL_MS) {
+    if (cachedRemote.results.length === 0) return localMatches;
+    const combined = [...localMatches];
+    for (const r of cachedRemote.results) {
+      const rKey = normalizeStationKey(r.name);
+      if (
+        !combined.some(
+          (c) => c.code === r.code || (rKey.length > 0 && normalizeStationKey(c.name) === rKey)
+        )
+      ) {
+        combined.push(r);
+      }
+    }
+    return combined;
   }
 
   const queriesToTry = Array.from(
@@ -595,15 +719,19 @@ export async function searchStations(query: string): Promise<StationInfo[]> {
   const remoteMatches: StationInfo[] = [];
 
   for (const qStr of queriesToTry) {
+    if (signal?.aborted) return localMatches;
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const onExternalAbort = () => controller.abort();
+      signal?.addEventListener('abort', onExternalAbort);
 
       const res = await fetch(
         `${VIAGGIATRENO_BASE_URL}/autocompletaStazione/${encodeURIComponent(qStr)}`,
         { signal: controller.signal }
       );
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onExternalAbort);
 
       if (res.ok) {
         const text = await res.text();
@@ -633,6 +761,12 @@ export async function searchStations(query: string): Promise<StationInfo[]> {
       }
     } catch {}
   }
+
+  if (remoteStationAutocompleteCache.size > 80) {
+    const oldest = remoteStationAutocompleteCache.keys().next().value;
+    if (oldest) remoteStationAutocompleteCache.delete(oldest);
+  }
+  remoteStationAutocompleteCache.set(cleanQ, { ts: Date.now(), results: remoteMatches });
 
   // Unisci senza duplicati preservando l'ordinamento per punteggio
   const combined = [...localMatches];
@@ -1237,6 +1371,9 @@ export interface OptimalTrainResult {
  * Recupera tutte le possibili corse (origine e data/orario partenza) per un numero treno tramite ViaggiaTreno.
  * Gestisce i numeri treno duplicati su reti diverse (es. 4731 Milano vs 4731 Perugia) usando l'endpoint autocomplete.
  */
+const trainOriginMissCache = new Map<string, number>();
+const TRAIN_ORIGIN_MISS_TTL_MS = 20 * 60 * 1000;
+
 async function getTrainOriginCandidates(
   trainNum: string
 ): Promise<{ originCode: string; departureMillis?: number }[]> {
@@ -1246,6 +1383,11 @@ async function getTrainOriginCandidates(
   const originKey = cleanNum + '_' + new Date().toDateString();
   const hit = trainOriginInfoCache.get(originKey);
   if (hit && hit.length > 0) return hit;
+
+  const missTs = trainOriginMissCache.get(originKey);
+  if (missTs && Date.now() - missTs < TRAIN_ORIGIN_MISS_TTL_MS) {
+    return [];
+  }
 
   const existing = originInfoInFlight.get(originKey);
   if (existing) return existing;
@@ -1309,8 +1451,11 @@ async function getTrainOriginCandidates(
     }
 
     if (candidates.length > 0) {
+      trainOriginMissCache.delete(originKey);
       trainOriginInfoCache.set(originKey, candidates);
-      void persistTrainOriginCache();
+      persistTrainOriginCache();
+    } else {
+      trainOriginMissCache.set(originKey, Date.now());
     }
     return candidates;
   })().finally(() => {
@@ -1356,10 +1501,13 @@ export async function fetchLiveTrenitaliaTimetable(
       targetDepMins = Math.max(0, nowMins - 30);
     }
 
-    // Verifica Cache in Memoria ad alte prestazioni (con riuso finestra oraria già coperta su stessa giornata)
+    // Verifica Cache in Memoria ad alte prestazioni (include sempre anche IC in cache e filtra al ritorno)
+    const filterByCategory = (list: LiveTrainInfo[]) =>
+      includeIntercity ? list : list.filter((t) => t.category !== 'IC');
+
     const dateKey = `${targetDate.getFullYear()}-${targetDate.getMonth() + 1}-${targetDate.getDate()}`;
     const timeBucket = Math.floor(targetDepMins / 30);
-    const baseCacheKey = `${depCode}_${arrCode}_${dateKey}_${ignoreCurrentTime ? 'sched' : 'live'}_${includeIntercity ? 'ic' : 'noic'}`;
+    const baseCacheKey = `${depCode}_${arrCode}_${dateKey}_${ignoreCurrentTime ? 'sched' : 'live'}_all`;
     const cacheKey = `${baseCacheKey}_${timeBucket}_${direction}`;
     const cacheTtl = isToday ? 45000 : 600000; // 45s oggi per ritardi live, 10m per giorni futuri
     const needStartMins = Math.max(0, targetDepMins - 60);
@@ -1368,7 +1516,7 @@ export async function fetchLiveTrenitaliaTimetable(
     if (!forceRefresh) {
       const cached = timetableCache.get(cacheKey);
       if (cached && cached.trains.length > 0 && Date.now() - cached.timestamp < cacheTtl) {
-        return cached.trains;
+        return filterByCategory(cached.trains);
       }
 
       for (const entry of timetableCache.values()) {
@@ -1380,12 +1528,12 @@ export async function fetchLiveTrenitaliaTimetable(
           needStartMins >= entry.coveredStartMins &&
           needEndMins <= entry.coveredEndMins
         ) {
-          return entry.trains;
+          return filterByCategory(entry.trains);
         }
       }
 
       const inFlight = timetableInFlight.get(cacheKey);
-      if (inFlight) return inFlight;
+      if (inFlight) return filterByCategory(await inFlight);
     }
 
     const depDateIso = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
@@ -1437,8 +1585,14 @@ export async function fetchLiveTrenitaliaTimetable(
     const arrLists = allLists.slice(depTimes.length);
 
     const depMap = new Map<string, any[]>();
-    for (const list of depLists) {
+    for (let listIdx = 0; listIdx < depLists.length; listIdx++) {
+      const list = depLists[listIdx];
       if (Array.isArray(list)) {
+        const dTime = depTimes[listIdx];
+        if (dTime) {
+          const depSlotKey = `${depCode}_${depDateIso}_${String(dTime.getHours()).padStart(2, '0')}`;
+          stationDeparturesCache.set(depSlotKey, { timestamp: Date.now(), list });
+        }
         for (const t of list) {
           if (t.numeroTreno) {
             const numKey = String(t.numeroTreno);
@@ -1507,7 +1661,7 @@ export async function fetchLiveTrenitaliaTimetable(
         catRaw === 'R' ||
         catRaw.includes('REGIONALE');
 
-      const isAllowed = isRegional || (includeIntercity && isIntercity);
+      const isAllowed = isRegional || isIntercity;
       if (!isAllowed) continue;
       if (!ignoreCurrentTime && (dep.provvedimento === 1 || dep.statoTreno === 'SOPPRESSO')) continue;
 
@@ -1836,6 +1990,18 @@ export async function fetchLiveTrenitaliaTimetable(
     // di arrivo (arrMap) con ritardo reale e orario effettivo.
     // Recupero dinamico e verificato al 100% per qualsiasi tratta senza dipendenza da orari statici:
     if (isToday) {
+      // Se disponiamo già dei numeri treno noti per la tratta (dalla tabella GTFS giornaliera in cache),
+      // limitiamo i probe andamentoTreno rigorosamente ai treni reali della tratta (evita 4-8 HTTP su arrivi casuali!)
+      const knownFullDayEntry = fullDayRailCache.get(`${depCode}_${arrCode}_${depDateIso}_all_v3`);
+      const knownCorridorNums =
+        knownFullDayEntry && knownFullDayEntry.trains.length > 0
+          ? new Set(
+              knownFullDayEntry.trains
+                .map((t) => t.trainNumber.replace(/\D/g, ''))
+                .filter(Boolean)
+            )
+          : null;
+
       // RECUPERO DINAMICO E VERIFICATO DA arrMap:
       // Solo convogli regionali/RV/IC non ancora abbinati che transitano REALMENTE per depCode e arrCode.
       // Si verifica la fermata tramite origine corsa o andamentoTreno in tempo reale per la data odierna.
@@ -1844,6 +2010,9 @@ export async function fetchLiveTrenitaliaTimetable(
       for (const [numStr, arrEntries] of arrMap) {
         for (const arr of arrEntries) {
         const cleanNumStr = String(numStr).replace(/\D/g, '');
+        if (knownCorridorNums && !knownCorridorNums.has(cleanNumStr)) {
+          continue;
+        }
         const candOrig = String(arr.codOrigine || arr.idOrigine || '').trim().toUpperCase();
         if (
           matchedNumbers.has(cleanNumStr) &&
@@ -1863,7 +2032,7 @@ export async function fetchLiveTrenitaliaTimetable(
           catRaw.includes('RV') ||
           catRaw === 'R' ||
           catRaw.includes('REGIONALE');
-        const isAllowed = isRegional || (includeIntercity && isIntercity);
+        const isAllowed = isRegional || isIntercity;
         if (!isAllowed) continue;
 
         const arrPlanned = arr.compOrarioArrivo;
@@ -2060,7 +2229,7 @@ export async function fetchLiveTrenitaliaTimetable(
       timetableInFlight.set(cacheKey, fetchTask);
     }
     try {
-      return await fetchTask;
+      return filterByCategory(await fetchTask);
     } finally {
       if (timetableInFlight.get(cacheKey) === fetchTask) {
         timetableInFlight.delete(cacheKey);
@@ -3026,16 +3195,19 @@ export async function fetchDynamicFullDayRailTimetable(
   const p = (n: number) => String(n).padStart(2, '0');
   const dateIso = `${targetDate.getFullYear()}-${p(targetDate.getMonth() + 1)}-${p(targetDate.getDate())}`;
   const targetDayStr = dateIso;
-  const cacheKey = `${depStation.code}_${arrStation.code}_${dateIso}_${includeIntercity ? 'ic' : 'noic'}_v2`;
+  // Cache unificata (include anche IC) e filtra in memoria quando !includeIntercity
+  const cacheKey = `${depStation.code}_${arrStation.code}_${dateIso}_all_v3`;
+  const filterByIc = (list: LiveTrainInfo[]) =>
+    includeIntercity ? list : list.filter((t) => t.category !== 'IC');
 
   if (!forceRefresh) {
     await ensureFullDayStorageLoaded();
     const cached = fullDayRailCache.get(cacheKey);
     if (cached && cached.trains.length > 0 && Date.now() - cached.timestamp < FULL_DAY_CACHE_TTL_MS) {
-      return cached.trains;
+      return filterByIc(cached.trains);
     }
     const existing = fullDayRailInFlight.get(cacheKey);
-    if (existing) return existing;
+    if (existing) return filterByIc(await existing);
   }
 
   const distKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -3061,17 +3233,17 @@ export async function fetchDynamicFullDayRailTimetable(
         return [];
       }
 
-      // Richiesta singola ottimizzata a Transitous su finestra intera giornata (03:00Z +21h, soli treni diretti)
-      // con concorrenza limitata (max 3) e retry su rate-limit HTML/5xx; integra 13:00Z solo se vicina al limite.
+      // Esclude HIGHSPEED_RAIL (comunque scartato dal filtro sotto) e aggiunge detailedTransfers=false
+      // per ridurre il payload e prevenire il superamento della soglia >=75 itinerari su direttrici AV.
       const transitModesParam =
-        'RAIL,REGIONAL_RAIL,SUBURBAN,LONG_DISTANCE,NIGHT_RAIL,HIGHSPEED_RAIL';
+        'RAIL,REGIONAL_RAIL,SUBURBAN,LONG_DISTANCE,NIGHT_RAIL';
       const fetchWindow = async (
         utcHour: string,
         numItineraries: number,
         searchWindowSec: number
       ): Promise<any[]> =>
         withTransitousSlot(async () => {
-          const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${depCoords.lat.toFixed(5)},${depCoords.lng.toFixed(5)}&toPlace=${arrCoords.lat.toFixed(5)},${arrCoords.lng.toFixed(5)}&time=${dateIso}T${utcHour}:00:00Z&numItineraries=${numItineraries}&searchWindow=${searchWindowSec}&maxTransfers=0&transitModes=${transitModesParam}`;
+          const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${depCoords.lat.toFixed(5)},${depCoords.lng.toFixed(5)}&toPlace=${arrCoords.lat.toFixed(5)},${arrCoords.lng.toFixed(5)}&time=${dateIso}T${utcHour}:00:00Z&numItineraries=${numItineraries}&searchWindow=${searchWindowSec}&maxTransfers=0&detailedTransfers=false&transitModes=${transitModesParam}`;
           for (let attempt = 0; attempt < 2; attempt++) {
             const ctrl = new AbortController();
             const to = setTimeout(() => ctrl.abort(), 5500);
@@ -3166,7 +3338,6 @@ export async function fetchDynamicFullDayRailTimetable(
 
           const rawCat = (leg.routeShortName || leg.mode || '').toUpperCase();
           const isIC = rawCat.includes('IC') || mode === 'LONG_DISTANCE' || mode === 'NIGHT_RAIL';
-          if (isIC && !includeIntercity) continue;
           const isExplicitHighSpeed =
             rawCat.includes('FR') ||
             rawCat.includes('FA') ||
@@ -3279,7 +3450,7 @@ export async function fetchDynamicFullDayRailTimetable(
   if (!forceRefresh) {
     fullDayRailInFlight.set(cacheKey, task);
   }
-  return task;
+  return filterByIc(await task);
 }
 
 /**
@@ -3556,12 +3727,13 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
         ignoreCurrentTime,
         includeIntercity
       ),
+      // Preserva la cache GTFS giornaliera (6h) durante i pull-to-refresh live
       fetchDynamicFullDayRailTimetable(
         departureStation,
         arrivalStation,
         effectiveQueryDate,
         includeIntercity,
-        forceRefresh
+        false
       ),
     ]);
   }

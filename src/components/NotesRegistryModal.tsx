@@ -97,7 +97,7 @@ interface DayGroup {
   dayNotes: AppNote[];
 }
 
-export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = ({
+const NotesRegistryModalContent: React.FC<NotesRegistryModalProps> = ({
   visible,
   onClose,
   theme,
@@ -142,8 +142,6 @@ export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = ({
           style: 'destructive',
           onPress: async () => {
             await deleteNote(note.id);
-            const list = await getNotes();
-            setNotes(list);
           },
         },
       ]
@@ -152,14 +150,10 @@ export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = ({
 
   const handleDeleteDirectly = async (noteId: string) => {
     await deleteNote(noteId);
-    const list = await getNotes();
-    setNotes(list);
   };
 
   const handleToggleComplete = async (noteId: string) => {
     await toggleNoteCompleted(noteId);
-    const list = await getNotes();
-    setNotes(list);
   };
 
   const handleOpenNewNote = () => {
@@ -172,28 +166,34 @@ export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = ({
     setEditModalVisible(true);
   };
 
-  // Filtraggio
-  const filteredNotes = notes.filter((n) => {
-    // Filtro per tab
-    if (activeTab === 'lessons' && n.targetType !== 'lesson') return false;
-    if (activeTab === 'days' && n.targetType !== 'day') return false;
-    if (activeTab === 'reminders' && !n.reminderEnabled) return false;
+  // Filtraggio memoizzato
+  const filteredNotes = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    return notes.filter((n) => {
+      if (activeTab === 'lessons' && n.targetType !== 'lesson') return false;
+      if (activeTab === 'days' && n.targetType !== 'day') return false;
+      if (activeTab === 'reminders' && !n.reminderEnabled) return false;
 
-    // Ricerca testuale
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      const matchTitle = (n.title || '').toLowerCase().includes(q);
-      const matchContent = n.content.toLowerCase().includes(q);
-      const matchSubject = (n.lessonSubject || '').toLowerCase().includes(q);
-      const matchRoom = (n.lessonRoom || '').toLowerCase().includes(q);
-      return matchTitle || matchContent || matchSubject || matchRoom;
+      if (q) {
+        const matchTitle = (n.title || '').toLowerCase().includes(q);
+        const matchContent = n.content.toLowerCase().includes(q);
+        const matchSubject = (n.lessonSubject || '').toLowerCase().includes(q);
+        const matchRoom = (n.lessonRoom || '').toLowerCase().includes(q);
+        return matchTitle || matchContent || matchSubject || matchRoom;
+      }
+      return true;
+    });
+  }, [notes, activeTab, searchQuery]);
+
+  const { totalNotes, activeReminders, completedNotes } = useMemo(() => {
+    let rem = 0;
+    let comp = 0;
+    for (const n of notes) {
+      if (n.reminderEnabled) rem++;
+      if (n.isCompleted) comp++;
     }
-    return true;
-  });
-
-  const totalNotes = notes.length;
-  const activeReminders = notes.filter((n) => n.reminderEnabled).length;
-  const completedNotes = notes.filter((n) => n.isCompleted).length;
+    return { totalNotes: notes.length, activeReminders: rem, completedNotes: comp };
+  }, [notes]);
 
   const groupedDays = useMemo<DayGroup[]>(() => {
     const map = new Map<number, {
@@ -743,22 +743,23 @@ export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = ({
           />
         )}
 
-        {/* Modal Modifica/Creazione */}
-        <NoteEditModal
-          visible={editModalVisible}
-          onClose={() => setEditModalVisible(false)}
-          noteToEdit={selectedNoteToEdit}
-          onSaved={() => {
-            getNotes().then(setNotes);
-          }}
-          onDeleted={() => {
-            getNotes().then(setNotes);
-          }}
-          theme={activeTheme}
-        />
+        {/* Modal Modifica/Creazione (montato solo se aperto) */}
+        {editModalVisible && (
+          <NoteEditModal
+            visible={editModalVisible}
+            onClose={() => setEditModalVisible(false)}
+            noteToEdit={selectedNoteToEdit}
+            theme={activeTheme}
+          />
+        )}
       </View>
     </NativeSheetModal>
   );
+};
+
+export const NotesRegistryModal: React.FC<NotesRegistryModalProps> = (props) => {
+  if (!props.visible) return null;
+  return <NotesRegistryModalContent {...props} />;
 };
 
 const styles = StyleSheet.create({

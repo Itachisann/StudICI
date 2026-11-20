@@ -609,6 +609,11 @@ const stationCoordsCache = new Map<
   string,
   { lat: number; lon: number; name: string }
 >();
+const stationCoordsInFlight = new Map<
+  string,
+  Promise<{ lat: number; lon: number; name: string } | null>
+>();
+const snappedStationRoadCache = new Map<string, { lat: number; lon: number }>();
 const originCoordsCache = new Map<
   string,
   { lat: number; lon: number; name: string }
@@ -618,6 +623,12 @@ const realRouteInFlight = new Map<string, Promise<RealRouteData | null>>();
 const originCoordsInFlight = new Map<
   string,
   Promise<{ lat: number; lon: number; name: string } | null>
+>();
+const PLACE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_PLACE_SEARCH_CACHE_ENTRIES = 50;
+const placeSearchCache = new Map<
+  string,
+  { ts: number; results: PlaceSuggestion[] }
 >();
 
 const DRIVING_STORAGE_KEY = "studici_driving_route_cache_v1";
@@ -1098,6 +1109,7 @@ async function resolveStationCoordinates(
 ): Promise<{ lat: number; lon: number; name: string } | null> {
   const clean = cleanStationLookupKey(stationQuery);
 
+  await ensureDrivingStorageLoaded();
   if (stationCoordsCache.has(clean)) {
     return stationCoordsCache.get(clean)!;
   }
@@ -1108,67 +1120,79 @@ async function resolveStationCoordinates(
     return known;
   }
 
-  const cleanSpaced = clean.replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+  const existingInFlight = stationCoordsInFlight.get(clean);
+  if (existingInFlight) return existingInFlight;
 
-  // Fallback: cerca stazione ferroviaria tramite Photon Komoot OSM
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
-    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanSpaced)}&limit=8`;
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (res.ok) {
-      const json = await res.json();
-      const features = Array.isArray(json?.features) ? json.features : [];
-      const railwayMatch =
-        features.find(
-          (f: any) =>
-            ["station", "train_station", "halt"].includes(
-              f?.properties?.osm_value,
-            ) &&
-            (f?.properties?.countrycode === "IT" ||
-              f?.properties?.country === "Italia"),
-        ) || features.find((f: any) => f?.properties?.countrycode === "IT");
-      if (railwayMatch?.geometry?.coordinates) {
-        const [lon, lat] = railwayMatch.geometry.coordinates;
-        const resolved = {
-          lat: Number(lat),
-          lon: Number(lon),
-          name: `Stazione di ${railwayMatch.properties?.name || stationQuery}`,
-        };
-        stationCoordsCache.set(clean, resolved);
-        return resolved;
+  const task = (async (): Promise<{ lat: number; lon: number; name: string } | null> => {
+    const cleanSpaced = clean.replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+
+    // Fallback: cerca stazione ferroviaria tramite Photon Komoot OSM
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanSpaced)}&limit=8`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const json = await res.json();
+        const features = Array.isArray(json?.features) ? json.features : [];
+        const railwayMatch =
+          features.find(
+            (f: any) =>
+              ["station", "train_station", "halt"].includes(
+                f?.properties?.osm_value,
+              ) &&
+              (f?.properties?.countrycode === "IT" ||
+                f?.properties?.country === "Italia"),
+          ) || features.find((f: any) => f?.properties?.countrycode === "IT");
+        if (railwayMatch?.geometry?.coordinates) {
+          const [lon, lat] = railwayMatch.geometry.coordinates;
+          const resolved = {
+            lat: Number(lat),
+            lon: Number(lon),
+            name: `Stazione di ${railwayMatch.properties?.name || stationQuery}`,
+          };
+          stationCoordsCache.set(clean, resolved);
+          void persistDrivingCache();
+          return resolved;
+        }
       }
-    }
-  } catch {}
+    } catch {}
 
-  // Fallback Nominatim
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-      `Stazione Ferroviaria ${cleanSpaced}, Italia`,
-    )}&format=json&limit=1`;
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "StudICI-Mobile/1.8 (Sapienza; iOS)" },
-    });
-    clearTimeout(timeout);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data[0]?.lat && data[0]?.lon) {
-        const resolved = {
-          lat: parseFloat(data[0].lat),
-          lon: parseFloat(data[0].lon),
-          name: `Stazione di ${stationQuery}`,
-        };
-        stationCoordsCache.set(clean, resolved);
-        return resolved;
+    // Fallback Nominatim
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+        `Stazione Ferroviaria ${cleanSpaced}, Italia`,
+      )}&format=json&limit=1`;
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "StudICI-Mobile/1.8 (Sapienza; iOS)" },
+      });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data[0]?.lat && data[0]?.lon) {
+          const resolved = {
+            lat: parseFloat(data[0].lat),
+            lon: parseFloat(data[0].lon),
+            name: `Stazione di ${stationQuery}`,
+          };
+          stationCoordsCache.set(clean, resolved);
+          void persistDrivingCache();
+          return resolved;
+        }
       }
-    }
-  } catch {}
+    } catch {}
 
-  return null;
+    return null;
+  })().finally(() => {
+    stationCoordsInFlight.delete(clean);
+  });
+
+  stationCoordsInFlight.set(clean, task);
+  return task;
 }
 
 async function queryPhotonGeocode(
@@ -1263,21 +1287,25 @@ export async function resolveOriginCoordinates(
   if (existingInFlight) return existingInFlight;
 
   const task = (async (): Promise<{ lat: number; lon: number; name: string } | null> => {
+    const trimmedOrigin = originQuery.trim();
     const containsKnownTown = Object.keys(KNOWN_TOWN_COORDINATES).some((t) =>
       clean.includes(t),
     );
-    const queryWithTown = containsKnownTown
-      ? originQuery.trim()
-      : `${originQuery.trim()}, Amelia`;
+    // Se l'utente ha già specificato una città/virgola (es. "Via X 10, Viterbo"), prova prima la query esatta
+    // senza anteporre ", Amelia" che sprecherebbe 2 round-trip di rete inutili.
+    const hasExplicitLocality = trimmedOrigin.includes(",") || containsKnownTown;
+    const primaryQuery = hasExplicitLocality
+      ? trimmedOrigin
+      : `${trimmedOrigin}, Amelia`;
 
     // Se il civico ha un suffisso letterale (es. "135c" -> "135"), genera la query col solo numero civico
-    const numericCivicQuery = queryWithTown
+    const numericCivicQuery = primaryQuery
       .replace(/\b(\d{1,4})\s?[a-zA-Z]\b/g, "$1")
       .replace(/\s+/g, " ")
       .trim();
 
     // Estrai anche la versione senza numero civico nel caso OpenStreetMap non abbia mappato il singolo portone
-    const streetOnlyQuery = queryWithTown
+    const streetOnlyQuery = primaryQuery
       .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
       .replace(/\s*,\s*,/g, ",")
       .replace(/\s+/g, " ")
@@ -1286,11 +1314,11 @@ export async function resolveOriginCoordinates(
     const candidates = Array.from(
       new Set(
         [
-          queryWithTown,
+          primaryQuery,
           numericCivicQuery,
-          originQuery.trim(),
+          trimmedOrigin,
           streetOnlyQuery,
-          originQuery
+          trimmedOrigin
             .replace(/\b\d{1,4}\s?[a-zA-Z]?\b/g, " ")
             .replace(/\s+/g, " ")
             .trim(),
@@ -1340,6 +1368,10 @@ async function snapStationToFrontRoad(
   origLat: number,
   origLon: number,
 ): Promise<{ lat: number; lon: number }> {
+  const snapKey = `${stLat.toFixed(4)},${stLon.toFixed(4)}|${origLat.toFixed(3)},${origLon.toFixed(3)}`;
+  const cachedSnap = snappedStationRoadCache.get(snapKey);
+  if (cachedSnap) return cachedSnap;
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2800);
@@ -1424,10 +1456,12 @@ async function snapStationToFrontRoad(
     });
 
     const chosen = wps[bestIdx] || wps[0];
-    return {
+    const snapped = {
       lat: Number(chosen.location[1]),
       lon: Number(chosen.location[0]),
     };
+    snappedStationRoadCache.set(snapKey, snapped);
+    return snapped;
   } catch {
     return { lat: stLat, lon: stLon };
   }
@@ -1484,6 +1518,8 @@ async function fetchRealRoadRoute(
             costing: "auto",
             alternates: 2,
             units: "kilometers",
+            shape_format: "no_shape",
+            directions_type: "maneuvers",
           }),
         });
         clearTimeout(timeout);
@@ -1629,7 +1665,7 @@ async function fetchRealRoadRoute(
           matchingValhalla && matchingOsrm
             ? Math.max(matchingValhalla.durationSec, matchingOsrm.durationSec)
             : best.durationSec,
-        steps: chosenSteps,
+        steps: [],
         mainRoadSummary: stepMeta.mainRoadSummary,
         intersectionsCount: stepMeta.intersectionsCount,
       };
@@ -1645,9 +1681,17 @@ async function fetchRealRoadRoute(
       5500,
     );
     if (osrmGlobalList.length > 0) {
-      realRouteCache.set(routeKey, osrmGlobalList[0]);
+      const bestGlobal = osrmGlobalList[0];
+      const compactGlobal: RealRouteData = {
+        distanceKm: bestGlobal.distanceKm,
+        durationSec: bestGlobal.durationSec,
+        steps: [],
+        mainRoadSummary: bestGlobal.mainRoadSummary,
+        intersectionsCount: bestGlobal.intersectionsCount,
+      };
+      realRouteCache.set(routeKey, compactGlobal);
       void persistDrivingCache();
-      return osrmGlobalList[0];
+      return compactGlobal;
     }
 
     return null;
@@ -2061,11 +2105,15 @@ export async function calculateDrivingEstimate(
   targetTimeStr?: string,
   originCoords?: { lat: number; lon: number },
   targetDate?: Date,
+  signal?: AbortSignal,
 ): Promise<DrivingEstimate> {
   const origin = originAddress.trim() || "Amelia";
   const station = stationName.trim() || "Orte";
 
   try {
+    if (signal?.aborted) {
+      throw new Error("Aborted");
+    }
     // Se l'indirizzo contiene un numero civico (es. "Via Roma 135c"), risolvi sempre con il geocoder
     // aggiornato (con cache in memoria) per evitare che vecchie coordinate salvate sulla via generica falsino i km
     const hasCivicNumber = /\d/.test(origin);
@@ -2082,6 +2130,9 @@ export async function calculateDrivingEstimate(
           }),
       resolveStationCoordinates(station),
     ]);
+    if (signal?.aborted) {
+      throw new Error("Aborted");
+    }
 
     const coordsOrigin =
       resolvedOrigin ||
@@ -2272,6 +2323,14 @@ export async function searchPlaces(
   const q = query.trim();
   if (q.length < 3) return [];
 
+  const cacheKey = normalizeKey(q);
+  const cached = placeSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < PLACE_SEARCH_CACHE_TTL_MS) {
+    placeSearchCache.delete(cacheKey);
+    placeSearchCache.set(cacheKey, cached);
+    return cached.results;
+  }
+
   const numberMatch = q.match(/(?:^|[\s,])(\d{1,4}\s?[a-zA-Z]?)(?=$|[\s,])/);
   const houseNumber = numberMatch ? numberMatch[1].replace(/\s+/g, "") : "";
   const numericOnly = houseNumber.replace(/[a-zA-Z]+$/, "");
@@ -2375,6 +2434,18 @@ export async function searchPlaces(
       title: titleWithNum,
       label: [titleWithNum, localityPart].filter(Boolean).join(", "),
     });
+  }
+
+  if (!signal?.aborted) {
+    if (placeSearchCache.has(cacheKey)) {
+      placeSearchCache.delete(cacheKey);
+    }
+    placeSearchCache.set(cacheKey, { ts: Date.now(), results });
+    while (placeSearchCache.size > MAX_PLACE_SEARCH_CACHE_ENTRIES) {
+      const oldestKey = placeSearchCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      placeSearchCache.delete(oldestKey);
+    }
   }
 
   return results;

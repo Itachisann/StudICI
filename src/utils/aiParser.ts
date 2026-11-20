@@ -18,6 +18,8 @@ const GEMINI_MODELS = [
   'gemini-2.5-flash',
 ];
 let rrModelIndex = 0;
+const modelCooldownUntil = new Map<string, number>();
+const MODEL_FAILURE_COOLDOWN_MS = 60_000;
 
 const getModelUrl = (modelName: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${getApiKey()}`;
@@ -43,8 +45,7 @@ function releaseGeminiSlot(): void {
 
 /**
  * Esegue una chiamata JSON a Gemini distribuendo il carico tra i modelli Flash-Lite,
- * limitando il burst simultaneo per azzerare gli errori 429 e facendo failover immediato (~80ms)
- * sul modello secondario in caso di 429/503/timeout.
+ * con cooldown di 60s sui modelli temporaneamente in errore (404/429/503) e failover immediato.
  */
 export async function callGeminiJson(prompt: string, timeoutMs = 5500, preferredIdx?: number): Promise<string> {
   await acquireGeminiSlot();
@@ -55,27 +56,43 @@ export async function callGeminiJson(prompt: string, timeoutMs = 5500, preferred
       GEMINI_MODELS[(startIdx + 1) % 2],
       GEMINI_MODELS[2],
     ];
+    const now = Date.now();
+    const healthyModels = orderedModels.filter(
+      (m) => (modelCooldownUntil.get(m) ?? 0) <= now
+    );
+    const candidates = healthyModels.length > 0 ? healthyModels : orderedModels;
 
     let lastErr: any = null;
-    for (let attempt = 0; attempt < orderedModels.length; attempt++) {
-      const model = orderedModels[attempt];
+    for (let attempt = 0; attempt < candidates.length; attempt++) {
+      const model = candidates[attempt];
       try {
+        const generationConfig: Record<string, any> = {
+          temperature: 0,
+          responseMimeType: 'application/json',
+        };
+        if (model === 'gemini-2.5-flash') {
+          generationConfig.thinkingConfig = { thinkingBudget: 0 };
+        }
         const response = await axios.post(
           getModelUrl(model),
           {
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0,
-              responseMimeType: 'application/json',
-            },
+            generationConfig,
           },
           { timeout: timeoutMs }
         );
         const aiText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (aiText) return aiText;
+        if (aiText) {
+          modelCooldownUntil.delete(model);
+          return aiText;
+        }
       } catch (err: any) {
         lastErr = err;
-        if (attempt < orderedModels.length - 1) {
+        const status = err?.response?.status;
+        if (status === 404 || status === 429 || status === 503 || err?.code === 'ECONNABORTED') {
+          modelCooldownUntil.set(model, Date.now() + MODEL_FAILURE_COOLDOWN_MS);
+        }
+        if (attempt < candidates.length - 1) {
           await new Promise(r => setTimeout(r, 80));
         }
       }
@@ -310,10 +327,10 @@ export async function parseScheduleCells(cells: string[]): Promise<ParsedClass[]
     }
   }
 
-  // 4. Se ci sono celle non in cache, suddividile in chunk paralleli di max 12 celle
-  //    per ridurre il numero di token di output per singola chiamata e dimezzare la latenza!
+  // 4. Se ci sono celle non in cache, suddividile in chunk paralleli di max 25 celle
+  //    per dimezzare il numero di chiamate HTTP e l'overhead del prompt di sistema ripetuto
   if (toFetch.length > 0) {
-    const CHUNK_SIZE = 12;
+    const CHUNK_SIZE = 25;
     const chunks: string[][] = [];
     for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
       chunks.push(toFetch.slice(i, i + CHUNK_SIZE));
@@ -850,38 +867,44 @@ export async function parseHeaderWithGemini(
   const headerLines = headerRows.map(r => r.filter(Boolean).join(' | ')).join('\n').trim();
   const uniqueRooms = Array.from(new Set(scheduleRooms.map(c => c.trim()).filter(Boolean)));
 
-  const fallbackSemester = extractDeterministicSemester(headerRows);
-  const fallbackAlerts = extractDeterministicAlerts(headerRows);
-  const fallbackRooms = extractClassroomsFromHeaderRows(headerRows, mapTabText);
-  uniqueRooms.forEach(room => {
-    const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
-    if (!fallbackRooms[clean] && !fallbackRooms[`aula ${clean}`]) {
-      const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
-      const item: MappedClassroom = {
-        key: clean,
-        displayName: resolved.displayName,
-        building: resolved.buildingName,
-        address: resolved.address,
-      };
-      fallbackRooms[clean] = item;
-      fallbackRooms[`aula ${clean}`] = item;
-      fallbackRooms[resolved.displayName.toLowerCase().trim()] = item;
-    }
-  });
+  const buildFallbackHeader = () => {
+    const fallbackSemester = extractDeterministicSemester(headerRows);
+    const fallbackAlerts = extractDeterministicAlerts(headerRows);
+    const fallbackRooms = extractClassroomsFromHeaderRows(headerRows, mapTabText);
+    uniqueRooms.forEach(room => {
+      const clean = room.replace(/^aula\s+/i, '').toLowerCase().trim();
+      if (!fallbackRooms[clean] && !fallbackRooms[`aula ${clean}`]) {
+        const resolved = resolveClassroom(room, headerLines + '\n' + mapTabText);
+        const item: MappedClassroom = {
+          key: clean,
+          displayName: resolved.displayName,
+          building: resolved.buildingName,
+          address: resolved.address,
+        };
+        fallbackRooms[clean] = item;
+        fallbackRooms[`aula ${clean}`] = item;
+        fallbackRooms[resolved.displayName.toLowerCase().trim()] = item;
+      }
+    });
+    return { fallbackSemester, fallbackAlerts, fallbackRooms };
+  };
 
   if (!headerLines) {
+    const { fallbackSemester, fallbackAlerts, fallbackRooms } = buildFallbackHeader();
     return { semester: fallbackSemester, alerts: fallbackAlerts, mappedRooms: fallbackRooms };
   }
 
-  // CHIAVE DI CACHE NORMALIZZATA CONDIVISA TRA TUTTI I CANALI DELLO STESSO CORSO:
+  // CHIAVE DI CACHE NORMALIZZATA CONDIVISA TRA TUTTI I CANALI DELLO STESSO CORSO
+  // (rimuove anche timestamp "ultimo aggiornamento / last update" per evitare cache miss inutili):
   const normalizedForCourse = (headerLines + '\n' + (mapTabText || ''))
+    .replace(/(?:ultimo\s+aggiornamento|last\s+update)[^\n|]*/gi, '')
     .replace(/\b(?:canale|can\.?)\s*[a-zA-Z]\s*-\s*[a-zA-Z]\b/gi, '')
     .replace(/\b(I{1,3}V?|IV|V|[1-5])\s*°?\s*anno\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
   const hashKey = `header_ai_v8_${hashString(normalizedForCourse)}`;
 
-  // 1. Controllo istantaneo in RAM (0ms)
+  // 1. Controllo istantaneo in RAM (0ms) PRIMA di eseguire il parser deterministico fallback
   const memCached = memoryHeaderCache.get(hashKey);
   if (memCached) {
     return enrichHeaderResultWithRooms(memCached, uniqueRooms, headerLines, mapTabText);
@@ -906,6 +929,8 @@ export async function parseHeaderWithGemini(
         return cachedResult;
       }
     } catch {}
+
+    const { fallbackSemester, fallbackAlerts, fallbackRooms } = buildFallbackHeader();
 
     try {
       const prompt = `Sei l'assistente IA ufficiale per gli orari universitari della Sapienza Università di Roma (applicabile a qualsiasi facoltà, corso di laurea o lingua).

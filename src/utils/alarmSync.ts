@@ -16,7 +16,7 @@ import {
   isLessonExcluded,
   subscribeToExcludedLessonsChanges,
 } from './excludedLessons';
-import { ClassEvent, fetchScheduleData, getCachedTabs, ScheduleData } from './scraper';
+import { ClassEvent, fetchScheduleData, getCachedScheduleData, getCachedTabs, ScheduleData } from './scraper';
 import { minutesToTime, parseTimeToMinutes } from './trenitaliaApi';
 
 const ALARM_SETTINGS_KEY = 'studici_alarm_settings_v1';
@@ -167,45 +167,30 @@ export async function resolveActiveSchedule(): Promise<{
   tabUrl: string | null;
   schedule: ScheduleData | null;
 }> {
-  const degreeUrl = await AsyncStorage.getItem('selectedDegreeUrl');
+  const basePairs = await AsyncStorage.multiGet(['selectedDegreeUrl', 'defaultTabUrl']);
+  const degreeUrl = basePairs[0]?.[1] || null;
   if (!degreeUrl) {
     return { degreeUrl: null, tabUrl: null, schedule: null };
   }
 
   let tabUrl =
     (await AsyncStorage.getItem(`defaultTabUrl_${degreeUrl}`)) ||
-    (await AsyncStorage.getItem('defaultTabUrl'));
+    basePairs[1]?.[1] ||
+    null;
 
-  // 1. Prova prima la cache locale istantanea v8 del corso
-  try {
-    const cachedRaw = await AsyncStorage.getItem(`allSchedules_v8_${degreeUrl}`);
-    if (cachedRaw) {
-      const parsed = JSON.parse(cachedRaw);
-      if (parsed && parsed.schedules) {
-        if (!tabUrl && Array.isArray(parsed.tabs) && parsed.tabs[0]?.url) {
-          tabUrl = parsed.tabs[0].url;
-        }
-        if (tabUrl && parsed.schedules[tabUrl]) {
-          return { degreeUrl, tabUrl, schedule: parsed.schedules[tabUrl] };
-        }
-        const firstAvailableKey = Object.keys(parsed.schedules)[0];
-        if (firstAvailableKey) {
-          return {
-            degreeUrl,
-            tabUrl: firstAvailableKey,
-            schedule: parsed.schedules[firstAvailableKey],
-          };
-        }
-      }
-    }
-  } catch {}
+  if (!tabUrl) {
+    const tabs = await getCachedTabs(degreeUrl);
+    if (tabs && tabs[0]?.url) tabUrl = tabs[0].url;
+  }
+
+  // 1. Legge prima dalla cache RAM/locale istantanea di scraper.ts (0ms, zero re-parse di allSchedules_v8)
+  const cachedSched = await getCachedScheduleData(tabUrl, degreeUrl);
+  if (cachedSched) {
+    return { degreeUrl, tabUrl: tabUrl || null, schedule: cachedSched };
+  }
 
   // 2. Fallback: fetchScheduleData da rete/cache singola
   try {
-    if (!tabUrl) {
-      const tabs = await getCachedTabs(degreeUrl);
-      if (tabs && tabs[0]?.url) tabUrl = tabs[0].url;
-    }
     if (tabUrl) {
       const schedule = await fetchScheduleData(tabUrl, false);
       return { degreeUrl, tabUrl, schedule };
@@ -291,6 +276,7 @@ export async function computeWeeklyAlarmPlans(
           selectedTrainOffset: 0,
           ignoreCurrentTime: true,
           excludedLessonIds: excludedSet,
+          fastCalendarMode: true,
         });
 
         const estimatedDepStr = itinerary.departureTime || '07:00';

@@ -30,6 +30,15 @@ export const SAVED_DOCUMENTS_TOMBSTONES_KEY = "studici_saved_documents_tombstone
 export const SAVED_DOCUMENTS_MODIFIED_KEY = "studici_saved_documents_modified_at";
 
 const savedDocumentsListeners = new Set<() => void>();
+let savedDocsMemoryCache: SavedDocument[] | null = null;
+
+export function clearSavedDocumentsMemoryCache(): void {
+  savedDocsMemoryCache = null;
+}
+
+function sortSavedDocsDesc(list: SavedDocument[]): SavedDocument[] {
+  return [...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
 
 export function subscribeToSavedDocumentsChanges(cb: () => void): () => void {
   savedDocumentsListeners.add(cb);
@@ -47,11 +56,20 @@ export function notifySavedDocumentsChanged(): void {
 }
 
 export async function getSavedDocuments(): Promise<SavedDocument[]> {
+  if (savedDocsMemoryCache !== null) {
+    return savedDocsMemoryCache;
+  }
   try {
     const raw = await AsyncStorage.getItem(SAVED_DOCUMENTS_KEY);
-    if (!raw) return [];
+    if (!raw) {
+      savedDocsMemoryCache = [];
+      return [];
+    }
     const list: any[] = JSON.parse(raw);
-    if (!Array.isArray(list)) return [];
+    if (!Array.isArray(list)) {
+      savedDocsMemoryCache = [];
+      return [];
+    }
 
     // Normalizza e garantisce retrocompatibilità con elementi creati come link
     const normalized: SavedDocument[] = list.map((item) => {
@@ -72,7 +90,8 @@ export async function getSavedDocuments(): Promise<SavedDocument[]> {
       };
     });
 
-    return normalized.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    savedDocsMemoryCache = sortSavedDocsDesc(normalized);
+    return savedDocsMemoryCache;
   } catch {
     return [];
   }
@@ -124,8 +143,21 @@ let uploadingFiles = false;
  * Carica sul cloud i file locali non ancora sincronizzati (in background) e
  * aggiorna i metadati del documento, così gli altri dispositivi possono scaricarli.
  */
-export async function uploadPendingFiles(): Promise<void> {
+export async function uploadPendingFiles(force = false): Promise<void> {
   if (uploadingFiles) return;
+  if (!force) {
+    try {
+      const pairs = await AsyncStorage.multiGet([
+        "studici_icloud_auto_sync_enabled",
+        "studici_cloud_is_paired_cached",
+      ]);
+      const autoSync = pairs[0]?.[1] === "true";
+      const isPairedCached = pairs[1]?.[1] === "true";
+      if (!autoSync && !isPairedCached) return;
+    } catch {
+      return;
+    }
+  }
   uploadingFiles = true;
   try {
     const docs = await getSavedDocuments();
@@ -137,10 +169,11 @@ export async function uploadPendingFiles(): Promise<void> {
       if (!local) continue;
       const chunks = await uploadFileToCloud(d.id, local);
       if (chunks) {
-        const fresh = await getSavedDocuments();
+        const fresh = [...(await getSavedDocuments())];
         const idx = fresh.findIndex((x) => x.id === d.id);
         if (idx >= 0) {
           fresh[idx] = { ...fresh[idx], cloudChunks: chunks, updatedAt: Date.now() };
+          savedDocsMemoryCache = sortSavedDocsDesc(fresh);
           await AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(fresh));
           await AsyncStorage.setItem(SAVED_DOCUMENTS_MODIFIED_KEY, String(Date.now()));
           changed = true;
@@ -172,10 +205,11 @@ export async function downloadCloudFileForDoc(
     const ok = await downloadFileFromCloud(doc.id, doc.cloudChunks, dest);
     if (!ok) return null;
 
-    const current = await getSavedDocuments();
+    const current = [...(await getSavedDocuments())];
     const idx = current.findIndex((d) => d.id === doc.id);
     if (idx >= 0) {
       current[idx] = { ...current[idx], fileUri: dest };
+      savedDocsMemoryCache = sortSavedDocsDesc(current);
       await AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(current));
     }
     return dest;
@@ -220,7 +254,7 @@ export async function saveSavedDocument(
   },
   silent: boolean = false
 ): Promise<SavedDocument> {
-  const current = await getSavedDocuments();
+  const current = [...(await getSavedDocuments())];
   const now = Date.now();
   let updatedDoc: SavedDocument;
 
@@ -282,6 +316,7 @@ export async function saveSavedDocument(
     current.unshift(updatedDoc);
   }
 
+  savedDocsMemoryCache = sortSavedDocsDesc(current);
   await Promise.all([
     AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(current)),
     AsyncStorage.setItem(SAVED_DOCUMENTS_MODIFIED_KEY, String(now)),
@@ -312,7 +347,7 @@ export async function saveSavedDocumentsBatch(
   silent: boolean = false
 ): Promise<SavedDocument[]> {
   if (newItems.length === 0) return [];
-  const current = await getSavedDocuments();
+  const current = [...(await getSavedDocuments())];
   const now = Date.now();
   const createdList: SavedDocument[] = [];
 
@@ -340,6 +375,7 @@ export async function saveSavedDocumentsBatch(
     current.unshift(created);
   }
 
+  savedDocsMemoryCache = sortSavedDocsDesc(current);
   await Promise.all([
     AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(current)),
     AsyncStorage.setItem(SAVED_DOCUMENTS_MODIFIED_KEY, String(now)),
@@ -360,7 +396,7 @@ export async function deleteSavedDocument(
   id: string,
   silent: boolean = false
 ): Promise<void> {
-  const current = await getSavedDocuments();
+  const current = [...(await getSavedDocuments())];
   const tombstones = await getSavedDocumentsTombstones();
   const now = Date.now();
 
@@ -374,6 +410,7 @@ export async function deleteSavedDocument(
 
   const filtered = current.filter((d) => d.id !== id);
   tombstones[id] = now;
+  savedDocsMemoryCache = sortSavedDocsDesc(filtered);
 
   await Promise.all([
     AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(filtered)),
@@ -396,6 +433,7 @@ export async function setAllSavedDocuments(
   silent: boolean = false
 ): Promise<void> {
   const now = modifiedAt || Date.now();
+  savedDocsMemoryCache = sortSavedDocsDesc(docs);
   const ops: Promise<void>[] = [
     AsyncStorage.setItem(SAVED_DOCUMENTS_KEY, JSON.stringify(docs)),
     AsyncStorage.setItem(SAVED_DOCUMENTS_MODIFIED_KEY, String(now)),

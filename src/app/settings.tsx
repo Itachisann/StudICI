@@ -11,6 +11,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as Clipboard from "expo-clipboard";
 import Constants, { ExecutionEnvironment } from "expo-constants";
+import { useIsFocused } from "@react-navigation/native";
 import { router, useFocusEffect } from "expo-router";
 import * as Sharing from "expo-sharing";
 import * as WebBrowser from "expo-web-browser";
@@ -165,6 +166,7 @@ import {
   fetchTabs,
   getCachedScheduleData,
   getCachedTabs,
+  notifyDegreeChanged,
   ScheduleData,
   Tab,
 } from "../utils/scraper";
@@ -208,19 +210,24 @@ function getSafeDocumentPicker(): typeof import("expo-document-picker") | null {
   }
 }
 
+let cachedWebViewModule:
+  | typeof import("react-native-webview").WebView
+  | null
+  | undefined;
+
 function getSafeWebView():
   | typeof import("react-native-webview").WebView
   | null {
+  if (cachedWebViewModule !== undefined) return cachedWebViewModule;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("react-native-webview");
-    return mod?.WebView || mod?.default || null;
+    cachedWebViewModule = mod?.WebView || mod?.default || null;
   } catch {
-    return null;
+    cachedWebViewModule = null;
   }
+  return cachedWebViewModule ?? null;
 }
-
-const SafeWebView = getSafeWebView();
 
 interface BatchDraftItem {
   tempId: string;
@@ -724,20 +731,33 @@ export default function ProfiloScreen() {
     [],
   );
 
-  // Riallinea solo i colori visualizzati in UI quando ThemeContext idrata/cambia tema
-  // senza sovrascrivere eventuali colori personalizzati scelti dall'utente su Apple Calendar.
+  // Riallinea solo i colori visualizzati in UI quando ThemeContext cambia effettivamente tema
+  // (evita la lettura ridondante al primo mount già coperta da loadProfileData)
+  const isSettingsFocused = useIsFocused();
+  const isSettingsFocusedRef = useRef(isSettingsFocused);
   useEffect(() => {
+    isSettingsFocusedRef.current = isSettingsFocused;
+  }, [isSettingsFocused]);
+
+  const prevSyncedThemePrimaryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevSyncedThemePrimaryRef.current === null) {
+      prevSyncedThemePrimaryRef.current = theme.primary;
+      return;
+    }
+    if (prevSyncedThemePrimaryRef.current === theme.primary) return;
+    prevSyncedThemePrimaryRef.current = theme.primary;
     syncCalendarMetadataState(theme.primary, {
       pullExternal: false,
       syncInputs: false,
     }).catch(() => {});
   }, [theme.primary, syncCalendarMetadataState]);
 
-  // Quando l'utente torna in StudICI (es. dopo aver modificato titolo o colore in Apple Calendar)
+  // Quando l'utente torna in StudICI mentre la schermata Profilo è attiva
   // o riceve un aggiornamento esterno di configurazione, riallinea subito nomi e colori.
   useEffect(() => {
     const subAppState = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") {
+      if (nextState === "active" && isSettingsFocusedRef.current) {
         syncCalendarMetadataState(undefined, {
           pullExternal: true,
           syncInputs: true,
@@ -952,7 +972,10 @@ export default function ProfiloScreen() {
     setTrainsReturnHasCustomColor(tRetCustomColor);
   }, []);
 
-  const loadProfileData = useCallback(async () => {
+  const lastSettingsCalPullRef = useRef<number>(0);
+
+  const loadProfileData = useCallback(async (options?: { includeNetwork?: boolean }) => {
+    const includeNetwork = options?.includeNetwork ?? true;
     try {
       // 1. Lettura iniziale e lancio parallelo di tutte le fonti locali da AsyncStorage (0 attese di rete)
       const storedPairs = await AsyncStorage.multiGet([
@@ -976,14 +999,17 @@ export default function ProfiloScreen() {
         null;
       const studentHiddenVal = storedMap["@studici_student_info_hidden"];
 
-      // Allinea eventuali modifiche esterne Apple Calendar senza bloccare la visualizzazione locale
-      pullExternalAppleCalendarChanges(themePrimaryRef.current)
-        .then((res) => {
-          if (res?.updated) {
-            readAndApplyCalendarSettings().catch(() => {});
-          }
-        })
-        .catch(() => {});
+      // Allinea eventuali modifiche esterne Apple Calendar (throttled 30s per evitare IPC ad ogni cambio tab)
+      if (includeNetwork && Date.now() - lastSettingsCalPullRef.current >= 30_000) {
+        lastSettingsCalPullRef.current = Date.now();
+        pullExternalAppleCalendarChanges(themePrimaryRef.current)
+          .then((res) => {
+            if (res?.updated) {
+              readAndApplyCalendarSettings().catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
 
       const [
         localTabs,
@@ -1030,6 +1056,9 @@ export default function ProfiloScreen() {
         setIsStudentInfoHidden(studentHiddenVal === "true");
       }
       void calReady;
+
+      if (!includeNetwork) return;
+
       uploadPendingFiles().catch(() => {});
 
       // 2. Aggiornamenti silenti di rete in BACKGROUND (completamente asincroni, zero ritardi per l'utente)
@@ -1061,9 +1090,18 @@ export default function ProfiloScreen() {
     }
   }, [readAndApplyCalendarSettings]);
 
+  // Pre-idrata lo stato locale al mount iniziale (lazy: false, 0 byte di rete)
+  // così il primo ingresso nella tab "Profilo" è istantaneo e già popolato.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadProfileData({ includeNetwork: false });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadProfileData]);
+
   useFocusEffect(
     useCallback(() => {
-      loadProfileData();
+      loadProfileData({ includeNetwork: true });
     }, [loadProfileData]),
   );
 
@@ -1154,7 +1192,7 @@ export default function ProfiloScreen() {
         } else if (doc.type === "file") {
           // 1) copia locale (anche dopo cambio container iOS); 2) altrimenti scarica dal cloud
           const localUri = await resolveSavedFileUri(doc.fileUri);
-          const canPreviewInApp = Platform.OS === "ios" && Boolean(SafeWebView);
+          const canPreviewInApp = Platform.OS === "ios" && Boolean(getSafeWebView());
 
           if (!localUri && !doc.cloudChunks) {
             if (doc.url) {
@@ -1552,6 +1590,7 @@ export default function ProfiloScreen() {
             ["selectedDegreeName", degree.name],
             ["selectedDegreeClassName", degree.className || ""],
           ]);
+          notifyDegreeChanged(degree.url, degree.name);
           await saveCourseDefaultTabPreference(
             degree.url,
             activeTab,
@@ -1576,7 +1615,10 @@ export default function ProfiloScreen() {
                   "Verifica ordinaria: rilevate variazioni per il corso",
                   degree.name,
                 );
-                fetchAllCourseData(degree.url, true).catch(() => {});
+                fetchAllCourseData(degree.url, true, undefined, {
+                  changedTabUrls: checkRes.changedTabUrls,
+                  preloadedHtmlByUrl: checkRes.preloadedHtmlByUrl,
+                }).catch(() => {});
               }
             })
             .catch(() => {});
@@ -1603,6 +1645,7 @@ export default function ProfiloScreen() {
       if (degree.className) {
         await AsyncStorage.setItem("selectedDegreeClassName", degree.className);
       }
+      notifyDegreeChanged(degree.url, degree.name);
 
       const savedTabForDegree = await AsyncStorage.getItem(
         `defaultTabUrl_${degree.url}`,
@@ -3990,6 +4033,7 @@ export default function ProfiloScreen() {
       </ScrollView>
 
       {/* Modal Selezione Corso di Laurea in stile App / iOS */}
+      {courseModalVisible && (
       <NativeSheetModal
         visible={courseModalVisible}
         onClose={() => {
@@ -4147,8 +4191,10 @@ export default function ProfiloScreen() {
           )}
         </View>
       </NativeSheetModal>
+      )}
 
       {/* Modal Cambio Canale / Anno */}
+      {channelModalVisible && (
       <NativeSheetModal
         visible={channelModalVisible}
         onClose={() => {
@@ -4194,8 +4240,10 @@ export default function ProfiloScreen() {
           )}
         </View>
       </NativeSheetModal>
+      )}
 
       {/* Modal Registro presenze Completo */}
+      {attendanceModalVisible && (
       <NativeSheetModal
         visible={attendanceModalVisible}
         onClose={() => setAttendanceModalVisible(false)}
@@ -4338,6 +4386,7 @@ export default function ProfiloScreen() {
           </ScrollView>
         </View>
       </NativeSheetModal>
+      )}
 
       {/* Modal Segnatura Presenza Passata */}
       <PastAttendanceModal
@@ -4362,6 +4411,7 @@ export default function ProfiloScreen() {
       />
 
       {/* Modal Gestione Sincronizzazione */}
+      {cloudModalVisible && (
       <NativeSheetModal
         visible={cloudModalVisible}
         onClose={() => setCloudModalVisible(false)}
@@ -4810,8 +4860,10 @@ export default function ProfiloScreen() {
           </ScrollView>
         </View>
       </NativeSheetModal>
+      )}
 
       {/* Modal Gestione Calendario Apple */}
+      {calendarModalVisible && (
       <NativeSheetModal
         visible={calendarModalVisible}
         onClose={() => {
@@ -6005,6 +6057,8 @@ export default function ProfiloScreen() {
           </KeyboardAvoidingView>
         </View>
       </NativeSheetModal>
+      )}
+      {studentModalVisible && (
       <NativeSheetModal
         visible={studentModalVisible}
         onClose={() => setStudentModalVisible(false)}
@@ -6079,8 +6133,10 @@ export default function ProfiloScreen() {
           </View>
         </ScrollView>
       </NativeSheetModal>
+      )}
 
       {/* Modal 1: Lista Documenti e link salvati con Context Menu e Swipe-to-Delete */}
+      {docsListModalVisible && (
       <NativeSheetModal
         visible={docsListModalVisible}
         onClose={() => setDocsListModalVisible(false)}
@@ -6232,8 +6288,10 @@ export default function ProfiloScreen() {
           )}
         </ScrollView>
       </NativeSheetModal>
+      )}
 
       {/* Modal 2: Aggiungi Elementi (Multi-item con tasto '+' e tick separati in alto a destra) */}
+      {batchAddModalVisible && (
       <NativeSheetModal
         visible={batchAddModalVisible}
         onClose={() => {
@@ -6479,8 +6537,10 @@ export default function ProfiloScreen() {
           </Text>
         </ScrollView>
       </NativeSheetModal>
+      )}
 
       {/* Visualizzatore nativo in-app per PDF / file salvati (nessun nuovo download) */}
+      {Boolean(viewerDoc) && (
       <NativeSheetModal
         visible={Boolean(viewerDoc)}
         onClose={() => setViewerDoc(null)}
@@ -6508,7 +6568,8 @@ export default function ProfiloScreen() {
         ]}
       >
         {(() => {
-          if (!viewerDoc || !SafeWebView) return null;
+          const LazyWebView = getSafeWebView();
+          if (!viewerDoc || !LazyWebView) return null;
           if (!viewerDoc.resolvedUri) {
             return (
               <View
@@ -6531,7 +6592,7 @@ export default function ProfiloScreen() {
             viewerDoc.resolvedUri.lastIndexOf("/") + 1,
           );
           return (
-            <SafeWebView
+            <LazyWebView
               style={{ flex: 1, backgroundColor: "#000000" }}
               source={{ uri: viewerDoc.resolvedUri }}
               originWhitelist={["*"]}
@@ -6553,8 +6614,10 @@ export default function ProfiloScreen() {
           );
         })()}
       </NativeSheetModal>
+      )}
 
       {/* Modal 3: Dettaglio / Modifica Singolo Elemento con Segmented UI */}
+      {editModalVisible && (
       <NativeSheetModal
         visible={editModalVisible}
         onClose={() => {
@@ -6812,6 +6875,7 @@ export default function ProfiloScreen() {
           </View>
         </ScrollView>
       </NativeSheetModal>
+      )}
       <Modal
         visible={Boolean(downloadingCourse)}
         animationType="fade"
@@ -6827,7 +6891,7 @@ export default function ProfiloScreen() {
       </Modal>
 
       {/* Modal Impostazioni Pendolare */}
-      {commuterConfig && (
+      {commuterModalVisible && commuterConfig && (
         <CommuterConfigModal
           visible={commuterModalVisible}
           config={commuterConfig}

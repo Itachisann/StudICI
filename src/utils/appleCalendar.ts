@@ -1322,7 +1322,10 @@ async function _pullExternalChangesInternal(
         continue;
       }
 
-      await AsyncStorage.setItem(idKey, cal.id);
+      const prevStoredId = await AsyncStorage.getItem(idKey);
+      if (prevStoredId !== cal.id) {
+        await AsyncStorage.setItem(idKey, cal.id);
+      }
 
       // 1. Allinea eventuale rinomina fatta da Apple Calendar
       const calTitle = cal.title?.trim();
@@ -1953,16 +1956,36 @@ function detectOnlyPreferredSlotsChanged(
       return null;
     }
 
-    const savedNoPt = { ...savedObj, pt: undefined };
-    const currNoPt = { ...currObj, pt: undefined };
-    if (JSON.stringify(savedNoPt) !== JSON.stringify(currNoPt)) {
+    // Se è cambiato un parametro globale (stazioni, auto, buffer, alert, titolo, IC, ecc.), serve resync completo
+    const savedGlobal = {
+      ...savedObj,
+      pt: undefined,
+      days: undefined,
+      man: undefined,
+      ex: undefined,
+    };
+    const currGlobal = {
+      ...currObj,
+      pt: undefined,
+      days: undefined,
+      man: undefined,
+      ex: undefined,
+    };
+    if (JSON.stringify(savedGlobal) !== JSON.stringify(currGlobal)) {
       return null;
     }
 
+    const dirty = new Set<string>();
+    const addDayBoth = (dayIdx: number) => {
+      if (dayIdx >= 0 && dayIdx <= 6) {
+        dirty.add(`${dayIdx}_outbound`);
+        dirty.add(`${dayIdx}_return`);
+      }
+    };
+
+    // 1. Diff treni preferiti (pt): aggiorna solo gli slot specifici (${dayIdx}_${direction})
     const oldPt = new Set<string>(Array.isArray(savedObj.pt) ? savedObj.pt : []);
     const newPt = new Set<string>(Array.isArray(currObj.pt) ? currObj.pt : []);
-    const dirty = new Set<string>();
-
     const parsePtSlot = (entry: string): string | null => {
       const m = /^(outbound|return)_([0-6])_/.exec(entry);
       if (!m) return null;
@@ -1983,6 +2006,52 @@ function detectOnlyPreferredSlotsChanged(
         const slot = parsePtSlot(item);
         if (!slot) return null;
         dirty.add(slot);
+      }
+    }
+
+    // 2. Diff lezioni ufficiali per giorno (days[d])
+    const oldDays: any[] = Array.isArray(savedObj.days) ? savedObj.days : [];
+    const newDays: any[] = Array.isArray(currObj.days) ? currObj.days : [];
+    const maxDaysLen = Math.max(oldDays.length, newDays.length);
+    for (let d = 0; d < maxDaysLen; d++) {
+      if (JSON.stringify(oldDays[d] || []) !== JSON.stringify(newDays[d] || [])) {
+        addDayBoth(d);
+      }
+    }
+
+    // 3. Diff lezioni manuali per giorno (man: "${dayIndex}:${startTime}-${endTime}")
+    const groupByLeadingDay = (arr: any[], sep: string): Map<number, string[]> | null => {
+      const map = new Map<number, string[]>();
+      for (const entry of arr) {
+        if (typeof entry !== "string") return null;
+        const idx = entry.indexOf(sep);
+        if (idx <= 0) return null;
+        const d = parseInt(entry.slice(0, idx), 10);
+        if (Number.isNaN(d) || d < 0 || d > 6) return null;
+        const bucket = map.get(d);
+        if (bucket) bucket.push(entry);
+        else map.set(d, [entry]);
+      }
+      for (const bucket of map.values()) bucket.sort();
+      return map;
+    };
+
+    const oldManMap = groupByLeadingDay(Array.isArray(savedObj.man) ? savedObj.man : [], ":");
+    const newManMap = groupByLeadingDay(Array.isArray(currObj.man) ? currObj.man : [], ":");
+    if (!oldManMap || !newManMap) return null;
+    for (let d = 0; d < 7; d++) {
+      if (JSON.stringify(oldManMap.get(d) || []) !== JSON.stringify(newManMap.get(d) || [])) {
+        addDayBoth(d);
+      }
+    }
+
+    // 4. Diff lezioni barrate per giorno (ex: "${dayIndex}_...")
+    const oldExMap = groupByLeadingDay(Array.isArray(savedObj.ex) ? savedObj.ex : [], "_");
+    const newExMap = groupByLeadingDay(Array.isArray(currObj.ex) ? currObj.ex : [], "_");
+    if (!oldExMap || !newExMap) return null;
+    for (let d = 0; d < 7; d++) {
+      if (JSON.stringify(oldExMap.get(d) || []) !== JSON.stringify(newExMap.get(d) || [])) {
+        addDayBoth(d);
       }
     }
 
@@ -3978,8 +4047,12 @@ export async function switchTrainCalendarMode(
   }
 }
 
+let lastAutoSyncExternalPullAt = 0;
+const AUTO_SYNC_EXTERNAL_PULL_COOLDOWN_MS = 60_000;
+
 /**
  * Verifica se l'aggiornamento automatico è abilitato e sincronizza i calendari se necessario.
+ * Controlla prima configurazione e fingerprint locali per saltare le chiamate EventKit superflue entro 60s.
  */
 export async function triggerCalendarAutoSyncIfNeeded(
   schedule: ScheduleData,
@@ -3997,15 +4070,6 @@ export async function triggerCalendarAutoSyncIfNeeded(
   if (isCalendarSyncInProgress) return false;
   isCalendarSyncInProgress = true;
   try {
-    const isAvailable = await Calendar.isAvailableAsync();
-    if (!isAvailable) return false;
-
-    const { status } = await Calendar.getCalendarPermissionsAsync();
-    if (status !== "granted") return false;
-
-    const calendars = await getFreshCalendarsSafe();
-    await _pullExternalChangesInternal(calendars, calendarColor);
-
     const [lessonsAuto, trainsAuto, lessonsEnabled, trainsEnabled] =
       await Promise.all([
         getCalendarAutoSync("lessons"),
@@ -4013,19 +4077,103 @@ export async function triggerCalendarAutoSyncIfNeeded(
         getCalendarEnabled("lessons"),
         getCalendarEnabled("trains"),
       ]);
+
+    const lessonsActive = lessonsAuto && lessonsEnabled;
+    const trainsActive = trainsAuto && trainsEnabled;
+    const withinPullCooldown =
+      Date.now() - lastAutoSyncExternalPullAt < AUTO_SYNC_EXTERNAL_PULL_COOLDOWN_MS;
+
+    if (!lessonsActive && !trainsActive && withinPullCooldown) {
+      return false;
+    }
+
+    const isAvailable = await Calendar.isAvailableAsync();
+    if (!isAvailable) return false;
+
+    const { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== "granted") return false;
+
     const storedDegreeUrl = await AsyncStorage.getItem("selectedDegreeUrl");
     const [manualList, excludedRecords] = await Promise.all([
       getManualEvents(storedDegreeUrl || undefined),
       getExcludedLessons(storedDegreeUrl || undefined),
     ]);
     const excludedIds = Array.from(buildExcludedIdSet(excludedRecords)).sort();
+
+    // Pre-verifica fingerprint locali: se tutto combacia ed abbiamo già fatto pull EventKit negli ultimi 60s,
+    // evita completamente getFreshCalendarsSafe() + _pullExternalChangesInternal().
+    if (withinPullCooldown) {
+      let lessonsChanged = false;
+      if (lessonsActive) {
+        const [activeTitle, alertConfig, savedFp] = await Promise.all([
+          getCalendarTitle("lessons"),
+          getCalendarAlertConfig("lessons"),
+          AsyncStorage.getItem(CALENDAR_SCHEDULE_HASH_KEY),
+        ]);
+        const currFp = computeScheduleFingerprint(
+          schedule,
+          manualList,
+          activeTitle,
+          alertConfig.alertType,
+          alertConfig.customMinutes,
+          excludedIds,
+        );
+        lessonsChanged = !savedFp || savedFp !== currFp;
+      }
+
+      let trainsChanged = false;
+      if (trainsActive) {
+        const separateReturn = await getTrainSeparateReturn();
+        const [activeTitle, alertConfig, returnTitle, commuterConfig, savedFp] =
+          await Promise.all([
+            getCalendarTitle("trains", separateReturn),
+            getCalendarAlertConfig("trains"),
+            getCalendarTitle("trains_return"),
+            getCommuterConfig(),
+            AsyncStorage.getItem(TRAIN_CALENDAR_SCHEDULE_HASH_KEY),
+          ]);
+        const currFp = computeTrainFingerprint(
+          schedule,
+          manualList,
+          commuterConfig,
+          activeTitle,
+          alertConfig.alertType,
+          alertConfig.customMinutes,
+          true,
+          separateReturn,
+          returnTitle,
+          excludedIds,
+        );
+        trainsChanged = !savedFp || savedFp !== currFp;
+      }
+
+      if (!lessonsChanged && !trainsChanged) {
+        return false;
+      }
+    }
+
+    const calendars = await getFreshCalendarsSafe();
+    await _pullExternalChangesInternal(calendars, calendarColor);
+    lastAutoSyncExternalPullAt = Date.now();
+
+    const [
+      lessonsAutoFresh,
+      trainsAutoFresh,
+      lessonsEnabledFresh,
+      trainsEnabledFresh,
+    ] = await Promise.all([
+      getCalendarAutoSync("lessons"),
+      getCalendarAutoSync("trains"),
+      getCalendarEnabled("lessons"),
+      getCalendarEnabled("trains"),
+    ]);
     let anyUpdated = false;
     const sharedOutboundItineraries: Record<string, CommuterItinerary> = {
       ...(syncHints?.precomputedItineraries || {}),
     };
 
     // 1. Auto-sync Lezioni
-    if (lessonsAuto && lessonsEnabled) {
+    if (lessonsAutoFresh && lessonsEnabledFresh) {
       try {
         const activeTitle = await getCalendarTitle("lessons");
         const alertConfig = await getCalendarAlertConfig("lessons");
@@ -4072,7 +4220,7 @@ export async function triggerCalendarAutoSyncIfNeeded(
     }
 
     // 2. Auto-sync Treni
-    if (trainsAuto && trainsEnabled) {
+    if (trainsAutoFresh && trainsEnabledFresh) {
       try {
         const separateReturn = await getTrainSeparateReturn();
         const activeTitle = await getCalendarTitle("trains", separateReturn);

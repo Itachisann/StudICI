@@ -12,6 +12,8 @@
  * 7. Sistema 100% generico per qualsiasi linea, vettore o città italiana/internazionale
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 export interface LatLngPoint {
   latitude: number;
   longitude: number;
@@ -31,13 +33,130 @@ export interface TransitRoadwayRequest {
   existingPolyline?: LatLngPoint[];
 }
 
-// Cache in-memory delle polilinee stradali ad alta risoluzione risolte
+type StreetAccessResult = {
+  lat: number;
+  lng: number;
+  distanceMeters: number;
+  roadName: string;
+} | null;
+
+// Cache in-memory + in-flight dedup delle polilinee stradali e pedonali risolte
 const roadwayCache = new Map<string, LatLngPoint[]>();
+const roadwayInFlight = new Map<string, Promise<LatLngPoint[]>>();
 const pedestrianCache = new Map<string, LatLngPoint[]>();
-const streetAccessCache = new Map<
-  string,
-  { lat: number; lng: number; distanceMeters: number; roadName: string } | null
->();
+const pedestrianInFlight = new Map<string, Promise<LatLngPoint[] | null>>();
+const streetAccessCache = new Map<string, StreetAccessResult>();
+const streetAccessInFlight = new Map<string, Promise<StreetAccessResult>>();
+
+const ROADWAY_STATIC_CACHE_KEY = '@studici_roadway_static_cache_v1';
+const ROADWAY_STATIC_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 giorni
+const MAX_PERSISTED_PED_ENTRIES = 80;
+const MAX_PERSISTED_ACCESS_ENTRIES = 80;
+
+let roadwayStorageLoaded = false;
+let roadwayStorageLoadPromise: Promise<void> | null = null;
+let persistRoadwayTimer: ReturnType<typeof setTimeout> | null = null;
+let valhallaCooldownUntil = 0;
+
+function isValhallaAvailable(): boolean {
+  return Date.now() >= valhallaCooldownUntil;
+}
+
+function markValhallaDegraded(): void {
+  valhallaCooldownUntil = Date.now() + 60_000;
+}
+
+function encodePolyline6(points: LatLngPoint[]): string {
+  let lastLat = 0;
+  let lastLng = 0;
+  let out = '';
+  const encodeSigned = (val: number) => {
+    let v = val < 0 ? ~(val << 1) : val << 1;
+    while (v >= 0x20) {
+      out += String.fromCharCode((0x20 | (v & 0x1f)) + 63);
+      v >>= 5;
+    }
+    out += String.fromCharCode(v + 63);
+  };
+  for (const p of points) {
+    const lat = Math.round(p.latitude * 1e6);
+    const lng = Math.round(p.longitude * 1e6);
+    encodeSigned(lat - lastLat);
+    encodeSigned(lng - lastLng);
+    lastLat = lat;
+    lastLng = lng;
+  }
+  return out;
+}
+
+async function ensureRoadwayStorageLoaded(): Promise<void> {
+  if (roadwayStorageLoaded) return;
+  if (roadwayStorageLoadPromise) return roadwayStorageLoadPromise;
+  roadwayStorageLoadPromise = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(ROADWAY_STATIC_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const now = Date.now();
+        if (parsed?.ped && typeof parsed.ped === 'object') {
+          for (const [k, entry] of Object.entries<any>(parsed.ped)) {
+            if (
+              entry &&
+              typeof entry.s === 'string' &&
+              typeof entry.ts === 'number' &&
+              now - entry.ts < ROADWAY_STATIC_TTL_MS &&
+              !pedestrianCache.has(k)
+            ) {
+              const pts = decodePolyline(entry.s, 6);
+              if (pts.length >= 2) pedestrianCache.set(k, pts);
+            }
+          }
+        }
+        if (parsed?.access && typeof parsed.access === 'object') {
+          for (const [k, entry] of Object.entries<any>(parsed.access)) {
+            if (
+              entry &&
+              typeof entry.ts === 'number' &&
+              now - entry.ts < ROADWAY_STATIC_TTL_MS &&
+              !streetAccessCache.has(k)
+            ) {
+              streetAccessCache.set(k, entry.v ?? null);
+            }
+          }
+        }
+      }
+    } catch {}
+    roadwayStorageLoaded = true;
+    roadwayStorageLoadPromise = null;
+  })();
+  return roadwayStorageLoadPromise;
+}
+
+function schedulePersistRoadwayStaticCache(): void {
+  if (persistRoadwayTimer) return;
+  persistRoadwayTimer = setTimeout(() => {
+    persistRoadwayTimer = null;
+    try {
+      const now = Date.now();
+      const pedEntries = Array.from(pedestrianCache.entries()).slice(-MAX_PERSISTED_PED_ENTRIES);
+      const pedObj: Record<string, { s: string; ts: number }> = {};
+      for (const [k, pts] of pedEntries) {
+        if (pts.length >= 2 && pts.length <= 250) {
+          pedObj[k] = { s: encodePolyline6(pts), ts: now };
+        }
+      }
+      const accessEntries = Array.from(streetAccessCache.entries()).slice(-MAX_PERSISTED_ACCESS_ENTRIES);
+      const accessObj: Record<string, { v: StreetAccessResult; ts: number }> = {};
+      for (const [k, v] of accessEntries) {
+        accessObj[k] = { v, ts: now };
+      }
+      AsyncStorage.setItem(
+        ROADWAY_STATIC_CACHE_KEY,
+        JSON.stringify({ ped: pedObj, access: accessObj })
+      ).catch(() => {});
+    } catch {}
+  }, 600);
+}
 
 /**
  * Calcola la distanza in metri tra due coordinate geografiche
@@ -536,127 +655,137 @@ export async function snapToRoadsMapMatching(
   const costing = mode === 'tram' ? 'bus' : 'bus';
 
   // Motore 1: Valhalla Map Matching (/trace_route API con costing 'bus')
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
-    const traceShape = alignedWaypoints.map((w) => ({ lat: w.lat, lon: w.lng }));
+  if (isValhallaAvailable()) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      const traceShape = alignedWaypoints.map((w) => ({ lat: w.lat, lon: w.lng }));
 
-    const res = await fetch('https://valhalla1.openstreetmap.de/trace_route', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'StudICI-Mobile/1.9 (MapMatching-BusRoads)',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        shape: traceShape,
-        costing,
-        costing_options: {
-          bus: {
-            u_turn_penalty: 5000,
-            alley_factor: 2.0,
-          },
+      const res = await fetch('https://valhalla1.openstreetmap.de/trace_route', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'StudICI-Mobile/1.9 (MapMatching-BusRoads)',
         },
-        shape_format: 'polyline6',
-      }),
-    });
-    clearTimeout(timeout);
+        signal: controller.signal,
+        body: JSON.stringify({
+          shape: traceShape,
+          costing,
+          costing_options: {
+            bus: {
+              u_turn_penalty: 5000,
+              alley_factor: 2.0,
+            },
+          },
+          directions_type: 'none',
+          shape_format: 'polyline6',
+        }),
+      });
+      clearTimeout(timeout);
 
-    if (res.ok) {
-      const data = await res.json();
-      const legs = Array.isArray(data?.trip?.legs) ? data.trip.legs : [];
-      const allPoints: LatLngPoint[] = [];
-      for (const leg of legs) {
-        if (typeof leg?.shape === 'string' && leg.shape.length > 0) {
-          const pts = decodePolyline(leg.shape, 6);
-          if (pts.length > 0) {
-            if (allPoints.length > 0) {
-              const lastPt = allPoints[allPoints.length - 1];
-              if (haversineMeters(lastPt, pts[0]) < 2) {
-                allPoints.push(...pts.slice(1));
-                continue;
+      if (res.status === 429 || res.status === 503) {
+        markValhallaDegraded();
+      } else if (res.ok) {
+        const data = await res.json();
+        const legs = Array.isArray(data?.trip?.legs) ? data.trip.legs : [];
+        const allPoints: LatLngPoint[] = [];
+        for (const leg of legs) {
+          if (typeof leg?.shape === 'string' && leg.shape.length > 0) {
+            const pts = decodePolyline(leg.shape, 6);
+            if (pts.length > 0) {
+              if (allPoints.length > 0) {
+                const lastPt = allPoints[allPoints.length - 1];
+                if (haversineMeters(lastPt, pts[0]) < 2) {
+                  allPoints.push(...pts.slice(1));
+                  continue;
+                }
               }
+              allPoints.push(...pts);
             }
-            allPoints.push(...pts);
           }
         }
+        if (allPoints.length >= 10) {
+          return allPoints;
+        }
       }
-      if (allPoints.length >= 10) {
-        return allPoints;
-      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') markValhallaDegraded();
     }
-  } catch {
-    // Prova il fallback successivo
   }
 
   // Motore 2: Valhalla Road Routing (/route API con costing 'bus' multi-stop e orientamento)
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
-    const locations = alignedWaypoints.map((w, idx) => {
-      let b = 0;
-      if (idx < alignedWaypoints.length - 1) {
-        b = calculateBearing(w, alignedWaypoints[idx + 1]);
-      } else {
-        b = calculateBearing(alignedWaypoints[idx - 1], w);
-      }
-      return {
-        lat: w.lat,
-        lon: w.lng,
-        heading: b,
-        heading_tolerance: 60,
-      };
-    });
+  if (isValhallaAvailable()) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      const locations = alignedWaypoints.map((w, idx) => {
+        let b = 0;
+        if (idx < alignedWaypoints.length - 1) {
+          b = calculateBearing(w, alignedWaypoints[idx + 1]);
+        } else {
+          b = calculateBearing(alignedWaypoints[idx - 1], w);
+        }
+        return {
+          lat: w.lat,
+          lon: w.lng,
+          heading: b,
+          heading_tolerance: 60,
+        };
+      });
 
-    const res = await fetch('https://valhalla1.openstreetmap.de/route', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'StudICI-Mobile/1.9 (MapMatching-BusRoads)',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        locations,
-        costing,
-        costing_options: {
-          bus: {
-            u_turn_penalty: 5000,
-            alley_factor: 2.0,
-          },
+      const res = await fetch('https://valhalla1.openstreetmap.de/route', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'StudICI-Mobile/1.9 (MapMatching-BusRoads)',
         },
-        shape_format: 'polyline6',
-      }),
-    });
-    clearTimeout(timeout);
+        signal: controller.signal,
+        body: JSON.stringify({
+          locations,
+          costing,
+          costing_options: {
+            bus: {
+              u_turn_penalty: 5000,
+              alley_factor: 2.0,
+            },
+          },
+          directions_type: 'none',
+          shape_format: 'polyline6',
+        }),
+      });
+      clearTimeout(timeout);
 
-    if (res.ok) {
-      const data = await res.json();
-      const legs = Array.isArray(data?.trip?.legs) ? data.trip.legs : [];
-      const allPoints: LatLngPoint[] = [];
-      for (const leg of legs) {
-        if (typeof leg?.shape === 'string' && leg.shape.length > 0) {
-          const pts = decodePolyline(leg.shape, 6);
-          if (pts.length > 0) {
-            if (allPoints.length > 0) {
-              const lastPt = allPoints[allPoints.length - 1];
-              if (haversineMeters(lastPt, pts[0]) < 2) {
-                allPoints.push(...pts.slice(1));
-                continue;
+      if (res.status === 429 || res.status === 503) {
+        markValhallaDegraded();
+      } else if (res.ok) {
+        const data = await res.json();
+        const legs = Array.isArray(data?.trip?.legs) ? data.trip.legs : [];
+        const allPoints: LatLngPoint[] = [];
+        for (const leg of legs) {
+          if (typeof leg?.shape === 'string' && leg.shape.length > 0) {
+            const pts = decodePolyline(leg.shape, 6);
+            if (pts.length > 0) {
+              if (allPoints.length > 0) {
+                const lastPt = allPoints[allPoints.length - 1];
+                if (haversineMeters(lastPt, pts[0]) < 2) {
+                  allPoints.push(...pts.slice(1));
+                  continue;
+                }
               }
+              allPoints.push(...pts);
             }
-            allPoints.push(...pts);
           }
         }
+        if (allPoints.length >= 10) {
+          return allPoints;
+        }
       }
-      if (allPoints.length >= 10) {
-        return allPoints;
-      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') markValhallaDegraded();
     }
-  } catch {
-    // Prova il fallback successivo
   }
 
-  // Motore 3: OSRM Driving Engine Multi-Stop con Bearings
+  // Motore 3: OSRM Driving Engine Multi-Stop con Bearings (geometries=polyline6: 5-6x più leggero di GeoJSON)
   try {
     const bearingsList = alignedWaypoints.map((p, idx) => {
       if (idx < alignedWaypoints.length - 1) {
@@ -676,9 +805,9 @@ export async function snapToRoadsMapMatching(
     const bearingsStr = bearingsList.join(';');
 
     const urls = [
-      `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsStr}?overview=full&geometries=geojson&continue_straight=true&bearings=${bearingsStr}`,
-      `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson&continue_straight=true&bearings=${bearingsStr}`,
-      `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsStr}?overview=full&geometries=geojson&continue_straight=true`,
+      `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsStr}?overview=full&geometries=polyline6&continue_straight=true&bearings=${bearingsStr}`,
+      `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=polyline6&continue_straight=true&bearings=${bearingsStr}`,
+      `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsStr}?overview=full&geometries=polyline6&continue_straight=true`,
     ];
 
     for (const url of urls) {
@@ -693,13 +822,11 @@ export async function snapToRoadsMapMatching(
 
         if (!res.ok) continue;
         const data = await res.json();
-        if (data?.code === 'Ok' && Array.isArray(data?.routes) && data.routes[0]?.geometry?.coordinates) {
-          const coords = data.routes[0].geometry.coordinates;
-          if (Array.isArray(coords) && coords.length >= 10) {
-            return coords.map((c: [number, number]) => ({
-              latitude: c[1],
-              longitude: c[0],
-            }));
+        const geom = data?.routes?.[0]?.geometry;
+        if (data?.code === 'Ok' && typeof geom === 'string' && geom.length > 0) {
+          const decoded = decodePolyline(geom, 6);
+          if (decoded.length >= 10) {
+            return decoded;
           }
         }
       } catch {
@@ -757,11 +884,15 @@ export async function resolveTransitRoadwayPolyline(
     ];
   }
 
-  // 2. Controllo cache in memoria
+  // 2. Controllo cache in memoria + deduplica in-flight
   const cacheKey = getRoadwayCacheKey(req);
   const cached = roadwayCache.get(cacheKey);
-  if (cached && cached.length >= 15) {
+  if (cached && cached.length >= 2) {
     return cached;
+  }
+  const existingInFlight = roadwayInFlight.get(cacheKey);
+  if (existingInFlight) {
+    return existingInFlight;
   }
 
   // 3. Se il feed/API fornisce già una geometria densa ad alta risoluzione derivata da GTFS shapes.txt
@@ -805,33 +936,39 @@ export async function resolveTransitRoadwayPolyline(
     return fallback;
   }
 
-  // 5. Esecuzione algoritmo di Map Matching / Snap to Roads
-  const matchedCoords = await snapToRoadsMapMatching(cleanWaypoints, mode);
+  // 5. Esecuzione algoritmo di Map Matching / Snap to Roads (con deduplica in-flight)
+  const task = (async (): Promise<LatLngPoint[]> => {
+    const matchedCoords = await snapToRoadsMapMatching(cleanWaypoints, mode);
 
-  if (matchedCoords && matchedCoords.length >= 6) {
-    const cleaned = pruneAnomalousLoopsAndSpikes(matchedCoords);
-    const snappedStart = snapCoordinateToPolyline(fromCoords, cleaned, 150);
-    const snappedEnd = snapCoordinateToPolyline(toCoords, cleaned, 150);
-    const merged = [snappedStart, ...cleaned.slice(1, -1), snappedEnd];
-    const deduplicated = deduplicateAdjacentPoints(pruneAnomalousLoopsAndSpikes(merged), 0.5);
-    roadwayCache.set(cacheKey, deduplicated);
-    return deduplicated;
-  }
+    if (matchedCoords && matchedCoords.length >= 6) {
+      const cleaned = pruneAnomalousLoopsAndSpikes(matchedCoords);
+      const snappedStart = snapCoordinateToPolyline(fromCoords, cleaned, 150);
+      const snappedEnd = snapCoordinateToPolyline(toCoords, cleaned, 150);
+      const merged = [snappedStart, ...cleaned.slice(1, -1), snappedEnd];
+      const deduplicated = deduplicateAdjacentPoints(merged, 0.5);
+      roadwayCache.set(cacheKey, deduplicated);
+      return deduplicated;
+    }
 
-  // 6. Fallback resiliente se il servizio esterno non risponde:
-  // Se existingPolyline ha almeno 4 punti, pulisci e usa
-  if (existingPolyline && existingPolyline.length >= 4) {
-    const cleaned = pruneAnomalousLoopsAndSpikes(existingPolyline);
-    roadwayCache.set(cacheKey, cleaned);
-    return cleaned;
-  }
+    // 6. Fallback resiliente se il servizio esterno non risponde:
+    if (existingPolyline && existingPolyline.length >= 4) {
+      const cleaned = pruneAnomalousLoopsAndSpikes(existingPolyline);
+      roadwayCache.set(cacheKey, cleaned);
+      return cleaned;
+    }
 
-  const fallback = cleanWaypoints.map((w) => ({
-    latitude: w.lat,
-    longitude: w.lng,
-  }));
-  roadwayCache.set(cacheKey, fallback);
-  return fallback;
+    const fallback = cleanWaypoints.map((w) => ({
+      latitude: w.lat,
+      longitude: w.lng,
+    }));
+    roadwayCache.set(cacheKey, fallback);
+    return fallback;
+  })().finally(() => {
+    roadwayInFlight.delete(cacheKey);
+  });
+
+  roadwayInFlight.set(cacheKey, task);
+  return task;
 }
 
 /**
@@ -881,63 +1018,77 @@ export async function resolveDynamicPublicStreetAccess(
   const lng = 'longitude' in coord ? coord.longitude : coord.lng;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
-  const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  await ensureRoadwayStorageLoaded();
+  const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
   if (streetAccessCache.has(cacheKey)) {
     return streetAccessCache.get(cacheKey) ?? null;
   }
-
-  const urls = [
-    `https://routing.openstreetmap.de/routed-car/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
-    `https://router.project-osrm.org/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
-  ];
-
-  for (const url of urls) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2800);
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'StudICI-Mobile/1.9 (StreetAccessSnap)' },
-      });
-      clearTimeout(timeout);
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const wp = Array.isArray(data?.waypoints) ? data.waypoints[0] : null;
-      const loc = wp?.location;
-      const roadName = typeof wp?.name === 'string' ? wp.name.trim() : '';
-      if (
-        Array.isArray(loc) &&
-        loc.length >= 2 &&
-        typeof loc[0] === 'number' &&
-        typeof loc[1] === 'number'
-      ) {
-        const snapLat = loc[1];
-        const snapLng = loc[0];
-        const distanceMeters =
-          typeof wp.distance === 'number'
-            ? wp.distance
-            : haversineMeters({ latitude: lat, longitude: lng }, { latitude: snapLat, longitude: snapLng });
-
-        // Evita autostrade/tangenziali ad alto scorrimento prive di marciapiedi
-        const lowerName = roadName.toLowerCase();
-        const isMotorwayLike =
-          lowerName.includes('autostrada') ||
-          lowerName.includes('tangenziale') ||
-          lowerName.includes('raccordo');
-        const result = isMotorwayLike
-          ? null
-          : { lat: snapLat, lng: snapLng, distanceMeters, roadName };
-        streetAccessCache.set(cacheKey, result);
-        return result;
-      }
-    } catch {
-      continue;
-    }
+  const existing = streetAccessInFlight.get(cacheKey);
+  if (existing) {
+    return existing;
   }
 
-  streetAccessCache.set(cacheKey, null);
-  return null;
+  const task = (async (): Promise<StreetAccessResult> => {
+    const urls = [
+      `https://routing.openstreetmap.de/routed-car/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
+      `https://router.project-osrm.org/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`,
+    ];
+
+    for (const url of urls) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2800);
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'StudICI-Mobile/1.9 (StreetAccessSnap)' },
+        });
+        clearTimeout(timeout);
+        if (!res.ok) continue;
+
+        const data = await res.json();
+        const wp = Array.isArray(data?.waypoints) ? data.waypoints[0] : null;
+        const loc = wp?.location;
+        const roadName = typeof wp?.name === 'string' ? wp.name.trim() : '';
+        if (
+          Array.isArray(loc) &&
+          loc.length >= 2 &&
+          typeof loc[0] === 'number' &&
+          typeof loc[1] === 'number'
+        ) {
+          const snapLat = loc[1];
+          const snapLng = loc[0];
+          const distanceMeters =
+            typeof wp.distance === 'number'
+              ? wp.distance
+              : haversineMeters({ latitude: lat, longitude: lng }, { latitude: snapLat, longitude: snapLng });
+
+          // Evita autostrade/tangenziali ad alto scorrimento prive di marciapiedi
+          const lowerName = roadName.toLowerCase();
+          const isMotorwayLike =
+            lowerName.includes('autostrada') ||
+            lowerName.includes('tangenziale') ||
+            lowerName.includes('raccordo');
+          const result = isMotorwayLike
+            ? null
+            : { lat: snapLat, lng: snapLng, distanceMeters, roadName };
+          streetAccessCache.set(cacheKey, result);
+          schedulePersistRoadwayStaticCache();
+          return result;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    streetAccessCache.set(cacheKey, null);
+    schedulePersistRoadwayStaticCache();
+    return null;
+  })().finally(() => {
+    streetAccessInFlight.delete(cacheKey);
+  });
+
+  streetAccessInFlight.set(cacheKey, task);
+  return task;
 }
 
 async function fetchPedestrianRoadwayRaw(
@@ -946,51 +1097,56 @@ async function fetchPedestrianRoadwayRaw(
   dLat: number,
   dLng: number
 ): Promise<LatLngPoint[] | null> {
-  // Motore 1: Valhalla pedestrian routing (alta precisione sui marciapiedi e attraversamenti)
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-    const res = await fetch('https://valhalla1.openstreetmap.de/route', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'StudICI-Mobile/1.9 (PedestrianRoadway)',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        locations: [
-          { lat: oLat, lon: oLng },
-          { lat: dLat, lon: dLng },
-        ],
-        costing: 'pedestrian',
-        shape_format: 'polyline6',
-      }),
-    });
-    clearTimeout(timeout);
+  // Motore 1: Valhalla pedestrian routing (con directions_type=none + circuit breaker)
+  if (isValhallaAvailable()) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch('https://valhalla1.openstreetmap.de/route', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'StudICI-Mobile/1.9 (PedestrianRoadway)',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          locations: [
+            { lat: oLat, lon: oLng },
+            { lat: dLat, lon: dLng },
+          ],
+          costing: 'pedestrian',
+          directions_type: 'none',
+          shape_format: 'polyline6',
+        }),
+      });
+      clearTimeout(timeout);
 
-    if (res.ok) {
-      const data = await res.json();
-      const encodedShape = data?.trip?.legs?.[0]?.shape;
-      if (typeof encodedShape === 'string' && encodedShape.length > 0) {
-        const decoded = decodePolyline(encodedShape, 6);
-        if (decoded.length >= 2) {
-          const mapped = deduplicateAdjacentPoints(decoded, 0.5);
-          return [
-            { latitude: oLat, longitude: oLng },
-            ...mapped.slice(1, -1),
-            { latitude: dLat, longitude: dLng },
-          ];
+      if (res.status === 429 || res.status === 503) {
+        markValhallaDegraded();
+      } else if (res.ok) {
+        const data = await res.json();
+        const encodedShape = data?.trip?.legs?.[0]?.shape;
+        if (typeof encodedShape === 'string' && encodedShape.length > 0) {
+          const decoded = decodePolyline(encodedShape, 6);
+          if (decoded.length >= 2) {
+            const mapped = deduplicateAdjacentPoints(decoded, 0.5);
+            return [
+              { latitude: oLat, longitude: oLng },
+              ...mapped.slice(1, -1),
+              { latitude: dLat, longitude: dLng },
+            ];
+          }
         }
       }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') markValhallaDegraded();
     }
-  } catch {
-    // Prova fallback OSRM
   }
 
-  // Motore 2: OSRM routed-foot
+  // Motore 2: OSRM routed-foot con polyline6 (5-6x più compatto di GeoJSON)
   const footUrls = [
-    `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${oLng.toFixed(6)},${oLat.toFixed(6)};${dLng.toFixed(6)},${dLat.toFixed(6)}?overview=full&geometries=geojson`,
-    `https://router.project-osrm.org/route/v1/foot/${oLng.toFixed(6)},${oLat.toFixed(6)};${dLng.toFixed(6)},${dLat.toFixed(6)}?overview=full&geometries=geojson`,
+    `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${oLng.toFixed(6)},${oLat.toFixed(6)};${dLng.toFixed(6)},${dLat.toFixed(6)}?overview=full&geometries=polyline6`,
+    `https://router.project-osrm.org/route/v1/foot/${oLng.toFixed(6)},${oLat.toFixed(6)};${dLng.toFixed(6)},${dLat.toFixed(6)}?overview=full&geometries=polyline6`,
   ];
 
   for (const url of footUrls) {
@@ -1005,17 +1161,16 @@ async function fetchPedestrianRoadwayRaw(
 
       if (!res.ok) continue;
       const data = await res.json();
-      const fCoords = data?.routes?.[0]?.geometry?.coordinates;
-      if (Array.isArray(fCoords) && fCoords.length >= 2) {
-        const mapped: LatLngPoint[] = fCoords.map((c: [number, number]) => ({
-          latitude: c[1],
-          longitude: c[0],
-        }));
-        return [
-          { latitude: oLat, longitude: oLng },
-          ...mapped.slice(1, -1),
-          { latitude: dLat, longitude: dLng },
-        ];
+      const geom = data?.routes?.[0]?.geometry;
+      if (typeof geom === 'string' && geom.length > 0) {
+        const mapped = decodePolyline(geom, 6);
+        if (mapped.length >= 2) {
+          return [
+            { latitude: oLat, longitude: oLng },
+            ...mapped.slice(1, -1),
+            { latitude: dLat, longitude: dLng },
+          ];
+        }
       }
     } catch {
       continue;
@@ -1046,61 +1201,75 @@ export async function resolvePedestrianRoadwayPolyline(
     return [origPt, destPt];
   }
 
-  const pedKey = `${oLat.toFixed(5)},${oLng.toFixed(5)}_${dLat.toFixed(5)},${dLng.toFixed(5)}`;
+  await ensureRoadwayStorageLoaded();
+  const pedKey = `${oLat.toFixed(4)},${oLng.toFixed(4)}_${dLat.toFixed(4)},${dLng.toFixed(4)}`;
   const cachedPed = pedestrianCache.get(pedKey);
   if (cachedPed && cachedPed.length >= 2) {
     return cachedPed;
   }
+  const existingPed = pedestrianInFlight.get(pedKey);
+  if (existingPed) {
+    return existingPed;
+  }
 
-  const rawPed = await fetchPedestrianRoadwayRaw(oLat, oLng, dLat, dLng);
-  const rawLen = rawPed && rawPed.length >= 2 ? polylineLengthMeters(rawPed) : Infinity;
+  const task = (async (): Promise<LatLngPoint[] | null> => {
+    const rawPed = await fetchPedestrianRoadwayRaw(oLat, oLng, dLat, dLng);
+    const rawLen = rawPed && rawPed.length >= 2 ? polylineLengthMeters(rawPed) : Infinity;
 
-  // Rileva dinamicamente eventuali giri viziosi da cortili interni OSM (es. percorso > 1.5x linea d'aria)
-  if (!rawPed || (directDist >= 55 && rawLen > Math.max(210, directDist * 1.50))) {
-    const [origAccess, destAccess] = await Promise.all([
-      resolveDynamicPublicStreetAccess(origPt),
-      resolveDynamicPublicStreetAccess(destPt),
-    ]);
+    // Rileva dinamicamente eventuali giri viziosi da cortili interni OSM (es. percorso > 1.5x linea d'aria)
+    if (!rawPed || (directDist >= 55 && rawLen > Math.max(210, directDist * 1.50))) {
+      const [origAccess, destAccess] = await Promise.all([
+        resolveDynamicPublicStreetAccess(origPt),
+        resolveDynamicPublicStreetAccess(destPt),
+      ]);
 
-    const useOrigSnap =
-      origAccess && origAccess.distanceMeters >= 5 && origAccess.distanceMeters <= 68;
-    const useDestSnap =
-      destAccess && destAccess.distanceMeters >= 5 && destAccess.distanceMeters <= 68;
+      const useOrigSnap =
+        origAccess && origAccess.distanceMeters >= 5 && origAccess.distanceMeters <= 68;
+      const useDestSnap =
+        destAccess && destAccess.distanceMeters >= 5 && destAccess.distanceMeters <= 68;
 
-    if (useOrigSnap || useDestSnap) {
-      const sOLat = useOrigSnap ? origAccess.lat : oLat;
-      const sOLng = useOrigSnap ? origAccess.lng : oLng;
-      const sDLat = useDestSnap ? destAccess.lat : dLat;
-      const sDLng = useDestSnap ? destAccess.lng : dLng;
+      if (useOrigSnap || useDestSnap) {
+        const sOLat = useOrigSnap ? origAccess.lat : oLat;
+        const sOLng = useOrigSnap ? origAccess.lng : oLng;
+        const sDLat = useDestSnap ? destAccess.lat : dLat;
+        const sDLng = useDestSnap ? destAccess.lng : dLng;
 
-      const snappedPed = await fetchPedestrianRoadwayRaw(sOLat, sOLng, sDLat, sDLng);
-      if (snappedPed && snappedPed.length >= 2) {
-        const bridgeStart = useOrigSnap ? origAccess.distanceMeters : 0;
-        const bridgeEnd = useDestSnap ? destAccess.distanceMeters : 0;
-        const totalSnappedLen = bridgeStart + polylineLengthMeters(snappedPed) + bridgeEnd;
+        const snappedPed = await fetchPedestrianRoadwayRaw(sOLat, sOLng, sDLat, sDLng);
+        if (snappedPed && snappedPed.length >= 2) {
+          const bridgeStart = useOrigSnap ? origAccess.distanceMeters : 0;
+          const bridgeEnd = useDestSnap ? destAccess.distanceMeters : 0;
+          const totalSnappedLen = bridgeStart + polylineLengthMeters(snappedPed) + bridgeEnd;
 
-        if (!rawPed || totalSnappedLen < rawLen * 0.80) {
-          const stitched: LatLngPoint[] = [origPt];
-          if (useOrigSnap) {
-            stitched.push({ latitude: sOLat, longitude: sOLng });
+          if (!rawPed || totalSnappedLen < rawLen * 0.80) {
+            const stitched: LatLngPoint[] = [origPt];
+            if (useOrigSnap) {
+              stitched.push({ latitude: sOLat, longitude: sOLng });
+            }
+            stitched.push(...snappedPed.slice(1, -1));
+            if (useDestSnap) {
+              stitched.push({ latitude: sDLat, longitude: sDLng });
+            }
+            stitched.push(destPt);
+            const cleaned = deduplicateAdjacentPoints(stitched, 0.5);
+            pedestrianCache.set(pedKey, cleaned);
+            schedulePersistRoadwayStaticCache();
+            return cleaned;
           }
-          stitched.push(...snappedPed.slice(1, -1));
-          if (useDestSnap) {
-            stitched.push({ latitude: sDLat, longitude: sDLng });
-          }
-          stitched.push(destPt);
-          const cleaned = deduplicateAdjacentPoints(stitched, 0.5);
-          pedestrianCache.set(pedKey, cleaned);
-          return cleaned;
         }
       }
     }
-  }
 
-  if (rawPed && rawPed.length >= 2) {
-    pedestrianCache.set(pedKey, rawPed);
-    return rawPed;
-  }
+    if (rawPed && rawPed.length >= 2) {
+      pedestrianCache.set(pedKey, rawPed);
+      schedulePersistRoadwayStaticCache();
+      return rawPed;
+    }
 
-  return [origPt, destPt];
+    return [origPt, destPt];
+  })().finally(() => {
+    pedestrianInFlight.delete(pedKey);
+  });
+
+  pedestrianInFlight.set(pedKey, task);
+  return task;
 }

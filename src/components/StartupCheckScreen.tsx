@@ -15,7 +15,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
 import { UNIFORM_SCREEN_BG } from '@/constants/theme';
 import { StudICILogo } from './StudICILogo';
-import { checkCourseUpdates, fetchAllCourseData } from '../utils/scraper';
+import { checkCourseUpdates, fetchAllCourseData, warmCourseStartupData } from '../utils/scraper';
+import { getAttendanceRecords } from '../utils/attendance';
+import { getManualEvents } from '../utils/manualEvents';
+import { getExcludedLessons } from '../utils/excludedLessons';
+import { getNotes } from '../utils/notesStorage';
 import { refreshCommuterAlarmsInBackground } from '../utils/alarmSync';
 import {
   invalidateViaggioStartupSnapshot,
@@ -118,11 +122,22 @@ export function StartupCheckScreen({
         // Avvia subito in background il prefetch selettivo per scioperi e sezione Viaggio (non bloccante)
         prefetchViaggioStartupData(degreeUrl).catch(() => {});
 
+        // Pre-idrata in parallelo i dati locali in RAM (0 byte di rete) così all'ingresso nella
+        // schermata Orario / Aule i dati compaiono subito sul frame 0 senza spinner "Carico l'orario...".
+        const localWarmPromise = Promise.allSettled([
+          warmCourseStartupData(degreeUrl),
+          getManualEvents(degreeUrl),
+          getAttendanceRecords(degreeUrl),
+          getExcludedLessons(degreeUrl),
+          getNotes(),
+        ]);
+
         // Controllo simultaneo di aggiornamenti app obbligatori e orario lezioni
         const [appUpdateRes, courseUpdateRes] = await Promise.allSettled([
           checkForAppUpdate(),
           checkCourseUpdates(degreeUrl),
         ]);
+        await localWarmPromise;
 
         if (finishedRef.current) return;
 
@@ -182,10 +197,19 @@ export function StartupCheckScreen({
           setStatus('updating');
           setStatusMessage(courseUpdateRes.value.reason || 'Aggiornamento lezioni in corso...');
 
-          await fetchAllCourseData(degreeUrl, true, (stepMsg) => {
-            setProgressDetail(stepMsg);
-          });
+          await fetchAllCourseData(
+            degreeUrl,
+            true,
+            (stepMsg) => {
+              setProgressDetail(stepMsg);
+            },
+            {
+              changedTabUrls: courseUpdateRes.value.changedTabUrls,
+              preloadedHtmlByUrl: courseUpdateRes.value.preloadedHtmlByUrl,
+            }
+          );
 
+          await warmCourseStartupData(degreeUrl).catch(() => {});
           invalidateViaggioStartupSnapshot();
           prefetchViaggioStartupData(degreeUrl).catch(() => {});
           refreshCommuterAlarmsInBackground(true).catch(() => {});

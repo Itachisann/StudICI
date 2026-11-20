@@ -2,10 +2,196 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DisruptionEvent, DisruptionCategory, DisruptionImpact } from '@/types/disruptions';
 import { callGeminiJson } from './aiParser';
 
-const DISRUPTIONS_CACHE_KEY = '@studici_disruptions_cache';
+const DISRUPTIONS_CACHE_KEY = '@studici_disruptions_cache_v5';
 const DISRUPTIONS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minuti
-const LUCEVERDE_ARTICLES_CACHE_KEY = '@studici_luceverde_articles_cache_v1';
+const LUCEVERDE_ARTICLES_CACHE_KEY = '@studici_luceverde_articles_cache_v3';
 const LUCEVERDE_ARTICLES_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+const ROMAMOBILITA_ARTICLES_CACHE_KEY = '@studici_romamobilita_articles_cache_v1';
+const ROMAMOBILITA_ARTICLES_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+const MIT_AI_ANALYSIS_CACHE_KEY = '@studici_mit_ai_analysis_cache_v3';
+const MIT_AI_ANALYSIS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+const DISRUPTIONS_HTTP_META_KEY = '@studici_disruptions_http_etags_v1';
+
+function hashDisruptionSig(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 33) ^ str.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const idx = nextIdx++;
+        if (idx >= items.length) break;
+        results[idx] = await worker(items[idx], idx);
+      }
+    })
+  );
+  return results;
+}
+
+interface HttpConditionalEntry {
+  etag?: string;
+  lastModified?: string;
+  savedAt: number;
+  cachedEvents?: DisruptionEvent[];
+  cachedPosts?: any[];
+}
+
+const httpConditionalMetaCache = new Map<string, HttpConditionalEntry>();
+let httpConditionalMetaLoaded = false;
+
+async function ensureHttpConditionalMetaLoaded(): Promise<void> {
+  if (httpConditionalMetaLoaded) return;
+  httpConditionalMetaLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(DISRUPTIONS_HTTP_META_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const now = Date.now();
+      for (const [k, v] of Object.entries<HttpConditionalEntry>(parsed)) {
+        if (v && typeof v.savedAt === 'number' && now - v.savedAt < 7 * 24 * 60 * 60 * 1000) {
+          httpConditionalMetaCache.set(k, v);
+        }
+      }
+    }
+  } catch {}
+}
+
+let httpMetaPersistTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersistHttpConditionalMeta(): void {
+  if (httpMetaPersistTimer) clearTimeout(httpMetaPersistTimer);
+  httpMetaPersistTimer = setTimeout(() => {
+    httpMetaPersistTimer = null;
+    try {
+      const payload: Record<string, HttpConditionalEntry> = {};
+      for (const [k, v] of httpConditionalMetaCache.entries()) {
+        payload[k] = v;
+      }
+      AsyncStorage.setItem(DISRUPTIONS_HTTP_META_KEY, JSON.stringify(payload)).catch(() => {});
+    } catch {}
+  }, 400);
+}
+
+function buildConditionalHeaders(
+  baseHeaders: Record<string, string>,
+  metaKey: string
+): Record<string, string> {
+  const entry = httpConditionalMetaCache.get(metaKey);
+  if (!entry) return baseHeaders;
+  const headers = { ...baseHeaders };
+  if (entry.etag) headers['If-None-Match'] = entry.etag;
+  if (entry.lastModified) headers['If-Modified-Since'] = entry.lastModified;
+  return headers;
+}
+
+function saveConditionalResponseMeta(
+  metaKey: string,
+  res: Response,
+  payload: { cachedEvents?: DisruptionEvent[]; cachedPosts?: any[] }
+): void {
+  const etag = res.headers.get('etag') || res.headers.get('ETag') || undefined;
+  const lastModified =
+    res.headers.get('last-modified') || res.headers.get('Last-Modified') || undefined;
+  if (!etag && !lastModified) return;
+  httpConditionalMetaCache.set(metaKey, {
+    etag,
+    lastModified,
+    savedAt: Date.now(),
+    ...payload,
+  });
+  schedulePersistHttpConditionalMeta();
+}
+
+interface CachedMitAiAnalysis {
+  timestamp: number;
+  signature: string;
+  aiImpactsPassengerService?: boolean;
+  aiNonImpactReason?: string;
+}
+
+const romaMobilitaArticlesMemoryCache = new Map<string, CachedLuceverdeArticle>();
+let romaMobilitaArticlesStorageLoaded = false;
+
+async function ensureRomaMobilitaArticlesCacheLoaded(): Promise<void> {
+  if (romaMobilitaArticlesStorageLoaded) return;
+  romaMobilitaArticlesStorageLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(ROMAMOBILITA_ARTICLES_CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const now = Date.now();
+      for (const [k, v] of Object.entries<CachedLuceverdeArticle>(parsed)) {
+        if (v && v.event && typeof v.timestamp === 'number' && now - v.timestamp < ROMAMOBILITA_ARTICLES_TTL_MS) {
+          romaMobilitaArticlesMemoryCache.set(k, v);
+        }
+      }
+    }
+  } catch {}
+}
+
+async function persistRomaMobilitaArticlesCache(): Promise<void> {
+  try {
+    const now = Date.now();
+    const entries = Array.from(romaMobilitaArticlesMemoryCache.entries())
+      .filter(([, val]) => now - val.timestamp < ROMAMOBILITA_ARTICLES_TTL_MS)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, 60);
+    const payload: Record<string, CachedLuceverdeArticle> = {};
+    for (const [k, v] of entries) {
+      payload[k] = v;
+    }
+    await AsyncStorage.setItem(ROMAMOBILITA_ARTICLES_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+const mitAiAnalysisMemoryCache = new Map<string, CachedMitAiAnalysis>();
+let mitAiAnalysisStorageLoaded = false;
+
+async function ensureMitAiAnalysisCacheLoaded(): Promise<void> {
+  if (mitAiAnalysisStorageLoaded) return;
+  mitAiAnalysisStorageLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(MIT_AI_ANALYSIS_CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const now = Date.now();
+      for (const [k, v] of Object.entries<CachedMitAiAnalysis>(parsed)) {
+        if (v && typeof v.timestamp === 'number' && now - v.timestamp < MIT_AI_ANALYSIS_TTL_MS) {
+          mitAiAnalysisMemoryCache.set(k, v);
+        }
+      }
+    }
+  } catch {}
+}
+
+async function persistMitAiAnalysisCache(): Promise<void> {
+  try {
+    const now = Date.now();
+    const entries = Array.from(mitAiAnalysisMemoryCache.entries())
+      .filter(([, val]) => now - val.timestamp < MIT_AI_ANALYSIS_TTL_MS)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, 80);
+    const payload: Record<string, CachedMitAiAnalysis> = {};
+    for (const [k, v] of entries) {
+      payload[k] = v;
+    }
+    await AsyncStorage.setItem(MIT_AI_ANALYSIS_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
 
 interface CachedLuceverdeArticle {
   timestamp: number;
@@ -97,12 +283,14 @@ function parseDateItToIso(dStr: string): string {
 }
 
 /**
- * Cerca di estrarre una data italiana dal titolo della notizia di Luceverde
- * Es: "lunedì 2 novembre", "domenica 1°novembre", "dal 3 al 14 novembre",
- * "da mercoledì 4 a venerdì 6 novembre", "dal 28 ottobre al 15 novembre"
+ * Estrae una data esplicita italiana ("2 novembre", "dal 3 al 14 novembre", "fino al 30 novembre")
+ * senza ricorrere al fallback, ritornando null se non trovata.
  */
-function extractDateFromTitle(title: string, fallbackIso: string): { startIso: string; endIso: string } {
-  const clean = title.toLowerCase().replace(/°/g, ' ');
+function extractExplicitDateFromText(
+  text: string,
+  fallbackIso?: string
+): { startIso: string; endIso: string } | null {
+  const clean = text.toLowerCase().replace(/°/g, ' ');
   const year = new Date().getFullYear();
 
   // Pattern "fino a [giorno] X mese" (es: "fino a mercoledì 11 novembre", "fino al 30 novembre")
@@ -120,7 +308,7 @@ function extractDateFromTitle(title: string, fallbackIso: string): { startIso: s
     }
   }
 
-  // Pattern "da [giorno] X [mese1] a [giorno] Y mese2" (es: "da mercoledì 4 a venerdì 6 novembre", "dal 28 ottobre al 15 novembre", "dal 3 al 14 novembre")
+  // Pattern "da/tra [giorno] X [mese1] a/e [giorno] Y mese2"
   const multiMonthRangeMatch = clean.match(
     /(?:da|dal|dalla|tra)\s+(?:[a-z]+\s+)?(\d{1,2})(?:\s+([a-z]+))?\s+(?:a|al|alla|e)\s+(?:[a-z]+\s+)?(\d{1,2})\s+([a-z]+)/
   );
@@ -151,8 +339,137 @@ function extractDateFromTitle(title: string, fallbackIso: string): { startIso: s
     }
   }
 
+  return null;
+}
+
+/**
+ * Cerca di estrarre una data italiana dal titolo della notizia di Luceverde
+ * Es: "lunedì 2 novembre", "domenica 1°novembre", "dal 3 al 14 novembre",
+ * "da mercoledì 4 a venerdì 6 novembre", "dal 28 ottobre al 15 novembre"
+ */
+function extractDateFromTitle(title: string, fallbackIso: string): { startIso: string; endIso: string } {
+  const explicit = extractExplicitDateFromText(title, fallbackIso);
+  if (explicit) return explicit;
+
   const defaultIso = fallbackIso ? fallbackIso.slice(0, 10) : new Date().toISOString().slice(0, 10);
   return { startIso: defaultIso, endIso: defaultIso };
+}
+
+const ITALIAN_WEEKDAYS: Record<string, number> = {
+  domenica: 0,
+  lunedi: 1,
+  lunedì: 1,
+  martedi: 2,
+  martedì: 2,
+  mercoledi: 3,
+  mercoledì: 3,
+  giovedi: 4,
+  giovedì: 4,
+  venerdi: 5,
+  venerdì: 5,
+  sabato: 6,
+};
+
+/**
+ * Risolve date esplicite o riferimenti relativi ("oggi", "domani", "domenica")
+ * rispetto alla data di pubblicazione/aggiornamento dell'articolo Roma Mobilità.
+ */
+function extractDateFromRomaMobilitaText(
+  title: string,
+  plainText: string,
+  slug: string,
+  refIsoRaw: string
+): { startIso: string; endIso: string } {
+  const refIso = refIsoRaw ? refIsoRaw.slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+  // 1) Prima cerca una data esplicita con mese nel titolo, nel lead dell'articolo o nello slug
+  const explicit = extractExplicitDateFromText(
+    `${title} ${plainText.slice(0, 420)} ${slug.replace(/-/g, ' ')}`,
+    refIso
+  );
+  if (explicit) return explicit;
+
+  // 2) Riferimenti relativi ("oggi", "stamattina", "domani") nel titolo o attacco articolo
+  const headLow = `${title} ${plainText.slice(0, 180)}`.toLowerCase();
+  if (/\b(?:oggi|stamattina|stasera|stanotte)\b/.test(headLow)) {
+    return { startIso: refIso, endIso: refIso };
+  }
+  if (/\bdomani\b/.test(headLow)) {
+    const tomorrowIso = addDaysToIso(refIso, 1);
+    return { startIso: tomorrowIso, endIso: tomorrowIso };
+  }
+
+  // 3) Giorno della settimana ("domenica mattina", "venerdì") proiettato a partire da refIso
+  const weekdayMatch = headLow.match(
+    /\b(domenica|luned[ìi]|marted[ìi]|mercoled[ìi]|gioved[ìi]|venerd[ìi]|sabato)\b/
+  );
+  if (weekdayMatch) {
+    const targetDay = ITALIAN_WEEKDAYS[weekdayMatch[1]];
+    const parts = refIso.split('-').map(Number);
+    if (targetDay !== undefined && parts.length === 3) {
+      const refDate = new Date(parts[0], parts[1] - 1, parts[2]);
+      let diff = targetDay - refDate.getDay();
+      if (diff < 0) diff += 7;
+      const resolved = addDaysToIso(refIso, diff);
+      return { startIso: resolved, endIso: resolved };
+    }
+  }
+
+  return { startIso: refIso, endIso: refIso };
+}
+
+/**
+ * Converte HTML WordPress (entità numeriche/nominative e tag) in testo pulito leggibile.
+ */
+function decodeHtmlEntitiesAndStripTags(html: string): string {
+  if (!html) return '';
+  const withNewlines = html
+    .replace(/<\/(?:p|div|li|h[1-6]|tr)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+
+  const decoded = withNewlines
+    .replace(/&#(\d+);/g, (_, num) => {
+      const code = parseInt(num, 10);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
+    })
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&laquo;/gi, '«')
+    .replace(/&raquo;/gi, '»')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&rsquo;/gi, '’')
+    .replace(/&lsquo;/gi, '‘')
+    .replace(/&ldquo;/gi, '“')
+    .replace(/&rdquo;/gi, '”')
+    .replace(/&agrave;/g, 'à')
+    .replace(/&egrave;/g, 'è')
+    .replace(/&eacute;/g, 'é')
+    .replace(/&igrave;/g, 'ì')
+    .replace(/&ograve;/g, 'ò')
+    .replace(/&ugrave;/g, 'ù')
+    .replace(/&Agrave;/g, 'À')
+    .replace(/&Egrave;/g, 'È');
+
+  return decoded
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 export interface ParsedDisruptionSchedule {
@@ -252,13 +569,32 @@ function selectRelevantModalitaClause(
   if (parts.length <= 1) return text;
 
   if (category === 'sciopero_treni') {
-    const railClause = parts.find((p) => /ferrovi|fs|trenitalia|rfi|rotai/i.test(p));
+    const railClause = parts.find((p) => /ferrovi|fs\b|trenitalia|rfi|rotai/i.test(p));
     if (railClause) return railClause;
   } else if (category === 'sciopero_tpl') {
-    const tplClause = parts.find((p) => /\btpl\b|pubblico locale|bus|metro|tram/i.test(p));
+    const tplClause = parts.find((p) => /\btpl\b|pubblico locale|bus|metro|tram|atac|cotral/i.test(p));
     if (tplClause) return tplClause;
   }
   return parts[0];
+}
+
+/**
+ * Estrae un'eventuale data esplicita singola ("DEL 21/11", "IL 21/11/2026") presente nella clausola specifica
+ * di uno sciopero plurisettoriale/generale quando non c'è un range orario con date inline.
+ */
+function extractSingleClauseDateIso(clauseText: string, refStartIso: string): string | null {
+  const m = clauseText.match(/(?:del|il|giorno)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/i);
+  if (!m) return null;
+  return resolveInlineDayMonthIso(m[1], m[2], m[3], refStartIso);
+}
+
+function stripGuaranteedBands(raw: string): string {
+  return raw
+    .replace(
+      /(?:servizio\s+(?:sar[àa]\s+|è\s+)?(?:garantit[oa]|assicurat[oa])|fasce\s+(?:orarie\s+)?di\s+garanzia|fasce\s+garantite|corse\s+garantite|regolare\s+fino\s+alle)[^.;\n]*/gi,
+      ' '
+    )
+    .replace(/\b(?:garantit[oeai]|tutela)\s+(?:fino\s+alle|dalle|tra\s+le)[^.;\n]*/gi, ' ');
 }
 
 /**
@@ -270,31 +606,65 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
   const baseStartIso = event.startDate || new Date().toISOString().slice(0, 10);
   const baseEndIso = event.endDate && event.endDate >= baseStartIso ? event.endDate : baseStartIso;
 
-  const mitNotes =
-    event.sourceName === 'Ministero dei Trasporti (MIT)'
-      ? selectRelevantModalitaClause(event.notes || '', event.category)
-      : event.notes || '';
+  const isPureMit = event.sourceName === 'Ministero dei Trasporti (MIT)';
+  const mitNotes = isPureMit
+    ? selectRelevantModalitaClause(event.notes || '', event.category)
+    : event.notes || '';
 
+  const rawText = isPureMit
+    ? `${mitNotes} ${event.timeWindow || ''} ${event.title || ''}`
+    : `${event.timeWindow || ''} ${event.title || ''} ${mitNotes}`;
   const text =
-    event.sourceName === 'Ministero dei Trasporti (MIT)'
-      ? `${mitNotes} ${event.timeWindow || ''} ${event.title || ''}`
-      : `${event.timeWindow || ''} ${event.title || ''} ${mitNotes}`;
+    event.category === 'sciopero_treni' || event.category === 'sciopero_tpl'
+      ? stripGuaranteedBands(rawText)
+      : rawText;
   const lower = text.toLowerCase();
 
+  const isStrikeCategory =
+    event.category === 'sciopero_treni' || event.category === 'sciopero_tpl';
+
   const isExplicitNight =
-    event.isNocturnal === true ||
-    lower.includes('chiusura notturna') ||
-    lower.includes('lavori notturni') ||
-    lower.includes('fascia oraria compresa tra le ore 22') ||
-    lower.includes('fascia oraria compresa tra le 22') ||
-    lower.includes('notturno') ||
-    lower.includes('notturna') ||
-    lower.includes('ore 22') ||
-    lower.includes('ore 23') ||
-    lower.includes('dalle 22') ||
-    lower.includes('dalle 23');
+    !isStrikeCategory &&
+    (event.isNocturnal === true ||
+      lower.includes('chiusura notturna') ||
+      lower.includes('lavori notturni') ||
+      lower.includes('manutenzione notturna') ||
+      lower.includes('fascia oraria compresa tra le ore 22') ||
+      lower.includes('fascia oraria compresa tra le 22') ||
+      lower.includes('notturno') ||
+      lower.includes('notturna') ||
+      lower.includes('ore 22') ||
+      lower.includes('ore 23') ||
+      lower.includes('dalle 22') ||
+      lower.includes('dalle 23'));
 
   const durationHours = extractDurationHours(text);
+
+  // Uno sciopero TPL di 24 ore sul singolo giorno copre l'intera giornata di servizio (fatte salve le fasce di garanzia)
+  if (
+    event.category === 'sciopero_tpl' &&
+    baseStartIso === baseEndIso &&
+    (durationHours === 24 || /\b24\s*ore\b|intera\s+giornata/i.test(text))
+  ) {
+    const singleClauseIso = isPureMit
+      ? extractSingleClauseDateIso(mitNotes, baseStartIso)
+      : null;
+    const resolvedIso = singleClauseIso || baseStartIso;
+    return {
+      startDateIso: resolvedIso,
+      endDateIso: resolvedIso,
+      startHour: 0,
+      startMinute: 0,
+      endHour: 24,
+      endMinute: 0,
+      durationHours: durationHours || 24,
+      hasExplicitRange: false,
+      hasStartTimeOnly: false,
+      hasTimeWindow: false,
+      isFullDay: true,
+      isNocturnal: false,
+    };
+  }
 
   // 1) Intervallo completo con eventuali date inline ("DALLE 21.00 DEL 20/11 ALLE 20.00 DEL 21/11" o "09:01 - 17:00")
   const rangeRegex =
@@ -337,12 +707,11 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
     const spansMultiDayDaytime =
       startDateIso !== endDateIso && (endTotalMins > 8 * 60 || addDaysToIso(startDateIso, 1) < endDateIso);
 
-    const isNocturnal =
-      event.category === 'sciopero_treni'
-        ? false
-        : isExplicitNight ||
-          (!spansMultiDayDaytime &&
-            ((startDateIso === endDateIso && sH >= 21) || (sH >= 20 && eH <= 7)));
+    const isNocturnal = isStrikeCategory
+      ? false
+      : isExplicitNight ||
+        (!spansMultiDayDaytime &&
+          ((startDateIso === endDateIso && sH >= 21) || (sH >= 20 && eH <= 7)));
 
     return {
       startDateIso,
@@ -398,10 +767,9 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
         hasStartTimeOnly: false,
         hasTimeWindow: true,
         isFullDay: isFullDayBounds,
-        isNocturnal:
-          event.category === 'sciopero_treni'
-            ? false
-            : isExplicitNight || (!spansMultiDayDaytime && sH >= 21),
+        isNocturnal: isStrikeCategory
+          ? false
+          : isExplicitNight || (!spansMultiDayDaytime && sH >= 21),
       };
     }
 
@@ -416,7 +784,7 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
       hasStartTimeOnly: true,
       hasTimeWindow: true,
       isFullDay: false,
-      isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight || sH >= 21,
+      isNocturnal: isStrikeCategory ? false : isExplicitNight || sH >= 21,
     };
   }
 
@@ -445,14 +813,21 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
       hasStartTimeOnly: false,
       hasTimeWindow: true,
       isFullDay: false,
-      isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight,
+      isNocturnal: isStrikeCategory ? false : isExplicitNight,
     };
   }
 
   // 4) Intera giornata / nessun orario orologio specifico
+  const singleClauseIso =
+    event.sourceName === 'Ministero dei Trasporti (MIT)'
+      ? extractSingleClauseDateIso(mitNotes, baseStartIso)
+      : null;
+  const finalFullStartIso = singleClauseIso || baseStartIso;
+  const finalFullEndIso = singleClauseIso || baseEndIso;
+
   return {
-    startDateIso: baseStartIso,
-    endDateIso: baseEndIso,
+    startDateIso: finalFullStartIso,
+    endDateIso: finalFullEndIso,
     startHour: 0,
     startMinute: 0,
     endHour: 24,
@@ -462,7 +837,7 @@ export function parseDisruptionSchedule(event: DisruptionEvent): ParsedDisruptio
     hasStartTimeOnly: false,
     hasTimeWindow: false,
     isFullDay: true,
-    isNocturnal: event.category === 'sciopero_treni' ? false : isExplicitNight,
+    isNocturnal: isStrikeCategory ? false : isExplicitNight,
   };
 }
 
@@ -667,22 +1042,33 @@ export function formatTrainStrikeBannerSummary(
  */
 async function fetchOfficialStrikes(): Promise<{ events: DisruptionEvent[]; ok: boolean }> {
   try {
+    await ensureHttpConditionalMetaLoaded();
+    const metaKey = 'mit-rss';
+    const baseHeaders = {
+      Accept: 'application/rss+xml, application/xml, text/xml, */*',
+      'User-Agent':
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    };
+    const prevMeta = httpConditionalMetaCache.get(metaKey);
     const res = await fetchWithTimeout(
       'https://scioperi.mit.gov.it/mit2/public/scioperi/rss',
       {
-        headers: {
-          Accept: 'application/rss+xml, application/xml, text/xml, */*',
-          'User-Agent':
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-        },
+        headers: prevMeta?.cachedEvents
+          ? buildConditionalHeaders(baseHeaders, metaKey)
+          : baseHeaders,
       },
       7500
     );
+    if (res.status === 304 && prevMeta?.cachedEvents) {
+      return { events: prevMeta.cachedEvents, ok: true };
+    }
     if (!res.ok) return { events: [], ok: false };
 
     const xml = await res.text();
     const items = xml.split('<item>').slice(1);
     const strikes: DisruptionEvent[] = [];
+    const todayD = new Date();
+    const todayIso = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
 
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -707,58 +1093,183 @@ async function fetchOfficialStrikes(): Promise<{ events: DisruptionEvent[]; ok: 
       const region = regionMatch ? regionMatch[1].trim() : '';
       const startDateRaw = startMatch ? startMatch[1] : '';
       const endDateRaw = endMatch ? endMatch[1] : startDateRaw;
+      const modalitaStr = modeMatch ? modeMatch[1].trim() : '';
+      const affectedCompanies = categoryMatch ? categoryMatch[1].trim() : '';
+      const unionsStr = unionsMatch ? unionsMatch[1].trim() : '';
 
-      const isRail = sector.toLowerCase().includes('ferrovi');
-      const isTpl =
-        sector.toLowerCase().includes('pubblico locale') || sector.toLowerCase().includes('tpl');
+      const sectorLow = sector.toLowerCase();
+      const combinedLow = `${sector} ${modalitaStr} ${affectedCompanies}`.toLowerCase();
+
+      // Escludi scioperi generali che escludono esplicitamente il settore trasporti / trasporto passeggeri
+      const excludesTransport =
+        combinedLow.includes('escluso servizio trasporto passeggeri') ||
+        combinedLow.includes('con esclusione settore trasporti') ||
+        combinedLow.includes('con esclusione del settore trasporti') ||
+        (combinedLow.includes('con esclusione trasporto ferroviario') &&
+          combinedLow.includes('aziende tpl'));
+
+      if (excludesTransport) continue;
+
+      const isMultiOrGeneral =
+        sectorLow.includes('plurisettoriale') || sectorLow.includes('generale');
+
+      // Non considerare il settore "Trasporto merci" come sciopero ferroviario passeggeri
+      const isRailSector =
+        sectorLow.includes('ferrovi') && !sectorLow.includes('merci');
+      const isTplSector =
+        sectorLow.includes('pubblico locale') || sectorLow.includes('tpl');
+
+      const clauseWithoutCargo = `${modalitaStr} ${affectedCompanies}`.replace(
+        /trasporto\s+merci\s+su\s+rotaia|autotrasporto\s+merci|\bmerci\b\s+e\s+logistica|appalti\s+ferroviari/gi,
+        ''
+      );
+
+      const mentionsRailInClause =
+        isMultiOrGeneral &&
+        /ferrovi|trenitalia|\brfi\b|gruppo fs|trasporto ferroviario/i.test(
+          clauseWithoutCargo
+        ) &&
+        !/esclusione\s+trasporto\s+ferroviario/i.test(affectedCompanies);
+
+      const mentionsTplInClause =
+        isMultiOrGeneral &&
+        /\btpl\b|trasporto pubblico locale|atac|cotral|bus|metro/i.test(
+          `${modalitaStr} ${affectedCompanies}`
+        ) &&
+        !/esclusione[^<]*tpl/i.test(affectedCompanies);
+
+      const hasRail = isRailSector || mentionsRailInClause;
+      const hasTpl = isTplSector || mentionsTplInClause;
+
       const isRelevantGeo =
         region.toLowerCase().includes('lazio') ||
+        region.toLowerCase().includes('roma') ||
         region.toLowerCase().includes('italia') ||
         scope.toLowerCase().includes('nazion') ||
         region.trim().length === 0;
 
-      if ((isRail || isTpl) && isRelevantGeo) {
+      if ((hasRail || hasTpl) && isRelevantGeo) {
         const startIso = parseDateItToIso(startDateRaw);
         const endIso = parseDateItToIso(endDateRaw) || startIso;
         if (!startIso) continue;
 
-        const category: DisruptionCategory = isRail ? 'sciopero_treni' : 'sciopero_tpl';
-        const modalitaStr = modeMatch ? modeMatch[1].trim() : '';
-        const affectedCompanies = categoryMatch ? categoryMatch[1].trim() : '';
-        const unionsStr = unionsMatch ? unionsMatch[1].trim() : '';
+        const categoriesToCreate: DisruptionCategory[] = [];
+        if (hasRail) categoriesToCreate.push('sciopero_treni');
+        if (hasTpl) categoriesToCreate.push('sciopero_tpl');
 
-        const affectedModes: ('train' | 'transit' | 'walk')[] = isRail
-          ? ['train']
-          : ['transit'];
+        for (const category of categoriesToCreate) {
+          const isRailCat = category === 'sciopero_treni';
+          const affectedModes: ('train' | 'transit' | 'walk')[] = isRailCat
+            ? ['train']
+            : ['transit', 'walk'];
 
-        const draftEvent: DisruptionEvent = {
-          id: `mit-${startIso}-${i}`,
-          title: `Sciopero ${sector} (${scope})`,
-          category,
-          impact: isRail ? 'high' : 'medium',
-          startDate: startIso,
-          endDate: endIso,
-          formattedDateSpan: startDateRaw === endDateRaw ? startDateRaw : `${startDateRaw} - ${endDateRaw}`,
-          timeWindow: '',
-          scope,
-          affectedModes,
-          affectedCompanies,
-          unions: unionsStr,
-          notes: modalitaStr,
-          sourceName: 'Ministero dei Trasporti (MIT)',
-          sourceUrl: 'https://scioperi.mit.gov.it/mit2/public/scioperi',
-        };
+          const displaySector = isMultiOrGeneral
+            ? isRailCat
+              ? `Ferroviario / ${sector}`
+              : `Trasporto pubblico locale / ${sector}`
+            : sector;
 
-        const parsedSchedule = parseDisruptionSchedule(draftEvent);
-        draftEvent.startDate = parsedSchedule.startDateIso;
-        draftEvent.endDate = parsedSchedule.endDateIso;
-        draftEvent.timeWindow = formatDisruptionModalTimeWindow(draftEvent);
+          const relevantClause = selectRelevantModalitaClause(modalitaStr, category);
+          const stableContentKey = `${category}|${startIso}|${endIso}|${scope}|${affectedCompanies}|${relevantClause || modalitaStr}`;
+          const stableHash = hashDisruptionSig(stableContentKey);
 
-        strikes.push(draftEvent);
+          const draftEvent: DisruptionEvent = {
+            id: `mit-${category}-${startIso}-${stableHash}`,
+            title: `Sciopero ${displaySector} (${scope})`,
+            category,
+            impact: 'high',
+            startDate: startIso,
+            endDate: endIso,
+            formattedDateSpan:
+              startDateRaw === endDateRaw ? startDateRaw : `${startDateRaw} - ${endDateRaw}`,
+            timeWindow: '',
+            scope,
+            affectedModes,
+            affectedCompanies,
+            unions: unionsStr,
+            notes: relevantClause || modalitaStr,
+            sourceName: 'Ministero dei Trasporti (MIT)',
+            sourceUrl: 'https://scioperi.mit.gov.it/mit2/public/scioperi',
+          };
+
+          const parsedSchedule = parseDisruptionSchedule(draftEvent);
+          draftEvent.startDate = parsedSchedule.startDateIso;
+          draftEvent.endDate = parsedSchedule.endDateIso;
+          if (draftEvent.startDate === draftEvent.endDate) {
+            const p = draftEvent.startDate.split('-');
+            if (p.length === 3) {
+              draftEvent.formattedDateSpan = `${p[2]}/${p[1]}/${p[0]}`;
+            }
+          }
+          draftEvent.timeWindow = formatDisruptionModalTimeWindow(draftEvent);
+
+          // Pre-filtra scioperi già scaduti prima di accodarli alla valutazione Gemini
+          if (draftEvent.endDate && draftEvent.endDate < todayIso) {
+            continue;
+          }
+
+          strikes.push(draftEvent);
+        }
       }
     }
 
-    return { events: strikes, ok: true };
+    await ensureMitAiAnalysisCacheLoaded();
+    const uncachedStrikes: DisruptionEvent[] = [];
+    const enrichedStrikes: DisruptionEvent[] = [];
+
+    for (const st of strikes) {
+      const sig = `${st.category}|${st.startDate}|${st.endDate}|${st.scope || ''}|${st.affectedCompanies || ''}|${st.notes || ''}`;
+      const cacheKey = hashDisruptionSig(sig);
+      const cached = mitAiAnalysisMemoryCache.get(cacheKey);
+      if (
+        cached &&
+        cached.signature === sig &&
+        Date.now() - cached.timestamp < MIT_AI_ANALYSIS_TTL_MS
+      ) {
+        enrichedStrikes.push({
+          ...st,
+          aiImpactsPassengerService: cached.aiImpactsPassengerService,
+          aiNonImpactReason: cached.aiNonImpactReason,
+        });
+      } else {
+        // Salta Gemini se le regole deterministiche escludono già con certezza lo sciopero (es. merci/Italo/altre regioni)
+        const alreadyExcluded =
+          (st.category === 'sciopero_treni' && !isTrainStrikeImpactingCommuter(st)) ||
+          (st.category === 'sciopero_tpl' && !isTplStrikeImpactingRome(st));
+        if (!alreadyExcluded) {
+          uncachedStrikes.push(st);
+        }
+        enrichedStrikes.push(st);
+      }
+    }
+
+    if (uncachedStrikes.length > 0) {
+      const aiEvaluated = await evaluateMitStrikesImpactWithGemini(uncachedStrikes);
+      const evalMap = new Map<string, DisruptionEvent>();
+      const nowTs = Date.now();
+      for (const ev of aiEvaluated) {
+        evalMap.set(ev.id, ev);
+        const sig = `${ev.category}|${ev.startDate}|${ev.endDate}|${ev.scope || ''}|${ev.affectedCompanies || ''}|${ev.notes || ''}`;
+        const cacheKey = hashDisruptionSig(sig);
+        mitAiAnalysisMemoryCache.set(cacheKey, {
+          timestamp: nowTs,
+          signature: sig,
+          aiImpactsPassengerService: ev.aiImpactsPassengerService,
+          aiNonImpactReason: ev.aiNonImpactReason,
+        });
+      }
+      void persistMitAiAnalysisCache();
+
+      for (let idx = 0; idx < enrichedStrikes.length; idx++) {
+        const updated = evalMap.get(enrichedStrikes[idx].id);
+        if (updated) {
+          enrichedStrikes[idx] = updated;
+        }
+      }
+    }
+
+    saveConditionalResponseMeta(metaKey, res, { cachedEvents: enrichedStrikes });
+    return { events: enrichedStrikes, ok: true };
   } catch (err) {
     console.warn('[Disruptions] Errore fetch MIT RSS:', err);
     return { events: [], ok: false };
@@ -766,12 +1277,160 @@ async function fetchOfficialStrikes(): Promise<{ events: DisruptionEvent[]; ok: 
 }
 
 /**
- * Recupera l'articolo completo di dettaglio da Luceverde per estrarre orari, percorso e testo reale
+ * Usa Gemini Flash Lite per valutare semanticamente se gli scioperi MIT estratti impattano davvero
+ * la circolazione dei treni passeggeri del pendolare (Trenitalia/RFI/FS) o dei mezzi pubblici TPL di Roma (ATAC/Roma TPL/Cotral),
+ * escludendo scioperi riservati al solo trasporto merci/cargo, appalti pulizie/ristorazione/uffici, taxi/NCC/marittimo/aereo o aziende di altre città.
  */
-async function fetchLuceverdeArticleDetail(id: string): Promise<{
+async function evaluateMitStrikesImpactWithGemini(
+  strikes: DisruptionEvent[]
+): Promise<DisruptionEvent[]> {
+  if (!strikes || strikes.length === 0) return strikes;
+
+  try {
+    const payload = strikes.map((s) => ({
+      id: s.id,
+      category: s.category,
+      title: s.title,
+      scope: s.scope,
+      affectedCompanies: s.affectedCompanies || '',
+      unions: s.unions || '',
+      notes: s.notes || '',
+    }));
+
+    const prompt = `Sei un analista esperto di trasporti per uno studente pendolare che viaggia in treno (Trenitalia Regionali/RV/IC su rete RFI verso Roma Tiburtina/Termini/Ostiense) e usa i mezzi pubblici urbani di Roma (ATAC, Roma TPL, Cotral: metro, bus, tram).
+Valuta per ciascuno dei seguenti scioperi del Ministero dei Trasporti (MIT) se impatta REALMENTE la circolazione dei treni passeggeri o dei mezzi pubblici urbani del pendolare a Roma.
+
+Regole tassative per "impactsCommuterService":
+- Imposta "impactsCommuterService": FALSE nei seguenti casi che NON bloccano i viaggi del pendolare:
+  1. Sciopero che riguarda ESCLUSIVAMENTE il trasporto merci / cargo su rotaia o gomma (es. Mercitalia Rail, Captrain, GTS Rail, Medway, DB Cargo, SBB Cargo, Sangritana Cargo, EVM Rail, TX Logistik, autotrasporto merci, logistica).
+  2. Sciopero che riguarda ESCLUSIVAMENTE appalti accessori che non fermano la circolazione dei treni o dei bus: pulizie, sanificazione, ristorazione a bordo, facchinaggio, vigilanza privata, assistenza clienti/biglietterie/call center, personale amministrativo o d'ufficio, manutenzione impianti in ambiti territoriali lontani dal Lazio (es. DOIT Verona, Bari, Torino, Milano).
+  3. Sciopero ferroviario che riguarda ESCLUSIVAMENTE Italo-NTV o ferrovie regionali di altre regioni (es. Trenord, EAV, Ferrovie del Sud Est, Ferrotramviaria, FNM, TPER, SAD).
+  4. Sciopero TPL che riguarda ESCLUSIVAMENTE aziende di altre città/province fuori da Roma/Lazio o settori diversi dal TPL di linea (es. solo Taxi, solo NCC, solo scuolabus, solo trasporto marittimo/aereo/autostrade).
+- Imposta "impactsCommuterService": TRUE se lo sciopero coinvolge il personale di macchina/bordo/circolazione Trenitalia, Gruppo FS, RFI (nazionale o Lazio) oppure il trasporto pubblico locale (TPL nazionale, Lazio o Roma ATAC/Cotral/Roma TPL) o uno sciopero generale/plurisettoriale che include la circolazione ferroviaria passeggeri o TPL.
+- In "reason": se impactsCommuterService è false, scrivi una spiegazione brevissima in italiano del motivo (es. "Riguarda solo il trasporto merci", "Solo addetti appalti pulizie", "Solo personale Italo-NTV", "Riguarda altra regione"); altrimenti "".
+
+Scioperi da valutare:
+${JSON.stringify(payload)}
+
+Rispondi rigorosamente SOLO con il JSON array valido nel formato:
+[
+  {
+    "id": "string",
+    "impactsCommuterService": boolean,
+    "reason": "string"
+  }
+]`;
+
+    const aiRes = await callGeminiJson(prompt, 6500);
+    const parsed: any[] = JSON.parse(aiRes);
+    if (!Array.isArray(parsed)) return strikes;
+
+    const map = new Map<string, { impacts: boolean; reason: string }>();
+    for (const item of parsed) {
+      if (item && typeof item.id === 'string' && typeof item.impactsCommuterService === 'boolean') {
+        map.set(item.id, {
+          impacts: item.impactsCommuterService,
+          reason: typeof item.reason === 'string' ? item.reason.trim() : '',
+        });
+      }
+    }
+
+    return strikes.map((s) => {
+      const res = map.get(s.id);
+      if (!res) return s;
+      return {
+        ...s,
+        aiImpactsPassengerService: res.impacts,
+        aiNonImpactReason: res.reason || undefined,
+      };
+    });
+  } catch (err) {
+    console.warn('[Disruptions] Fallback valutazione AI scioperi MIT:', err);
+    return strikes;
+  }
+}
+
+function parseLuceverdeComponentsToDetail(components: any[]): {
+  text?: string;
+  timeWindow?: string;
+} | null {
+  const paragraphs: string[] = [];
+
+  for (const comp of components) {
+    if (comp?.content?.raw?.children) {
+      for (const ch of comp.content.raw.children) {
+        const t = ch.children?.map((c: any) => c.text).join('') || '';
+        const cleaned = t.replace(/Fonte_[^\n]+/g, '').trim();
+        if (
+          cleaned &&
+          !cleaned.toLowerCase().includes('iscriviti') &&
+          !cleaned.toLowerCase().includes('whatsapp')
+        ) {
+          paragraphs.push(cleaned);
+        }
+      }
+    }
+  }
+
+  const fullText = paragraphs.join('\n\n').trim();
+  if (!fullText) return null;
+
+  let timeWindow = '';
+  const hoursRangeMatch = fullText.match(
+    /(?:dalle\s*ore\s*|in\s*orario\s*|tra\s*le\s*ore\s*)([0-9]{1,2}[:.][0-9]{2})\s*(?:alle\s*(?:ore\s*)?|\/|-)\s*([0-9]{1,2}[:.][0-9]{2})/i
+  );
+  if (hoursRangeMatch) {
+    timeWindow = `${hoursRangeMatch[1].replace('.', ':')} - ${hoursRangeMatch[2].replace('.', ':')}`;
+  } else {
+    const singleHourMatch = fullText.match(
+      /(?:dalle\s*ore\s*|alle\s*ore\s*|ore\s*)([0-9]{1,2}[:.][0-9]{2})/i
+    );
+    if (singleHourMatch) {
+      timeWindow = `dalle ${singleHourMatch[1].replace('.', ':')}`;
+    }
+  }
+
+  return {
+    text: fullText,
+    timeWindow,
+  };
+}
+
+/**
+ * Recupera l'articolo completo di dettaglio da Luceverde preferendo l'endpoint leggero
+ * Next.js JSON (`/_next/data/<buildId>/articles/<id>.json`, ~10 KB) con fallback trasparente HTML.
+ */
+async function fetchLuceverdeArticleDetail(
+  id: string,
+  buildId?: string
+): Promise<{
   text?: string;
   timeWindow?: string;
 } | null> {
+  if (buildId) {
+    try {
+      const jsonRes = await fetchWithTimeout(
+        `https://roma.luceverde.it/_next/data/${encodeURIComponent(buildId)}/articles/${encodeURIComponent(id)}.json`,
+        {
+          headers: {
+            Accept: 'application/json, */*',
+            'User-Agent':
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+          },
+        },
+        4500
+      );
+      if (jsonRes.ok) {
+        const jsonData = await jsonRes.json();
+        const components = jsonData?.pageProps?.components || [];
+        const parsed = parseLuceverdeComponentsToDetail(components);
+        if (parsed) return parsed;
+      }
+    } catch {
+      // Fallback trasparente ad HTML
+    }
+  }
+
   try {
     const res = await fetchWithTimeout(
       `https://roma.luceverde.it/articles/${id}`,
@@ -792,46 +1451,7 @@ async function fetchLuceverdeArticleDetail(id: string): Promise<{
 
     const data = JSON.parse(match[1]);
     const components = data?.props?.pageProps?.components || [];
-    const paragraphs: string[] = [];
-
-    for (const comp of components) {
-      if (comp.content?.raw?.children) {
-        for (const ch of comp.content.raw.children) {
-          const t = ch.children?.map((c: any) => c.text).join('') || '';
-          const cleaned = t.replace(/Fonte_[^\n]+/g, '').trim();
-          if (
-            cleaned &&
-            !cleaned.toLowerCase().includes('iscriviti') &&
-            !cleaned.toLowerCase().includes('whatsapp')
-          ) {
-            paragraphs.push(cleaned);
-          }
-        }
-      }
-    }
-
-    const fullText = paragraphs.join('\n\n').trim();
-    if (!fullText) return null;
-
-    let timeWindow = '';
-    const hoursRangeMatch = fullText.match(
-      /(?:dalle\s*ore\s*|in\s*orario\s*|tra\s*le\s*ore\s*)([0-9]{1,2}[:.][0-9]{2})\s*(?:alle\s*(?:ore\s*)?|\/|-)\s*([0-9]{1,2}[:.][0-9]{2})/i
-    );
-    if (hoursRangeMatch) {
-      timeWindow = `${hoursRangeMatch[1].replace('.', ':')} - ${hoursRangeMatch[2].replace('.', ':')}`;
-    } else {
-      const singleHourMatch = fullText.match(
-        /(?:dalle\s*ore\s*|alle\s*ore\s*|ore\s*)([0-9]{1,2}[:.][0-9]{2})/i
-      );
-      if (singleHourMatch) {
-        timeWindow = `dalle ${singleHourMatch[1].replace('.', ':')}`;
-      }
-    }
-
-    return {
-      text: fullText,
-      timeWindow,
-    };
+    return parseLuceverdeComponentsToDetail(components);
   } catch {
     return null;
   }
@@ -842,17 +1462,26 @@ async function fetchLuceverdeArticleDetail(id: string): Promise<{
  */
 async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; ok: boolean }> {
   try {
+    await ensureHttpConditionalMetaLoaded();
+    const metaKey = 'luceverde-news';
+    const baseHeaders = {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'User-Agent':
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    };
+    const prevMeta = httpConditionalMetaCache.get(metaKey);
     const res = await fetchWithTimeout(
       'https://roma.luceverde.it/news',
       {
-        headers: {
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'User-Agent':
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-        },
+        headers: prevMeta?.cachedEvents
+          ? buildConditionalHeaders(baseHeaders, metaKey)
+          : baseHeaders,
       },
       7500
     );
+    if (res.status === 304 && prevMeta?.cachedEvents) {
+      return { events: prevMeta.cachedEvents, ok: true };
+    }
     if (!res.ok) return { events: [], ok: false };
 
     const html = await res.text();
@@ -860,8 +1489,11 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
     if (!nextMatch) return { events: [], ok: false };
 
     const nextData = JSON.parse(nextMatch[1]);
+    const nextBuildId = typeof nextData?.buildId === 'string' ? nextData.buildId.trim() : '';
     const newsList: any[] = nextData?.props?.pageProps?.additionalData?.newsList || [];
     const events: DisruptionEvent[] = [];
+    const todayD = new Date();
+    const todayIso = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
 
     const keywords = [
       'Verano',
@@ -899,7 +1531,11 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
 
       if (isGenericDigest) continue;
 
-      // Identifica manifestazioni, cortei, presidi o eventi con impatto viario/pedonale
+      // Identifica scioperi TPL, manifestazioni, cortei, presidi o eventi con impatto viario/pedonale
+      const isScioperoTpl =
+        titleLower.includes('sciopero') &&
+        !titleLower.includes('aereo') &&
+        !titleLower.includes('aeroport');
       const isManifestazione =
         titleLower.includes('manifestazi') ||
         titleLower.includes('corteo') ||
@@ -927,16 +1563,37 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
         titleLower.includes('esquilino') ||
         titleLower.includes('tangenziale');
 
-      // Se non è né una manifestazione né un blocco/evento in zona rilevante, saltiamo
-      if (!isManifestazione && !isBlocco && !isRelevantZone) continue;
+      // Se non è né uno sciopero né una manifestazione né un blocco/evento in zona rilevante, saltiamo
+      if (!isScioperoTpl && !isManifestazione && !isBlocco && !isRelevantZone) continue;
 
       const { startIso, endIso } = extractDateFromTitle(title, item.newsTimeUTC || '');
+
+      // Pre-filtra notizie già scadute prima di scaricare il corpo dell'articolo o invocare Gemini
+      if (endIso && endIso < todayIso) continue;
+
+      // Pre-filtra chiusure puramente notturne o esclusivamente su GRA/autostrade prive di riferimenti urbani Sapienza
+      const isClearlyNocturnalOrGra =
+        !isScioperoTpl &&
+        (titleLower.includes('chiusura notturna') ||
+          titleLower.includes('lavori notturni') ||
+          titleLower.includes('manutenzione notturna') ||
+          ((/\bg\.?r\.?a\.?\b/.test(titleLower) ||
+            titleLower.includes('grande raccordo') ||
+            titleLower.includes('autostrada')) &&
+            !titleLower.includes('verano') &&
+            !titleLower.includes('sapienza') &&
+            !titleLower.includes('san lorenzo')));
+      if (isClearlyNocturnalOrGra) continue;
 
       let category: DisruptionCategory = 'cantiere_viabilita';
       let impact: DisruptionImpact = 'medium';
       const affectedModes: ('train' | 'transit' | 'walk')[] = ['walk'];
 
-      if (isManifestazione) {
+      if (isScioperoTpl) {
+        category = 'sciopero_tpl';
+        impact = 'high';
+        affectedModes.push('transit');
+      } else if (isManifestazione) {
         category = 'manifestazione';
         impact = 'high';
         affectedModes.push('transit');
@@ -1006,14 +1663,16 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
     }
 
     if (uncachedDrafts.length > 0) {
-      // Arricchimento asincrono dei dettagli dal corpo dei soli nuovi articoli non ancora in cache
-      const detailedNewEvents = await Promise.all(
-        uncachedDrafts.map(async (ev) => {
+      // Arricchimento asincrono dei dettagli dal corpo dei soli nuovi articoli con concorrenza limitata (max 5)
+      const detailedNewEvents = await runWithConcurrency(
+        uncachedDrafts,
+        5,
+        async (ev) => {
           if (!ev.id || !ev.id.startsWith('piattaforma-')) {
             return ev;
           }
           try {
-            const detail = await fetchLuceverdeArticleDetail(ev.id);
+            const detail = await fetchLuceverdeArticleDetail(ev.id, nextBuildId);
             if (!detail) return ev;
 
             const updatedNotes = detail.text || ev.notes;
@@ -1035,7 +1694,7 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
           } catch {
             return ev;
           }
-        })
+        }
       );
 
       // Raffinamento intelligente date (da DATA a DATA) e orari con Gemini Flash Lite solo sui nuovi articoli
@@ -1055,6 +1714,7 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
     }
 
     const finalEvents = events.map((ev) => cachedEventsMap.get(ev.id) || ev);
+    saveConditionalResponseMeta(metaKey, res, { cachedEvents: finalEvents });
 
     return { events: finalEvents, ok: true };
   } catch (err) {
@@ -1064,8 +1724,353 @@ async function fetchRomeMobilityEvents(): Promise<{ events: DisruptionEvent[]; o
 }
 
 /**
+ * Tronca un testo informativo lungo in modo leggibile rispettando i confini di frase/parola.
+ */
+function summarizeArticleBody(plainText: string, maxLen = 920): string {
+  const cleaned = plainText.trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  const slice = cleaned.slice(0, maxLen);
+  const lastPeriod = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('.\n'));
+  if (lastPeriod > maxLen * 0.55) {
+    return slice.slice(0, lastPeriod + 1).trim();
+  }
+  const lastSpace = slice.lastIndexOf(' ');
+  return `${(lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trim()}…`;
+}
+
+/**
+ * Recupera avvisi ufficiali di mobilità, scioperi TPL ATAC/Cotral, manifestazioni e deviazioni bus
+ * dalle API WordPress pubbliche di Roma Servizi per la Mobilità (romamobilita.it).
+ */
+async function fetchRomaMobilitaEvents(): Promise<{ events: DisruptionEvent[]; ok: boolean }> {
+  try {
+    await ensureHttpConditionalMetaLoaded();
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const fourteenDaysAgoIso = `${addDaysToIso(todayIso, -14)}T00:00:00`;
+
+    const endpoints: { key: string; url: string }[] = [
+      {
+        key: 'rm-primo-piano',
+        url: `https://romamobilita.it/wp-json/wp/v2/primo-piano?per_page=10&modified_after=${fourteenDaysAgoIso}&_fields=id,date,modified,slug,link,title,content`,
+      },
+      {
+        key: 'rm-comunicato',
+        url: `https://romamobilita.it/wp-json/wp/v2/comunicato?per_page=8&modified_after=${fourteenDaysAgoIso}&_fields=id,date,modified,slug,link,title,content`,
+      },
+      {
+        key: 'rm-infomobilita',
+        url: `https://romamobilita.it/wp-json/wp/v2/infomobilita?per_page=15&modified_after=${fourteenDaysAgoIso}&_fields=id,date,modified,slug,link,title,content`,
+      },
+    ];
+
+    const baseHeaders = {
+      Accept: 'application/json, */*',
+      'User-Agent':
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    };
+
+    const responses = await Promise.allSettled(
+      endpoints.map(async (ep) => {
+        const prevMeta = httpConditionalMetaCache.get(ep.key);
+        const res = await fetchWithTimeout(
+          ep.url,
+          {
+            headers: prevMeta?.cachedPosts
+              ? buildConditionalHeaders(baseHeaders, ep.key)
+              : baseHeaders,
+          },
+          7500
+        );
+        return { key: ep.key, res, prevMeta };
+      })
+    );
+
+    const rawPosts: any[] = [];
+    let anyEndpointOk = false;
+    const seenPostIds = new Set<number>();
+
+    for (const r of responses) {
+      if (r.status === 'fulfilled') {
+        const { key, res, prevMeta } = r.value;
+        if (res.status === 304 && Array.isArray(prevMeta?.cachedPosts)) {
+          anyEndpointOk = true;
+          for (const post of prevMeta.cachedPosts) {
+            if (post && typeof post.id === 'number' && !seenPostIds.has(post.id)) {
+              seenPostIds.add(post.id);
+              rawPosts.push(post);
+            }
+          }
+          continue;
+        }
+        if (res.ok) {
+          anyEndpointOk = true;
+          try {
+            const json = await res.json();
+            if (Array.isArray(json)) {
+              saveConditionalResponseMeta(key, res, { cachedPosts: json });
+              for (const post of json) {
+                if (post && typeof post.id === 'number' && !seenPostIds.has(post.id)) {
+                  seenPostIds.add(post.id);
+                  rawPosts.push(post);
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    if (!anyEndpointOk) return { events: [], ok: false };
+
+    const yesterdayIso = addDaysToIso(todayIso, -1);
+
+    const areaKeywords = [
+      'Verano',
+      'Sapienza',
+      'Termini',
+      'Tiburtina',
+      'Ostiense',
+      'San Lorenzo',
+      'Policlinico',
+      'Castro Pretorio',
+      'Centro',
+      'Esquilino',
+      'Piazza Vittorio',
+      'Fori Imperiali',
+      'Tridente',
+      'Piazza del Popolo',
+      'Tangenziale Est',
+      'Garbatella',
+    ];
+
+    const draftEvents: { event: DisruptionEvent; cacheSig: string }[] = [];
+
+    for (const item of rawPosts) {
+      const title = decodeHtmlEntitiesAndStripTags(item.title?.rendered || '');
+      if (!title) continue;
+      const plainText = decodeHtmlEntitiesAndStripTags(item.content?.rendered || '');
+      const slug = String(item.slug || '');
+      const titleLow = title.toLowerCase();
+
+      // Salta avvisi di ripristino / revoca / rinvio (nessun disservizio attivo)
+      const isResolvedOrRevoked =
+        titleLow.includes('riaperta') ||
+        titleLow.includes('riaperto') ||
+        titleLow.includes('percorso regolare') ||
+        titleLow.includes('percorso di nuovo regolare') ||
+        titleLow.includes('normali percorsi') ||
+        titleLow.includes('ripristinat') ||
+        titleLow.includes('differito ad altra data') ||
+        titleLow.includes('servizio regolare nei trasporti') ||
+        titleLow.includes('revocato') ||
+        titleLow.includes('revocata') ||
+        titleLow.includes('revocati') ||
+        titleLow.includes('annullato lo sciopero') ||
+        titleLow.includes('sospeso lo sciopero');
+
+      // Salta notizie istituzionali / infrastrutturali non actionable come disservizi giornalieri
+      const isEditorialNews =
+        titleLow.includes('premiata') ||
+        titleLow.includes('premiato') ||
+        titleLow.includes('attraversamenti pedonali') ||
+        titleLow.includes('piste ciclabili') ||
+        titleLow.includes('nuovi impianti') ||
+        titleLow.includes('aperto il nuovo accesso') ||
+        titleLow.includes('terminerà entro l') ||
+        titleLow.includes('cronoprogramma degli interventi') ||
+        titleLow.includes('webinar') ||
+        titleLow.includes('bando') ||
+        titleLow.includes('selezione') ||
+        titleLow.includes('concorso') ||
+        titleLow.includes('nuove strade scolastiche');
+
+      if (isResolvedOrRevoked || isEditorialNews) continue;
+
+      const isScioperoTpl =
+        titleLow.includes('sciopero') &&
+        !titleLow.includes('aereo') &&
+        !titleLow.includes('aeroport') &&
+        !titleLow.includes('taxi');
+      const isManifestazione =
+        titleLow.includes('manifestazi') ||
+        titleLow.includes('corteo') ||
+        titleLow.includes('presidio') ||
+        titleLow.includes('parade') ||
+        titleLow.includes('cerimonia') ||
+        titleLow.includes('evento sportivo') ||
+        titleLow.includes('gara podistica') ||
+        titleLow.includes('corsa') ||
+        titleLow.includes('corri');
+      const isBlocco =
+        titleLow.includes('chiusur') ||
+        titleLow.includes('blocco') ||
+        titleLow.includes('deviaz') ||
+        titleLow.includes('modifiche di viabilit') ||
+        titleLow.includes('modifiche alla viabilit') ||
+        titleLow.includes('limitazioni al traffico') ||
+        titleLow.includes('divieti di sosta') ||
+        titleLow.includes('lavori') ||
+        titleLow.includes('manutenzione');
+
+      if (!isScioperoTpl && !isManifestazione && !isBlocco) continue;
+
+      const refDateIso = (item.modified || item.date || todayIso).slice(0, 10);
+      const { startIso, endIso } = extractDateFromRomaMobilitaText(
+        title,
+        plainText,
+        slug,
+        refDateIso
+      );
+
+      // Salta subito notizie già concluse nel passato prima di invocare Gemini
+      if (endIso < yesterdayIso) continue;
+
+      let category: DisruptionCategory = 'cantiere_viabilita';
+      let impact: DisruptionImpact = 'medium';
+      const affectedModes: ('train' | 'transit' | 'walk')[] = ['walk'];
+
+      if (isScioperoTpl) {
+        category = 'sciopero_tpl';
+        impact = 'high';
+        affectedModes.push('transit');
+      } else if (isManifestazione) {
+        category = 'manifestazione';
+        impact = 'high';
+        affectedModes.push('transit');
+      } else if (
+        titleLow.includes('chiusur') ||
+        titleLow.includes('blocco') ||
+        titleLow.includes('deviaz') ||
+        titleLow.includes('modifiche di viabilit') ||
+        titleLow.includes('divieti di sosta')
+      ) {
+        category = 'blocco_stradale';
+        affectedModes.push('transit');
+      } else {
+        category = 'cantiere_viabilita';
+        impact = 'info';
+      }
+
+      const scanAreasText = `${title} ${plainText.slice(0, 800)}`.toLowerCase();
+      const areas: string[] = [];
+      for (const kw of areaKeywords) {
+        if (scanAreasText.includes(kw.toLowerCase())) {
+          areas.push(kw);
+        }
+      }
+
+      const startParts = startIso.split('-');
+      const endParts = endIso.split('-');
+      let formattedSpan = startIso;
+      if (startIso !== endIso && startParts.length === 3 && endParts.length === 3) {
+        formattedSpan = `Dal ${startParts[2]}/${startParts[1]} al ${endParts[2]}/${endParts[1]}/${endParts[0]}`;
+      } else if (startParts.length === 3) {
+        formattedSpan = `${startParts[2]}/${startParts[1]}/${startParts[0]}`;
+      }
+
+      let initialTimeWindow = '';
+      if (!isScioperoTpl) {
+        const normT = (t: string) => {
+          const clean = t.replace(/[.,]/g, ':');
+          if (clean.includes(':')) {
+            const [h, m] = clean.split(':');
+            return `${h.padStart(2, '0')}:${m}`;
+          }
+          return `${clean.padStart(2, '0')}:00`;
+        };
+        const rangeM = plainText.match(
+          /(?:dalle\s*(?:ore\s*)?|tra\s*le\s*(?:ore\s*)?)([0-9]{1,2}(?:[:.,][0-9]{2})?)\s*(?:alle|e\s*le)\s*(?:ore\s*)?([0-9]{1,2}(?:[:.,][0-9]{2})?)/i
+        );
+        if (rangeM) {
+          initialTimeWindow = `${normT(rangeM[1])} - ${normT(rangeM[2])}`;
+        } else {
+          const singleStartM = plainText.match(
+            /(?:partir[àa]\s+alle|dalle\s*(?:ore\s*)?|a\s+partire\s+dalle\s*(?:ore\s*)?)\s*([0-9]{1,2}(?:[:.,][0-9]{2})?)\b/i
+          );
+          if (singleStartM) {
+            initialTimeWindow = `dalle ${normT(singleStartM[1])}`;
+          }
+        }
+      }
+
+      const notesSummary = summarizeArticleBody(plainText, 1250);
+      const companies = isScioperoTpl
+        ? 'Rete ATAC, operatori privati TPL, Metromare, Roma-Nord e Cotral'
+        : undefined;
+
+      const draft: DisruptionEvent = {
+        id: `rm-${item.id}`,
+        title,
+        category,
+        impact,
+        startDate: startIso,
+        endDate: endIso,
+        formattedDateSpan: formattedSpan,
+        timeWindow: initialTimeWindow,
+        scope: 'Roma',
+        affectedModes,
+        affectedCompanies: companies,
+        affectedAreas: areas,
+        notes: notesSummary,
+        sourceName: 'Roma Mobilità',
+        sourceUrl: typeof item.link === 'string' && item.link ? item.link : 'https://romamobilita.it',
+      };
+
+      if (isScioperoTpl) {
+        draft.timeWindow = formatDisruptionModalTimeWindow(draft);
+      }
+
+      draftEvents.push({
+        event: draft,
+        cacheSig: `${title}|${item.modified || item.date || ''}`,
+      });
+    }
+
+    await ensureRomaMobilitaArticlesCacheLoaded();
+    const cachedEventsMap = new Map<string, DisruptionEvent>();
+    const uncachedDrafts: DisruptionEvent[] = [];
+    const sigById = new Map<string, string>();
+
+    for (const { event: ev, cacheSig } of draftEvents) {
+      sigById.set(ev.id, cacheSig);
+      const cacheEntry = romaMobilitaArticlesMemoryCache.get(ev.id);
+      if (
+        cacheEntry &&
+        cacheEntry.title === cacheSig &&
+        Date.now() - cacheEntry.timestamp < ROMAMOBILITA_ARTICLES_TTL_MS
+      ) {
+        cachedEventsMap.set(ev.id, cacheEntry.event);
+      } else {
+        uncachedDrafts.push(ev);
+      }
+    }
+
+    if (uncachedDrafts.length > 0) {
+      const aiEnrichedNew = await enrichEventsWithGemini(uncachedDrafts);
+      const nowTs = Date.now();
+      for (const enriched of aiEnrichedNew) {
+        cachedEventsMap.set(enriched.id, enriched);
+        romaMobilitaArticlesMemoryCache.set(enriched.id, {
+          timestamp: nowTs,
+          title: sigById.get(enriched.id) || enriched.title,
+          event: enriched,
+        });
+      }
+      void persistRomaMobilitaArticlesCache();
+    }
+
+    const finalEvents = draftEvents.map(({ event: ev }) => cachedEventsMap.get(ev.id) || ev);
+    return { events: finalEvents, ok: true };
+  } catch (err) {
+    console.warn('[Disruptions] Errore fetch Roma Mobilità:', err);
+    return { events: [], ok: false };
+  }
+}
+
+/**
  * Usa Gemini Flash Lite per verificare e raffinare date (da DATA a DATA), orari precisi
- * e fasce notturne delle segnalazioni di mobilità, gestendo qualsiasi pattern naturale italiano.
+ * e fasce notturne delle segnalazioni di mobilità (Luceverde Roma e Roma Mobilità), gestendo qualsiasi pattern naturale italiano.
  */
 async function enrichEventsWithGemini(events: DisruptionEvent[]): Promise<DisruptionEvent[]> {
   if (!events || events.length === 0) return events;
@@ -1073,24 +2078,35 @@ async function enrichEventsWithGemini(events: DisruptionEvent[]): Promise<Disrup
   try {
     const payload = events.map((ev) => ({
       id: ev.id,
+      source: ev.sourceName,
+      category: ev.category,
+      refDate: ev.startDate,
       title: ev.title,
-      text: ev.notes ? ev.notes.slice(0, 380) : '',
+      text: ev.notes ? ev.notes.slice(0, 1100) : '',
     }));
 
     const currentYear = new Date().getFullYear();
     const todayIso = new Date().toISOString().slice(0, 10);
 
-    const prompt = `Sei l'assistente per la mobilità a Roma. Analizza le seguenti segnalazioni di mobilità di Luceverde Roma ed estrai per ciascuna le date e gli orari reali in cui si svolgono le modifiche, cortei o lavori.
+    const prompt = `Sei l'assistente per la mobilità a Roma di uno studente pendolare che si sposta tra le stazioni ferroviarie di Roma (Roma Tiburtina, Roma Termini, Roma Ostiense) e le sedi dell'Università La Sapienza / Policlinico / San Lorenzo / Piazzale del Verano / Via Tiburtina / Viale Regina Elena / Via del Castro Laurenziano / Castro Pretorio (a piedi o con mezzi pubblici ATAC: bus, tram, metro B — in particolare linee 71, 163, 310, 492, 495, 545, 649, 19, 3, Metro B).
+Analizza le seguenti segnalazioni di mobilità provenienti da Luceverde Roma e Roma Mobilità ed estrai per ciascuna le date, gli orari reali e se l'evento impatta concretamente i viaggi verso le sedi universitarie Sapienza.
 Anno di riferimento: ${currentYear}, oggi è ${todayIso}.
 
 Regole tassative di estrazione:
 - "startDate" e "endDate": date in formato ISO "YYYY-MM-DD".
-  - Se è un intervallo (es. "dal 3 al 14 novembre", "da mercoledì 4 a venerdì 6 novembre", "dal 28 ottobre al 15 novembre"), estrai la data iniziale in startDate e la data finale in endDate.
-  - Se riguarda un solo giorno (es. "lunedì 2 novembre"), startDate ed endDate devono coincidere.
+  - Se è un intervallo (es. "dal 3 al 14 novembre", "tra il 23 e il 28 novembre", "da mercoledì 4 a venerdì 6 novembre"), estrai la data iniziale in startDate e la data finale in endDate.
+  - Se riguarda un solo giorno (es. "venerdì 20 novembre", "domenica 22 novembre"), startDate ed endDate devono coincidere.
+  - Se il testo usa riferimenti relativi come "oggi", "domani" o "domenica" senza data esplicita, usa "refDate" come ancora affidabile.
   - Se è indicato "fino a [data]", startDate è "${todayIso}" (o la data di inizio citata nel testo) e endDate è quella data finale.
-- "timeWindow": orario sintetico es. "dalle 16:00", "10:00 - 18:00", "22:00 - 06:00", "dalle 22:00", oppure "" se dura tutto il giorno.
-- "isNocturnal": true SOLO se l'evento/chiusura si svolge esclusivamente in orario notturno (es. "chiusura notturna", "lavori notturni", "fascia compresa tra le 22:00 e le 06:00", dalle 22 in poi), false altrimenti.
+- "timeWindow": orario sintetico es. "dalle 16:00", "08:30 - 13:00", "22:00 - 06:00", oppure "" se dura tutto il giorno.
+  - ATTENZIONE per gli scioperi TPL di 24 ore (category="sciopero_tpl"): lascia "timeWindow": "" (NON mettere mai le fasce di garanzia come orario dello sciopero!).
+- "isNocturnal": true SOLO se l'evento/chiusura si svolge esclusivamente in orario notturno (es. "chiusura notturna", "lavori notturni", "manutenzione notturna", "fascia compresa tra le 22:00 e le 06:00", dalle 22 in poi), false altrimenti.
 - "affectedAreas": quartieri o zone citate (es. ["Verano", "Tiburtina", "San Lorenzo", "Centro"]).
+- "impactsCommuterCorridor": true SOLO se:
+  1. È uno sciopero cittadino dei mezzi TPL/ATAC/Cotral a Roma (category="sciopero_tpl"), OPPURE
+  2. La manifestazione/corteo/chiusura impatta le strade tra le stazioni (Tiburtina, Termini, Ostiense) e le sedi Sapienza / Verano / San Lorenzo / Policlinico / Castro Laurenziano / Regina Elena / Castro Pretorio, OPPURE devia linee ATAC usate dal pendolare Sapienza (es. 71, 163, 310, 492, 495, 545, 649, 19, 3, Metro B).
+  Imposta FALSE se riguarda cantieri stradali periferici (es. Ostia, Prima Porta, Colli Aniene/IV Municipio come "Corri al Tiburtino", GRA/Raccordo Anulare), lavori puramente notturni (es. Tangenziale Est / Ponte Spizzichino di notte) o quartieri lontani che non interferiscono col tragitto universitario né con quelle linee bus.
+- "reason": se impactsCommuterCorridor è false, spiega in poche parole il motivo (es. "Zona fuori dal tragitto universitario", "Cantiere periferico verso il GRA", "Lavori in orario notturno"); altrimenti "".
 
 Segnalazioni:
 ${JSON.stringify(payload)}
@@ -1103,11 +2119,13 @@ Rispondi rigorosamente SOLO con il JSON array valido nel formato:
     "endDate": "YYYY-MM-DD",
     "timeWindow": "string",
     "isNocturnal": boolean,
-    "affectedAreas": ["string"]
+    "affectedAreas": ["string"],
+    "impactsCommuterCorridor": boolean,
+    "reason": "string"
   }
 ]`;
 
-    const aiRes = await callGeminiJson(prompt, 6000);
+    const aiRes = await callGeminiJson(prompt, 6500);
     const parsed: any[] = JSON.parse(aiRes);
     if (!Array.isArray(parsed)) return events;
 
@@ -1128,12 +2146,23 @@ Rispondi rigorosamente SOLO con il JSON array valido nel formato:
         typeof ai.endDate === 'string' && ai.endDate.length === 10
           ? ai.endDate
           : ev.endDate;
+      const aiTimeRaw = typeof ai.timeWindow === 'string' ? ai.timeWindow.trim() : '';
+      const isFullDayTpl =
+        ev.category === 'sciopero_tpl' && parseDisruptionSchedule(ev).isFullDay;
       const timeWindow =
-        typeof ai.timeWindow === 'string' && ai.timeWindow.trim()
-          ? ai.timeWindow.trim()
+        !isFullDayTpl && aiTimeRaw && !/garantit|garanzia/i.test(aiTimeRaw)
+          ? aiTimeRaw
           : ev.timeWindow;
       const isNocturnal =
         typeof ai.isNocturnal === 'boolean' ? ai.isNocturnal : ev.isNocturnal;
+      const aiImpacts =
+        typeof ai.impactsCommuterCorridor === 'boolean'
+          ? ai.impactsCommuterCorridor
+          : ev.aiImpactsPassengerService;
+      const aiReason =
+        typeof ai.reason === 'string' && ai.reason.trim()
+          ? ai.reason.trim()
+          : ev.aiNonImpactReason;
 
       const mergedAreas = [...(ev.affectedAreas || [])];
       if (Array.isArray(ai.affectedAreas)) {
@@ -1159,6 +2188,8 @@ Rispondi rigorosamente SOLO con il JSON array valido nel formato:
         endDate: endIso,
         timeWindow,
         isNocturnal,
+        aiImpactsPassengerService: aiImpacts,
+        aiNonImpactReason: aiReason,
         affectedAreas: mergedAreas,
         formattedDateSpan: formattedSpan,
       };
@@ -1167,6 +2198,434 @@ Rispondi rigorosamente SOLO con il JSON array valido nel formato:
     console.warn('[Disruptions] Fallback parsing mobilità con Gemini:', err);
     return events;
   }
+}
+
+const URBAN_DEDUP_STOPWORDS = new Set([
+  'roma',
+  'oggi',
+  'domani',
+  'ieri',
+  'stamattina',
+  'stasera',
+  'mattina',
+  'pomeriggio',
+  'sera',
+  'notte',
+  'luned',
+  'marte',
+  'merco',
+  'giove',
+  'vener',
+  'sabat',
+  'domen',
+  'genna',
+  'febbr',
+  'marzo',
+  'april',
+  'maggi',
+  'giugn',
+  'lugli',
+  'agost',
+  'sette',
+  'ottob',
+  'novem',
+  'dicem',
+  'torna',
+  'progr',
+  'chius',
+  'traff',
+  'devia',
+  'manif',
+  'sport',
+  'event',
+  'strad',
+  'linee',
+  'linea',
+  'modif',
+  'viabi',
+  'divie',
+  'sosta',
+  'trans',
+  'centr',
+  'piazz',
+  'viale',
+  'largo',
+  'corso',
+  'dalle',
+  'delle',
+  'degli',
+  'della',
+  'nella',
+  'sulla',
+  'tutti',
+  'tutte',
+  'nuovo',
+  'nuova',
+]);
+
+function extractUrbanTitleStems(title: string): Set<string> {
+  const normalized = title
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ');
+  const stems = new Set<string>();
+  for (const word of normalized.split(/\s+/)) {
+    if (word.length < 4 || /^\d+$/.test(word)) continue;
+    const stem = word.slice(0, 5);
+    if (!URBAN_DEDUP_STOPWORDS.has(stem)) {
+      stems.add(stem);
+    }
+  }
+  return stems;
+}
+
+function areUrbanTitlesDuplicate(titleA: string, titleB: string): boolean {
+  const normA = titleA.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const normB = titleB.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (normA && normA === normB) return true;
+
+  const stemsA = extractUrbanTitleStems(titleA);
+  const stemsB = extractUrbanTitleStems(titleB);
+  const minSize = Math.min(stemsA.size, stemsB.size);
+  if (minSize < 2) return false;
+
+  let overlapCount = 0;
+  for (const s of stemsA) {
+    if (stemsB.has(s)) overlapCount++;
+  }
+  return overlapCount >= 2 && overlapCount / minSize >= 0.65;
+}
+
+function normalizeClockForDedupKey(hour: number, minute: number): string {
+  if (minute >= 58) {
+    return `${Math.min(24, hour + 1)}:00`;
+  }
+  return `${hour}:${String(minute).padStart(2, '0')}`;
+}
+
+function mergeCommaSeparatedUnique(values: (string | undefined)[]): string | undefined {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const val of values) {
+    if (!val) continue;
+    for (const part of val.split(/[,;]+/)) {
+      const cleaned = part.trim();
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase().replace(/\s+/g, ' ');
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(cleaned);
+      }
+    }
+  }
+  return out.length > 0 ? out.join(', ') : undefined;
+}
+
+function mergeAreasUnique(lists: (string[] | undefined)[]): string[] | undefined {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    if (!list) continue;
+    for (const area of list) {
+      const cleaned = area.trim();
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(cleaned);
+      }
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function cleanMitStrikeTitle(title: string): string {
+  return title
+    .replace(/\s*\/\s*(?:Plurisettoriale|Generale)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function pickBestAffectedCompanies(
+  group: DisruptionEvent[],
+  isTpl: boolean,
+  hasRomaMobilita: boolean
+): string | undefined {
+  const genericPattern = /^tutte le categorie|pubbliche e private|vari settori|tutti i settori/i;
+  const specificList: string[] = [];
+  const fallbackList: string[] = [];
+
+  for (const ev of group) {
+    const comp = (ev.affectedCompanies || '').trim();
+    if (!comp) continue;
+    if (genericPattern.test(comp)) {
+      fallbackList.push(comp);
+    } else {
+      specificList.push(comp);
+    }
+  }
+
+  if (isTpl && hasRomaMobilita) {
+    const rmSpecific = group.find(
+      (ev) => ev.sourceName === 'Roma Mobilità' && ev.affectedCompanies
+    )?.affectedCompanies;
+    if (rmSpecific) return rmSpecific;
+  }
+
+  if (specificList.length > 0) {
+    // Ordina preferendo la voce più informativa e deduplicando
+    const sorted = [...specificList].sort((a, b) => b.length - a.length);
+    const unique: string[] = [];
+    for (const item of sorted) {
+      const low = item.toLowerCase();
+      if (!unique.some((u) => u.toLowerCase().includes(low) || low.includes(u.toLowerCase()))) {
+        unique.push(item);
+      }
+    }
+    return unique.slice(0, 2).join(' · ');
+  }
+
+  return fallbackList[0];
+}
+
+function mergeRailStrikeGroup(group: DisruptionEvent[], keySuffix: string): DisruptionEvent {
+  if (group.length === 1) {
+    const single = group[0];
+    return {
+      ...single,
+      title: cleanMitStrikeTitle(single.title),
+    };
+  }
+
+  // Preferisci una voce con titolo ferroviario pulito e dettagli completi Trenitalia/FS
+  const sorted = [...group].sort((a, b) => {
+    const aPure = !/plurisettoriale|generale/i.test(a.title) ? 1 : 0;
+    const bPure = !/plurisettoriale|generale/i.test(b.title) ? 1 : 0;
+    if (aPure !== bPure) return bPure - aPure;
+    const aFs = /trenitalia|gruppo fs|ferrovie dello stato|rfi/i.test(
+      `${a.affectedCompanies || ''} ${a.notes || ''}`
+    )
+      ? 1
+      : 0;
+    const bFs = /trenitalia|gruppo fs|ferrovie dello stato|rfi/i.test(
+      `${b.affectedCompanies || ''} ${b.notes || ''}`
+    )
+      ? 1
+      : 0;
+    if (aFs !== bFs) return bFs - aFs;
+    return (b.notes || '').length - (a.notes || '').length;
+  });
+
+  const primary = sorted[0];
+  const mergedUnions = mergeCommaSeparatedUnique(group.map((g) => g.unions));
+  const mergedCompanies = pickBestAffectedCompanies(group, false, false);
+  const anyAiImpacts = group.some((g) => g.aiImpactsPassengerService === true);
+  const allAiNonImpacting = group.every((g) => g.aiImpactsPassengerService === false);
+  const firstReason = group.find((g) => g.aiNonImpactReason)?.aiNonImpactReason;
+
+  const merged: DisruptionEvent = {
+    ...primary,
+    id: `mit-rail-${keySuffix}`,
+    title: cleanMitStrikeTitle(primary.title),
+    affectedCompanies: mergedCompanies || primary.affectedCompanies,
+    unions: mergedUnions,
+    aiImpactsPassengerService: anyAiImpacts ? true : allAiNonImpacting ? false : undefined,
+    aiNonImpactReason: allAiNonImpacting ? firstReason : undefined,
+    isCommuterRelevant: group.some((g) => g.isCommuterRelevant),
+  };
+  merged.timeWindow = formatDisruptionModalTimeWindow(merged);
+  return merged;
+}
+
+function mergeTplStrikeGroup(group: DisruptionEvent[], keySuffix: string): DisruptionEvent {
+  const hasMit = group.some((g) => g.sourceName === 'Ministero dei Trasporti (MIT)');
+  const hasRm = group.some((g) => g.sourceName === 'Roma Mobilità');
+
+  if (group.length === 1) {
+    const single = group[0];
+    return hasMit ? { ...single, title: cleanMitStrikeTitle(single.title) } : single;
+  }
+
+  const mitEntries = group.filter((g) => g.sourceName === 'Ministero dei Trasporti (MIT)');
+  const rmEntries = group.filter((g) => g.sourceName === 'Roma Mobilità');
+  const lvEntries = group.filter((g) => g.sourceName === 'Luceverde Roma');
+
+  const bestMit = mitEntries[0];
+  // Tra gli articoli Roma Mobilità preferisci quello col corpo più dettagliato (contiene le fasce di garanzia ATAC/Cotral)
+  const bestRmByNotes = [...rmEntries].sort(
+    (a, b) => (b.notes || '').length - (a.notes || '').length
+  )[0];
+  const bestRmNonRelativeTitle = rmEntries.find(
+    (e) => !/\b(?:oggi|domani|stamattina|stasera|ieri)\b/i.test(e.title)
+  );
+
+  // Scegli una base temporale precisa (se MIT ha una fascia esplicita ridotta es. 4 ore, mantienila)
+  const explicitShortEntry =
+    mitEntries.find((e) => !parseDisruptionSchedule(e).isFullDay) ||
+    group.find((e) => !parseDisruptionSchedule(e).isFullDay);
+  const primary = explicitShortEntry || bestMit || bestRmByNotes || lvEntries[0] || group[0];
+
+  const sourceName: DisruptionEvent['sourceName'] =
+    hasRm && hasMit
+      ? 'Roma Mobilità · MIT'
+      : hasRm
+        ? 'Roma Mobilità'
+        : hasMit
+          ? 'Ministero dei Trasporti (MIT)'
+          : 'Luceverde Roma';
+
+  const title = bestMit
+    ? cleanMitStrikeTitle(bestMit.title)
+    : bestRmNonRelativeTitle
+      ? bestRmNonRelativeTitle.title
+      : (bestRmByNotes?.title || primary.title);
+
+  const notes =
+    bestRmByNotes?.notes ||
+    lvEntries.find((e) => e.notes)?.notes ||
+    mitEntries.sort((a, b) => (b.notes || '').length - (a.notes || '').length)[0]?.notes ||
+    primary.notes;
+
+  const mergedUnions = mergeCommaSeparatedUnique(group.map((g) => g.unions));
+  const mergedCompanies = pickBestAffectedCompanies(group, true, hasRm);
+  const mergedAreas = mergeAreasUnique(group.map((g) => g.affectedAreas));
+  const anyAiImpacts = group.some((g) => g.aiImpactsPassengerService === true);
+  const allAiNonImpacting = group.every((g) => g.aiImpactsPassengerService === false);
+  const firstReason = group.find((g) => g.aiNonImpactReason)?.aiNonImpactReason;
+
+  const merged: DisruptionEvent = {
+    ...primary,
+    id: `tpl-strike-${keySuffix}`,
+    title,
+    affectedCompanies: mergedCompanies || primary.affectedCompanies,
+    affectedAreas: mergedAreas,
+    unions: mergedUnions,
+    notes,
+    sourceName,
+    sourceUrl: bestRmByNotes?.sourceUrl || primary.sourceUrl,
+    aiImpactsPassengerService: anyAiImpacts ? true : allAiNonImpacting ? false : undefined,
+    aiNonImpactReason: allAiNonImpacting ? firstReason : undefined,
+    isCommuterRelevant: group.some((g) => g.isCommuterRelevant),
+    isWalkRelevant: group.some((g) => g.isWalkRelevant),
+  };
+
+  // Se avevamo una finestra oraria ridotta esplicita (es. 4 ore), preservala; altrimenti ricalcola
+  merged.timeWindow = explicitShortEntry
+    ? formatDisruptionModalTimeWindow(explicitShortEntry)
+    : formatDisruptionModalTimeWindow(merged);
+  return merged;
+}
+
+/**
+ * Deduplica e consolida gli eventi provenienti da più sindacati (MIT RSS) e più fonti
+ * (MIT + Roma Mobilità + Luceverde Roma) in un'unica scheda autorevole per sciopero/evento.
+ */
+function deduplicateDisruptions(events: DisruptionEvent[]): DisruptionEvent[] {
+  const railGroups = new Map<string, DisruptionEvent[]>();
+  const tplDateGroups = new Map<string, DisruptionEvent[]>();
+  const urbanEvents: DisruptionEvent[] = [];
+
+  for (const ev of events) {
+    if (ev.category === 'sciopero_treni') {
+      const sched = parseDisruptionSchedule(ev);
+      const isImp = isTrainStrikeImpactingCommuter(ev);
+      const clockSig = sched.isFullDay
+        ? 'full'
+        : `${normalizeClockForDedupKey(sched.startHour, sched.startMinute)}-${
+            sched.endHour !== undefined
+              ? normalizeClockForDedupKey(sched.endHour, sched.endMinute || 0)
+              : 'open'
+          }`;
+      const key = `${sched.startDateIso}_${sched.endDateIso}_${clockSig}_${isImp ? '1' : '0'}`;
+      const list = railGroups.get(key) || [];
+      list.push(ev);
+      railGroups.set(key, list);
+    } else if (ev.category === 'sciopero_tpl') {
+      const sched = parseDisruptionSchedule(ev);
+      const isImp = isTplStrikeImpactingRome(ev);
+      const key = `${sched.startDateIso}_${sched.endDateIso}_${isImp ? '1' : '0'}`;
+      const list = tplDateGroups.get(key) || [];
+      list.push(ev);
+      tplDateGroups.set(key, list);
+    } else {
+      urbanEvents.push(ev);
+    }
+  }
+
+  const deduped: DisruptionEvent[] = [];
+
+  // 1) Consolida scioperi ferroviari con stessa finestra temporale e impatto
+  for (const [key, group] of railGroups.entries()) {
+    deduped.push(mergeRailStrikeGroup(group, key));
+  }
+
+  // 2) Consolida scioperi TPL sulla stessa data tra MIT, Roma Mobilità e Luceverde
+  for (const [key, group] of tplDateGroups.entries()) {
+    // Separa solo se nello stesso giorno coesistono due fasce orarie ridotte esplicite completamente disgiunte
+    const buckets: DisruptionEvent[][] = [];
+    for (const ev of group) {
+      const sched = parseDisruptionSchedule(ev);
+      let placed = false;
+      for (const bucket of buckets) {
+        const refSched = parseDisruptionSchedule(bucket[0]);
+        if (sched.isFullDay || refSched.isFullDay || !sched.hasExplicitRange || !refSched.hasExplicitRange) {
+          bucket.push(ev);
+          placed = true;
+          break;
+        }
+        const aStart = sched.startHour * 60 + sched.startMinute;
+        const aEnd = (sched.endHour ?? 24) * 60 + (sched.endMinute || 0);
+        const bStart = refSched.startHour * 60 + refSched.startMinute;
+        const bEnd = (refSched.endHour ?? 24) * 60 + (refSched.endMinute || 0);
+        if (aStart <= bEnd && bStart <= aEnd) {
+          bucket.push(ev);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        buckets.push([ev]);
+      }
+    }
+
+    buckets.forEach((bucket, idx) => {
+      const suffix = buckets.length > 1 ? `${key}_${idx}` : key;
+      deduped.push(mergeTplStrikeGroup(bucket, suffix));
+    });
+  }
+
+  // 3) Deduplica eventi urbani equivalenti sulla stessa data tra Roma Mobilità e Luceverde Roma
+  const mergedUrban: DisruptionEvent[] = [];
+  for (const ev of urbanEvents) {
+    const matchIdx = mergedUrban.findIndex(
+      (existing) =>
+        existing.startDate === ev.startDate &&
+        existing.endDate === ev.endDate &&
+        areUrbanTitlesDuplicate(existing.title, ev.title)
+    );
+
+    if (matchIdx === -1) {
+      mergedUrban.push(ev);
+    } else {
+      const existing = mergedUrban[matchIdx];
+      const existingNotesLen = (existing.notes || '').length;
+      const incomingNotesLen = (ev.notes || '').length;
+      const preferred = incomingNotesLen > existingNotesLen ? ev : existing;
+      const secondary = preferred === ev ? existing : ev;
+
+      mergedUrban[matchIdx] = {
+        ...preferred,
+        timeWindow: preferred.timeWindow || secondary.timeWindow,
+        affectedAreas: mergeAreasUnique([preferred.affectedAreas, secondary.affectedAreas]),
+        isCommuterRelevant: Boolean(preferred.isCommuterRelevant || secondary.isCommuterRelevant),
+        isWalkRelevant: Boolean(preferred.isWalkRelevant || secondary.isWalkRelevant),
+      };
+    }
+  }
+
+  deduped.push(...mergedUrban);
+  return deduped;
 }
 
 /**
@@ -1200,22 +2659,29 @@ export async function getDisruptions(forceRefresh = false): Promise<DisruptionEv
         }
       }
 
-      const [strikesRes, mobilityRes] = await Promise.allSettled([
+      const [strikesRes, luceverdeRes, romaMobilitaRes] = await Promise.allSettled([
         fetchOfficialStrikes(),
         fetchRomeMobilityEvents(),
+        fetchRomaMobilitaEvents(),
       ]);
 
       const strikesOutcome =
         strikesRes.status === 'fulfilled' ? strikesRes.value : { events: [], ok: false };
-      const mobilityOutcome =
-        mobilityRes.status === 'fulfilled' ? mobilityRes.value : { events: [], ok: false };
+      const luceverdeOutcome =
+        luceverdeRes.status === 'fulfilled' ? luceverdeRes.value : { events: [], ok: false };
+      const romaMobilitaOutcome =
+        romaMobilitaRes.status === 'fulfilled' ? romaMobilitaRes.value : { events: [], ok: false };
 
-      // Se entrambe le sorgenti sono fallite, preserva la cache precedente invece di sovrascriverla con []
-      if (!strikesOutcome.ok && !mobilityOutcome.ok) {
+      // Se tutte le sorgenti sono fallite, preserva la cache precedente invece di sovrascriverla con []
+      if (!strikesOutcome.ok && !luceverdeOutcome.ok && !romaMobilitaOutcome.ok) {
         return staleCacheData ?? [];
       }
 
-      const combined = [...strikesOutcome.events, ...mobilityOutcome.events].map((ev) => {
+      const combined = [
+        ...strikesOutcome.events,
+        ...luceverdeOutcome.events,
+        ...romaMobilitaOutcome.events,
+      ].map((ev) => {
         const isTrainRelevant = ev.category === 'sciopero_treni' ? isTrainStrikeImpactingCommuter(ev) : false;
         const isWalkRel = isWalkDisruptionImpactingCommuter(ev);
         const isRelevant = isTrainRelevant || isWalkRel;
@@ -1230,12 +2696,15 @@ export async function getDisruptions(forceRefresh = false): Promise<DisruptionEv
       const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
       // Escludi eventi già interamente conclusi nel passato (endDate < todayIso)
-      const activeOrUpcoming = combined.filter((ev) => {
+      const activeRaw = combined.filter((ev) => {
         if (ev.endDate && ev.endDate < todayIso) {
           return false;
         }
         return true;
       });
+
+      // Consolida duplicati multi-sindacato (MIT) e cross-fonte (MIT + Roma Mobilità + Luceverde)
+      const activeOrUpcoming = deduplicateDisruptions(activeRaw);
 
       // Ordina: prima gli eventi con data crescente, privilegiando quelli che impattano la tratta
       activeOrUpcoming.sort((a, b) => {
@@ -1322,15 +2791,16 @@ export function getDisruptionsForWeekday(
 
 /**
  * Verifica se uno sciopero ferroviario impatta realmente la linea del pendolare (Trenitalia / Gruppo FS / RFI / Regionali / IC).
- * Gli scioperi che riguardano esclusivamente Italo-NTV o altre ferrovie regionali estranee (es. Trenord, EAV)
- * NON creano alcun disservizio sulla tratta del pendolare.
+ * Gli scioperi che riguardano esclusivamente Italo-NTV, trasporto merci/cargo, appalti pulizie/ristorazione/uffici
+ * o altre ferrovie regionali estranee (es. Trenord, EAV) NON creano alcun disservizio sulla tratta del pendolare.
  */
 export function isTrainStrikeImpactingCommuter(strike: DisruptionEvent): boolean {
   if (strike.category !== 'sciopero_treni') return false;
+  if (strike.aiImpactsPassengerService === false) return false;
 
   const textToScan = `${strike.title} ${strike.affectedCompanies || ''} ${strike.notes || ''}`.toLowerCase();
 
-  // Se riguarda unicamente Italo / NTV / Nuovo Trasporto Viaggiatori
+  // 1. Se riguarda unicamente Italo / NTV / Nuovo Trasporto Viaggiatori
   const mentionsItalo =
     textToScan.includes('italo') ||
     textToScan.includes('ntv') ||
@@ -1338,21 +2808,80 @@ export function isTrainStrikeImpactingCommuter(strike: DisruptionEvent): boolean
   const mentionsFS =
     textToScan.includes('trenitalia') ||
     textToScan.includes('gruppo fs') ||
-    textToScan.includes('rfi') ||
-    textToScan.includes('ferrovie dello stato');
+    textToScan.includes('ferrovie dello stato') ||
+    textToScan.includes('fsi');
 
   if (mentionsItalo && !mentionsFS) {
     return false;
   }
 
-  // Se riguarda ferrovie regionali di altre regioni estranee (es. Trenord, EAV, FSE, Ferrotramviaria)
+  // 2. Se riguarda esclusivamente il trasporto merci / cargo su rotaia
+  const mentionsCargo =
+    textToScan.includes('mercitalia') ||
+    textToScan.includes('captrain') ||
+    textToScan.includes('gts rail') ||
+    textToScan.includes('medway') ||
+    textToScan.includes('sbb cargo') ||
+    textToScan.includes('db cargo') ||
+    textToScan.includes('sangritana') ||
+    textToScan.includes('evm rail') ||
+    textToScan.includes('ermes rail') ||
+    textToScan.includes('tx logistik') ||
+    textToScan.includes('bls cargo') ||
+    textToScan.includes('inrail') ||
+    textToScan.includes('rail traction') ||
+    textToScan.includes('autotrasporto merci');
+
+  const isCargoOnlyClause =
+    (mentionsCargo ||
+      (textToScan.includes('trasporto merci') &&
+        !textToScan.includes('settore ferroviario, trasporto merci'))) &&
+    !mentionsFS;
+
+  if (isCargoOnlyClause) {
+    return false;
+  }
+
+  // 3. Se riguarda esclusivamente appalti di pulizia, ristorazione, facchinaggio, vigilanza o uffici
+  const isAncillaryContractOnly =
+    (textToScan.includes('appalto pulizie') ||
+      textToScan.includes('appalti pulizie') ||
+      textToScan.includes('servizi di pulizia') ||
+      textToScan.includes('pulizia e sanificazione') ||
+      textToScan.includes('ristorazione a bordo') ||
+      textToScan.includes('accoglienza e accompagnamento') ||
+      textToScan.includes('facchinaggio') ||
+      textToScan.includes('vigilanza privata')) &&
+    !textToScan.includes('personale di macchina') &&
+    !textToScan.includes('personale di bordo') &&
+    !textToScan.includes('circolazione');
+
+  if (isAncillaryContractOnly) {
+    return false;
+  }
+
+  // 4. Se riguarda ferrovie regionali o unità territoriali RFI di altre regioni estranee al Lazio
   const isOtherRegional =
     (textToScan.includes('trenord') ||
       textToScan.includes('eav') ||
       textToScan.includes('ferrovie del sud est') ||
+      textToScan.includes('fs sud est') ||
       textToScan.includes('ferrovie appulo lucane') ||
-      textToScan.includes('ferrotramviaria')) &&
-    !mentionsFS;
+      textToScan.includes('ferrotramviaria') ||
+      textToScan.includes('ferrovie del gargano') ||
+      textToScan.includes('tper') ||
+      textToScan.includes('fnm') ||
+      textToScan.includes('doit verona') ||
+      textToScan.includes('doit torino') ||
+      textToScan.includes('doit milano') ||
+      textToScan.includes('doit venezia') ||
+      textToScan.includes('doit bologna') ||
+      textToScan.includes('doit genova') ||
+      textToScan.includes('doit bari') ||
+      textToScan.includes('doit palermo') ||
+      textToScan.includes('doit reggio calabria')) &&
+    !textToScan.includes('roma') &&
+    !textToScan.includes('lazio');
 
   if (isOtherRegional) {
     return false;
@@ -1498,8 +3027,58 @@ export function getDisruptionTimingContext(
 }
 
 /**
- * Verifica se una manifestazione o blocco stradale / deviazione impatta il tragitto
- * urbano del pendolare (a piedi o con mezzi pubblici/bus/tram)
+ * Verifica se uno sciopero del trasporto pubblico locale (TPL) impatta Roma (ATAC / Roma TPL / Cotral / nazionale).
+ */
+export function isTplStrikeImpactingRome(event: DisruptionEvent): boolean {
+  if (event.category !== 'sciopero_tpl') return false;
+  if (event.isNocturnal) return false;
+  if (event.aiImpactsPassengerService === false) return false;
+
+  const timeInfo = parseDisruptionTime(event);
+  if (timeInfo.isNocturnal) return false;
+
+  const scan = `${event.title} ${event.scope || ''} ${event.affectedCompanies || ''} ${event.notes || ''}`.toLowerCase();
+
+  // Escludi scioperi che riguardano esclusivamente appalti pulizie/ausiliari/biglietterie o settori non TPL di linea
+  const isNonCirculationTpl =
+    (scan.includes('appalto pulizie') ||
+      scan.includes('servizi di pulizia') ||
+      scan.includes('ausiliari del traffico') ||
+      scan.includes('addetti al servizio taxi') ||
+      scan.includes('noleggio con conducente')) &&
+    !scan.includes('atac') &&
+    !scan.includes('cotral') &&
+    !scan.includes('esercizio');
+
+  if (isNonCirculationTpl) return false;
+
+  // Escludi scioperi aziendali circoscritti ad altre città/province italiane estranee a Roma/Lazio
+  const isOtherCityTpl =
+    (scan.includes('atm milano') ||
+      scan.includes('gtt torino') ||
+      scan.includes('anm napoli') ||
+      scan.includes('eav') ||
+      scan.includes('tper bologna') ||
+      scan.includes('amt genova') ||
+      scan.includes('actv venezia') ||
+      scan.includes('amtab bari') ||
+      scan.includes('amat palermo') ||
+      scan.includes('autolinee toscane') ||
+      scan.includes('fs sud est') ||
+      scan.includes('autolinee romano') ||
+      scan.includes('casale monferrato')) &&
+    !scan.includes('atac') &&
+    !scan.includes('cotral') &&
+    !scan.includes('roma');
+
+  if (isOtherCityTpl) return false;
+
+  return true;
+}
+
+/**
+ * Verifica se uno sciopero TPL, manifestazione o blocco stradale / deviazione impatta il tragitto
+ * urbano del pendolare (a piedi o con mezzi pubblici/bus/tram/metro)
  * tra la stazione ferroviaria (Tiburtina/Termini/Ostiense) e le sedi universitarie Sapienza.
  * Eventi puramente notturni (es. ore 22-06, chiusura notturna Tangenziale) o che riguardano
  * autostrade/tangenziali prive di interferenza con il corridoio aule sono tassativamente esclusi.
@@ -1510,6 +3089,11 @@ export function isUrbanDisruptionImpactingCommuter(
 ): boolean {
   if (event.category === 'sciopero_treni') return false;
   if (event.isNocturnal) return false;
+  if (event.aiImpactsPassengerService === false) return false;
+
+  if (event.category === 'sciopero_tpl') {
+    return isTplStrikeImpactingRome(event);
+  }
 
   // 1. Esclusione tassativa eventi notturni (fuori dagli orari delle lezioni del pendolare)
   const timeInfo = parseDisruptionTime(event);
@@ -1523,6 +3107,8 @@ export function isUrbanDisruptionImpactingCommuter(
   if (
     textToScan.includes('chiusura notturna') ||
     textToScan.includes('lavori notturni') ||
+    textToScan.includes('manutenzione notturna') ||
+    textToScan.includes('manutenzione straordinaria notturna') ||
     textToScan.includes('dalle 22') ||
     textToScan.includes('dalle ore 22') ||
     textToScan.includes('ore 22:00') ||
@@ -1537,7 +3123,7 @@ export function isUrbanDisruptionImpactingCommuter(
   const isHighwayOnly =
     (textToScan.includes('tangenziale') ||
       textToScan.includes('tangenziale est') ||
-      textToScan.includes('gra') ||
+      /\bg\.?r\.?a\.?\b/i.test(textToScan) ||
       textToScan.includes('grande raccordo') ||
       textToScan.includes('autostrada') ||
       textToScan.includes('galleria nuova circonvallazione')) &&
@@ -1590,7 +3176,10 @@ export function isUrbanDisruptionImpactingCommuter(
     corridorKeywords.push('ostiense', 'piramide', 'stazione ostiense');
   }
 
-  return corridorKeywords.some((kw) => textToScan.includes(kw));
+  const mentionsCorridorBusLine =
+    /\bline[ae]\b[^.\n]{0,160}\b(?:71|163|310|492|495|545|649)\b/i.test(textToScan);
+
+  return corridorKeywords.some((kw) => textToScan.includes(kw)) || mentionsCorridorBusLine;
 }
 
 // Alias retrocompatibile

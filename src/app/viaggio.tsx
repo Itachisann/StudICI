@@ -250,11 +250,7 @@ function formatWalkDisruptionSummary(event: DisruptionEvent) {
       ? "rgba(239, 68, 68, 0.26)"
       : "rgba(245, 158, 11, 0.24)",
     descColor: meta.isStrike ? "#fecaca" : "#fde68a",
-    modalFilter: (event.category === "sciopero_tpl" ||
-    (event.affectedModes.includes("transit") &&
-      !event.affectedModes.includes("walk"))
-      ? "transit"
-      : "walk") as "transit" | "walk",
+    modalFilter: "walk" as "transit" | "walk",
   };
 }
 
@@ -546,6 +542,7 @@ export default function ViaggioScreen() {
     null,
   );
   const [selectedTrainOffset, setSelectedTrainOffset] = useState<number>(0);
+  const selectedTrainOffsetRef = useRef<number>(0);
   // Treno appena toccato nello slider: evidenziato subito mentre i dati reali si caricano
   const [pendingTrainNumber, setPendingTrainNumber] = useState<string | null>(
     null,
@@ -554,6 +551,19 @@ export default function ViaggioScreen() {
   const [selectedTrainNumber, setSelectedTrainNumber] = useState<string | null>(
     null,
   );
+  const selectedTrainNumberRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedTrainOffsetRef.current = selectedTrainOffset;
+  }, [selectedTrainOffset]);
+  useEffect(() => {
+    selectedTrainNumberRef.current = selectedTrainNumber;
+  }, [selectedTrainNumber]);
+  useEffect(() => {
+    directionRef.current = direction;
+  }, [direction]);
+  useEffect(() => {
+    activeClassIdxRef.current = selectedClassIndex;
+  }, [selectedClassIndex]);
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(() =>
     initialStartupSeed ? new Date(initialStartupSeed.timestamp) : new Date(),
@@ -573,13 +583,24 @@ export default function ViaggioScreen() {
     string | null
   >(null);
 
+  const [selectedDisruptionEventIds, setSelectedDisruptionEventIds] = useState<
+    string[]
+  >([]);
+
   const handleOpenDisruptionsModal = useCallback(
     (
       filter: "all" | "train" | "walk" | "transit" = "all",
-      eventId?: string | null,
+      eventIdOrIds?: string | string[] | null,
     ) => {
       setDisruptionsInitialFilter(filter);
-      setSelectedDisruptionEventId(eventId || null);
+      if (Array.isArray(eventIdOrIds)) {
+        const cleanIds = eventIdOrIds.filter(Boolean);
+        setSelectedDisruptionEventIds(cleanIds);
+        setSelectedDisruptionEventId(cleanIds[0] || null);
+      } else {
+        setSelectedDisruptionEventIds(eventIdOrIds ? [eventIdOrIds] : []);
+        setSelectedDisruptionEventId(eventIdOrIds || null);
+      }
       setDisruptionsModalVisible(true);
     },
     [],
@@ -754,6 +775,59 @@ export default function ViaggioScreen() {
           }
         } else if (localCfg?.enabled === false) {
           setLoading(false);
+        }
+
+        // Se la cache persistita non contiene ancora l'itinerario odierno, assorbi lo snapshot
+        // del prefetch di avvio già in corso (0 richieste di rete extra) mentre la tab è in memoria.
+        const curKeyAfterLocal = `${directionRef.current}_${activeDayIdxRef.current}_${activeClassIdxRef.current ?? "auto"}`;
+        if (!itinerariesCacheRef.current[curKeyAfterLocal] && localCfg?.enabled !== false) {
+          const applyWarmSeed = (
+            seed: ReturnType<typeof getWarmViaggioStartupSnapshot>,
+          ) => {
+            if (!mounted || !seed) return;
+            configCacheRef.current = seed.config;
+            manualsCacheRef.current = seed.manualEvents;
+            excludedCacheRef.current = seed.excludedLessons || [];
+            scheduleCacheRef.current = seed.schedule;
+            hasLoadedScheduleRef.current = true;
+            defaultTabUrlRef.current = seed.defaultTabUrl;
+            setConfig((prev) => prev ?? seed.config);
+            setManualEvents((prev) => (prev.length > 0 ? prev : seed.manualEvents));
+            setExcludedLessons((prev) =>
+              prev.length > 0 ? prev : seed.excludedLessons || [],
+            );
+            setDefaultTabUrl((prev) => prev ?? seed.defaultTabUrl);
+            setSchedule((prev) => prev ?? seed.schedule);
+            setScheduleHydrated(true);
+            setDisruptions((prev) => (prev.length > 0 ? prev : seed.disruptions));
+            if (seed.config.enabled === false || seed.itinerary !== null) {
+              if (seed.itinerary) {
+                const seedKey = `outbound_${seed.dayIdx}_auto`;
+                itinerariesCacheRef.current[seedKey] = seed.itinerary;
+                savePersistedItineraryEntry(seedKey, seed.itinerary);
+                setItinerariesByDay((prev) => ({
+                  ...prev,
+                  [seed.dayIdx]: seed.itinerary,
+                }));
+              }
+              setItinerary((prev) => prev ?? seed.itinerary);
+              setLastUpdated(new Date(seed.timestamp));
+              setLoading(false);
+            }
+          };
+
+          const warm = getWarmViaggioStartupSnapshot(
+            initialTodayDayIdx,
+            "outbound",
+          );
+          if (warm) {
+            applyWarmSeed(warm);
+          } else {
+            const inFlight = getInFlightStartupPrefetch();
+            if (inFlight) {
+              inFlight.then((seed) => applyWarmSeed(seed)).catch(() => {});
+            }
+          }
         }
       })
       .catch(() => {});
@@ -1209,7 +1283,7 @@ export default function ViaggioScreen() {
           : undefined);
 
       handleOpenDisruptionsModal(
-        payload.category === "sciopero_treni" ? "train" : "all",
+        payload.category === "sciopero_treni" ? "train" : "walk",
         matchedEvent?.id || payload.eventId || null,
       );
     },
@@ -1289,23 +1363,25 @@ export default function ViaggioScreen() {
       },
     ) => {
       const effDir =
-        overrides?.direction !== undefined ? overrides.direction : direction;
+        overrides?.direction !== undefined
+          ? overrides.direction
+          : directionRef.current;
       const effDayIdx =
         overrides?.selectedDayIdx !== undefined
           ? overrides.selectedDayIdx
-          : selectedDayIdx;
+          : activeDayIdxRef.current;
       const effClassIdx =
         overrides?.selectedClassIndex !== undefined
           ? overrides.selectedClassIndex
-          : selectedClassIndex;
+          : activeClassIdxRef.current;
       const effTrainOffset =
         overrides?.selectedTrainOffset !== undefined
           ? overrides.selectedTrainOffset
-          : selectedTrainOffset;
+          : selectedTrainOffsetRef.current;
       const effTrainNum =
         overrides?.selectedTrainNumber !== undefined
           ? overrides.selectedTrainNumber
-          : selectedTrainNumber;
+          : selectedTrainNumberRef.current;
 
       const requestId = ++loadRequestIdRef.current;
 
@@ -1541,22 +1617,33 @@ export default function ViaggioScreen() {
             excludedLessonIds: currentExcludedSet,
           });
 
-        const [itinRes, disruptionsRes] = await Promise.allSettled([
-          computeCommuterItinerary({
-            config: currentConfig,
-            scheduleData: sched,
-            manualEvents: currentManuals,
-            direction: effDir,
-            targetDate,
-            selectedClass: targetClass,
-            isExplicitClass,
-            selectedTrainOffset: effTrainOffset,
-            selectedTrainNumber: effTrainNum || undefined,
-            forceRefresh: isRefresh && !silent,
-            excludedLessonIds: currentExcludedSet,
-          }),
-          disruptionsPromise,
-        ]);
+        // Disaccoppia gli avvisi scioperi/viabilità dal commit critico dell'itinerario:
+        // se già in cache si risolvono subito, altrimenti aggiornano i badge appena arrivano senza bloccare treni/mezzi.
+        let settledDisruptions: DisruptionEvent[] | null = null;
+        disruptionsPromise
+          .then((freshDisruptions) => {
+            settledDisruptions = freshDisruptions;
+            if (requestId !== loadRequestIdRef.current) return;
+            setDisruptions(freshDisruptions);
+            syncStrikeNotifications(freshDisruptions, {
+              promptIfNeeded: true,
+            }).catch(() => {});
+          })
+          .catch(() => {});
+
+        const itin = await computeCommuterItinerary({
+          config: currentConfig,
+          scheduleData: sched,
+          manualEvents: currentManuals,
+          direction: effDir,
+          targetDate,
+          selectedClass: targetClass,
+          isExplicitClass,
+          selectedTrainOffset: effTrainOffset,
+          selectedTrainNumber: effTrainNum || undefined,
+          forceRefresh: isRefresh && !silent,
+          excludedLessonIds: currentExcludedSet,
+        });
 
         if (
           requestId !== loadRequestIdRef.current ||
@@ -1566,11 +1653,9 @@ export default function ViaggioScreen() {
         }
 
         const resolvedDisruptions =
-          disruptionsRes.status === "fulfilled"
-            ? disruptionsRes.value
-            : disruptionsRef.current;
+          settledDisruptions ?? disruptionsRef.current;
 
-        // Commit atomico in un unico batch React: lezioni, hero card, treni, mezzi e scioperi compaiono insieme
+        // Commit atomico in un unico batch React: lezioni, hero card, treni e mezzi compaiono insieme
         configCacheRef.current = currentConfig;
         manualsCacheRef.current = currentManuals;
         excludedCacheRef.current = currentExcluded;
@@ -1584,26 +1669,20 @@ export default function ViaggioScreen() {
         setDefaultTabUrl(defaultTab);
         setSchedule(sched);
         setScheduleHydrated(true);
-        setDisruptions(resolvedDisruptions);
-
-        if (itinRes.status === "fulfilled") {
-          const itin = itinRes.value;
-          const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
-          itinerariesCacheRef.current[cacheKey] = itin;
-          if (effTrainOffset === 0 && !effTrainNum) {
-            savePersistedItineraryEntry(cacheKey, itin);
-          }
-          setItinerary(itin);
-          if (effClassIdx === null) {
-            setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
-          }
-          setLastUpdated(new Date());
-          syncStrikeNotifications(resolvedDisruptions, {
-            promptIfNeeded: true,
-          }).catch(() => {});
-        } else {
-          console.warn("Errore calcolo itinerario pendolare", itinRes.reason);
+        if (settledDisruptions) {
+          setDisruptions(resolvedDisruptions);
         }
+
+        const cacheKey = `${effDir}_${effDayIdx}_${effClassIdx ?? "auto"}`;
+        itinerariesCacheRef.current[cacheKey] = itin;
+        if (effTrainOffset === 0 && !effTrainNum) {
+          savePersistedItineraryEntry(cacheKey, itin);
+        }
+        setItinerary(itin);
+        if (effClassIdx === null) {
+          setItinerariesByDay((prev) => ({ ...prev, [effDayIdx]: itin }));
+        }
+        setLastUpdated(new Date());
       } catch (err: any) {
         console.warn("Errore calcolo itinerario pendolare", err);
       } finally {
@@ -1615,13 +1694,7 @@ export default function ViaggioScreen() {
         }
       }
     },
-    [
-      direction,
-      selectedDayIdx,
-      selectedClassIndex,
-      selectedTrainOffset,
-      selectedTrainNumber,
-    ],
+    [],
   );
 
   useEffect(() => {
@@ -1678,7 +1751,7 @@ export default function ViaggioScreen() {
           prevCfg?.trainPreferences?.preferredTrains,
           nextCfg.trainPreferences?.preferredTrains,
         );
-        const curDir = directionRef.current || direction;
+        const curDir = directionRef.current;
         const curDay = activeDayIdxRef.current;
         const curCalSlot = `${jsDayToCalendarDayIndex(curDay)}_${curDir}`;
 
@@ -1707,7 +1780,7 @@ export default function ViaggioScreen() {
       }
     });
     return () => unsub();
-  }, [loadData, direction]);
+  }, [loadData]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1739,6 +1812,8 @@ export default function ViaggioScreen() {
     (dayIdx: number) => {
       activeDayIdxRef.current = dayIdx;
       activeClassIdxRef.current = null;
+      selectedTrainOffsetRef.current = 0;
+      selectedTrainNumberRef.current = null;
       setSelectedDayIdx(dayIdx);
       setSelectedClassIndex(null);
       setSelectedTrainOffset(0);
@@ -1819,6 +1894,8 @@ export default function ViaggioScreen() {
 
   const handleDirectionChange = (newDir: "outbound" | "return") => {
     directionRef.current = newDir;
+    selectedTrainOffsetRef.current = 0;
+    selectedTrainNumberRef.current = null;
     setDirection(newDir);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
@@ -1843,6 +1920,8 @@ export default function ViaggioScreen() {
 
   const handleSelectClass = (idx: number) => {
     activeClassIdxRef.current = idx;
+    selectedTrainOffsetRef.current = 0;
+    selectedTrainNumberRef.current = null;
     setSelectedClassIndex(idx);
     setSelectedTrainOffset(0);
     setSelectedTrainNumber(null);
@@ -1877,6 +1956,8 @@ export default function ViaggioScreen() {
       }
     }
     const nextOffset = selectedTrainOffset - 1;
+    selectedTrainOffsetRef.current = nextOffset;
+    selectedTrainNumberRef.current = null;
     setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);
     loadData(false, true, {
@@ -1898,6 +1979,8 @@ export default function ViaggioScreen() {
       }
     }
     const nextOffset = selectedTrainOffset + 1;
+    selectedTrainOffsetRef.current = nextOffset;
+    selectedTrainNumberRef.current = null;
     setSelectedTrainOffset(nextOffset);
     setSelectedTrainNumber(null);
     loadData(false, true, {
@@ -1948,6 +2031,8 @@ export default function ViaggioScreen() {
     );
 
     centerSelectedTrain(trainNum);
+    selectedTrainNumberRef.current = trainNum;
+    selectedTrainOffsetRef.current = 0;
     setSelectedTrainNumber(trainNum);
     setSelectedTrainOffset(0);
 
@@ -2546,18 +2631,23 @@ export default function ViaggioScreen() {
         const prevLeaveLeg =
           prev.legs[0]?.id === "leave-lecture-leg" ? prev.legs[0] : null;
         const leaveLegNeedsSync = Boolean(
-          prevLeaveLeg &&
-            typeof update.walkBeforeMinutes === "number" &&
-            prev.targetLecture?.endTime &&
-            parseTimeToMinutes(update.startTime) -
-              Math.max(0, update.walkBeforeMinutes) >=
-              parseTimeToMinutes(prev.targetLecture.endTime) &&
-            prevLeaveLeg.durationMinutes !==
-              Math.max(0, update.walkBeforeMinutes),
+          prevLeaveLeg && prevLeaveLeg.durationMinutes !== 0,
         );
+        const curDet = currentLeg.details;
+        const segDetailsChanged =
+          curDet?.walkBeforeMinutes !== update.walkBeforeMinutes ||
+          curDet?.inVehicleMinutes !== update.inVehicleMinutes ||
+          curDet?.walkAfterMinutes !== update.walkAfterMinutes ||
+          curDet?.busDepartureTime !== update.busDepartureTime ||
+          curDet?.busAlightingTime !== update.busAlightingTime ||
+          curDet?.coincidenceAvailableFromTime !==
+            update.coincidenceAvailableFromTime ||
+          curDet?.firstAvailableDepartureTime !==
+            update.firstAvailableDepartureTime;
 
         if (
           !leaveLegNeedsSync &&
+          !segDetailsChanged &&
           currentLeg.startTime === update.startTime &&
           currentLeg.endTime === update.endTime &&
           currentLeg.durationMinutes === update.durationMinutes &&
@@ -2575,6 +2665,16 @@ export default function ViaggioScreen() {
           startTime: update.startTime,
           endTime: update.endTime,
           durationMinutes: update.durationMinutes,
+          details: {
+            ...currentLeg.details,
+            walkBeforeMinutes: update.walkBeforeMinutes,
+            inVehicleMinutes: update.inVehicleMinutes,
+            walkAfterMinutes: update.walkAfterMinutes,
+            busDepartureTime: update.busDepartureTime,
+            busAlightingTime: update.busAlightingTime,
+            coincidenceAvailableFromTime: update.coincidenceAvailableFromTime,
+            firstAvailableDepartureTime: update.firstAvailableDepartureTime,
+          },
         };
 
         // Se la tappa successiva è l'attesa in stazione (nel ritorno), riallinea il suo inizio all'arrivo del mezzo consigliato
@@ -2741,14 +2841,10 @@ export default function ViaggioScreen() {
             prev.targetLecture.startTime || "08:30",
           );
           const lecEndM = parseTimeToMinutes(prev.targetLecture.endTime);
-          const walkBefore =
-            typeof update.walkBeforeMinutes === "number"
-              ? Math.max(0, update.walkBeforeMinutes)
-              : 7;
-          const leaveM = Math.max(
-            lecStartM,
-            parseTimeToMinutes(update.startTime) - walkBefore,
-          );
+          // update.startTime è già l'orario di partenza dell'utente dall'origine (comprensivo di walkBefore),
+          // mentre il tratto a piedi iniziale viene rappresentato sul nodo blu della linea verticale dei mezzi.
+          const userLeaveM = parseTimeToMinutes(update.startTime);
+          const leaveM = Math.max(lecStartM, userLeaveM);
           const lectureRoomSubtitle = prev.targetLecture.buildingName
             ? `${prev.targetLecture.room} • ${prev.targetLecture.buildingName}`
             : prev.targetLecture.room;
@@ -2765,11 +2861,8 @@ export default function ViaggioScreen() {
               title: `Termine lezione: ${prev.targetLecture.subject}`,
               subtitle: lectureRoomSubtitle,
               startTime: minutesToTime(leaveM),
-              endTime: update.startTime,
-              durationMinutes: Math.max(
-                0,
-                parseTimeToMinutes(update.startTime) - leaveM,
-              ),
+              endTime: minutesToTime(leaveM),
+              durationMinutes: 0,
               details: {
                 ...updatedLegs[0].details,
                 notes: `Partenza anticipata durante la lezione • ${lostBadge}`,
@@ -2782,14 +2875,13 @@ export default function ViaggioScreen() {
             newDepTime = minutesToTime(leaveM);
           } else {
             nextLectureTimeStatus = undefined;
-            const postEndDur = walkBefore;
             updatedLegs[0] = {
               ...updatedLegs[0],
               title: `Termine lezione: ${prev.targetLecture.subject}`,
               subtitle: lectureRoomSubtitle,
               startTime: prev.targetLecture.endTime,
-              endTime: minutesToTime(lecEndM + postEndDur),
-              durationMinutes: postEndDur,
+              endTime: prev.targetLecture.endTime,
+              durationMinutes: 0,
               details: undefined,
             };
             newDepTime = prev.targetLecture.endTime;
@@ -2836,9 +2928,11 @@ export default function ViaggioScreen() {
         if (itinerariesCacheRef.current[dayIdx]) {
           itinerariesCacheRef.current[dayIdx] = nextItin;
         }
-        setItinerariesByDay((prevMap) =>
-          prevMap[dayIdx] ? { ...prevMap, [dayIdx]: nextItin } : prevMap,
-        );
+        queueMicrotask(() => {
+          setItinerariesByDay((prevMap) =>
+            prevMap[dayIdx] ? { ...prevMap, [dayIdx]: nextItin } : prevMap,
+          );
+        });
 
         return nextItin;
       });
@@ -2869,11 +2963,10 @@ export default function ViaggioScreen() {
       ? "rgba(245, 158, 11, 0.50)"
       : null;
 
-  const renderHeroDisruptionAlerts = (marginTop = 10) => {
-    if (
-      currentTrainDisruptions.length === 0 &&
-      currentWalkDisruptions.length === 0
-    ) {
+  const renderHeroDisruptionAlerts = (marginTop = 8) => {
+    const totalAlerts =
+      currentTrainDisruptions.length + currentWalkDisruptions.length;
+    if (totalAlerts === 0) {
       return null;
     }
 
@@ -2884,184 +2977,169 @@ export default function ViaggioScreen() {
       (e) => e.category !== "sciopero_tpl",
     );
 
-    const urbanAlerts: { event: DisruptionEvent; extraCount: number }[] = [];
-    if (walkStrikes.length > 0) {
-      urbanAlerts.push({
-        event: walkStrikes[0],
-        extraCount: walkStrikes.length - 1,
-      });
-    }
-    if (walkOthers.length > 0) {
-      urbanAlerts.push({
-        event: walkOthers[0],
-        extraCount: walkOthers.length - 1,
-      });
+    const hasTrainStrike = currentTrainDisruptions.length > 0;
+    const hasTplStrike = walkStrikes.length > 0;
+    const hasWalkAlert = walkOthers.length > 0;
+    const isRedAlert = hasTrainStrike || hasTplStrike;
+
+    let summaryLabel = "";
+    if (hasTrainStrike && hasTplStrike && hasWalkAlert) {
+      summaryLabel = "Sciopero treni, mezzi e avvisi viabilità";
+    } else if (hasTrainStrike && hasTplStrike) {
+      summaryLabel = "Sciopero treni e mezzi sul tuo tragitto";
+    } else if (hasTrainStrike && hasWalkAlert) {
+      summaryLabel = "Sciopero treni e avvisi viabilità";
+    } else if (hasTplStrike && hasWalkAlert) {
+      summaryLabel = "Sciopero mezzi e avvisi viabilità";
+    } else if (hasTrainStrike) {
+      summaryLabel =
+        formatTrainStrikeBannerSummary(
+          currentTrainDisruptions[0],
+          selectedDateIso,
+        ) || "Sciopero treni sul tuo tragitto";
+      summaryLabel = `Sciopero treni · ${summaryLabel}`;
+    } else if (hasTplStrike) {
+      const tplInfo = formatWalkDisruptionSummary(walkStrikes[0]);
+      summaryLabel = `Sciopero mezzi · ${tplInfo.description}`;
+    } else {
+      const walkInfo = formatWalkDisruptionSummary(walkOthers[0]);
+      summaryLabel = `${walkInfo.badgeLabel.charAt(0) + walkInfo.badgeLabel.slice(1).toLowerCase()} · ${walkInfo.description}`;
     }
 
-    const primaryTrainStrike = currentTrainDisruptions[0] ?? null;
-    const trainExtraCount = Math.max(0, currentTrainDisruptions.length - 1);
+    const targetFilter: "all" | "train" | "walk" =
+      hasTrainStrike && (hasTplStrike || hasWalkAlert)
+        ? "all"
+        : hasTrainStrike
+          ? "train"
+          : "walk";
+    const allHeroAlertIds = [
+      ...currentTrainDisruptions.map((e) => e.id),
+      ...walkStrikes.map((e) => e.id),
+      ...walkOthers.map((e) => e.id),
+    ].filter(Boolean);
+
+    // Quando il tema è già sui toni del rosso/bordeaux/rosa (es. Rosso Sapienza o Rosa Rubino),
+    // usa una palette ambra-oro ad alto contrasto per staccare nettamente dal fondo rosso della Hero Card.
+    const isRedFamilyTheme =
+      theme.id === "sapienza" || theme.id === "rose";
+    const useHighContrastGold = isRedAlert && isRedFamilyTheme;
+
+    const stripBgColor = useHighContrastGold
+      ? "rgba(245, 158, 11, 0.20)"
+      : isRedAlert
+        ? "rgba(239, 68, 68, 0.16)"
+        : "rgba(245, 158, 11, 0.13)";
+    const stripBorderColor = useHighContrastGold
+      ? "rgba(251, 191, 36, 0.65)"
+      : isRedAlert
+        ? "rgba(239, 68, 68, 0.45)"
+        : "rgba(245, 158, 11, 0.4)";
+    const strikeIconBg = useHighContrastGold
+      ? "rgba(251, 191, 36, 0.26)"
+      : "rgba(239, 68, 68, 0.24)";
+    const strikeIconColor = useHighContrastGold ? "#fbbf24" : "#ef4444";
+    const stripTextColor = useHighContrastGold
+      ? "#fef08a"
+      : isRedAlert
+        ? "#fecaca"
+        : "#fde68a";
+    const countPillBg = useHighContrastGold
+      ? "rgba(251, 191, 36, 0.26)"
+      : isRedAlert
+        ? "rgba(239, 68, 68, 0.24)"
+        : "rgba(245, 158, 11, 0.24)";
+    const countPillText = useHighContrastGold
+      ? "#fde047"
+      : isRedAlert
+        ? "#fca5a5"
+        : "#fcd34d";
 
     return (
-      <View style={[styles.heroDisruptionStack, { marginTop }]}>
-        {primaryTrainStrike && (
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() =>
-              handleOpenDisruptionsModal("train", primaryTrainStrike.id)
-            }
+      <TouchableOpacity
+        activeOpacity={0.82}
+        onPress={() =>
+          handleOpenDisruptionsModal(targetFilter, allHeroAlertIds)
+        }
+        style={[
+          styles.heroDisruptionCompactStrip,
+          {
+            marginTop,
+            backgroundColor: stripBgColor,
+            borderColor: stripBorderColor,
+          },
+        ]}
+      >
+        <View style={styles.heroDisruptionCompactIconsWrap}>
+          {hasTrainStrike && (
+            <View
+              style={[
+                styles.heroDisruptionCompactIconDot,
+                { backgroundColor: strikeIconBg },
+              ]}
+            >
+              <Ionicons name="train" size={11} color={strikeIconColor} />
+            </View>
+          )}
+          {hasTplStrike && (
+            <View
+              style={[
+                styles.heroDisruptionCompactIconDot,
+                { backgroundColor: strikeIconBg },
+              ]}
+            >
+              <Ionicons name="bus" size={11} color={strikeIconColor} />
+            </View>
+          )}
+          {hasWalkAlert && (
+            <View
+              style={[
+                styles.heroDisruptionCompactIconDot,
+                { backgroundColor: "rgba(245, 158, 11, 0.24)" },
+              ]}
+            >
+              <Ionicons name="megaphone" size={11} color="#f59e0b" />
+            </View>
+          )}
+        </View>
+
+        <Text
+          style={[
+            styles.heroDisruptionCompactText,
+            { color: stripTextColor },
+          ]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {summaryLabel}
+        </Text>
+
+        {totalAlerts > 1 && (
+          <View
             style={[
-              styles.heroDisruptionCard,
+              styles.heroDisruptionCompactCountPill,
               {
-                backgroundColor: "rgba(239, 68, 68, 0.16)",
-                borderColor: "rgba(239, 68, 68, 0.45)",
+                backgroundColor: countPillBg,
               },
             ]}
           >
-            <View style={styles.heroDisruptionHeaderRow}>
-              <View
-                style={[
-                  styles.heroDisruptionBadge,
-                  { backgroundColor: "rgba(239, 68, 68, 0.26)" },
-                ]}
-              >
-                <Ionicons
-                  name="warning"
-                  size={11}
-                  color="#ef4444"
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[
-                    styles.heroDisruptionBadgeText,
-                    { color: "#ef4444" },
-                  ]}
-                >
-                  SCIOPERO TRENI
-                </Text>
-              </View>
-              {trainExtraCount > 0 && (
-                <View
-                  style={[
-                    styles.heroDisruptionExtraPill,
-                    { backgroundColor: "rgba(239, 68, 68, 0.22)" },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.heroDisruptionExtraText,
-                      { color: "#fca5a5" },
-                    ]}
-                  >
-                    +{trainExtraCount}
-                  </Text>
-                </View>
-              )}
-              <View style={styles.heroDisruptionActionRow}>
-                <Text
-                  style={[
-                    styles.heroDisruptionActionText,
-                    { color: "#fca5a5" },
-                  ]}
-                >
-                  Dettagli
-                </Text>
-                <Ionicons name="chevron-forward" size={12} color="#fca5a5" />
-              </View>
-            </View>
             <Text
-              style={[styles.heroDisruptionDesc, { color: "#fecaca" }]}
-              numberOfLines={2}
-            >
-              {formatTrainStrikeBannerSummary(
-                primaryTrainStrike,
-                selectedDateIso,
-              )}
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        {urbanAlerts.map(({ event, extraCount }) => {
-          const info = formatWalkDisruptionSummary(event);
-          return (
-            <TouchableOpacity
-              key={event.id}
-              activeOpacity={0.85}
-              onPress={() =>
-                handleOpenDisruptionsModal(info.modalFilter, event.id)
-              }
               style={[
-                styles.heroDisruptionCard,
-                {
-                  backgroundColor: info.bgColor,
-                  borderColor: info.borderColor,
-                },
+                styles.heroDisruptionCompactCountText,
+                { color: countPillText },
               ]}
             >
-              <View style={styles.heroDisruptionHeaderRow}>
-                <View
-                  style={[
-                    styles.heroDisruptionBadge,
-                    { backgroundColor: info.badgeBgColor },
-                  ]}
-                >
-                  <Ionicons
-                    name={info.iconName}
-                    size={11}
-                    color={info.accentColor}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text
-                    style={[
-                      styles.heroDisruptionBadgeText,
-                      { color: info.accentColor },
-                    ]}
-                  >
-                    {info.badgeLabel}
-                  </Text>
-                </View>
-                {extraCount > 0 && (
-                  <View
-                    style={[
-                      styles.heroDisruptionExtraPill,
-                      { backgroundColor: info.badgeBgColor },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.heroDisruptionExtraText,
-                        { color: info.descColor },
-                      ]}
-                    >
-                      +{extraCount}
-                    </Text>
-                  </View>
-                )}
-                <View style={styles.heroDisruptionActionRow}>
-                  <Text
-                    style={[
-                      styles.heroDisruptionActionText,
-                      { color: info.descColor },
-                    ]}
-                  >
-                    Dettagli
-                  </Text>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={12}
-                    color={info.descColor}
-                  />
-                </View>
-              </View>
-              <Text
-                style={[styles.heroDisruptionDesc, { color: info.descColor }]}
-                numberOfLines={2}
-              >
-                {info.description}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+              {totalAlerts}
+            </Text>
+          </View>
+        )}
+
+        <Ionicons
+          name="chevron-forward"
+          size={12.5}
+          color={countPillText}
+          style={{ marginLeft: 4 }}
+        />
+      </TouchableOpacity>
     );
   };
 
@@ -4011,91 +4089,186 @@ export default function ViaggioScreen() {
                                     excludedSet,
                                   );
 
+                                const iconColor = theme.accent;
+                                const iconBg = "rgba(255, 255, 255, 0.08)";
+                                const roomLabel =
+                                  itinerary.targetLecture?.room?.trim() || "";
+                                const buildingLabel =
+                                  itinerary.targetLecture?.buildingName?.trim() ||
+                                  "";
+                                const locationLabel =
+                                  roomLabel &&
+                                  buildingLabel &&
+                                  !roomLabel
+                                    .toLowerCase()
+                                    .includes(buildingLabel.toLowerCase())
+                                    ? `${roomLabel} (${buildingLabel})`
+                                    : roomLabel || buildingLabel;
+
+                                const mainTitle = isWeekend
+                                  ? direction === "outbound"
+                                    ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
+                                    : `Rientro ad ${config?.originAddress}`
+                                  : hasNoActiveTargetLecture
+                                    ? dayClasses.length > 0
+                                      ? "Tutte le lezioni escluse"
+                                      : direction === "outbound"
+                                        ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
+                                        : `Rientro ad ${config?.originAddress}`
+                                    : direction === "outbound"
+                                      ? itinerary.targetLecture?.subject &&
+                                        itinerary.targetLecture.subject !==
+                                          "Lezioni di oggi terminate"
+                                        ? itinerary.targetLecture.subject
+                                        : activeSelectedClass?.subject ||
+                                          "Lezione"
+                                      : itinerary.targetLecture?.subject &&
+                                          itinerary.targetLecture.subject !==
+                                            "Lezioni di oggi terminate"
+                                        ? itinerary.targetLecture.subject
+                                        : `Rientro ad ${config?.originAddress}`;
+
+                                const isLate =
+                                  !isWeekend &&
+                                  !hasNoActiveTargetLecture &&
+                                  !isTargetLectureFinished &&
+                                  direction === "outbound" &&
+                                  itinerary.lectureTimeStatus?.type ===
+                                    "late_arrival";
+
                                 return (
-                                  <View
-                                    style={[
-                                      styles.heroTargetLectureBox,
-                                      {
-                                        backgroundColor: theme.subtle,
-                                        borderColor: theme.border,
-                                      },
-                                    ]}
-                                  >
-                                    <Ionicons
-                                      name={
-                                        isWeekend || hasNoActiveTargetLecture
-                                          ? "train-outline"
-                                          : isTargetLectureFinished
-                                            ? "checkmark-circle-outline"
-                                            : direction === "outbound"
-                                              ? "flag"
-                                              : "home"
-                                      }
-                                      size={16}
-                                      color={
-                                        isWeekend || hasNoActiveTargetLecture
-                                          ? theme.primary
-                                          : isTargetLectureFinished
-                                            ? "#10b981"
-                                            : theme.accent
-                                      }
-                                      style={{ marginRight: 8 }}
-                                    />
-                                    <View style={{ flex: 1 }}>
-                                      <Text
-                                        style={styles.heroLectureSubject}
-                                        numberOfLines={1}
-                                      >
-                                        {isWeekend
-                                          ? direction === "outbound"
-                                            ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
-                                            : `Rientro ad ${config?.originAddress}`
-                                          : hasNoActiveTargetLecture
-                                            ? dayClasses.length > 0
-                                              ? "Tutte le lezioni escluse"
-                                              : direction === "outbound"
-                                                ? `Tragitto verso ${config?.arrivalStation.shortName || config?.arrivalStation.name}`
-                                                : `Rientro ad ${config?.originAddress}`
-                                            : direction === "outbound"
-                                              ? itinerary.targetLecture
-                                                  ?.subject &&
-                                                itinerary.targetLecture
-                                                  .subject !==
-                                                  "Lezioni di oggi terminate"
-                                                ? itinerary.targetLecture
-                                                    .subject
-                                                : activeSelectedClass?.subject ||
-                                                  "Lezione"
-                                              : itinerary.targetLecture
-                                                    ?.subject &&
-                                                  itinerary.targetLecture
-                                                    .subject !==
-                                                    "Lezioni di oggi terminate"
-                                                ? itinerary.targetLecture
-                                                    .subject
-                                                : `Rientro ad ${config?.originAddress}`}
-                                      </Text>
-                                      <Text
-                                        style={styles.heroLectureDetails}
-                                        numberOfLines={1}
-                                      >
-                                        {isWeekend
-                                          ? "Fine settimana • Nessuna lezione collegata"
-                                          : hasNoActiveTargetLecture
-                                            ? dayClasses.length > 0
-                                              ? "Treni attivi • Tocca una lezione sopra per usarla"
-                                              : "Solo treni • Nessuna lezione attiva"
+                                  <View style={styles.heroTargetLectureBox}>
+                                    <View
+                                      style={[
+                                        styles.heroLectureIconBox,
+                                        { backgroundColor: iconBg },
+                                      ]}
+                                    >
+                                      <Ionicons
+                                        name={
+                                          isWeekend || hasNoActiveTargetLecture
+                                            ? "train"
                                             : isTargetLectureFinished
-                                              ? `Terminata • Treni da adesso${isTargetExcluded ? " • Esclusa" : ""}`
+                                              ? "checkmark-circle"
                                               : direction === "outbound"
-                                                ? `${
-                                                    itinerary.lectureTimeStatus
-                                                      ?.type === "late_arrival"
-                                                      ? `${itinerary.targetLecture?.room} • In corso (${itinerary.lectureTimeStatus.badgeText})`
-                                                      : `${itinerary.targetLecture?.room} • Inizio ore ${itinerary.targetLecture?.startTime}`
-                                                  }${isTargetExcluded ? " • Esclusa" : ""}`
-                                                : `Fine lezioni ore ${itinerary.targetLecture?.endTime}${isTargetExcluded ? " • Esclusa" : ""}`}
-                                      </Text>
+                                                ? "school"
+                                                : "home"
+                                        }
+                                        size={16}
+                                        color={iconColor}
+                                      />
+                                    </View>
+
+                                    <View style={{ flex: 1, minWidth: 0 }}>
+                                      <View style={styles.heroLectureTitleRow}>
+                                        <Text
+                                          style={[
+                                            styles.heroLectureSubject,
+                                            { flex: 1 },
+                                          ]}
+                                          numberOfLines={1}
+                                        >
+                                          {mainTitle}
+                                        </Text>
+                                        {isTargetExcluded && (
+                                          <View
+                                            style={
+                                              styles.heroLectureExcludedPill
+                                            }
+                                          >
+                                            <Text
+                                              style={
+                                                styles.heroLectureExcludedText
+                                              }
+                                            >
+                                              Esclusa
+                                            </Text>
+                                          </View>
+                                        )}
+                                      </View>
+
+                                      <View style={styles.heroLectureMetaRow}>
+                                        {isWeekend ? (
+                                          <Text
+                                            style={styles.heroLectureDetails}
+                                            numberOfLines={1}
+                                          >
+                                            Nessuna lezione collegata
+                                          </Text>
+                                        ) : hasNoActiveTargetLecture ? (
+                                          <Text
+                                            style={styles.heroLectureDetails}
+                                            numberOfLines={1}
+                                          >
+                                            {dayClasses.length > 0
+                                              ? "Tocca una lezione sopra per usarla"
+                                              : "Nessuna lezione attiva"}
+                                          </Text>
+                                        ) : isTargetLectureFinished ? (
+                                          <Text
+                                            style={[
+                                              styles.heroLectureDetails,
+                                              { color: theme.accent },
+                                            ]}
+                                            numberOfLines={1}
+                                          >
+                                            Terminata · Treni da adesso
+                                          </Text>
+                                        ) : direction === "outbound" ? (
+                                          <View
+                                            style={styles.heroLectureMetaItem}
+                                          >
+                                            {Boolean(locationLabel) && (
+                                              <Ionicons
+                                                name="location-outline"
+                                                size={12}
+                                                color={
+                                                  isLate ? "#f59e0b" : "#94a3b8"
+                                                }
+                                              />
+                                            )}
+                                            <Text
+                                              style={[
+                                                styles.heroLectureDetails,
+                                                isLate && { color: "#fbbf24" },
+                                              ]}
+                                              numberOfLines={1}
+                                            >
+                                              {(() => {
+                                                const timeText = isLate
+                                                  ? `In corso (${itinerary.lectureTimeStatus?.badgeText})`
+                                                  : `Inizio ${itinerary.targetLecture?.startTime}`;
+                                                return locationLabel
+                                                  ? `${locationLabel} · ${timeText}`
+                                                  : timeText;
+                                              })()}
+                                            </Text>
+                                          </View>
+                                        ) : (
+                                          <View
+                                            style={styles.heroLectureMetaItem}
+                                          >
+                                            {Boolean(locationLabel) && (
+                                              <Ionicons
+                                                name="location-outline"
+                                                size={12}
+                                                color="#94a3b8"
+                                              />
+                                            )}
+                                            <Text
+                                              style={styles.heroLectureDetails}
+                                              numberOfLines={1}
+                                            >
+                                              {(() => {
+                                                const timeText = `Fine lezioni ${itinerary.targetLecture?.endTime}`;
+                                                return locationLabel
+                                                  ? `${locationLabel} · ${timeText}`
+                                                  : timeText;
+                                              })()}
+                                            </Text>
+                                          </View>
+                                        )}
+                                      </View>
                                     </View>
                                   </View>
                                 );
@@ -4352,7 +4525,9 @@ export default function ViaggioScreen() {
                                     onPress={() => {
                                       handleOpenDisruptionsModal(
                                         "train",
-                                        currentTrainDisruptions[0]?.id,
+                                        currentTrainDisruptions.map(
+                                          (d) => d.id,
+                                        ),
                                       );
                                     }}
                                     style={styles.trainStrikeBanner}
@@ -5705,42 +5880,425 @@ export default function ViaggioScreen() {
                                   leg.type !== "train" &&
                                   leg.type !== "destination";
 
+                                const walkBeforeMins = Math.max(
+                                  0,
+                                  leg.details?.walkBeforeMinutes ?? 0,
+                                );
+                                const walkAfterMins = Math.max(
+                                  0,
+                                  leg.details?.walkAfterMinutes ?? 0,
+                                );
+                                const inVehicleMins = Math.max(
+                                  1,
+                                  leg.details?.inVehicleMinutes ??
+                                    Math.max(
+                                      1,
+                                      leg.durationMinutes -
+                                        walkBeforeMins -
+                                        walkAfterMins,
+                                    ),
+                                );
+                                const isTransitStep =
+                                  leg.type === "transit" &&
+                                  config?.transitLeg?.preferredMode !== "walk";
+                                const hasSegmentedTransitRail = isTransitStep;
+                                const busDepTimeStr =
+                                  leg.details?.busDepartureTime ||
+                                  (walkBeforeMins > 0 &&
+                                  parseTimeToMinutes(leg.startTime) >= 0
+                                    ? minutesToTime(
+                                        parseTimeToMinutes(leg.startTime) +
+                                          walkBeforeMins,
+                                      )
+                                    : leg.startTime);
+                                const busAlightTimeStr =
+                                  leg.details?.busAlightingTime ||
+                                  (walkAfterMins > 0 &&
+                                  parseTimeToMinutes(leg.endTime) >= 0
+                                    ? minutesToTime(
+                                        Math.max(
+                                          0,
+                                          parseTimeToMinutes(leg.endTime) -
+                                            walkAfterMins,
+                                        ),
+                                      )
+                                    : leg.endTime);
+                                const firstVisibleBusDepStr =
+                                  leg.details?.firstAvailableDepartureTime ||
+                                  busDepTimeStr;
+                                const walkBeforeStartStr =
+                                  parseTimeToMinutes(busDepTimeStr) >= 0 &&
+                                  walkBeforeMins > 0
+                                    ? minutesToTime(
+                                        Math.max(
+                                          0,
+                                          parseTimeToMinutes(busDepTimeStr) -
+                                            walkBeforeMins,
+                                        ),
+                                      )
+                                    : leg.startTime;
+                                const walkBeforeEndStr = busDepTimeStr;
+                                const walkAfterStartStr = busAlightTimeStr;
+                                const walkAfterEndStr =
+                                  parseTimeToMinutes(busAlightTimeStr) >= 0 &&
+                                  walkAfterMins > 0
+                                    ? minutesToTime(
+                                        parseTimeToMinutes(busAlightTimeStr) +
+                                          walkAfterMins,
+                                      )
+                                    : leg.endTime;
+                                const isVariableFollowUpStep =
+                                  leg.id === "station-wait-leg" ||
+                                  (leg.id === "lecture-leg" &&
+                                    itinerary.lectureTimeStatus?.type ===
+                                      "late_arrival");
+
+                                const renderWalkVerticalDashes = (
+                                  count = 4,
+                                ) => (
+                                  <View
+                                    style={{
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      paddingVertical: 4,
+                                      gap: 3.5,
+                                    }}
+                                  >
+                                    {Array.from({ length: count }).map(
+                                      (_, dIdx) => (
+                                        <View
+                                          key={`walk-dash-${dIdx}`}
+                                          style={{
+                                            width: 2,
+                                            height: 4.5,
+                                            borderRadius: 1,
+                                            backgroundColor: "#38bdf8",
+                                          }}
+                                        />
+                                      ),
+                                    )}
+                                  </View>
+                                );
+
                                 return (
                                   <View
                                     key={leg.id}
                                     style={styles.timelineStepRow}
                                   >
-                                    {/* Colonna Orario */}
-                                    <View style={styles.timeColumn}>
-                                      <Text style={styles.timeStartText}>
-                                        {leg.startTime}
-                                      </Text>
-                                      {leg.endTime &&
-                                        leg.endTime !== leg.startTime && (
-                                          <Text style={styles.timeEndText}>
-                                            {leg.endTime}
-                                          </Text>
-                                        )}
-                                    </View>
-
-                                    {/* Colonna Linea & Icona */}
-                                    <View style={styles.lineIconColumn}>
+                                    {hasSegmentedTransitRail ? (
                                       <View
-                                        style={[
-                                          styles.stepIconCircle,
-                                          { backgroundColor: circleBg },
-                                        ]}
+                                        style={{
+                                          width: 82,
+                                          alignSelf: "stretch",
+                                          flexDirection: "column",
+                                        }}
                                       >
-                                        <Ionicons
-                                          name={iconName}
-                                          size={15}
-                                          color={iconColor}
-                                        />
+                                        {/* 1. Nodo a piedi iniziale (orario inizio -> fine camminata + durata) */}
+                                        {walkBeforeMins > 0 && (
+                                          <View
+                                            style={{
+                                              flexDirection: "row",
+                                              alignItems: "flex-start",
+                                            }}
+                                          >
+                                            <View
+                                              style={[
+                                                styles.timeColumn,
+                                                { paddingTop: 2 },
+                                              ]}
+                                            >
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={[
+                                                  styles.timeStartText,
+                                                  {
+                                                    color: "#38bdf8",
+                                                    fontSize: 11,
+                                                    letterSpacing: -0.3,
+                                                    fontVariant: [
+                                                      "tabular-nums",
+                                                    ],
+                                                  },
+                                                ]}
+                                              >
+                                                ~{walkBeforeStartStr}
+                                              </Text>
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={[
+                                                  styles.timeEndText,
+                                                  {
+                                                    color: "#7dd3fc",
+                                                    fontSize: 10.5,
+                                                    fontWeight: "600",
+                                                    letterSpacing: -0.3,
+                                                    fontVariant: [
+                                                      "tabular-nums",
+                                                    ],
+                                                  },
+                                                ]}
+                                              >
+                                                ~{walkBeforeEndStr}
+                                              </Text>
+                                              <Text
+                                                numberOfLines={1}
+                                                style={{
+                                                  fontSize: 10,
+                                                  fontWeight: "700",
+                                                  color: "#38bdf8",
+                                                  marginTop: 1,
+                                                }}
+                                              >
+                                                {walkBeforeMins}m
+                                              </Text>
+                                            </View>
+                                            <View style={styles.lineIconColumn}>
+                                              <View
+                                                style={[
+                                                  styles.stepIconCircle,
+                                                  {
+                                                    width: 24,
+                                                    height: 24,
+                                                    borderRadius: 12,
+                                                    backgroundColor:
+                                                      "rgba(56, 189, 248, 0.16)",
+                                                    borderWidth: 1,
+                                                    borderColor:
+                                                      "rgba(56, 189, 248, 0.45)",
+                                                  },
+                                                ]}
+                                              >
+                                                <Ionicons
+                                                  name="walk"
+                                                  size={13}
+                                                  color="#38bdf8"
+                                                />
+                                              </View>
+                                              {renderWalkVerticalDashes(4)}
+                                            </View>
+                                          </View>
+                                        )}
+
+                                        {/* 2. Nodo mezzo pubblico ("da HH:MM" con HH:MM allineato agli altri orari e colore linea) */}
+                                        <View
+                                          style={{
+                                            flex: 1,
+                                            flexDirection: "row",
+                                            alignItems: "stretch",
+                                          }}
+                                        >
+                                          <View
+                                            style={[
+                                              styles.timeColumn,
+                                              { paddingTop: 2 },
+                                            ]}
+                                          >
+                                            <View
+                                              style={{
+                                                alignSelf: "flex-end",
+                                                alignItems: "flex-start",
+                                              }}
+                                            >
+                                              <Text
+                                                numberOfLines={1}
+                                                style={{
+                                                  fontSize: 9.5,
+                                                  fontWeight: "700",
+                                                  color: "#c084fc",
+                                                  lineHeight: 11,
+                                                }}
+                                              >
+                                                da
+                                              </Text>
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={[
+                                                  styles.timeStartText,
+                                                  {
+                                                    color: "#c084fc",
+                                                    fontVariant: [
+                                                      "tabular-nums",
+                                                    ],
+                                                  },
+                                                ]}
+                                              >
+                                                {firstVisibleBusDepStr}
+                                              </Text>
+                                            </View>
+                                          </View>
+                                          <View style={styles.lineIconColumn}>
+                                            <View
+                                              style={[
+                                                styles.stepIconCircle,
+                                                {
+                                                  backgroundColor: circleBg,
+                                                  borderWidth: 1,
+                                                  borderColor:
+                                                    "rgba(168, 85, 247, 0.48)",
+                                                },
+                                              ]}
+                                            >
+                                              <Ionicons
+                                                name={iconName}
+                                                size={14}
+                                                color={iconColor}
+                                              />
+                                            </View>
+                                            {(walkAfterMins > 0 || !isLast) && (
+                                              <View
+                                                style={[
+                                                  styles.connectingLine,
+                                                  {
+                                                    width: 2.5,
+                                                    backgroundColor:
+                                                      "rgba(168, 85, 247, 0.55)",
+                                                  },
+                                                ]}
+                                              />
+                                            )}
+                                          </View>
+                                        </View>
+
+                                        {/* 3. Nodo a piedi finale dopo la discesa dal mezzo (orario inizio -> fine camminata + durata) */}
+                                        {walkAfterMins > 0 && (
+                                          <View
+                                            style={{
+                                              flexDirection: "row",
+                                              alignItems: "flex-start",
+                                              paddingBottom: isLast ? 4 : 0,
+                                            }}
+                                          >
+                                            <View
+                                              style={[
+                                                styles.timeColumn,
+                                                { paddingTop: 2 },
+                                              ]}
+                                            >
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={[
+                                                  styles.timeStartText,
+                                                  {
+                                                    color: "#38bdf8",
+                                                    fontSize: 11,
+                                                    letterSpacing: -0.3,
+                                                    fontVariant: [
+                                                      "tabular-nums",
+                                                    ],
+                                                  },
+                                                ]}
+                                              >
+                                                ~{walkAfterStartStr}
+                                              </Text>
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={[
+                                                  styles.timeEndText,
+                                                  {
+                                                    color: "#7dd3fc",
+                                                    fontSize: 10.5,
+                                                    fontWeight: "600",
+                                                    letterSpacing: -0.3,
+                                                    fontVariant: [
+                                                      "tabular-nums",
+                                                    ],
+                                                  },
+                                                ]}
+                                              >
+                                                ~{walkAfterEndStr}
+                                              </Text>
+                                              <Text
+                                                numberOfLines={1}
+                                                style={{
+                                                  fontSize: 10,
+                                                  fontWeight: "700",
+                                                  color: "#38bdf8",
+                                                  marginTop: 1,
+                                                }}
+                                              >
+                                                {walkAfterMins}m
+                                              </Text>
+                                            </View>
+                                            <View style={styles.lineIconColumn}>
+                                              <View
+                                                style={[
+                                                  styles.stepIconCircle,
+                                                  {
+                                                    width: 24,
+                                                    height: 24,
+                                                    borderRadius: 12,
+                                                    backgroundColor:
+                                                      "rgba(56, 189, 248, 0.16)",
+                                                    borderWidth: 1,
+                                                    borderColor:
+                                                      "rgba(56, 189, 248, 0.45)",
+                                                  },
+                                                ]}
+                                              >
+                                                <Ionicons
+                                                  name="walk"
+                                                  size={13}
+                                                  color="#38bdf8"
+                                                />
+                                              </View>
+                                              {!isLast &&
+                                                renderWalkVerticalDashes(3)}
+                                            </View>
+                                          </View>
+                                        )}
                                       </View>
-                                      {!isLast && (
-                                        <View style={styles.connectingLine} />
-                                      )}
-                                    </View>
+                                    ) : (
+                                      <>
+                                        {/* Colonna Orario */}
+                                        <View style={styles.timeColumn}>
+                                          <Text
+                                            numberOfLines={1}
+                                            adjustsFontSizeToFit
+                                            style={styles.timeStartText}
+                                          >
+                                            {isVariableFollowUpStep
+                                              ? `~${leg.startTime}`
+                                              : leg.startTime}
+                                          </Text>
+                                          {leg.endTime &&
+                                            leg.endTime !== leg.startTime && (
+                                              <Text
+                                                numberOfLines={1}
+                                                adjustsFontSizeToFit
+                                                style={styles.timeEndText}
+                                              >
+                                                {leg.endTime}
+                                              </Text>
+                                            )}
+                                        </View>
+
+                                        {/* Colonna Linea & Icona */}
+                                        <View style={styles.lineIconColumn}>
+                                          <View
+                                            style={[
+                                              styles.stepIconCircle,
+                                              { backgroundColor: circleBg },
+                                            ]}
+                                          >
+                                            <Ionicons
+                                              name={iconName}
+                                              size={15}
+                                              color={iconColor}
+                                            />
+                                          </View>
+                                          {!isLast && (
+                                            <View
+                                              style={styles.connectingLine}
+                                            />
+                                          )}
+                                        </View>
+                                      </>
+                                    )}
 
                                     {/* Contenuto Tappa */}
                                     {(() => {
@@ -5796,9 +6354,12 @@ export default function ViaggioScreen() {
                                                       styles.stepDurationText
                                                     }
                                                   >
-                                                    {formatDuration(
-                                                      leg.durationMinutes,
-                                                    )}
+                                                    {isTransitStep ||
+                                                    isVariableFollowUpStep
+                                                      ? `~${formatDuration(leg.durationMinutes)}`
+                                                      : formatDuration(
+                                                          leg.durationMinutes,
+                                                        )}
                                                   </Text>
                                                 </View>
                                               )}
@@ -5809,9 +6370,54 @@ export default function ViaggioScreen() {
                                             >
                                               {leg.subtitle}
                                             </Text>
+
+                                            {isTransitStep && (
+                                              <View
+                                                style={{
+                                                  flexDirection: "row",
+                                                  flexWrap: "wrap",
+                                                  alignItems: "center",
+                                                  marginTop: 7,
+                                                }}
+                                              >
+                                                <View
+                                                  style={{
+                                                    flexDirection: "row",
+                                                    alignItems: "center",
+                                                    paddingHorizontal: 8,
+                                                    paddingVertical: 3.5,
+                                                    borderRadius: 6,
+                                                    backgroundColor: "#191f2e",
+                                                    borderWidth: 1,
+                                                    borderColor:
+                                                      "rgba(96, 165, 250, 0.45)",
+                                                  }}
+                                                >
+                                                  <Ionicons
+                                                    name="bus-outline"
+                                                    size={11}
+                                                    color="#60a5fa"
+                                                    style={{
+                                                      marginRight: 4,
+                                                    }}
+                                                  />
+                                                  <Text
+                                                    style={{
+                                                      fontSize: 10.5,
+                                                      fontWeight: "700",
+                                                      color: "#93c5fd",
+                                                    }}
+                                                  >
+                                                    Consigliato {busDepTimeStr}{" "}
+                                                    → {busAlightTimeStr} (
+                                                    {inVehicleMins}m)
+                                                  </Text>
+                                                </View>
+                                              </View>
+                                            )}
                                           </TouchableOpacity>
 
-                                          {/* Segnalazione manifestazioni o blocchi viabilità che impattano il percorso (a piedi o con mezzi) */}
+                                          {/* Segnalazione scioperi mezzi, manifestazioni o blocchi viabilità che impattano il percorso (identica graficamente alle card sciopero treni) */}
                                           {isTransitOrWalk &&
                                             currentWalkDisruptions.length > 0 &&
                                             (() => {
@@ -5821,21 +6427,28 @@ export default function ViaggioScreen() {
                                                 formatWalkDisruptionSummary(
                                                   activeDisruption,
                                                 );
+                                              const extraCount = Math.max(
+                                                0,
+                                                currentWalkDisruptions.length -
+                                                  1,
+                                              );
 
                                               return (
                                                 <TouchableOpacity
                                                   activeOpacity={0.85}
                                                   onPress={() => {
                                                     handleOpenDisruptionsModal(
-                                                      leg.type === "transit"
-                                                        ? "transit"
-                                                        : "walk",
-                                                      activeDisruption.id,
+                                                      "walk",
+                                                      currentWalkDisruptions.map(
+                                                        (d) => d.id,
+                                                      ),
                                                     );
                                                   }}
                                                   style={[
-                                                    styles.walkDisruptionAlertBanner,
+                                                    styles.heroDisruptionCard,
                                                     {
+                                                      marginTop: 8,
+                                                      marginBottom: 4,
                                                       backgroundColor:
                                                         info.bgColor,
                                                       borderColor:
@@ -5845,35 +6458,90 @@ export default function ViaggioScreen() {
                                                 >
                                                   <View
                                                     style={
-                                                      styles.walkDisruptionAlertHeader
+                                                      styles.heroDisruptionHeaderRow
                                                     }
                                                   >
-                                                    <Ionicons
-                                                      name={info.iconName}
-                                                      size={13}
-                                                      color={info.accentColor}
-                                                      style={{ marginRight: 5 }}
-                                                    />
-                                                    <Text
+                                                    <View
                                                       style={[
-                                                        styles.walkDisruptionAlertTitle,
+                                                        styles.heroDisruptionBadge,
                                                         {
-                                                          color:
-                                                            info.accentColor,
+                                                          backgroundColor:
+                                                            info.badgeBgColor,
                                                         },
                                                       ]}
                                                     >
-                                                      {info.isStrike
-                                                        ? "Sciopero mezzi sul tuo tragitto"
-                                                        : "Attenzione sul tuo tragitto"}
-                                                    </Text>
+                                                      <Ionicons
+                                                        name={info.iconName}
+                                                        size={11}
+                                                        color={info.accentColor}
+                                                        style={{
+                                                          marginRight: 4,
+                                                        }}
+                                                      />
+                                                      <Text
+                                                        style={[
+                                                          styles.heroDisruptionBadgeText,
+                                                          {
+                                                            color:
+                                                              info.accentColor,
+                                                          },
+                                                        ]}
+                                                      >
+                                                        {info.badgeLabel}
+                                                      </Text>
+                                                    </View>
+                                                    {extraCount > 0 && (
+                                                      <View
+                                                        style={[
+                                                          styles.heroDisruptionExtraPill,
+                                                          {
+                                                            backgroundColor:
+                                                              info.badgeBgColor,
+                                                          },
+                                                        ]}
+                                                      >
+                                                        <Text
+                                                          style={[
+                                                            styles.heroDisruptionExtraText,
+                                                            {
+                                                              color:
+                                                                info.descColor,
+                                                            },
+                                                          ]}
+                                                        >
+                                                          +{extraCount}
+                                                        </Text>
+                                                      </View>
+                                                    )}
+                                                    <View
+                                                      style={
+                                                        styles.heroDisruptionActionRow
+                                                      }
+                                                    >
+                                                      <Text
+                                                        style={[
+                                                          styles.heroDisruptionActionText,
+                                                          {
+                                                            color:
+                                                              info.descColor,
+                                                          },
+                                                        ]}
+                                                      >
+                                                        Dettagli
+                                                      </Text>
+                                                      <Ionicons
+                                                        name="chevron-forward"
+                                                        size={12}
+                                                        color={info.descColor}
+                                                      />
+                                                    </View>
                                                   </View>
                                                   <Text
                                                     style={[
-                                                      styles.walkDisruptionAlertDesc,
+                                                      styles.heroDisruptionDesc,
                                                       { color: info.descColor },
                                                     ]}
-                                                    numberOfLines={3}
+                                                    numberOfLines={2}
                                                   >
                                                     {info.description}
                                                   </Text>
@@ -6217,10 +6885,7 @@ export default function ViaggioScreen() {
                                                     direction === "return" &&
                                                     !isTargetLectureFinished &&
                                                     Boolean(
-                                                      itinerary.transitPreferLatestBeforeDeadline ||
-                                                        itinerary.lectureTimeStatus
-                                                          ?.type ===
-                                                          "early_departure",
+                                                      itinerary.transitPreferLatestBeforeDeadline,
                                                     )
                                                   }
                                                   prefetchedBoard={
@@ -6573,6 +7238,7 @@ export default function ViaggioScreen() {
           onClose={() => {
             setDisruptionsModalVisible(false);
             setSelectedDisruptionEventId(null);
+            setSelectedDisruptionEventIds([]);
           }}
           disruptions={disruptions}
           loading={disruptionsLoading}
@@ -6580,7 +7246,9 @@ export default function ViaggioScreen() {
           theme={theme}
           initialFilter={disruptionsInitialFilter}
           activeStationName={commuterStationName}
+          selectedDateIso={selectedDateIso}
           highlightEventId={selectedDisruptionEventId}
+          highlightEventIds={selectedDisruptionEventIds}
         />
       </SafeAreaView>
     </View>
@@ -7101,22 +7769,62 @@ const styles = StyleSheet.create({
   heroTargetLectureBox: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(130, 36, 51, 0.15)",
-    borderRadius: CARD_RADIUS.cardInner,
-    padding: 10,
-    marginTop: 0,
-    borderWidth: 1,
-    borderColor: "rgba(130, 36, 51, 0.3)",
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    marginTop: 2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    gap: 10,
+  },
+  heroLectureIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroLectureTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  heroLectureExcludedPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    backgroundColor: "rgba(148, 163, 184, 0.16)",
+  },
+  heroLectureExcludedText: {
+    color: "#cbd5e1",
+    fontSize: 9.5,
+    fontWeight: "600",
   },
   heroLectureSubject: {
-    fontSize: 14,
+    fontSize: 14.5,
     fontWeight: "700",
     color: "#ffffff",
+    letterSpacing: -0.2,
+  },
+  heroLectureMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 2.5,
+  },
+  heroLectureMetaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 1,
   },
   heroLectureDetails: {
     fontSize: 12,
     color: "#94a3b8",
-    marginTop: 2,
+    fontWeight: "500",
   },
 
   /* Card Treno Risaltato */
@@ -7476,9 +8184,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   timeColumn: {
-    width: 48,
+    width: 54,
     alignItems: "flex-end",
-    paddingRight: 8,
+    paddingRight: 6,
     paddingTop: 6,
   },
   timeStartText: {
@@ -7909,6 +8617,44 @@ const styles = StyleSheet.create({
     color: "#fde68a",
     fontSize: 12,
     lineHeight: 16,
+  },
+  heroDisruptionCompactStrip: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  heroDisruptionCompactIconsWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginRight: 7,
+  },
+  heroDisruptionCompactIconDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  heroDisruptionCompactText: {
+    flex: 1,
+    fontSize: 11.5,
+    fontWeight: "700",
+    letterSpacing: -0.1,
+  },
+  heroDisruptionCompactCountPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 8,
+    marginLeft: 6,
+  },
+  heroDisruptionCompactCountText: {
+    fontSize: 10,
+    fontWeight: "800",
   },
   heroDisruptionStack: {
     width: "100%",

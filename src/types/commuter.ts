@@ -211,6 +211,13 @@ export interface TripLeg {
     badgeBg?: string;
     remainingLectureMinutes?: number;
     lostLectureMinutes?: number;
+    walkBeforeMinutes?: number;
+    inVehicleMinutes?: number;
+    walkAfterMinutes?: number;
+    busDepartureTime?: string;
+    busAlightingTime?: string;
+    coincidenceAvailableFromTime?: string;
+    firstAvailableDepartureTime?: string;
   };
 }
 

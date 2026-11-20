@@ -57,11 +57,22 @@ export const DEFAULT_COMMUTER_CONFIG: CommuterConfig = {
 };
 
 let commuterStorageQueue: Promise<unknown> = Promise.resolve();
+let commuterConfigMemoryCache: CommuterConfig | null = null;
+
+export function clearCommuterMemoryCache(): void {
+  commuterConfigMemoryCache = null;
+}
 
 async function readCommuterConfigFromStorage(): Promise<CommuterConfig> {
+  if (commuterConfigMemoryCache) {
+    return commuterConfigMemoryCache;
+  }
   try {
     const raw = await AsyncStorage.getItem(COMMUTER_CONFIG_KEY);
-    if (!raw) return DEFAULT_COMMUTER_CONFIG;
+    if (!raw) {
+      commuterConfigMemoryCache = DEFAULT_COMMUTER_CONFIG;
+      return DEFAULT_COMMUTER_CONFIG;
+    }
     const parsed = JSON.parse(raw);
     const depNormalized = normalizeStationInfo({
       ...DEFAULT_COMMUTER_CONFIG.departureStation,
@@ -71,7 +82,7 @@ async function readCommuterConfigFromStorage(): Promise<CommuterConfig> {
       ...DEFAULT_COMMUTER_CONFIG.arrivalStation,
       ...(parsed.arrivalStation || {}),
     });
-    return {
+    const resolved: CommuterConfig = {
       ...DEFAULT_COMMUTER_CONFIG,
       ...parsed,
       includeIntercity: Boolean(parsed.includeIntercity),
@@ -96,6 +107,8 @@ async function readCommuterConfigFromStorage(): Promise<CommuterConfig> {
         ...(parsed.strikeAlerts || {}),
       },
     };
+    commuterConfigMemoryCache = resolved;
+    return resolved;
   } catch {
     return DEFAULT_COMMUTER_CONFIG;
   }
@@ -174,6 +187,7 @@ export async function saveCommuterConfig(
             ...(config.strikeAlerts || {}),
           },
         };
+        commuterConfigMemoryCache = updated;
         await AsyncStorage.setItem(COMMUTER_CONFIG_KEY, JSON.stringify(updated));
         for (const listener of commuterChangeListeners) {
           try {

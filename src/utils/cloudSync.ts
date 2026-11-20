@@ -3,6 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
 import { AppState, AppStateStatus, Platform } from "react-native";
+import { clearScraperMemoryCache, notifyDegreeChanged } from "./scraper";
 import { SYNC_DB_URL } from "../config/syncConfig";
 import { CommuterConfig } from "../types/commuter";
 import {
@@ -23,6 +24,7 @@ import {
 } from "./alarmSync";
 import {
   AttendanceRecord,
+  clearAttendanceMemoryCache,
   getAttendanceRecords,
   getAttendanceTombstones,
   saveAttendanceList,
@@ -34,6 +36,7 @@ import {
 } from "./attendance";
 import {
   ManualClassEvent,
+  clearManualEventsMemoryCache,
   getManualEvents,
   saveManualEvents,
   getManualEventsTombstones,
@@ -45,6 +48,7 @@ import {
 } from "./manualEvents";
 import {
   ExcludedLessonRecord,
+  clearExcludedLessonsMemoryCache,
   getExcludedLessons,
   saveExcludedLessonsList,
   getExcludedLessonsTombstones,
@@ -56,6 +60,7 @@ import {
 } from "./excludedLessons";
 import {
   DEFAULT_COMMUTER_CONFIG,
+  clearCommuterMemoryCache,
   getCommuterConfig,
   saveCommuterConfig,
   setCommuterChangeListener,
@@ -68,14 +73,17 @@ import {
 } from "./studentInfo";
 import {
   SavedDocument,
+  clearSavedDocumentsMemoryCache,
   getSavedDocuments,
   setAllSavedDocuments,
   getSavedDocumentsTombstones,
   setSavedDocumentsTombstones,
   subscribeToSavedDocumentsChanges,
+  uploadPendingFiles,
 } from "./savedDocuments";
 import {
   AppNote,
+  clearNotesMemoryCache,
   getNotes,
   getNotesTombstones,
   setAllNotes,
@@ -274,12 +282,8 @@ export async function generateUniqueInitialSyncCode(): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const candidate = generateInitialSyncCode();
     try {
-      const existing = await fetchRemote(candidate);
-      if (
-        !existing ||
-        !existing.devices ||
-        Object.keys(existing.devices).length === 0
-      ) {
+      const devices = await fetchRemoteDevicesOnly(candidate);
+      if (!devices || Object.keys(devices).length === 0) {
         return candidate;
       }
     } catch {
@@ -357,13 +361,13 @@ export async function setCustomCloudSyncId(
   }
 
   try {
-    const existing = await fetchRemote(norm);
-    if (existing && existing.devices) {
+    const existingDevices = await fetchRemoteDevicesOnly(norm);
+    if (existingDevices) {
       const myDevice = await getLocalDeviceInfo();
-      const otherDevices = Object.values(existing.devices).filter(
+      const otherDevices = Object.values(existingDevices).filter(
         (d) => d && d.id !== myDevice.id,
       );
-      if (otherDevices.length > 0 && !existing.devices[myDevice.id]) {
+      if (otherDevices.length > 0 && !existingDevices[myDevice.id]) {
         return {
           success: false,
           message: `Il nome "${norm}" è già in uso da un altro utente. Scegli un nome diverso o usa il campo "Collega" per unirti ad esso.`,
@@ -662,16 +666,20 @@ export async function performCloudSync(): Promise<{
  * anche prima che l'utente prema manualmente "Sincronizza". In questo modo un altro dispositivo
  * può collegarsi al codice immediatamente senza errori.
  */
+const registeredCloudSyncIds = new Set<string>();
+
 export async function ensureDeviceRegisteredInCloud(): Promise<void> {
   if (!isCloudConfigured()) return;
   try {
     const isSlave = await isCurrentDeviceSlave();
     if (isSlave) return;
     const ownId = await getCloudSyncId();
-    const existing = await fetchRemote(ownId);
-    if (!existing) {
+    if (registeredCloudSyncIds.has(ownId)) return;
+    const updatedAtCheck = await fetchRemoteUpdatedAt(ownId);
+    if (updatedAtCheck.status === "missing") {
       await syncWithICloudStorage();
     }
+    registeredCloudSyncIds.add(ownId);
   } catch {}
 }
 
@@ -817,6 +825,105 @@ export function isCloudConfigured(): boolean {
 
 function remoteUrl(syncId: string): string {
   return `${SYNC_DB_URL.replace(/\/+$/, "")}/sync/${syncId}.json`;
+}
+
+function remoteSubUrl(syncId: string, subPath: string): string {
+  return `${SYNC_DB_URL.replace(/\/+$/, "")}/sync/${syncId}/${subPath}.json`;
+}
+
+function computeStableDevicesHash(
+  devicesMap?: Record<string, SyncDeviceInfo> | null,
+): string {
+  if (!devicesMap || typeof devicesMap !== "object") return "";
+  return Object.values(devicesMap)
+    .filter(Boolean)
+    .map(
+      (d) =>
+        `${d.id}:${d.name}:${d.role || "master"}:${d.parentDeviceId || ""}`,
+    )
+    .sort()
+    .join("|");
+}
+
+const remoteUpdatedAtEtagBySyncId = new Map<string, string>();
+let pairedDevicesCache: {
+  syncId: string;
+  timestamp: number;
+  status: PairedDevicesStatus;
+} | null = null;
+let pairedDevicesInFlight: Promise<PairedDevicesStatus> | null = null;
+const PAIRED_DEVICES_CACHE_TTL_MS = 5000;
+
+function invalidatePairedDevicesCache(): void {
+  pairedDevicesCache = null;
+}
+
+async function fetchRemoteUpdatedAt(
+  syncId: string,
+): Promise<
+  | { status: "unchanged" }
+  | { status: "missing" }
+  | { status: "changed"; updatedAt: number }
+> {
+  const prevEtag = remoteUpdatedAtEtagBySyncId.get(syncId);
+  const headers: Record<string, string> = { "X-Firebase-ETag": "true" };
+  if (prevEtag) {
+    headers["If-None-Match"] = prevEtag;
+  }
+  const res = await fetchWithTimeout(remoteSubUrl(syncId, "updatedAt"), {
+    headers,
+  });
+  if (res.status === 304) {
+    return { status: "unchanged" };
+  }
+  if (!res.ok) {
+    throw new Error(`Errore server cloud (${res.status}).`);
+  }
+  const nextEtag = res.headers?.get?.("etag");
+  if (nextEtag) {
+    remoteUpdatedAtEtagBySyncId.set(syncId, nextEtag);
+  }
+  const val = await res.json();
+  if (val === null || val === undefined) {
+    return { status: "missing" };
+  }
+  return { status: "changed", updatedAt: typeof val === "number" ? val : 0 };
+}
+
+async function fetchRemoteDevicesOnly(
+  syncId: string,
+): Promise<Record<string, SyncDeviceInfo> | null> {
+  const res = await fetchWithTimeout(remoteSubUrl(syncId, "devices"));
+  if (!res.ok) return null;
+  const json = await res.json();
+  return json && typeof json === "object"
+    ? (json as Record<string, SyncDeviceInfo>)
+    : null;
+}
+
+async function fetchRemoteDevicesAndDissociated(syncId: string): Promise<{
+  devices: Record<string, SyncDeviceInfo> | null;
+  dissociatedDevices: Record<string, number> | null;
+}> {
+  const [devRes, dissRes] = await Promise.all([
+    fetchWithTimeout(remoteSubUrl(syncId, "devices")),
+    fetchWithTimeout(remoteSubUrl(syncId, "dissociatedDevices")),
+  ]);
+  let devices: Record<string, SyncDeviceInfo> | null = null;
+  let dissociatedDevices: Record<string, number> | null = null;
+  if (devRes.ok) {
+    const j = await devRes.json();
+    if (j && typeof j === "object") {
+      devices = j as Record<string, SyncDeviceInfo>;
+    }
+  }
+  if (dissRes.ok) {
+    const j = await dissRes.json();
+    if (j && typeof j === "object") {
+      dissociatedDevices = j as Record<string, number>;
+    }
+  }
+  return { devices, dissociatedDevices };
 }
 
 /**
@@ -1032,7 +1139,9 @@ export async function getLocalDeviceInfo(): Promise<SyncDeviceInfo> {
   };
 }
 
-export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
+export async function getPairedDevicesInfo(
+  forceRefresh = false,
+): Promise<PairedDevicesStatus> {
   const myDevice = await getLocalDeviceInfo();
   const isSlave = await isCurrentDeviceSlave();
   const masterCode = await getMasterSyncCode();
@@ -1050,80 +1159,109 @@ export async function getPairedDevicesInfo(): Promise<PairedDevicesStatus> {
     };
   }
 
-  try {
-    const activeSyncId = await getActiveSyncId();
-    const remote = await fetchRemote(activeSyncId);
-    if (!remote || !remote.devices) {
+  const activeSyncId = await getActiveSyncId();
+  if (
+    !forceRefresh &&
+    pairedDevicesCache &&
+    pairedDevicesCache.syncId === activeSyncId &&
+    Date.now() - pairedDevicesCache.timestamp < PAIRED_DEVICES_CACHE_TTL_MS
+  ) {
+    return pairedDevicesCache.status;
+  }
+
+  if (!forceRefresh && pairedDevicesInFlight) {
+    return pairedDevicesInFlight;
+  }
+
+  const runFetch = async (): Promise<PairedDevicesStatus> => {
+    try {
+      const { devices, dissociatedDevices } =
+        await fetchRemoteDevicesAndDissociated(activeSyncId);
+      if (!devices) {
+        const status: PairedDevicesStatus = {
+          myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
+          otherDevices: [],
+          otherDevice: null,
+          isPaired: false,
+          totalDevices: 0,
+          isSlave,
+          masterCode,
+        };
+        pairedDevicesCache = { syncId: activeSyncId, timestamp: Date.now(), status };
+        return status;
+      }
+
+      const devicesMap: Record<string, SyncDeviceInfo> =
+        typeof devices === "object" ? devices : {};
+      const registeredMy = devicesMap[myDevice.id] || {
+        ...myDevice,
+        code: ownCode,
+        role: isSlave ? "slave" : "master",
+      };
+
+      const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
+      const isDissociated = Boolean(
+        dissociatedDevices && dissociatedDevices[myDevice.id],
+      );
+
+      const others: SyncDeviceInfo[] = Object.entries(devicesMap)
+        .filter(
+          ([k, d]) =>
+            k !== myDevice.id && d && (d.id ? d.id !== myDevice.id : true),
+        )
+        .map(([k, d]) => ({
+          ...d,
+          id: d.id || k,
+        }));
+      const otherDevice = others.length > 0 ? others[0] : null;
+
+      if (isDissociated || (!isCurrentDeviceRegistered && others.length > 0)) {
+        setTimeout(() => {
+          handleLocalDeviceWasKickedOut(myDevice).catch(() => {});
+        }, 0);
+        return {
+          myDevice: registeredMy,
+          otherDevices: [],
+          otherDevice: null,
+          isPaired: false,
+          totalDevices: 1,
+          isSlave: false,
+          masterCode: null,
+        };
+      }
+
+      const status: PairedDevicesStatus = {
+        myDevice: registeredMy,
+        otherDevices: others,
+        otherDevice,
+        isPaired: others.length > 0,
+        totalDevices: Object.keys(devicesMap).length,
+        isSlave,
+        masterCode,
+      };
+      pairedDevicesCache = { syncId: activeSyncId, timestamp: Date.now(), status };
+      return status;
+    } catch {
       return {
         myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
         otherDevices: [],
         otherDevice: null,
         isPaired: false,
-        totalDevices: 0,
+        totalDevices: 1,
         isSlave,
         masterCode,
       };
     }
+  };
 
-    const devicesMap: Record<string, SyncDeviceInfo> =
-      typeof remote.devices === "object" ? remote.devices : {};
-    const registeredMy = devicesMap[myDevice.id] || {
-      ...myDevice,
-      code: ownCode,
-      role: isSlave ? "slave" : "master",
-    };
-
-    const isCurrentDeviceRegistered = Boolean(devicesMap[myDevice.id]);
-    const isDissociated = Boolean(
-      remote.dissociatedDevices && remote.dissociatedDevices[myDevice.id],
-    );
-
-    const others: SyncDeviceInfo[] = Object.entries(devicesMap)
-      .filter(
-        ([k, d]) =>
-          k !== myDevice.id && d && (d.id ? d.id !== myDevice.id : true),
-      )
-      .map(([k, d]) => ({
-        ...d,
-        id: d.id || k,
-      }));
-    const otherDevice = others.length > 0 ? others[0] : null;
-
-    if (isDissociated || (!isCurrentDeviceRegistered && others.length > 0)) {
-      setTimeout(() => {
-        handleLocalDeviceWasKickedOut(myDevice).catch(() => {});
-      }, 0);
-      return {
-        myDevice: registeredMy,
-        otherDevices: [],
-        otherDevice: null,
-        isPaired: false,
-        totalDevices: 1,
-        isSlave: false,
-        masterCode: null,
-      };
-    }
-
-    return {
-      myDevice: registeredMy,
-      otherDevices: others,
-      otherDevice,
-      isPaired: others.length > 0,
-      totalDevices: Object.keys(devicesMap).length,
-      isSlave,
-      masterCode,
-    };
-  } catch {
-    return {
-      myDevice: { ...myDevice, code: ownCode, role: isSlave ? "slave" : "master" },
-      otherDevices: [],
-      otherDevice: null,
-      isPaired: false,
-      totalDevices: 1,
-      isSlave,
-      masterCode,
-    };
+  if (forceRefresh) {
+    return runFetch();
   }
+
+  pairedDevicesInFlight = runFetch().finally(() => {
+    pairedDevicesInFlight = null;
+  });
+  return pairedDevicesInFlight;
 }
 
 export async function isDevicePaired(): Promise<boolean> {
@@ -1153,6 +1291,9 @@ async function handleLocalDeviceWasKickedOut(
     await setICloudAutoSyncEnabled(false);
     lastKnownDevicesHash = "";
     lastKnownRemoteUpdatedAt = 0;
+    remoteUpdatedAtEtagBySyncId.clear();
+    registeredCloudSyncIds.clear();
+    invalidatePairedDevicesCache();
 
     const ownId = await getCloudSyncId();
     const freshMyDevice: SyncDeviceInfo = {
@@ -1309,20 +1450,19 @@ export async function dissociateDevice(
         updatedDissociated[id] = Date.now();
       }
 
+      const dissTs = Date.now();
       await pushRemote(activeSyncId, {
         ...remote,
-        updatedAt: Date.now(),
+        updatedAt: dissTs,
         devices: devicesMap,
         dissociatedDevices: updatedDissociated,
       });
 
-      await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
-      lastKnownDevicesHash = Object.values(devicesMap)
-        .filter(Boolean)
-        .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
-        .sort()
-        .join("|");
-      lastKnownRemoteUpdatedAt = Date.now();
+      await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(dissTs));
+      lastKnownDevicesHash = computeStableDevicesHash(devicesMap);
+      lastKnownRemoteUpdatedAt = dissTs;
+      remoteUpdatedAtEtagBySyncId.delete(activeSyncId);
+      invalidatePairedDevicesCache();
 
       await notifyLiveSyncListeners(true);
       return {
@@ -1492,6 +1632,7 @@ export async function writeLocalCourse(c: CourseData): Promise<void> {
     if (val) await AsyncStorage.setItem(key, val);
     else await AsyncStorage.removeItem(key);
   }
+  notifyDegreeChanged(c.url, c.name || undefined);
   if (c.defaultTabsByCourse) {
     const toSet: [string, string][] = [];
     for (const [courseUrl, pref] of Object.entries(c.defaultTabsByCourse)) {
@@ -1528,8 +1669,12 @@ function idsKey(list: AttendanceRecord[]): string {
 }
 
 let syncInFlight: Promise<CloudSyncResult> | null = null;
+let suppressAutoPushDepth = 0;
 
-async function runSync(): Promise<CloudSyncResult> {
+async function runSync(
+  prefetchedRemote?: RemoteDoc | null,
+  options?: { allowUnpairedPush?: boolean },
+): Promise<CloudSyncResult> {
   if (!isCloudConfigured()) {
     return {
       success: false,
@@ -1538,11 +1683,15 @@ async function runSync(): Promise<CloudSyncResult> {
     };
   }
 
+  suppressAutoPushDepth++;
   try {
     const activeSyncId = await getActiveSyncId();
     const ownId = await getCloudSyncId();
     const isSlave = await isCurrentDeviceSlave();
-    const remote = await fetchRemote(activeSyncId);
+    const remote =
+      prefetchedRemote !== undefined
+        ? prefetchedRemote
+        : await fetchRemote(activeSyncId);
     const myDevice = await getLocalDeviceInfo();
 
     // Se questo dispositivo è slave e il documento master remoto non esiste più sul cloud (ripristinato o cancellato)
@@ -1590,15 +1739,22 @@ async function runSync(): Promise<CloudSyncResult> {
       myDevice.id,
     );
 
+    const existingDeviceEntry = devicesMap[myDevice.id];
+    const deviceMetaChanged =
+      !existingDeviceEntry ||
+      existingDeviceEntry.name !== uniqueName ||
+      existingDeviceEntry.code !== ownId ||
+      existingDeviceEntry.role !== (isSlave ? "slave" : "master");
+
     devicesMap[myDevice.id] = {
       ...myDevice,
       name: uniqueName,
       code: ownId,
       role: isSlave ? "slave" : "master",
-      parentDeviceId: devicesMap[myDevice.id]?.parentDeviceId || null,
-      parentCode: devicesMap[myDevice.id]?.parentCode || null,
-      pairedAt: devicesMap[myDevice.id]?.pairedAt || Date.now(),
-      lastActive: Date.now(),
+      parentDeviceId: existingDeviceEntry?.parentDeviceId || null,
+      parentCode: existingDeviceEntry?.parentCode || null,
+      pairedAt: existingDeviceEntry?.pairedAt || Date.now(),
+      lastActive: existingDeviceEntry?.lastActive || Date.now(),
     };
 
     const otherDevices = Object.values(devicesMap).filter(
@@ -1606,8 +1762,49 @@ async function runSync(): Promise<CloudSyncResult> {
     );
     const otherDevice = otherDevices.length > 0 ? otherDevices[0] : null;
     const isPaired = otherDevice !== null;
+    AsyncStorage.setItem(
+      "studici_cloud_is_paired_cached",
+      isPaired ? "true" : "false",
+    ).catch(() => {});
+    if (isPaired) {
+      uploadPendingFiles(true).catch(() => {});
+    }
+
+    const buildPairedStatus = (): PairedDevicesStatus => ({
+      myDevice: devicesMap[myDevice.id],
+      otherDevices,
+      otherDevice,
+      isPaired,
+      totalDevices: Object.keys(devicesMap).length,
+      isSlave,
+      masterCode: isSlave ? activeSyncId : null,
+    });
 
     if (!isPaired) {
+      // Se invocato dal polling live e il nodo remoto esiste già con questo dispositivo registrato,
+      // evita di riscrivere l'intero documento a vuoto (previene loop di upload inutili)
+      if (options?.allowUnpairedPush === false && remote && isAlreadyRegistered) {
+        lastKnownDevicesHash = computeStableDevicesHash(devicesMap);
+        lastKnownRemoteUpdatedAt = remote.updatedAt || 0;
+        pairedDevicesCache = {
+          syncId: activeSyncId,
+          timestamp: Date.now(),
+          status: buildPairedStatus(),
+        };
+        return {
+          success: false,
+          updated: false,
+          notPaired: true,
+          message:
+            "Nessun dispositivo associato. La sincronizzazione si attiverà non appena colleghi un secondo dispositivo.",
+        };
+      }
+
+      const pushTs = Date.now();
+      devicesMap[myDevice.id] = {
+        ...devicesMap[myDevice.id],
+        lastActive: pushTs,
+      };
       const localCourse = await readLocalCourse();
       const localAtt = await getAttendanceRecords();
       const localTomb = await getAttendanceTombstones();
@@ -1621,9 +1818,9 @@ async function runSync(): Promise<CloudSyncResult> {
         } catch {}
       }
       await pushRemote(activeSyncId, {
-        updatedAt: Date.now(),
+        updatedAt: pushTs,
         course: localCourse,
-        courseModified: Date.now(),
+        courseModified: pushTs,
         cachedSchedule: localCachedSchedule || remote?.cachedSchedule,
         cachedTabs: localCachedTabs || remote?.cachedTabs,
         attendance: localAtt,
@@ -1633,25 +1830,36 @@ async function runSync(): Promise<CloudSyncResult> {
         allCoursesAttendance: await getAllAttendanceAcrossCourses(),
         allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
         commuter: localCommuter,
-        commuterModified: Date.now(),
+        commuterModified: pushTs,
         studentInfo: await getStudentInfo(),
-        studentInfoModified: Date.now(),
+        studentInfoModified: pushTs,
         savedDocuments: await getSavedDocuments(),
         savedDocumentsTombstones: await getSavedDocumentsTombstones(),
-        savedDocumentsModified: Date.now(),
+        savedDocumentsModified: pushTs,
         notes: await getNotes(),
         notesTombstones: await getNotesTombstones(),
-        notesModified: Date.now(),
+        notesModified: pushTs,
         calendarConfig: {
           customTitle: await getCalendarTitle(),
           autoSync: await getCalendarAutoSync(),
           strikesTitle: await getCalendarTitle("strikes"),
           strikesCustomColor: await getCustomCalendarColor("strikes"),
-          updatedAt: Date.now(),
+          updatedAt: pushTs,
         },
         devices: devicesMap,
         dissociatedDevices: remote?.dissociatedDevices || {},
       });
+
+      lastKnownDevicesHash = computeStableDevicesHash(devicesMap);
+      lastKnownRemoteUpdatedAt = pushTs;
+      remoteUpdatedAtEtagBySyncId.delete(activeSyncId);
+      registeredCloudSyncIds.add(activeSyncId);
+      await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(pushTs));
+      pairedDevicesCache = {
+        syncId: activeSyncId,
+        timestamp: Date.now(),
+        status: buildPairedStatus(),
+      };
 
       return {
         success: false,
@@ -1771,7 +1979,9 @@ async function runSync(): Promise<CloudSyncResult> {
       const localAllAtt = await getAllAttendanceAcrossCourses();
       const mergedAllAtt = { ...localAllAtt, ...remote.allCoursesAttendance };
       if (finalCourse.url) mergedAllAtt[finalCourse.url] = merged;
-      await saveAllAttendanceAcrossCourses(mergedAllAtt);
+      if (JSON.stringify(mergedAllAtt) !== JSON.stringify(localAllAtt)) {
+        await saveAllAttendanceAcrossCourses(mergedAllAtt, true);
+      }
     }
 
     // 2b. Sincronizzazione Lezioni Manuali (Union con tombstones)
@@ -1810,7 +2020,9 @@ async function runSync(): Promise<CloudSyncResult> {
       const localAllManual = await getAllManualEventsAcrossCourses();
       const mergedAllManual = { ...localAllManual, ...remote.allCoursesManualEvents };
       if (finalCourse.url) mergedAllManual[finalCourse.url] = mergedManual;
-      await saveAllManualEventsAcrossCourses(mergedAllManual);
+      if (JSON.stringify(mergedAllManual) !== JSON.stringify(localAllManual)) {
+        await saveAllManualEventsAcrossCourses(mergedAllManual, true);
+      }
     }
 
     // 2c. Sincronizzazione Lezioni Barrate (Union con tombstones)
@@ -1854,7 +2066,9 @@ async function runSync(): Promise<CloudSyncResult> {
         ...remote.allCoursesExcludedLessons,
       };
       if (finalCourse.url) mergedAllExcluded[finalCourse.url] = mergedExcluded;
-      await saveAllExcludedLessonsAcrossCourses(mergedAllExcluded);
+      if (JSON.stringify(mergedAllExcluded) !== JSON.stringify(localAllExcluded)) {
+        await saveAllExcludedLessonsAcrossCourses(mergedAllExcluded, true);
+      }
     }
 
     // 3. Sincronizzazione Impostazioni di Viaggio (LWW)
@@ -2058,61 +2272,120 @@ async function runSync(): Promise<CloudSyncResult> {
       }
     }
 
-    // Pubblica al gruppo attivo
-    await pushRemote(activeSyncId, {
-      updatedAt: now,
-      course: finalCourse,
-      courseModified: finalMod,
-      cachedSchedule: activeCachedSchedule || remote?.cachedSchedule,
-      cachedTabs: activeCachedTabs || remote?.cachedTabs,
-      attendance: merged,
-      tombstones,
-      manualEvents: mergedManual,
-      manualTombstones,
-      excludedLessons: mergedExcluded,
-      excludedTombstones,
-      allCoursesAttendance: await getAllAttendanceAcrossCourses(),
-      allCoursesManualEvents: await getAllManualEventsAcrossCourses(),
-      allCoursesExcludedLessons: await getAllExcludedLessonsAcrossCourses(),
-      commuter: finalCommuter,
-      commuterModified: finalCommuterMod,
-      studentInfo: {
-        matricola: finalStudent.matricola,
-        email: finalStudent.email,
-      },
-      studentInfoModified: finalStudentMod,
-      savedDocuments: mergedDocs,
-      savedDocumentsTombstones: docTombstones,
-      savedDocumentsModified: now,
-      notes: mergedNotes,
-      notesTombstones: notesTombstones,
-      notesModified: now,
-      calendarConfig: {
-        customTitle: await getCalendarTitle(),
-        autoSync: await getCalendarAutoSync(),
-        strikesTitle: await getCalendarTitle("strikes"),
-        strikesCustomColor: await getCustomCalendarColor("strikes"),
-        updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod),
-      },
-      devices: devicesMap,
-      dissociatedDevices: remote?.dissociatedDevices || {},
-    });
+    const allCoursesAttendance = await getAllAttendanceAcrossCourses();
+    const allCoursesManualEvents = await getAllManualEventsAcrossCourses();
+    const allCoursesExcludedLessons = await getAllExcludedLessonsAcrossCourses();
+    const mergedCalConfig = {
+      customTitle: await getCalendarTitle(),
+      autoSync: await getCalendarAutoSync(),
+      strikesTitle: await getCalendarTitle("strikes"),
+      strikesCustomColor: await getCustomCalendarColor("strikes"),
+      updatedAt: Math.max(await getCalendarConfigUpdatedAt(), remoteCalMod),
+    };
+    const mergedStudentPayload = {
+      matricola: finalStudent.matricola,
+      email: finalStudent.email,
+    };
+    const stripFileUri = (docs: SavedDocument[]) =>
+      docs.map(({ fileUri: _ignored, ...rest }) => rest);
 
-    // Se sono slave, mantieni aggiornato il mio spazio personale per consentire ad altri di associarsi a me
-    if (isSlave) {
-      try {
-        await pushRemote(ownId, {
-          updatedAt: now,
-          forwardToMaster: activeSyncId,
-          masterId: activeSyncId,
-          devices: {
-            [myDevice.id]: devicesMap[myDevice.id],
-          },
-        });
-      } catch {}
+    // Verifica se il documento remoto contiene già esattamente lo stato fuso:
+    // evita il ping-pong di PUT completi tra Master e Slave quando un dispositivo ha solo ricevuto dati.
+    const remoteMatchesMerged =
+      Boolean(remote) &&
+      !deviceMetaChanged &&
+      JSON.stringify(normalizeCourse(remote?.course)) ===
+        JSON.stringify(finalCourse) &&
+      idsKey(merged) === idsKey(remoteAtt) &&
+      JSON.stringify(tombstones) === JSON.stringify(remoteTomb) &&
+      JSON.stringify(mergedManual) === JSON.stringify(remoteManual) &&
+      JSON.stringify(manualTombstones) === JSON.stringify(remoteManualTomb) &&
+      excludedIdsKey(mergedExcluded) === excludedIdsKey(remoteExcluded) &&
+      JSON.stringify(excludedTombstones) === JSON.stringify(remoteExcludedTomb) &&
+      JSON.stringify(allCoursesAttendance) ===
+        JSON.stringify(remote?.allCoursesAttendance || {}) &&
+      JSON.stringify(allCoursesManualEvents) ===
+        JSON.stringify(remote?.allCoursesManualEvents || {}) &&
+      JSON.stringify(allCoursesExcludedLessons) ===
+        JSON.stringify(remote?.allCoursesExcludedLessons || {}) &&
+      JSON.stringify(finalCommuter) ===
+        JSON.stringify(remote?.commuter || DEFAULT_COMMUTER_CONFIG) &&
+      JSON.stringify(mergedStudentPayload) ===
+        JSON.stringify(remote?.studentInfo || { matricola: "", email: "" }) &&
+      JSON.stringify(stripFileUri(mergedDocs)) ===
+        JSON.stringify(stripFileUri(remoteDocs)) &&
+      JSON.stringify(docTombstones) === JSON.stringify(remoteDocTomb) &&
+      JSON.stringify(mergedNotes) === JSON.stringify(remoteNotes) &&
+      JSON.stringify(notesTombstones) === JSON.stringify(remoteNotesTomb) &&
+      JSON.stringify(mergedCalConfig) ===
+        JSON.stringify(remote?.calendarConfig || {}) &&
+      Boolean(remote?.cachedSchedule || !activeCachedSchedule) &&
+      Boolean(remote?.cachedTabs || !activeCachedTabs);
+
+    const effectiveSyncTs = remoteMatchesMerged ? remote?.updatedAt || now : now;
+
+    if (!remoteMatchesMerged) {
+      devicesMap[myDevice.id] = {
+        ...devicesMap[myDevice.id],
+        lastActive: now,
+      };
+      // Pubblica al gruppo attivo solo se ci sono differenze reali rispetto al remoto
+      await pushRemote(activeSyncId, {
+        updatedAt: now,
+        course: finalCourse,
+        courseModified: finalMod,
+        cachedSchedule: activeCachedSchedule || remote?.cachedSchedule,
+        cachedTabs: activeCachedTabs || remote?.cachedTabs,
+        attendance: merged,
+        tombstones,
+        manualEvents: mergedManual,
+        manualTombstones,
+        excludedLessons: mergedExcluded,
+        excludedTombstones,
+        allCoursesAttendance,
+        allCoursesManualEvents,
+        allCoursesExcludedLessons,
+        commuter: finalCommuter,
+        commuterModified: finalCommuterMod,
+        studentInfo: mergedStudentPayload,
+        studentInfoModified: finalStudentMod,
+        savedDocuments: mergedDocs,
+        savedDocumentsTombstones: docTombstones,
+        savedDocumentsModified: now,
+        notes: mergedNotes,
+        notesTombstones: notesTombstones,
+        notesModified: now,
+        calendarConfig: mergedCalConfig,
+        devices: devicesMap,
+        dissociatedDevices: remote?.dissociatedDevices || {},
+      });
+
+      // Se sono slave, mantieni aggiornato il mio spazio personale per consentire ad altri di associarsi a me
+      if (isSlave) {
+        try {
+          await pushRemote(ownId, {
+            updatedAt: now,
+            forwardToMaster: activeSyncId,
+            masterId: activeSyncId,
+            devices: {
+              [myDevice.id]: devicesMap[myDevice.id],
+            },
+          });
+        } catch {}
+      }
+
+      remoteUpdatedAtEtagBySyncId.delete(activeSyncId);
     }
 
-    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(now));
+    lastKnownDevicesHash = computeStableDevicesHash(devicesMap);
+    lastKnownRemoteUpdatedAt = effectiveSyncTs;
+    await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(effectiveSyncTs));
+    pairedDevicesCache = {
+      syncId: activeSyncId,
+      timestamp: Date.now(),
+      status: buildPairedStatus(),
+    };
+
     const updated =
       attChanged ||
       courseChanged ||
@@ -2120,7 +2393,8 @@ async function runSync(): Promise<CloudSyncResult> {
       excludedChanged ||
       commuterChanged ||
       studentChanged ||
-      docsChanged;
+      docsChanged ||
+      notesChanged;
     return {
       success: true,
       updated,
@@ -2139,12 +2413,17 @@ async function runSync(): Promise<CloudSyncResult> {
         ? "Nessuna risposta dal cloud: controlla la connessione."
         : err?.message || "Errore durante la sincronizzazione cloud.",
     };
+  } finally {
+    suppressAutoPushDepth = Math.max(0, suppressAutoPushDepth - 1);
   }
 }
 
-export function syncWithICloudStorage(): Promise<CloudSyncResult> {
+export function syncWithICloudStorage(
+  prefetchedRemote?: RemoteDoc | null,
+  options?: { allowUnpairedPush?: boolean },
+): Promise<CloudSyncResult> {
   if (!syncInFlight) {
-    syncInFlight = runSync().finally(() => {
+    syncInFlight = runSync(prefetchedRemote, options).finally(() => {
       syncInFlight = null;
     });
   }
@@ -2561,6 +2840,8 @@ export async function linkDeviceWithCode(
 
     await AsyncStorage.setItem(LAST_CLOUD_SYNC_KEY, String(Date.now()));
     await setICloudAutoSyncEnabled(true);
+    remoteUpdatedAtEtagBySyncId.delete(rootMasterCode);
+    invalidatePairedDevicesCache();
 
     const otherDevices = Object.values(updatedDevices).filter(
       (d) => d.id !== myDevice.id,
@@ -2592,9 +2873,11 @@ export async function linkDeviceWithCode(
 // Invio automatico dopo ogni modifica locale alle presenze o alle impostazioni di viaggio
 let autoPushTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleAutoPush() {
+  if (suppressAutoPushDepth > 0) return;
   if (autoPushTimer) clearTimeout(autoPushTimer);
   autoPushTimer = setTimeout(async () => {
     autoPushTimer = null;
+    if (suppressAutoPushDepth > 0) return;
     try {
       if ((await getICloudAutoSyncEnabled()) && isCloudConfigured()) {
         const paired = await isDevicePaired();
@@ -2624,6 +2907,7 @@ export function notifyCourseConfigChanged(): void {
 // Sincronizzazione Live in Tempo Reale
 // ─────────────────────────────────────────────────────────────────────────────
 
+const LIVE_SYNC_POLL_INTERVAL_MS = 10000;
 let livePollTimer: ReturnType<typeof setInterval> | null = null;
 let lastKnownRemoteUpdatedAt = 0;
 let lastKnownDevicesHash = "";
@@ -2635,8 +2919,11 @@ export type LiveSyncCallback = (
 ) => void;
 const liveSyncListeners = new Set<LiveSyncCallback>();
 
-export async function notifyLiveSyncListeners(updated = false): Promise<void> {
-  const currentStatus = await getPairedDevicesInfo();
+export async function notifyLiveSyncListeners(
+  updated = false,
+  precomputedStatus?: PairedDevicesStatus,
+): Promise<void> {
+  const currentStatus = precomputedStatus || (await getPairedDevicesInfo());
   for (const cb of liveSyncListeners) {
     try {
       cb(currentStatus, updated);
@@ -2665,6 +2952,32 @@ async function checkRemoteLiveChanges(): Promise<void> {
   isPollingInProgress = true;
   try {
     const activeSyncId = await getActiveSyncId();
+
+    // 1. Controllo ultra-leggero su `updatedAt.json` (~13 byte, con ETag/304 Not Modified):
+    // evita di scaricare l'intero documento Firebase (100-200 KB) quando non ci sono novità.
+    const meta = await fetchRemoteUpdatedAt(activeSyncId);
+    if (meta.status === "unchanged") {
+      return;
+    }
+    if (meta.status === "missing") {
+      const isSlave = await isCurrentDeviceSlave();
+      if (isSlave) {
+        const myDevice = await getLocalDeviceInfo();
+        await handleLocalDeviceWasKickedOut(myDevice);
+      } else {
+        lastKnownRemoteUpdatedAt = 0;
+      }
+      return;
+    }
+
+    if (
+      meta.updatedAt === lastKnownRemoteUpdatedAt &&
+      lastKnownDevicesHash !== ""
+    ) {
+      return;
+    }
+
+    // 2. Scarica il documento completo solo quando il timestamp remoto è effettivamente cambiato
     const remote = await fetchRemote(activeSyncId);
     if (!remote) {
       const isSlave = await isCurrentDeviceSlave();
@@ -2692,14 +3005,7 @@ async function checkRemoteLiveChanges(): Promise<void> {
     }
 
     const devices = remote.devices || {};
-    const devEntries = Object.values(devices).filter(
-      Boolean,
-    ) as SyncDeviceInfo[];
-    const devHash = devEntries
-      .map((d) => `${d.id}:${d.name}:${d.lastActive}`)
-      .sort()
-      .join("|");
-
+    const devHash = computeStableDevicesHash(devices);
     const remoteUpdated = remote.updatedAt || 0;
     const localLastSync = (await getLastCloudSync()) || 0;
 
@@ -2711,7 +3017,9 @@ async function checkRemoteLiveChanges(): Promise<void> {
       lastKnownDevicesHash = devHash;
       lastKnownRemoteUpdatedAt = remoteUpdated;
 
-      const syncResult = await syncWithICloudStorage();
+      const syncResult = await syncWithICloudStorage(remote, {
+        allowUnpairedPush: false,
+      });
       await notifyLiveSyncListeners(syncResult.updated);
 
       if (syncResult.updated) {
@@ -2729,7 +3037,7 @@ export function startLiveSyncLoop(): void {
   if (livePollTimer) return;
   livePollTimer = setInterval(() => {
     checkRemoteLiveChanges();
-  }, 2500);
+  }, LIVE_SYNC_POLL_INTERVAL_MS);
   checkRemoteLiveChanges();
 }
 
@@ -2742,7 +3050,9 @@ export function stopLiveSyncLoop(): void {
 
 AppState.addEventListener("change", (nextState: AppStateStatus) => {
   if (nextState === "active") {
-    startLiveSyncLoop();
+    if (liveSyncListeners.size > 0) {
+      startLiveSyncLoop();
+    }
   } else {
     stopLiveSyncLoop();
   }
@@ -2826,6 +3136,9 @@ export async function resetAppCloudAndStorage(): Promise<string> {
     // 5. Resetta la cache e lo stato del live sync in memoria
     lastKnownDevicesHash = "";
     lastKnownRemoteUpdatedAt = 0;
+    remoteUpdatedAtEtagBySyncId.clear();
+    registeredCloudSyncIds.clear();
+    invalidatePairedDevicesCache();
 
     // 6. Genera un codice univoco nuovo e pulito
     const newCode = await generateUniqueInitialSyncCode();
@@ -2868,6 +3181,14 @@ export function subscribeToAppReset(listener: AppResetListener): () => void {
 }
 
 export function notifyAppReset(): void {
+  clearScraperMemoryCache();
+  clearNotesMemoryCache();
+  clearAttendanceMemoryCache();
+  clearManualEventsMemoryCache();
+  clearExcludedLessonsMemoryCache();
+  clearCommuterMemoryCache();
+  clearSavedDocumentsMemoryCache();
+  notifyDegreeChanged(null, "");
   appResetListeners.forEach((fn) => {
     try {
       fn();

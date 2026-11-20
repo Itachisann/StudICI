@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, Alert, ActionSheetIOS, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
@@ -152,12 +153,42 @@ function extractReleaseVersion(release: any): string {
 }
 
 const UPDATE_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
+const UPDATE_CHECK_STORAGE_KEY = '@studici_update_check_cache_v1';
+
+interface PersistedUpdateMeta {
+  etag?: string;
+  latestVersion: string;
+  currentVersion: string;
+  data: AppUpdateInfo;
+  checkedAt: number;
+}
+
 let cachedUpdateCheck: { timestamp: number; data: AppUpdateInfo } | null = null;
+let persistedUpdateMeta: PersistedUpdateMeta | null | undefined = undefined;
 let inFlightUpdateCheck: Promise<AppUpdateInfo> | null = null;
 
+async function loadPersistedUpdateMeta(): Promise<PersistedUpdateMeta | null> {
+  if (persistedUpdateMeta !== undefined) return persistedUpdateMeta;
+  try {
+    const raw = await AsyncStorage.getItem(UPDATE_CHECK_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.data) {
+        persistedUpdateMeta = parsed as PersistedUpdateMeta;
+        return persistedUpdateMeta;
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  persistedUpdateMeta = null;
+  return null;
+}
+
 /**
- * Controlla se è presente una nuova release su GitHub, verificando anche tutte le release
- * intermedie saltate dall'utente per determinare se almeno una di esse è bloccante.
+ * Controlla se è presente una nuova release su GitHub usando /releases/latest + ETag (304),
+ * interrogando /releases?per_page=20 solo se esiste effettivamente un aggiornamento non ancora
+ * classificato come major (per verificare eventuali release bloccanti intermedie saltate).
  */
 export async function checkForAppUpdate(forceRefresh = false): Promise<AppUpdateInfo> {
   if (!forceRefresh && cachedUpdateCheck && Date.now() - cachedUpdateCheck.timestamp < UPDATE_CHECK_CACHE_TTL_MS) {
@@ -183,58 +214,55 @@ export async function checkForAppUpdate(forceRefresh = false): Promise<AppUpdate
     };
 
     try {
+      const persisted = await loadPersistedUpdateMeta();
+      const canUseEtag = Boolean(
+        persisted?.etag && persisted.currentVersion === currentVersion && persisted.data
+      );
+
+      const headers: Record<string, string> = {
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'StudICI-App',
+      };
+      if (canUseEtag && persisted?.etag) {
+        headers['If-None-Match'] = persisted.etag;
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-      // Scarica le ultime release per poter controllare sia l'ultima versione sia eventuali versioni bloccanti intermedie saltate
-      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`, {
+      // Endpoint leggero (~2 KB) invece di /releases?per_page=20 (~60 KB) + validazione condizionale ETag (304)
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
         signal: controller.signal,
-        headers: {
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'StudICI-App',
-        },
+        headers,
       });
 
       clearTimeout(timeoutId);
 
+      if (response.status === 304 && persisted?.data) {
+        cachedUpdateCheck = { timestamp: Date.now(), data: persisted.data };
+        return persisted.data;
+      }
+
       if (!response.ok) {
+        return persisted?.currentVersion === currentVersion && persisted.data
+          ? persisted.data
+          : emptyResult;
+      }
+
+      const release = await response.json();
+      if (!release || typeof release !== 'object') {
         return emptyResult;
       }
 
-      const releasesData = await response.json();
-      const releasesList = Array.isArray(releasesData)
-        ? releasesData.filter((r: any) => !r?.draft && !r?.prerelease)
-        : releasesData
-        ? [releasesData]
-        : [];
-
-      if (releasesList.length === 0) {
-        return emptyResult;
-      }
-
-      const release = releasesList[0];
       const latestVersion = extractReleaseVersion(release);
-
       const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
-
-      // Raccoglie tutte le release tra currentVersion (esclusa) e latestVersion (inclusa)
-      const missedReleases = releasesList
-        .map((r: any) => ({
-          version: extractReleaseVersion(r),
-          body: r?.body || '',
-          name: r?.name || '',
-        }))
-        .filter(
-          (r) =>
-            Boolean(r.version) &&
-            compareVersions(r.version, currentVersion) > 0 &&
-            compareVersions(latestVersion, r.version) >= 0
-        );
 
       // Trova l'asset IPA se presente tra gli asset caricati dell'ultima release
       let ipaUrl = GITHUB_LATEST_IPA_URL;
       if (Array.isArray(release.assets)) {
-        const ipaAsset = release.assets.find((a: any) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.ipa'));
+        const ipaAsset = release.assets.find(
+          (a: any) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.ipa')
+        );
         if (ipaAsset?.browser_download_url) {
           ipaUrl = ipaAsset.browser_download_url;
         }
@@ -244,42 +272,60 @@ export async function checkForAppUpdate(forceRefresh = false): Promise<AppUpdate
       const releaseNotes = release.body || '';
       const targetCommitish = release.target_commitish || release.tag_name || `v${latestVersion}`;
 
-      // Recupera il titolo reale del commit associato al rilascio anziché limitarsi alla stringa 'main'
-      let commitName: string | undefined;
-      try {
-        const commitRef = release.target_commitish || release.tag_name || 'main';
-        const commitController = new AbortController();
-        const commitTimeoutId = setTimeout(() => commitController.abort(), 4500);
-        const commitRes = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/commits/${commitRef}`,
-          {
-            signal: commitController.signal,
-            headers: {
-              Accept: 'application/vnd.github.v3+json',
-              'User-Agent': 'StudICI-App',
-            },
-          }
-        );
-        clearTimeout(commitTimeoutId);
-        if (commitRes.ok) {
-          const commitData = await commitRes.json();
-          const rawMsg = commitData?.commit?.message || '';
-          const firstLine = rawMsg.split('\n')[0]?.trim();
-          if (firstLine) {
-            commitName = firstLine;
-          }
-        }
-      } catch {
-        // Fallback
-      }
-
-      const updateType = detectUpdateType(
+      let updateType = detectUpdateType(
         latestVersion,
         currentVersion,
         releaseNotes,
         releaseTitle,
-        missedReleases
+        []
       );
+
+      // Controlla le release intermedie SOLO se esiste un aggiornamento e non è già risultato bloccante/major
+      if (hasUpdate && updateType !== 'major') {
+        try {
+          const listCtrl = new AbortController();
+          const listTimeout = setTimeout(() => listCtrl.abort(), 6000);
+          const listRes = await fetch(
+            `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`,
+            {
+              signal: listCtrl.signal,
+              headers: {
+                Accept: 'application/vnd.github.v3+json',
+                'User-Agent': 'StudICI-App',
+              },
+            }
+          );
+          clearTimeout(listTimeout);
+          if (listRes.ok) {
+            const releasesData = await listRes.json();
+            const releasesList = Array.isArray(releasesData)
+              ? releasesData.filter((r: any) => !r?.draft && !r?.prerelease)
+              : [];
+            const missedReleases = releasesList
+              .map((r: any) => ({
+                version: extractReleaseVersion(r),
+                body: r?.body || '',
+                name: r?.name || '',
+              }))
+              .filter(
+                (r) =>
+                  Boolean(r.version) &&
+                  compareVersions(r.version, currentVersion) > 0 &&
+                  compareVersions(latestVersion, r.version) >= 0
+              );
+            updateType = detectUpdateType(
+              latestVersion,
+              currentVersion,
+              releaseNotes,
+              releaseTitle,
+              missedReleases
+            );
+          }
+        } catch {
+          // Best-effort per release intermedie
+        }
+      }
+
       const isMajor = hasUpdate && updateType === 'major';
 
       const result: AppUpdateInfo = {
@@ -292,11 +338,23 @@ export async function checkForAppUpdate(forceRefresh = false): Promise<AppUpdate
         ipaUrl,
         publishedAt: release.published_at,
         targetCommitish,
-        commitName: commitName || releaseTitle || `v${latestVersion}`,
+        commitName: releaseTitle || `v${latestVersion}`,
         updateType,
         isMajor,
       };
       cachedUpdateCheck = { timestamp: Date.now(), data: result };
+
+      const etag = response.headers.get('etag') || response.headers.get('ETag') || undefined;
+      const metaToSave: PersistedUpdateMeta = {
+        etag,
+        latestVersion,
+        currentVersion,
+        data: result,
+        checkedAt: Date.now(),
+      };
+      persistedUpdateMeta = metaToSave;
+      AsyncStorage.setItem(UPDATE_CHECK_STORAGE_KEY, JSON.stringify(metaToSave)).catch(() => {});
+
       return result;
     } catch {
       return emptyResult;

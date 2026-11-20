@@ -234,16 +234,34 @@ export async function getManualTombstonesKey(courseUrl?: string): Promise<string
   return `${MANUAL_TOMBSTONES_PREFIX}${url}`;
 }
 
+const manualEventsMemoryCache = new Map<string, ManualClassEvent[]>();
+
+export function clearManualEventsMemoryCache(): void {
+  manualEventsMemoryCache.clear();
+}
+
+export function getCachedManualEvents(courseUrl?: string | null): ManualClassEvent[] | null {
+  const key = `${MANUAL_EVENTS_PREFIX}${courseUrl || 'default'}`;
+  return manualEventsMemoryCache.get(key) ?? null;
+}
+
 /**
  * Recupera l'elenco degli orari manuali per un dato corso (o quello attivo).
  */
 export async function getManualEvents(courseUrl?: string): Promise<ManualClassEvent[]> {
   try {
     const key = await getManualEventsKey(courseUrl);
+    const cached = manualEventsMemoryCache.get(key);
+    if (cached) return cached;
     const raw = await AsyncStorage.getItem(key);
-    if (!raw) return [];
+    if (!raw) {
+      manualEventsMemoryCache.set(key, []);
+      return [];
+    }
     const list: ManualClassEvent[] = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
+    const resolved = Array.isArray(list) ? list : [];
+    manualEventsMemoryCache.set(key, resolved);
+    return resolved;
   } catch (err) {
     console.error('Errore lettura lezioni manuali:', err);
     return [];
@@ -259,6 +277,7 @@ export async function saveManualEvents(
 ): Promise<void> {
   try {
     const key = await getManualEventsKey(courseUrl);
+    manualEventsMemoryCache.set(key, events);
     await AsyncStorage.setItem(key, JSON.stringify(events));
     notifyManualChange();
   } catch (err) {
@@ -424,7 +443,8 @@ export async function getAllManualEventsAcrossCourses(): Promise<Record<string, 
  * Salva lezioni manuali multi-corso (usato per ripristino backup e cloud sync).
  */
 export async function saveAllManualEventsAcrossCourses(
-  map: Record<string, ManualClassEvent[]>
+  map: Record<string, ManualClassEvent[]>,
+  silent = false
 ): Promise<void> {
   if (!map) return;
   try {
@@ -433,8 +453,13 @@ export async function saveAllManualEventsAcrossCourses(
       JSON.stringify(events),
     ]);
     if (pairs.length > 0) {
+      for (const [courseUrl, events] of Object.entries(map)) {
+        manualEventsMemoryCache.set(`${MANUAL_EVENTS_PREFIX}${courseUrl}`, events);
+      }
       await AsyncStorage.multiSet(pairs);
-      notifyManualChange();
+      if (!silent) {
+        notifyManualChange();
+      }
     }
   } catch (err) {
     console.error('Errore ripristino lezioni manuali multi-corso:', err);

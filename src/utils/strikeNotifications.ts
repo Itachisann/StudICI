@@ -162,7 +162,31 @@ interface ManagedIosCalendarEvent {
 }
 
 let handlerInitialized = false;
-let syncQueue: Promise<unknown> = Promise.resolve();
+// Single-slot coalescing queue (1 esecuzione attiva + al massimo 1 esecuzione pendente accorpata)
+let activeStrikeSyncPromise: Promise<StrikeNotificationsStatus> | null = null;
+let pendingStrikeSyncRequest: {
+  disruptionsInput?: DisruptionEvent[];
+  promptIfNeeded: boolean;
+  waiters: {
+    resolve: (v: StrikeNotificationsStatus) => void;
+    reject: (e: unknown) => void;
+  }[];
+} | null = null;
+
+let lastIosStrikeSyncSig: string | null = null;
+let lastIosStrikeSyncStatus: StrikeNotificationsStatus | null = null;
+let lastIosStrikeSyncAt = 0;
+const IOS_STRIKE_SYNC_FAST_SKIP_TTL_MS = 5 * 60 * 1000;
+
+async function runBatched<T>(
+  items: T[],
+  batchSize: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += batchSize) {
+    await Promise.all(items.slice(i, i + batchSize).map(worker));
+  }
+}
 
 const statusListeners = new Set<(status: StrikeNotificationsStatus) => void>();
 const tapListeners = new Set<(payload: StrikeNotificationTapPayload) => void>();
@@ -1224,15 +1248,18 @@ async function fetchManagedIosStrikeEvents(
   }
 
   const foundIds = new Set(rawEvents.map((e) => e.id).filter(Boolean));
-  for (const entry of Object.values(storedState)) {
-    if (entry.eventId && !foundIds.has(entry.eventId)) {
-      try {
-        const single = await Calendar.getEventAsync(entry.eventId);
-        if (single) {
-          rawEvents.push(single);
-          if (single.id) foundIds.add(single.id);
-        }
-      } catch {}
+  const missingEventIds = Object.values(storedState)
+    .map((e) => e.eventId)
+    .filter((id): id is string => Boolean(id) && !foundIds.has(id));
+  if (missingEventIds.length > 0) {
+    const fetchedMissing = await Promise.all(
+      missingEventIds.map((id) => Calendar.getEventAsync(id).catch(() => null)),
+    );
+    for (const single of fetchedMissing) {
+      if (single) {
+        rawEvents.push(single);
+        if (single.id) foundIds.add(single.id);
+      }
     }
   }
 
@@ -1378,10 +1405,10 @@ async function clearAllIosStrikeCalendarEvents(
     }
 
     const managed = await fetchManagedIosStrikeEvents(searchIds, storedState);
-    for (const ev of managed) {
-      await deleteIosCalendarEventById(ev.id);
-    }
+    await runBatched(managed, 6, (ev) => deleteIosCalendarEventById(ev.id));
   } catch {}
+  lastIosStrikeSyncSig = null;
+  lastIosStrikeSyncStatus = null;
   await AsyncStorage.removeItem(STRIKE_STATE_KEY).catch(() => {});
 }
 
@@ -1476,6 +1503,31 @@ async function syncIosStrikeCalendarEvents(
     Date.now(),
   );
 
+  // Fast-skip: se gli input (config, preferenze e piani sciopero) non sono cambiati negli ultimi 5 minuti
+  // e i permessi sono già concessi, salta interamente tutte le query e scritture EventKit
+  const inputSig = JSON.stringify({
+    n7: alertPrefs.notify7DaysBefore,
+    n1: alertPrefs.notify1DayBefore,
+    p: planned.map((p) => [
+      p.identifier,
+      p.startDateMs,
+      p.endDateMs,
+      p.title,
+      p.location,
+      p.notes,
+      p.offsetsSignature,
+    ]),
+  });
+  if (
+    !options?.promptIfNeeded &&
+    perm.status === "granted" &&
+    lastIosStrikeSyncSig === inputSig &&
+    lastIosStrikeSyncStatus &&
+    Date.now() - lastIosStrikeSyncAt < IOS_STRIKE_SYNC_FAST_SKIP_TTL_MS
+  ) {
+    return lastIosStrikeSyncStatus;
+  }
+
   if (isAvail && perm.status !== "granted" && perm.canAskAgain) {
     const alreadyAsked = await AsyncStorage.getItem(
       STRIKE_PERMISSION_ASKED_KEY,
@@ -1555,31 +1607,38 @@ async function syncIosStrikeCalendarEvents(
     desiredMap.set(item.identifier, item);
   }
 
-  // Elimina eventi obsoleti (es. sciopero terminato/rimosso o giorno senza lezioni attive)
+  // Elimina eventi obsoleti in batch paralleli (max 6 per volta)
+  const obsoleteIdsToDelete: string[] = [];
   for (const [identifier, bucket] of existingByIdentifier.entries()) {
     if (!desiredMap.has(identifier)) {
       for (const ev of bucket) {
-        if (ev.id) {
-          await deleteIosCalendarEventById(ev.id);
-        }
+        if (ev.id) obsoleteIdsToDelete.push(ev.id);
       }
       existingByIdentifier.delete(identifier);
     }
+  }
+  if (obsoleteIdsToDelete.length > 0) {
+    await runBatched(obsoleteIdsToDelete, 6, deleteIosCalendarEventById);
   }
 
   const timeZoneId =
     Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Rome";
   const nextState: Record<string, StoredStrikeStateEntry> = {};
   let scheduledCount = 0;
+  let anyEventMutated = obsoleteIdsToDelete.length > 0;
+
+  const dupIdsToDelete: string[] = [];
+  const itemsToWrite: {
+    item: PlannedIosStrikeCalendarEvent;
+    primaryExisting?: ManagedIosCalendarEvent;
+  }[] = [];
 
   for (const item of planned) {
     const bucket = existingByIdentifier.get(item.identifier) || [];
     const primaryExisting = bucket[0];
     for (let i = 1; i < bucket.length; i++) {
       const dup = bucket[i];
-      if (dup?.id) {
-        await deleteIosCalendarEventById(dup.id);
-      }
+      if (dup?.id) dupIdsToDelete.push(dup.id);
     }
 
     const prevStored = storedState[item.identifier];
@@ -1607,68 +1666,82 @@ async function syncIosStrikeCalendarEvents(
       continue;
     }
 
-    const eventDetails: Partial<Calendar.Event> = {
-      calendarId: targetCalendarId,
-      title: item.title,
-      startDate: new Date(item.startDateMs),
-      endDate: new Date(item.endDateMs),
-      allDay: true,
-      timeZone: timeZoneId,
-      location: item.location,
-      notes: item.notes,
-      url: item.url,
-      availability: Calendar.Availability.FREE,
-      alarms: item.alarmRelativeOffsetsMinutes.map((relativeOffset) => ({
-        relativeOffset,
-      })),
-    };
-
-    let finalEventId: string | null = null;
-    if (primaryExisting?.id) {
-      try {
-        finalEventId = await Calendar.updateEventAsync(
-          primaryExisting.id,
-          eventDetails,
-        );
-      } catch {
-        await deleteIosCalendarEventById(primaryExisting.id);
-        finalEventId = null;
-      }
-    }
-
-    if (!finalEventId) {
-      try {
-        finalEventId = await Calendar.createEventAsync(
-          targetCalendarId,
-          eventDetails,
-        );
-      } catch (err) {
-        console.warn("[StrikeCalendar] Errore creazione evento sciopero:", err);
-      }
-    }
-
-    if (finalEventId) {
-      nextState[item.identifier] = {
-        identifier: item.identifier,
-        eventId: finalEventId,
-        calendarId: targetCalendarId,
-        fireAtMs: item.startDateMs,
-        title: item.title,
-        notes: item.notes,
-        strikeDateIso: item.commuteDateIso,
-        strikeEventId: item.strikeEventId,
-        offsetsSignature: item.offsetsSignature,
-      };
-      scheduledCount += 1;
-    }
+    itemsToWrite.push({ item, primaryExisting });
   }
 
-  await AsyncStorage.setItem(STRIKE_STATE_KEY, JSON.stringify(nextState)).catch(
-    () => {},
-  );
-  await markStrikesCalendarSynced();
+  if (dupIdsToDelete.length > 0) {
+    anyEventMutated = true;
+    await runBatched(dupIdsToDelete, 6, deleteIosCalendarEventById);
+  }
 
-  return {
+  if (itemsToWrite.length > 0) {
+    anyEventMutated = true;
+    await runBatched(itemsToWrite, 6, async ({ item, primaryExisting }) => {
+      const eventDetails: Partial<Calendar.Event> = {
+        calendarId: targetCalendarId,
+        title: item.title,
+        startDate: new Date(item.startDateMs),
+        endDate: new Date(item.endDateMs),
+        allDay: true,
+        timeZone: timeZoneId,
+        location: item.location,
+        notes: item.notes,
+        url: item.url,
+        availability: Calendar.Availability.FREE,
+        alarms: item.alarmRelativeOffsetsMinutes.map((relativeOffset) => ({
+          relativeOffset,
+        })),
+      };
+
+      let finalEventId: string | null = null;
+      if (primaryExisting?.id) {
+        try {
+          finalEventId = await Calendar.updateEventAsync(
+            primaryExisting.id,
+            eventDetails,
+          );
+        } catch {
+          await deleteIosCalendarEventById(primaryExisting.id);
+          finalEventId = null;
+        }
+      }
+
+      if (!finalEventId) {
+        try {
+          finalEventId = await Calendar.createEventAsync(
+            targetCalendarId,
+            eventDetails,
+          );
+        } catch (err) {
+          console.warn("[StrikeCalendar] Errore creazione evento sciopero:", err);
+        }
+      }
+
+      if (finalEventId) {
+        nextState[item.identifier] = {
+          identifier: item.identifier,
+          eventId: finalEventId,
+          calendarId: targetCalendarId,
+          fireAtMs: item.startDateMs,
+          title: item.title,
+          notes: item.notes,
+          strikeDateIso: item.commuteDateIso,
+          strikeEventId: item.strikeEventId,
+          offsetsSignature: item.offsetsSignature,
+        };
+        scheduledCount += 1;
+      }
+    });
+  }
+
+  const prevStateJson = JSON.stringify(storedState);
+  const nextStateJson = JSON.stringify(nextState);
+  if (anyEventMutated || nextStateJson !== prevStateJson) {
+    await AsyncStorage.setItem(STRIKE_STATE_KEY, nextStateJson).catch(() => {});
+    await markStrikesCalendarSynced();
+  }
+
+  const resultStatus: StrikeNotificationsStatus = {
     enabled: true,
     notify7DaysBefore: alertPrefs.notify7DaysBefore,
     notify1DayBefore: alertPrefs.notify1DayBefore,
@@ -1678,6 +1751,10 @@ async function syncIosStrikeCalendarEvents(
     upcomingImpactingCount,
     backend: "calendar",
   };
+  lastIosStrikeSyncSig = inputSig;
+  lastIosStrikeSyncStatus = resultStatus;
+  lastIosStrikeSyncAt = Date.now();
+  return resultStatus;
 }
 
 function isAndroidNotificationPermissionGranted(
@@ -2032,16 +2109,52 @@ async function runSyncStrikeNotifications(
   return status;
 }
 
+function drainPendingStrikeSync(): void {
+  if (activeStrikeSyncPromise || !pendingStrikeSyncRequest) return;
+  const req = pendingStrikeSyncRequest;
+  pendingStrikeSyncRequest = null;
+
+  activeStrikeSyncPromise = runSyncStrikeNotifications(req.disruptionsInput, {
+    promptIfNeeded: req.promptIfNeeded,
+  })
+    .then((status) => {
+      for (const w of req.waiters) w.resolve(status);
+      return status;
+    })
+    .catch((err) => {
+      for (const w of req.waiters) w.reject(err);
+      throw err;
+    })
+    .finally(() => {
+      activeStrikeSyncPromise = null;
+      if (pendingStrikeSyncRequest) {
+        drainPendingStrikeSync();
+      }
+    });
+  // Evita unhandled rejection sul driver interno (i chiamanti ricevono la rejection via waiters)
+  activeStrikeSyncPromise.catch(() => {});
+}
+
 export function syncStrikeNotifications(
   disruptionsInput?: DisruptionEvent[],
   options?: { promptIfNeeded?: boolean },
 ): Promise<StrikeNotificationsStatus> {
-  const next = syncQueue
-    .catch(() => {})
-    .then(() => runSyncStrikeNotifications(disruptionsInput, options));
-  syncQueue = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
+  return new Promise<StrikeNotificationsStatus>((resolve, reject) => {
+    if (!pendingStrikeSyncRequest) {
+      pendingStrikeSyncRequest = {
+        disruptionsInput,
+        promptIfNeeded: Boolean(options?.promptIfNeeded),
+        waiters: [{ resolve, reject }],
+      };
+    } else {
+      if (disruptionsInput !== undefined) {
+        pendingStrikeSyncRequest.disruptionsInput = disruptionsInput;
+      }
+      if (options?.promptIfNeeded) {
+        pendingStrikeSyncRequest.promptIfNeeded = true;
+      }
+      pendingStrikeSyncRequest.waiters.push({ resolve, reject });
+    }
+    drainPendingStrikeSync();
+  });
 }

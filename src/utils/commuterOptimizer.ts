@@ -1031,6 +1031,15 @@ async function computeOutboundItinerary(
     let transitDurMins = activeTransitMins;
     let actualClassroomArrivalMins = (trainArrRelFromDep % 1440) + activeTransitMins;
     let resolvedOutboundDirectLines: string[] = [];
+    let resolvedOutboundSegDetails: {
+      walkBeforeMinutes: number;
+      inVehicleMinutes: number;
+      walkAfterMinutes: number;
+      busDepartureTime: string;
+      busAlightingTime: string;
+      coincidenceAvailableFromTime: string;
+      firstAvailableDepartureTime: string;
+    } | null = null;
 
     const resolveOutboundBoard = async (lecture: DayLectureTarget) => {
       try {
@@ -1083,11 +1092,52 @@ async function computeOutboundItinerary(
           const optDepStr = isTransitLive
             ? opt.estimatedTime || opt.scheduledTime
             : opt.scheduledTime;
+          const optDepM = parseTimeToMinutes(optDepStr);
           const optArrM = parseTimeToMinutes(opt.arrivalTime);
+          const walkBefore = Math.max(0, opt.walkBeforeMinutes ?? 0);
+          const walkAfter = Math.max(0, opt.walkAfterMinutes ?? 0);
+          const inVehicle =
+            typeof opt.inVehicleMinutes === 'number' && opt.inVehicleMinutes > 0
+              ? opt.inVehicleMinutes
+              : Math.max(1, opt.durationMinutes - walkAfter);
+          const userStartM = optDepM >= 0 ? optDepM - walkBefore : -1;
+          const busAlightStr =
+            optDepM >= 0
+              ? minutesToTime(optDepM + inVehicle)
+              : opt.alightingTime || opt.arrivalTime;
+          const doorDur =
+            typeof opt.totalDoorToDoorMinutes === 'number' &&
+            opt.totalDoorToDoorMinutes > 0
+              ? opt.totalDoorToDoorMinutes
+              : walkBefore + inVehicle + walkAfter;
           if (optDepStr && optArrM >= 0) {
-            transitStartStr = optDepStr;
-            transitDurMins = opt.durationMinutes;
+            let earliestBusM = optDepM >= 0 ? optDepM : Infinity;
+            let firstAvailDepStr = optDepStr;
+            for (const dep of boardData.departures.slice(0, 4)) {
+              const dStr = isTransitLive
+                ? dep.estimatedTime || dep.scheduledTime
+                : dep.scheduledTime;
+              const dM = parseTimeToMinutes(dStr);
+              if (dM >= 0 && dM < earliestBusM) {
+                earliestBusM = dM;
+                firstAvailDepStr = dStr;
+              }
+            }
+            transitStartStr =
+              userStartM >= 0 && walkBefore > 0
+                ? minutesToTime(userStartM)
+                : optDepStr;
+            transitDurMins = doorDur;
             actualClassroomArrivalMins = optArrM;
+            resolvedOutboundSegDetails = {
+              walkBeforeMinutes: walkBefore,
+              inVehicleMinutes: inVehicle,
+              walkAfterMinutes: walkAfter,
+              busDepartureTime: optDepStr,
+              busAlightingTime: busAlightStr,
+              coincidenceAvailableFromTime: outboundArrTime || transitStartStr,
+              firstAvailableDepartureTime: firstAvailDepStr,
+            };
           }
         }
       } catch {
@@ -1123,6 +1173,7 @@ async function computeOutboundItinerary(
         resolvedOutboundMinDepTime = undefined;
         resolvedOutboundLiveContext = undefined;
         resolvedOutboundDirectLines = [];
+        resolvedOutboundSegDetails = null;
         if (roomChanged) {
           const recalculatedTransit = getOptimalRomeTransit({
             fromStationCode: config.arrivalStation.code,
@@ -1193,6 +1244,7 @@ async function computeOutboundItinerary(
         targetTime: outboundHasActiveDeadline ? targetLecture.startTime : outboundArrTime,
         timeType: outboundHasActiveDeadline ? 'arrive_by' : 'depart_at',
         notes: activeTransitSolution.routeDescription,
+        ...(resolvedOutboundSegDetails || {}),
       },
     });
 
@@ -1594,25 +1646,8 @@ async function computeReturnItinerary(
     ? [forcedPreferredTrain]
     : getPreferredTrainsForDayDirection(config, 'return', targetDate);
 
-  // Esecuzione in PARALLELO: ricerca treni Trenitalia e stima stradale OSRM per azzerare i tempi morti
-  const [optimalTrainResult, drivingEst] = await Promise.all([
-    findOptimalCommuterTrain({
-      direction: 'return',
-      departureStation: config.arrivalStation, // da Roma Tiburtina
-      arrivalStation: config.departureStation, // verso Orte
-      targetTimeStr: stationArrivalStr,
-      targetDate,
-      trainOffset: selectedTrainOffset,
-      selectedTrainNumber,
-      forceRefresh,
-      minDepartureMins: isToday ? stationArrivalMins : undefined,
-      ignoreCurrentTime,
-      includeIntercity: config.includeIntercity ?? false,
-      preferredTrain: forcedPreferredTrain,
-      preferredTrainsForDay: forcedPreferredTrain ? undefined : dayReturnPrefs,
-      filterPreferredByTargetWindow: Boolean(targetLecture && isExplicitClass),
-      scheduledOnly: fastCalendarMode && ignoreCurrentTime,
-    }),
+  // Avvia la stima auto in parallelo senza bloccare l'avvio del tabellone mezzi urbani al termine del treno
+  const drivingEstPromise =
     carEnabled && !fastCalendarMode
       ? calculateDrivingEstimate(
           config.originAddress,
@@ -1621,8 +1656,25 @@ async function computeReturnItinerary(
           config.originCoords,
           targetDate
         )
-      : Promise.resolve(null),
-  ]);
+      : Promise.resolve(null);
+
+  const optimalTrainResult = await findOptimalCommuterTrain({
+    direction: 'return',
+    departureStation: config.arrivalStation, // da Roma Tiburtina
+    arrivalStation: config.departureStation, // verso Orte
+    targetTimeStr: stationArrivalStr,
+    targetDate,
+    trainOffset: selectedTrainOffset,
+    selectedTrainNumber,
+    forceRefresh,
+    minDepartureMins: isToday ? stationArrivalMins : undefined,
+    ignoreCurrentTime,
+    includeIntercity: config.includeIntercity ?? false,
+    preferredTrain: forcedPreferredTrain,
+    preferredTrainsForDay: forcedPreferredTrain ? undefined : dayReturnPrefs,
+    filterPreferredByTargetWindow: Boolean(targetLecture && isExplicitClass),
+    scheduledOnly: fastCalendarMode && ignoreCurrentTime,
+  });
 
   let { train, availableTrains, selectedIndex } = optimalTrainResult;
   let prefetchedReturnBoard: TransitBoardResult | undefined;
@@ -1812,37 +1864,6 @@ async function computeReturnItinerary(
     ? parseTimeToMinutes(train.arrivalTimeActual || train.arrivalTimePlanned || '')
     : parseTimeToMinutes(train.arrivalTimePlanned || train.arrivalTimeActual || '');
 
-  let carDuration = 0;
-  // La distanza chilometrica tra stazione di riferimento e residenza è fissa e costante;
-  // con il traffico varia solo il minutaggio di percorrenza (~X min), non i km.
-  const baseSavedReturnKm = config.carLeg.distanceKm && config.carLeg.distanceKm > 0 ? config.carLeg.distanceKm : 0;
-  let carDistanceKm = baseSavedReturnKm || (drivingEst?.distanceKm ?? 17.2);
-  let carTrafficNote: string | undefined = undefined;
-  let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
-  let carTrafficPeak = false;
-  let carTrafficBaseline = 0;
-  let carTrafficDelay = 0;
-
-  if (drivingEst) {
-    if (!baseSavedReturnKm && drivingEst.distanceKm) {
-      carDistanceKm = drivingEst.distanceKm;
-    }
-    carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
-    carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
-    carTrafficPeak = Boolean(drivingEst.isPeakHour);
-    carTrafficBaseline = Math.ceil(drivingEst.baseDurationMinutes || config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
-    carTrafficDelay = Math.max(drivingEst.trafficDelayMinutes ?? 0, config.carLeg.trafficDelayMinutes ?? 0);
-    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
-  } else if (carEnabled) {
-    carTrafficBaseline = Math.ceil(config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
-    carTrafficDelay = Math.max(0, config.carLeg.trafficDelayMinutes ?? 0);
-    carTrafficNote = config.carLeg.trafficCondition;
-    carTrafficFluency = config.carLeg.trafficFluency;
-    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
-  }
-
-  const homeArrivalMins =
-    normalizeRelativeMinutes(trainArrMins, trainDepMins) + carWalkBuffer + carDuration;
   const targetDateStr = targetDate.toISOString().slice(0, 10);
   const legs: TripLeg[] = [];
   let lectureTimeStatus: CommuterItinerary['lectureTimeStatus'] | undefined = undefined;
@@ -1886,9 +1907,16 @@ async function computeReturnItinerary(
     let resolvedReturnDirectLines: string[] = [];
     let resolvedReturnOpt: {
       startMins: number;
+      busStartMins: number;
       endMins: number;
       durationMinutes: number;
       walkBeforeMinutes: number;
+      inVehicleMinutes: number;
+      walkAfterMinutes: number;
+      busDepartureTime: string;
+      busAlightingTime: string;
+      coincidenceAvailableFromTime: string;
+      firstAvailableDepartureTime: string;
     } | null = null;
 
     if (!isWalkLeg && trainDepMins > 0 && !fastCalendarMode) {
@@ -1954,12 +1982,57 @@ async function computeReturnItinerary(
             : opt.scheduledTime;
           const sM = parseTimeToMinutes(depStr);
           const eM = parseTimeToMinutes(opt.arrivalTime);
+          const walkBefore = Math.max(0, opt.walkBeforeMinutes ?? 0);
+          const walkAfter = Math.max(0, opt.walkAfterMinutes ?? 0);
+          const inVehicle =
+            typeof opt.inVehicleMinutes === 'number' && opt.inVehicleMinutes > 0
+              ? opt.inVehicleMinutes
+              : Math.max(1, opt.durationMinutes - walkAfter);
+          const userStartM = sM >= 0 ? Math.max(0, sM - walkBefore) : sM;
+          const busAlightStr =
+            sM >= 0
+              ? minutesToTime(sM + inVehicle)
+              : opt.alightingTime || opt.arrivalTime;
+          const doorDur =
+            typeof opt.totalDoorToDoorMinutes === 'number' &&
+            opt.totalDoorToDoorMinutes > 0
+              ? opt.totalDoorToDoorMinutes
+              : walkBefore + inVehicle + walkAfter;
           if (sM >= 0 && eM >= 0) {
+            let earliestBusM = sM;
+            let earliestLeaveM = userStartM;
+            let firstAvailDepStr = depStr;
+            for (const dep of boardData.departures.slice(0, 4)) {
+              const dStr = isTransitLive
+                ? dep.estimatedTime || dep.scheduledTime
+                : dep.scheduledTime;
+              const dM = parseTimeToMinutes(dStr);
+              if (dM < 0) continue;
+              const dWalkBefore = Math.max(0, dep.walkBeforeMinutes ?? 0);
+              const dLeaveM = Math.max(0, dM - dWalkBefore);
+              if (dM < earliestBusM) {
+                earliestBusM = dM;
+                firstAvailDepStr = dStr;
+              }
+              if (dLeaveM < earliestLeaveM) {
+                earliestLeaveM = dLeaveM;
+              }
+            }
+            const anchorFromStr =
+              computedMinDepTime ||
+              minutesToTime(Math.max(0, Math.min(userStartM, earliestLeaveM)));
             resolvedReturnOpt = {
-              startMins: sM,
+              startMins: userStartM,
+              busStartMins: sM,
               endMins: eM,
-              durationMinutes: opt.durationMinutes,
-              walkBeforeMinutes: Math.max(0, opt.walkBeforeMinutes ?? 0),
+              durationMinutes: doorDur,
+              walkBeforeMinutes: walkBefore,
+              inVehicleMinutes: inVehicle,
+              walkAfterMinutes: walkAfter,
+              busDepartureTime: depStr,
+              busAlightingTime: busAlightStr,
+              coincidenceAvailableFromTime: anchorFromStr,
+              firstAvailableDepartureTime: firstAvailDepStr,
             };
           }
         }
@@ -1969,13 +2042,27 @@ async function computeReturnItinerary(
     }
 
     const resolvedLeaveOriginMins = resolvedReturnOpt
-      ? resolvedReturnOpt.startMins - resolvedReturnOpt.walkBeforeMinutes
+      ? resolvedReturnOpt.startMins
       : requiredDepartureFromCampusMins;
     const effectiveIsEarlyDeparture =
       !isLectureFinished &&
       (resolvedReturnOpt
         ? resolvedLeaveOriginMins < lectureEndMins
         : isEarlyDeparture);
+
+    const returnSegDetails = resolvedReturnOpt
+      ? {
+          walkBeforeMinutes: resolvedReturnOpt.walkBeforeMinutes,
+          inVehicleMinutes: resolvedReturnOpt.inVehicleMinutes,
+          walkAfterMinutes: resolvedReturnOpt.walkAfterMinutes,
+          busDepartureTime: resolvedReturnOpt.busDepartureTime,
+          busAlightingTime: resolvedReturnOpt.busAlightingTime,
+          coincidenceAvailableFromTime:
+            resolvedReturnOpt.coincidenceAvailableFromTime,
+          firstAvailableDepartureTime:
+            resolvedReturnOpt.firstAvailableDepartureTime,
+        }
+      : {};
 
     if (isTrainAlreadyPassed) {
       // SCENARIO DEDICATO: Treno già passato dalla stazione di partenza del pendolare (es. Roma Tiburtina)
@@ -1997,9 +2084,7 @@ async function computeReturnItinerary(
       if (isEarlyForLecture) {
         const effectiveLeaveFromLecture = Math.max(
           lectureStartMins,
-          resolvedReturnOpt
-            ? lockedTransitStartMins - resolvedReturnOpt.walkBeforeMinutes
-            : lockedTransitStartMins
+          lockedTransitStartMins
         );
         const lostMins = Math.max(1, lectureEndMins - effectiveLeaveFromLecture);
         const formattedLost = formatMinutesToHours(lostMins);
@@ -2037,6 +2122,7 @@ async function computeReturnItinerary(
           targetTime: minutesToTime(lockedTransitStartMins),
           timeType: 'depart_at',
           notes: transitNotes,
+          ...returnSegDetails,
         },
       });
       // Nessuna attesa fittizia o negativa: il pullman è ancorato all'orario esatto di passaggio del treno.
@@ -2085,6 +2171,7 @@ async function computeReturnItinerary(
           targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
           notes: activeTransitSolution.routeDescription,
+          ...returnSegDetails,
         },
       });
 
@@ -2111,10 +2198,7 @@ async function computeReturnItinerary(
 
       if (resolvedReturnOpt) {
         startTransitMins = resolvedReturnOpt.startMins;
-        leaveLectureAtMins = Math.max(
-          lectureStartMins,
-          startTransitMins - resolvedReturnOpt.walkBeforeMinutes
-        );
+        leaveLectureAtMins = Math.max(lectureStartMins, startTransitMins);
         lostMins = Math.max(1, lectureEndMins - leaveLectureAtMins);
       } else if (isLectureInProgress) {
         leaveLectureAtMins = Math.max(nowMins, requiredDepartureFromCampusMins);
@@ -2153,8 +2237,8 @@ async function computeReturnItinerary(
         title: `Termine lezione: ${targetLecture.subject}`,
         subtitle: lectureRoomSubtitle,
         startTime: minutesToTime(leaveLectureAtMins),
-        endTime: minutesToTime(startTransitMins),
-        durationMinutes: Math.max(0, startTransitMins - leaveLectureAtMins),
+        endTime: minutesToTime(leaveLectureAtMins),
+        durationMinutes: 0,
         details: {
           notes: `Partenza anticipata durante la lezione • ${lostBadge}`,
           badgeText: lostBadge,
@@ -2189,6 +2273,7 @@ async function computeReturnItinerary(
           targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
           notes: activeTransitSolution.routeDescription,
+          ...returnSegDetails,
         },
       });
 
@@ -2229,13 +2314,6 @@ async function computeReturnItinerary(
         ? resolvedReturnOpt.durationMinutes
         : activeTransitMins;
 
-      // Mostra l'uscita dall'aula al termine della lezione aggiungendo solo il tempo reale a piedi fino alla fermata
-      const leaveWalkMins = isWalkLeg
-        ? 0
-        : resolvedReturnOpt
-          ? Math.max(0, resolvedReturnOpt.walkBeforeMinutes)
-          : exitClassroomBuffer;
-      const leaveEndMins = lectureEndMins + leaveWalkMins;
       const lectureRoomSubtitle = targetLecture.buildingName
         ? `${targetLecture.room} • ${targetLecture.buildingName}`
         : targetLecture.room;
@@ -2246,8 +2324,8 @@ async function computeReturnItinerary(
         title: `Termine lezione: ${targetLecture.subject}`,
         subtitle: lectureRoomSubtitle,
         startTime: targetLecture.endTime,
-        endTime: minutesToTime(leaveEndMins),
-        durationMinutes: leaveWalkMins,
+        endTime: targetLecture.endTime,
+        durationMinutes: 0,
       });
 
       // Leg 2: Mezzi Urbani verso Stazione (ancorato all'ultimo mezzo utile)
@@ -2276,6 +2354,7 @@ async function computeReturnItinerary(
           targetTime: minutesToTime(startTransitMins),
           timeType: 'depart_at',
           notes: activeTransitSolution.routeDescription,
+          ...returnSegDetails,
         },
       });
 
@@ -2346,6 +2425,38 @@ async function computeReturnItinerary(
       notes: `${train.category} verso ${train.destination} • Binario ${isToday ? (train.platformActual || train.platformPlanned || 'in definizione') : (train.platformPlanned || 'in definizione')} • ${isToday ? train.statusDescription : 'Programmato'}`,
     },
   });
+
+  // Attende la stima auto (già avviata in parallelo con treno e mezzi urbani) solo prima di comporre la tappa finale
+  const drivingEst = await drivingEstPromise;
+  let carDuration = 0;
+  const baseSavedReturnKm = config.carLeg.distanceKm && config.carLeg.distanceKm > 0 ? config.carLeg.distanceKm : 0;
+  let carDistanceKm = baseSavedReturnKm || (drivingEst?.distanceKm ?? 17.2);
+  let carTrafficNote: string | undefined = undefined;
+  let carTrafficFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' | undefined = undefined;
+  let carTrafficPeak = false;
+  let carTrafficBaseline = 0;
+  let carTrafficDelay = 0;
+
+  if (drivingEst) {
+    if (!baseSavedReturnKm && drivingEst.distanceKm) {
+      carDistanceKm = drivingEst.distanceKm;
+    }
+    carTrafficNote = drivingEst.trafficCondition || config.carLeg.trafficCondition;
+    carTrafficFluency = drivingEst.fluencyStatus || config.carLeg.trafficFluency;
+    carTrafficPeak = Boolean(drivingEst.isPeakHour);
+    carTrafficBaseline = Math.ceil(drivingEst.baseDurationMinutes || config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(drivingEst.trafficDelayMinutes ?? 0, config.carLeg.trafficDelayMinutes ?? 0);
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
+  } else if (carEnabled) {
+    carTrafficBaseline = Math.ceil(config.carLeg.baseDurationMinutes || config.carLeg.durationMinutes || 24);
+    carTrafficDelay = Math.max(0, config.carLeg.trafficDelayMinutes ?? 0);
+    carTrafficNote = config.carLeg.trafficCondition;
+    carTrafficFluency = config.carLeg.trafficFluency;
+    carDuration = Math.ceil(carTrafficBaseline + carTrafficDelay);
+  }
+
+  const homeArrivalMins =
+    normalizeRelativeMinutes(trainArrMins, trainDepMins) + carWalkBuffer + carDuration;
 
   // Leg 4: Auto verso Casa
   if (carEnabled) {
@@ -2711,12 +2822,84 @@ const STARTUP_SNAPSHOT_TTL_MS = 90000;
 let warmViaggioSnapshot: ViaggioStartupSnapshot | null = null;
 let inFlightStartupPrefetch: Promise<ViaggioStartupSnapshot | null> | null = null;
 
-const PERSISTED_ITINERARIES_CACHE_KEY = 'studici_itineraries_cache_v5';
+const PERSISTED_ITINERARIES_CACHE_KEY = 'studici_itineraries_cache_v6';
 const PERSISTED_ITINERARY_TTL_MS = 24 * 60 * 60 * 1000; // 24 ore
 let persistedItinerariesMemory: Record<
   string,
   { timestamp: number; itinerary: CommuterItinerary }
 > | null = null;
+let persistItinerariesTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Rimuove le polilinee decodificate e le fermate dei treni non selezionati prima della persistenza su disco,
+ * riducendo il peso di AsyncStorage di oltre il 90% ed evitando il superamento del limite CursorWindow (2 MB) su Android.
+ */
+function compactTransitDepartureForDisk(dep?: TransitBoardResult['departures'][number]) {
+  if (!dep) return dep;
+  const {
+    transitPolyline: _tp,
+    walkBeforePolyline: _wbp,
+    walkAfterPolyline: _wap,
+    transferWalkPolylines: _twp,
+    intermediateStopCoords: _isc,
+    legs,
+    ...rest
+  } = dep;
+  return {
+    ...rest,
+    ...(Array.isArray(legs)
+      ? {
+          legs: legs.map(({ polyline: _lp, ...legRest }) => legRest),
+        }
+      : {}),
+  };
+}
+
+function compactItineraryForPersistence(itinerary: CommuterItinerary): CommuterItinerary {
+  const selectedTrainNum = itinerary.liveTrain?.trainNumber;
+  const compactAvailableTrains = Array.isArray(itinerary.availableTrains)
+    ? itinerary.availableTrains.map((t) =>
+        t.trainNumber === selectedTrainNum
+          ? t
+          : { ...t, stops: undefined }
+      )
+    : itinerary.availableTrains;
+
+  const board = itinerary.prefetchedTransitBoard;
+  const compactBoard: TransitBoardResult | undefined = board
+    ? {
+        ...board,
+        departures: Array.isArray(board.departures)
+          ? board.departures.map((d) => compactTransitDepartureForDisk(d)!)
+          : [],
+        optimalDeparture: compactTransitDepartureForDisk(board.optimalDeparture),
+        lastUsefulDeparture: compactTransitDepartureForDisk(board.lastUsefulDeparture),
+      }
+    : undefined;
+
+  return {
+    ...itinerary,
+    availableTrains: compactAvailableTrains,
+    prefetchedTransitBoard: compactBoard,
+    lastUsefulTransitDeparture: compactTransitDepartureForDisk(
+      itinerary.lastUsefulTransitDeparture
+    ),
+  };
+}
+
+function flushPersistedItinerariesCache(): void {
+  if (persistItinerariesTimer) {
+    clearTimeout(persistItinerariesTimer);
+  }
+  persistItinerariesTimer = setTimeout(() => {
+    persistItinerariesTimer = null;
+    if (!persistedItinerariesMemory) return;
+    AsyncStorage.setItem(
+      PERSISTED_ITINERARIES_CACHE_KEY,
+      JSON.stringify(persistedItinerariesMemory)
+    ).catch(() => {});
+  }, 300);
+}
 
 export async function loadPersistedItinerariesCache(): Promise<
   Record<string, CommuterItinerary>
@@ -2754,7 +2937,7 @@ export function savePersistedItineraryEntry(
       }
       persistedItinerariesMemory[key] = {
         timestamp: Date.now(),
-        itinerary,
+        itinerary: compactItineraryForPersistence(itinerary),
       };
       const keys = Object.keys(persistedItinerariesMemory);
       if (keys.length > 20) {
@@ -2767,10 +2950,7 @@ export function savePersistedItineraryEntry(
           delete persistedItinerariesMemory[oldKey];
         }
       }
-      await AsyncStorage.setItem(
-        PERSISTED_ITINERARIES_CACHE_KEY,
-        JSON.stringify(persistedItinerariesMemory)
-      );
+      flushPersistedItinerariesCache();
     } catch {}
   })();
 }
@@ -2906,7 +3086,20 @@ export function prefetchViaggioStartupData(
         }
       }
 
-      const disruptions = await disruptionsPromise;
+      // Non bloccare la pubblicazione dello snapshot caldo su eventuali scraping scioperi lenti:
+      // attendi al massimo 250ms se già quasi pronti, altrimenti aggiorna lo snapshot appena arrivano.
+      let resolvedDisruptions: DisruptionEvent[] = [];
+      let disruptionsSettled = false;
+      const disruptionsWithCapture = disruptionsPromise.then((list) => {
+        resolvedDisruptions = list;
+        disruptionsSettled = true;
+        return list;
+      });
+      await Promise.race([
+        disruptionsWithCapture,
+        new Promise<void>((resolve) => setTimeout(resolve, 250)),
+      ]);
+
       if (itin) {
         savePersistedItineraryEntry(`outbound_${todayIdx}_auto`, itin);
       }
@@ -2920,9 +3113,19 @@ export function prefetchViaggioStartupData(
         schedule: sched,
         defaultTabUrl,
         itinerary: itin,
-        disruptions,
+        disruptions: resolvedDisruptions,
       };
       warmViaggioSnapshot = snapshot;
+
+      if (!disruptionsSettled) {
+        disruptionsWithCapture
+          .then((list) => {
+            if (warmViaggioSnapshot === snapshot) {
+              warmViaggioSnapshot = { ...snapshot, disruptions: list };
+            }
+          })
+          .catch(() => {});
+      }
       return snapshot;
     } catch {
       return null;

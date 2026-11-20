@@ -57,6 +57,7 @@ import {
   AttendanceRecord,
   generateAttendanceId,
   getAttendanceRecords,
+  getCachedAttendanceRecords,
   getDateForDayIndex,
   toggleAttendance,
   toggleDayAttendance,
@@ -65,6 +66,7 @@ import {
 import {
   ManualClassEvent,
   getManualEvents,
+  getCachedManualEvents,
   addManualEvent,
   updateManualEvent,
   deleteManualEvent,
@@ -90,6 +92,7 @@ import { refreshCommuterAlarmsInBackground } from "../utils/alarmSync";
 import {
   ExcludedLessonRecord,
   buildExcludedIdSet,
+  getCachedExcludedLessons,
   getExcludedLessons,
   isLessonExcluded,
   subscribeToExcludedLessonsChanges,
@@ -99,6 +102,7 @@ import {
   ClassEvent,
   fetchAllCourseData,
   fetchScheduleData,
+  getWarmCourseStartupSnapshot,
   ScheduleData,
   Tab,
 } from "../utils/scraper";
@@ -111,6 +115,7 @@ import {
   AppNote,
   filterNotesForDay,
   filterNotesForLesson,
+  getCachedNotes,
   getNotes,
   subscribeToNotesChanges,
   syncAppleRemindersWithNotes,
@@ -432,20 +437,27 @@ function ScheduleClassCard({
 
 export default function ScheduleScreen() {
   const { theme } = useTheme();
-  const [loading, setLoading] = useState(true);
-  const [schedule, setSchedule] = useState<ScheduleData | null>(null);
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [selectedTab, setSelectedTab] = useState<Tab | null>(null);
-  const selectedTabRef = useRef<Tab | null>(null);
+  const [initialCourseSeed] = useState(() => getWarmCourseStartupSnapshot());
+  const [loading, setLoading] = useState(() => !initialCourseSeed);
+  const [schedule, setSchedule] = useState<ScheduleData | null>(
+    () => initialCourseSeed?.selectedSchedule ?? null,
+  );
+  const [tabs, setTabs] = useState<Tab[]>(() => initialCourseSeed?.tabs ?? []);
+  const [selectedTab, setSelectedTab] = useState<Tab | null>(
+    () => initialCourseSeed?.selectedTab ?? null,
+  );
+  const selectedTabRef = useRef<Tab | null>(initialCourseSeed?.selectedTab ?? null);
   useEffect(() => {
     selectedTabRef.current = selectedTab;
   }, [selectedTab]);
-  const tabsRef = useRef<Tab[]>([]);
+  const tabsRef = useRef<Tab[]>(initialCourseSeed?.tabs ?? []);
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
-  const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
-  const degreeUrlRef = useRef<string | null>(null);
+  const [degreeUrl, setDegreeUrl] = useState<string | null>(
+    () => initialCourseSeed?.degreeUrl ?? null,
+  );
+  const degreeUrlRef = useRef<string | null>(initialCourseSeed?.degreeUrl ?? null);
   useEffect(() => {
     degreeUrlRef.current = degreeUrl;
   }, [degreeUrl]);
@@ -578,7 +590,7 @@ export default function ScheduleScreen() {
 
   const [schedulesMap, setSchedulesMap] = useState<
     Record<string, ScheduleData>
-  >({});
+  >(() => initialCourseSeed?.schedules ?? {});
   const [alertsModalVisible, setAlertsModalVisible] = useState(false);
   const [selectedRoomModal, setSelectedRoomModal] =
     useState<ResolvedClassroom | null>(null);
@@ -588,22 +600,26 @@ export default function ScheduleScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [attendanceRecords, setAttendanceRecords] = useState<
     AttendanceRecord[]
-  >([]);
+  >(() => getCachedAttendanceRecords(initialCourseSeed?.degreeUrl) ?? []);
   const [excludedLessons, setExcludedLessons] = useState<
     ExcludedLessonRecord[]
-  >([]);
+  >(() => getCachedExcludedLessons(initialCourseSeed?.degreeUrl) ?? []);
   const excludedSet = useMemo(
     () => buildExcludedIdSet(excludedLessons),
     [excludedLessons],
   );
-  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>([]);
+  const [manualEvents, setManualEvents] = useState<ManualClassEvent[]>(
+    () => getCachedManualEvents(initialCourseSeed?.degreeUrl) ?? [],
+  );
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [editingManualEvent, setEditingManualEvent] = useState<ManualClassEvent | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
 
   // Gestione Note e Promemoria
-  const [allNotes, setAllNotes] = useState<AppNote[]>([]);
+  const [allNotes, setAllNotes] = useState<AppNote[]>(
+    () => getCachedNotes() ?? [],
+  );
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [editingNote, setEditingNote] = useState<AppNote | null>(null);
   const [initialNoteLesson, setInitialNoteLesson] = useState<{
@@ -762,23 +778,32 @@ export default function ScheduleScreen() {
     } catch {}
   }, []);
 
+  const lastFocusCloudSyncAtRef = useRef<number>(0);
+
   const loadData = useCallback(
     async (force = false) => {
       try {
-        // Sincronizzazione cloud in background per non rallentare l'avvio immediato dell'orario
-        getICloudAutoSyncEnabled().then(async (icloudEnabled) => {
-          if (icloudEnabled) {
-            try {
-              const syncRes = await syncWithICloudStorage();
-              if (syncRes.updated) {
-                const recs = await getAttendanceRecords();
-                setAttendanceRecords(recs);
-                loadManualEvents();
-                loadExcludedLessons();
-              }
-            } catch {}
-          }
-        }).catch(() => {});
+        // Sincronizzazione cloud in background (throttled 30s sui cambi tab per non scaricare Firebase a ogni focus)
+        const shouldCheckCloudOnFocus =
+          force || Date.now() - lastFocusCloudSyncAtRef.current >= 30_000;
+        if (shouldCheckCloudOnFocus) {
+          lastFocusCloudSyncAtRef.current = Date.now();
+          getICloudAutoSyncEnabled().then(async (icloudEnabled) => {
+            if (icloudEnabled) {
+              try {
+                const syncRes = await syncWithICloudStorage(undefined, {
+                  allowUnpairedPush: false,
+                });
+                if (syncRes.updated) {
+                  const recs = await getAttendanceRecords();
+                  setAttendanceRecords(recs);
+                  loadManualEvents();
+                  loadExcludedLessons();
+                }
+              } catch {}
+            }
+          }).catch(() => {});
+        }
 
         const storagePairs = await AsyncStorage.multiGet([
           "selectedDegreeUrl",
@@ -865,14 +890,19 @@ export default function ScheduleScreen() {
     }, [loadData]),
   );
 
+  const loadDataRef = useRef(loadData);
   useEffect(() => {
-    const unsub = subscribeToLiveSync((status, updated) => {
+    loadDataRef.current = loadData;
+  }, [loadData]);
+
+  useEffect(() => {
+    const unsub = subscribeToLiveSync((_status, updated) => {
       if (updated) {
-        loadData(false);
+        loadDataRef.current(false);
       }
     });
     return unsub;
-  }, [loadData]);
+  }, []);
 
   // Sincronizzazione istantanea in tempo reale tra tab per presenze, lezioni manuali e lezioni barrate
   useEffect(() => {
@@ -980,21 +1010,52 @@ export default function ScheduleScreen() {
     [schedule, manualEvents, degreeUrl, selectedTab?.url],
   );
 
+  const { attendedIdSet, attendedDateSet } = useMemo(() => {
+    const idSet = new Set<string>();
+    const dateSet = new Set<string>();
+    for (const r of attendanceRecords) {
+      idSet.add(r.id);
+      dateSet.add(r.date);
+    }
+    return { attendedIdSet: idSet, attendedDateSet: dateSet };
+  }, [attendanceRecords]);
+
+  const lessonNotesBySubject = useMemo(() => {
+    const map = new Map<string, AppNote[]>();
+    for (const n of allNotes) {
+      if (n.targetType !== "lesson" || !n.lessonSubject) continue;
+      const key = n.lessonSubject.trim().toLowerCase();
+      const list = map.get(key);
+      if (list) list.push(n);
+      else map.set(key, [n]);
+    }
+    return map;
+  }, [allNotes]);
+
+  const dayNotesByDayIdx = useMemo(() => {
+    const out: Record<number, AppNote[]> = {};
+    for (const w of WEEKDAYS_ORARI) {
+      const currentWeekDate = getDateForDayIndex(w.dayIdx).dateStr;
+      out[w.dayIdx] = filterNotesForDay(allNotes, w.dayIdx, currentWeekDate);
+    }
+    return out;
+  }, [allNotes]);
+
   const checkIsAttended = useCallback(
     (cls: ClassEvent, dayIdx: number = selectedDay) => {
       const { dateStr } = getDateForDayIndex(dayIdx);
       const id = generateAttendanceId(dateStr, cls.subject, cls.startTime);
-      return attendanceRecords.some((r) => r.id === id);
+      return attendedIdSet.has(id);
     },
-    [selectedDay, attendanceRecords],
+    [selectedDay, attendedIdSet],
   );
 
   const dayHasAttendance = useCallback(
     (dayIdx: number) => {
       const { dateStr } = getDateForDayIndex(dayIdx);
-      return attendanceRecords.some((r) => r.date === dateStr);
+      return attendedDateSet.has(dateStr);
     },
-    [attendanceRecords],
+    [attendedDateSet],
   );
 
   const onRefresh = useCallback(async () => {
@@ -1197,7 +1258,10 @@ export default function ScheduleScreen() {
     const isAttended = checkIsAttended(cls, dayIdx);
     const isExcluded = isLessonExcluded(dayIdx, cls, excludedSet);
     const { dateStr } = getDateForDayIndex(dayIdx);
-    const lectureNotes = filterNotesForLesson(allNotes, cls.subject, cls.startTime, dateStr, dayIdx);
+    const subjectBucket = lessonNotesBySubject.get(cls.subject.trim().toLowerCase());
+    const lectureNotes = subjectBucket
+      ? filterNotesForLesson(subjectBucket, cls.subject, cls.startTime, dateStr, dayIdx)
+      : [];
     const cleanRoom = cls.room
       ? cls.room.trim().toLowerCase().startsWith("aula")
         ? cls.room.trim()
@@ -1599,7 +1663,7 @@ export default function ScheduleScreen() {
           {WEEKDAYS_ORARI.map((w) => {
             const dayClasses = classesByDay[w.dayIdx] || [];
             const currentWeekDate = getDateForDayIndex(w.dayIdx).dateStr;
-            const dayNotes = filterNotesForDay(allNotes, w.dayIdx, currentWeekDate);
+            const dayNotes = dayNotesByDayIdx[w.dayIdx] || [];
             const futureEventsForDay = manualEvents
               .filter(
                 (e) =>

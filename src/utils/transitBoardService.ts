@@ -9,7 +9,9 @@ import { ROME_STATION_COORDINATES } from './transitRouter';
 import { resolveClassroom } from './classroomLocations';
 import {
   fetchCloserCorridorItineraries,
+  fetchTransitousTripDetails,
   optimizeSingleLegStopsViaTrip,
+  prefetchTransitousStopsBoxes,
   resolveEffectiveEndpointForRouting,
   resolveWalkLegMetrics,
 } from './transitClosestStopHelper';
@@ -42,7 +44,10 @@ export interface TransitLegDetail {
   fromStopCoords?: { lat: number; lng: number };
   toStopCoords?: { lat: number; lng: number };
   departureTime?: string;
+  scheduledDepartureTime?: string;
   arrivalTime?: string;
+  delayMinutes?: number;
+  isLive?: boolean;
   durationMinutes: number;
   intermediateStopsCount?: number;
   intermediateStopNames?: string[];
@@ -125,7 +130,7 @@ const CURATED_LINE_PALETTE = [
 // Cache in-memory + persistente per le direzioni reali (capolinea di giro) delle linee circolari/anello GTFS
 const circularTurnaroundCache = new Map<string, string>();
 const circularTurnaroundInFlight = new Map<string, Promise<string>>();
-const CIRCULAR_TURNAROUND_STORAGE_KEY = 'studici_circular_turnaround_v1';
+const CIRCULAR_TURNAROUND_STORAGE_KEY = 'studici_circular_turnaround_v2';
 const CIRCULAR_TURNAROUND_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 giorni
 let circularTurnaroundStorageLoaded = false;
 
@@ -548,7 +553,8 @@ export function optimizeTransitStopForMinWalk(params: {
   direction: 'to_campus' | 'to_station';
   currentStopName: string;
   currentStopCoords: { lat: number; lng: number };
-  targetCoords: { lat: number; lng: number }; // finalDestCoords (andata) o originCoords (ritorno)
+  boardStopCoords?: { lat: number; lng: number };
+  targetCoords: { lat: number; lng: number }; // finalDestCoords (andata o ritorno)
   intermediateStops: { name: string; lat: number; lng: number }[];
   lineShort: string;
   mode: string;
@@ -562,6 +568,7 @@ export function optimizeTransitStopForMinWalk(params: {
   const {
     currentStopName,
     currentStopCoords,
+    boardStopCoords,
     targetCoords,
     intermediateStops,
     mode,
@@ -608,11 +615,27 @@ export function optimizeTransitStopForMinWalk(params: {
   let bestStop = candidateStops[0];
   let bestDist = currDist;
 
+  const boardToTargetDist = boardStopCoords
+    ? haversineMeters(
+        { latitude: boardStopCoords.lat, longitude: boardStopCoords.lng },
+        { latitude: targetCoords.lat, longitude: targetCoords.lng }
+      )
+    : Infinity;
+
   for (const cand of candidateStops) {
     const d = haversineMeters(
       { latitude: cand.lat, longitude: cand.lng },
       { latitude: targetCoords.lat, longitude: targetCoords.lng }
     );
+    if (boardStopCoords) {
+      const distFromBoard = haversineMeters(
+        { latitude: boardStopCoords.lat, longitude: boardStopCoords.lng },
+        { latitude: cand.lat, longitude: cand.lng }
+      );
+      if (distFromBoard < 200 || d > boardToTargetDist - 150) {
+        continue;
+      }
+    }
     // Privilegia la fermata alternativa se accorcia sensibilmente la camminata (almeno 35 metri in meno)
     if (d < bestDist - 35) {
       bestDist = d;
@@ -792,11 +815,34 @@ function normalizeStopTokens(name?: string): string {
     .trim();
 }
 
+function isSameStopEntity(
+  nameA?: string,
+  nameB?: string,
+  stopIdA?: string,
+  stopIdB?: string
+): boolean {
+  if (stopIdA && stopIdB && stopIdA === stopIdB) return true;
+  const rawA = (nameA || '').trim().toLowerCase();
+  const rawB = (nameB || '').trim().toLowerCase();
+  if (!rawA || !rawB) return false;
+  if (rawA === rawB) return true;
+  const normA = normalizeStopTokens(nameA);
+  const normB = normalizeStopTokens(nameB);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  // Evita falsi positivi tra una stazione/capolinea (es. "Staz.ne Tiburtina (MB)") e una fermata lungo la via omonima (es. "Tiburtina/Castro Laurenziano")
+  const hasSlashA = rawA.includes('/');
+  const hasSlashB = rawB.includes('/');
+  if (hasSlashA !== hasSlashB) return false;
+  return false;
+}
+
 /**
  * Verifica se la direzione GTFS coincide erroneamente con la fermata di partenza
  * (tipico delle linee ad anello/circolari come il 71 a Roma, dove tripFrom === tripTo).
- * In tal caso interroga l'elenco completo delle fermate della corsa per individuare il vero capolinea di svolta
- * (es. "L.go Chigi" per il 71 in uscita da Tiburtina).
+ * In tal caso interroga l'elenco completo delle fermate della corsa (inclusi capolinea iniziale e finale)
+ * e determina in base alla posizione reale e all'orario di salita/discesa se il mezzo sta andando
+ * verso il punto di svolta dell'anello (es. "L.go Chigi") o se sta rientrando verso il capolinea finale (es. "Staz.ne Tiburtina (MB)").
  */
 async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
   const rawHeadsign = (primaryLeg.headsign || '').trim();
@@ -821,29 +867,28 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
 
   const headsignMatchesOrigin =
     !normHead ||
-    (normFrom.length >= 4 &&
-      (normHead === normFrom ||
-        normHead.includes(normFrom) ||
-        normFrom.includes(normHead)));
+    isSameStopEntity(rawHeadsign, fromName, undefined, primaryLeg.from?.stopId);
+
+  const headsignMatchesDest = isSameStopEntity(
+    rawHeadsign,
+    toName,
+    undefined,
+    primaryLeg.to?.stopId
+  );
 
   // Se la linea non è circolare e l'headsign non coincide con la fermata di salita, l'headsign GTFS è già corretto
   if (!isLoopTrip && !headsignMatchesOrigin) {
     return formatStopDisplayName(rawHeadsign);
   }
 
-  // Se siamo su una linea circolare ma stiamo effettivamente tornando verso il capolinea finale (to === headsign),
-  // allora la direzione mostrata (es. Staz.ne Tiburtina tornando da Castro Laurenziano) è già quella giusta!
-  if (
-    normHead &&
-    normTo &&
-    !headsignMatchesOrigin &&
-    (normTo === normHead || normTo.includes(normHead) || normHead.includes(normTo))
-  ) {
+  // Se siamo su una linea circolare e la fermata di discesa coincide già col capolinea finale (to === headsign e from !== headsign),
+  // allora stiamo rientrando verso il capolinea finale (es. Staz.ne Tiburtina tornando da Castro Laurenziano)
+  if (normHead && headsignMatchesDest && !headsignMatchesOrigin) {
     return formatStopDisplayName(rawHeadsign);
   }
 
   await ensureCircularTurnaroundLoaded();
-  const routeKey = `${primaryLeg.routeId || primaryLeg.routeShortName || 'route'}_${primaryLeg.directionId || '0'}_${normFrom}`;
+  const routeKey = `${primaryLeg.routeId || primaryLeg.routeShortName || 'route'}_${primaryLeg.directionId || '0'}_${normFrom}_${normTo}`;
   const cachedTurnaround = circularTurnaroundCache.get(routeKey);
   if (cachedTurnaround) {
     return cachedTurnaround;
@@ -854,32 +899,31 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
     return existingInFlight;
   }
 
-  // Interroga /api/v5/trip di Transitous per trovare il punto più distante (capolinea di svolta dell'anello)
+  // Interroga /api/v5/trip di Transitous tramite cache/dedup condivisa per determinare il ramo dell'anello
   if (primaryLeg.tripId) {
     const task = (async (): Promise<string> => {
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2400);
-        const tripUrl = `https://api.transitous.org/api/v5/trip?tripId=${encodeURIComponent(primaryLeg.tripId)}`;
-        const res = await fetch(tripUrl, {
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'StudICI/1.0 (https://github.com/studici; contact@studici.app)',
-            Accept: 'application/json',
-          },
-        });
-        clearTimeout(timer);
+        const tripData = await fetchTransitousTripDetails(primaryLeg.tripId);
+        if (tripData) {
+          const tripIt = Array.isArray(tripData?.itineraries)
+            ? tripData.itineraries[0]
+            : tripData;
+          const fullLeg = tripIt?.legs?.[0];
+          const allStops: any[] = [];
+          if (fullLeg?.from) allStops.push(fullLeg.from);
+          if (Array.isArray(fullLeg?.intermediateStops)) {
+            allStops.push(...fullLeg.intermediateStops);
+          }
+          if (fullLeg?.to) allStops.push(fullLeg.to);
 
-        if (res.ok) {
-          const tripData = await res.json();
-          const fullLeg = tripData?.legs?.[0];
-          const allStops: any[] = Array.isArray(fullLeg?.intermediateStops)
-            ? fullLeg.intermediateStops
-            : [];
           const loopOriginLat = fullLeg?.from?.lat ?? primaryLeg.from?.lat;
           const loopOriginLon = fullLeg?.from?.lon ?? primaryLeg.from?.lon;
 
-          if (allStops.length > 0 && typeof loopOriginLat === 'number' && typeof loopOriginLon === 'number') {
+          if (
+            allStops.length >= 3 &&
+            typeof loopOriginLat === 'number' &&
+            typeof loopOriginLon === 'number'
+          ) {
             let maxDist = -1;
             let turnaroundIdx = Math.floor(allStops.length / 2);
 
@@ -893,20 +937,72 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
               }
             });
 
-            const turnaroundStopName = allStops[turnaroundIdx]?.name;
-            if (turnaroundStopName) {
-              const toStopId = primaryLeg.to?.stopId;
-              let userAlightIdx = allStops.findIndex(
-                (s) => (toStopId && s.stopId === toStopId) || normalizeStopTokens(s.name) === normTo
-              );
+            const legStartMs = primaryLeg.startTime
+              ? new Date(primaryLeg.startTime).getTime()
+              : NaN;
+            const legEndMs = primaryLeg.endTime
+              ? new Date(primaryLeg.endTime).getTime()
+              : NaN;
+            const fromStopId = primaryLeg.from?.stopId;
+            const toStopId = primaryLeg.to?.stopId;
 
-              if (userAlightIdx === -1 || userAlightIdx <= turnaroundIdx + 2) {
-                const formatted = formatStopDisplayName(turnaroundStopName);
-                circularTurnaroundCache.set(routeKey, formatted);
-                void persistCircularTurnaroundCache();
-                return formatted;
-              } else if (tripToName && !headsignMatchesOrigin) {
-                const formatted = formatStopDisplayName(tripToName);
+            let userBoardIdx = -1;
+            let bestBoardTimeDiff = Infinity;
+            for (let i = 0; i < allStops.length; i++) {
+              const s = allStops[i];
+              const match =
+                (fromStopId && s?.stopId === fromStopId) ||
+                isSameStopEntity(s?.name, fromName, s?.stopId, fromStopId);
+              if (!match) continue;
+              const sIso = s?.departure || s?.scheduledDeparture || s?.arrival;
+              const sMs = sIso ? new Date(sIso).getTime() : NaN;
+              const diff =
+                Number.isFinite(legStartMs) && Number.isFinite(sMs)
+                  ? Math.abs(sMs - legStartMs)
+                  : 0;
+              if (diff < bestBoardTimeDiff) {
+                bestBoardTimeDiff = diff;
+                userBoardIdx = i;
+              }
+            }
+
+            let userAlightIdx = -1;
+            let bestAlightTimeDiff = Infinity;
+            for (let i = Math.max(0, userBoardIdx + 1); i < allStops.length; i++) {
+              const s = allStops[i];
+              const match =
+                (toStopId && s?.stopId === toStopId) ||
+                isSameStopEntity(s?.name, toName, s?.stopId, toStopId);
+              if (!match) continue;
+              const sIso = s?.arrival || s?.scheduledArrival || s?.departure;
+              const sMs = sIso ? new Date(sIso).getTime() : NaN;
+              const diff =
+                Number.isFinite(legEndMs) && Number.isFinite(sMs)
+                  ? Math.abs(sMs - legEndMs)
+                  : 0;
+              if (diff < bestAlightTimeDiff) {
+                bestAlightTimeDiff = diff;
+                userAlightIdx = i;
+              }
+            }
+
+            const turnaroundStopName = allStops[turnaroundIdx]?.name;
+            const finalTerminusName =
+              allStops[allStops.length - 1]?.name || tripToName || rawHeadsign;
+
+            if (turnaroundStopName) {
+              // Ramo di andata dell'anello (prima del giro di boa): direzione = capolinea di svolta (es. L.go Chigi)
+              // Ramo di ritorno dell'anello (dopo il giro di boa): direzione = capolinea finale (es. Staz.ne Tiburtina (MB))
+              const isOnReturnHalfOfLoop =
+                (userBoardIdx >= turnaroundIdx && userBoardIdx >= 0) ||
+                (userAlightIdx > turnaroundIdx + 1 &&
+                  (userBoardIdx < 0 || userBoardIdx >= Math.floor(turnaroundIdx * 0.6)));
+
+              const chosenHeadsign = isOnReturnHalfOfLoop
+                ? finalTerminusName
+                : turnaroundStopName;
+              if (chosenHeadsign) {
+                const formatted = formatStopDisplayName(chosenHeadsign);
                 circularTurnaroundCache.set(routeKey, formatted);
                 void persistCircularTurnaroundCache();
                 return formatted;
@@ -918,7 +1014,7 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
         // Continua con il fallback intelligente
       }
 
-      if (toName && normalizeStopTokens(toName) !== normFrom) {
+      if (toName && !isSameStopEntity(toName, fromName)) {
         return formatStopDisplayName(toName);
       }
       return formatStopDisplayName(rawHeadsign || toName || 'Centro');
@@ -930,8 +1026,7 @@ async function resolveVerifiedHeadsign(primaryLeg: any): Promise<string> {
     return task;
   }
 
-  // Fallback se il dettaglio trip non risponde: usa la fermata di discesa o l'ultima fermata intermedia nota
-  if (toName && normalizeStopTokens(toName) !== normFrom) {
+  if (toName && !isSameStopEntity(toName, fromName)) {
     return formatStopDisplayName(toName);
   }
 
@@ -1927,7 +2022,7 @@ export async function getStationTransitBoard(options: {
         direction === 'to_campus'
       ),
     ]);
-    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20`;
+    const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20&detailedTransfers=false`;
 
     // Query secondaria con arriveBy=true sul vincolo comprensivo di anticipo per identificare con precisione l'ultima corsa utile
     let secondaryDepUrl: string | null = null;
@@ -1954,9 +2049,12 @@ export async function getStationTransitBoard(options: {
         const secDate = resolveDateWithDayOffset(secBaseDate, secDayOffset);
         secondaryDepUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(
           buildQueryIsoTime(secDate, minsToHHMM(secMins))
-        )}&arriveBy=true&numItineraries=15`;
+        )}&arriveBy=true&numItineraries=15&detailedTransfers=false`;
       }
     }
+
+    // Avvia il prefetch delle fermate circostanti in parallelo a MOTIS /plan (rimuove lo stadio dal percorso seriale)
+    prefetchTransitousStopsBoxes(effectiveOrigin, effectiveDest);
 
     try {
       const controller = new AbortController();
@@ -2048,25 +2146,46 @@ export async function getStationTransitBoard(options: {
       }
 
       const originLeaveEpochMs = !useArriveBy ? new Date(queryIso).getTime() : undefined;
-      await Promise.all(
-        itineraries.slice(0, 18).map(async (it) => {
-          const legsArr = Array.isArray(it?.legs) ? it.legs : [];
-          const trIdxs = legsArr
-            .map((l: any, idx: number) => (l?.mode && l.mode !== 'WALK' ? idx : -1))
-            .filter((idx: number) => idx >= 0);
-          if (trIdxs.length !== 1) return;
-          const tIdx = trIdxs[0];
-          const optLeg = await optimizeSingleLegStopsViaTrip({
-            leg: legsArr[tIdx],
-            originCoords: effectiveOrigin,
-            destCoords: effectiveDest,
-            originLeaveEpochMs,
-          });
-          if (optLeg !== legsArr[tIdx]) {
-            legsArr[tIdx] = optLeg;
-          }
-        })
-      );
+      // Raggruppa per pattern (linea|direzione|fermata salita|fermata discesa):
+      // sonda prima 1 corsa rappresentativa per pattern così i pattern già ottimali saltano /v5/trip per tutte le altre corse.
+      const singleLegTasks: { legsArr: any[]; tIdx: number; patternKey: string }[] = [];
+      for (const it of itineraries.slice(0, 18)) {
+        const legsArr = Array.isArray(it?.legs) ? it.legs : [];
+        const trIdxs = legsArr
+          .map((l: any, idx: number) => (l?.mode && l.mode !== 'WALK' ? idx : -1))
+          .filter((idx: number) => idx >= 0);
+        if (trIdxs.length !== 1) continue;
+        const tIdx = trIdxs[0];
+        const leg = legsArr[tIdx];
+        const patternKey = `${leg?.routeId || leg?.routeShortName || ''}|${leg?.directionId || ''}|${leg?.from?.stopId || ''}|${leg?.to?.stopId || ''}`;
+        singleLegTasks.push({ legsArr, tIdx, patternKey });
+      }
+      const firstByPattern: typeof singleLegTasks = [];
+      const restByPattern: typeof singleLegTasks = [];
+      const seenPatternKeys = new Set<string>();
+      for (const item of singleLegTasks) {
+        if (!seenPatternKeys.has(item.patternKey)) {
+          seenPatternKeys.add(item.patternKey);
+          firstByPattern.push(item);
+        } else {
+          restByPattern.push(item);
+        }
+      }
+      const runOptItem = async (item: (typeof singleLegTasks)[number]) => {
+        const optLeg = await optimizeSingleLegStopsViaTrip({
+          leg: item.legsArr[item.tIdx],
+          originCoords: effectiveOrigin,
+          destCoords: effectiveDest,
+          originLeaveEpochMs,
+        });
+        if (optLeg !== item.legsArr[item.tIdx]) {
+          item.legsArr[item.tIdx] = optLeg;
+        }
+      };
+      await Promise.all(firstByPattern.map(runOptItem));
+      if (restByPattern.length > 0) {
+        await Promise.all(restByPattern.map(runOptItem));
+      }
 
       // Risolve dinamicamente i tragitti pedonali reali su marciapiede per le fermate uniche
       // (eliminando giri viziosi da cortili interni OSM e velocità pedonali MOTIS troppo lente)
@@ -2179,8 +2298,15 @@ export async function getStationTransitBoard(options: {
 
       const pendingItems: {
         primaryLeg: any;
+        transitLegs: any[];
         draft: Omit<TransitDepartureItem, 'headsign'>;
       }[] = [];
+      const clockDiffMins = (startMins: number, endMins: number): number => {
+        if (startMins < 0 || endMins < 0) return 0;
+        let diff = endMins - startMins;
+        if (diff < -720) diff += 1440;
+        return Math.max(0, diff);
+      };
       const directLinesSet = new Set<string>();
       const seenTripIds = new Set<string>();
 
@@ -2236,6 +2362,42 @@ export async function getStationTransitBoard(options: {
         const finalDestCoords = { lat: destLat, lng: destLng };
         const originCoords = { lat: originLat, lng: originLng };
 
+        // Filtro direzionale dinamico generale (valido per qualsiasi linea e qualsiasi tratta):
+        // Scarta corse che vanno nel verso opposto, che non avvicinano sensibilmente alla destinazione
+        // (es. 1 fermata nel verso sbagliato + lunga camminata), o che compiono un intero giro circolare opposto.
+        const directOriginDestDist = haversineMeters(
+          { latitude: originCoords.lat, longitude: originCoords.lng },
+          { latitude: finalDestCoords.lat, longitude: finalDestCoords.lng }
+        );
+        if (directOriginDestDist > 250) {
+          const fromDistToDest = haversineMeters(
+            { latitude: rawFromCoords.lat, longitude: rawFromCoords.lng },
+            { latitude: finalDestCoords.lat, longitude: finalDestCoords.lng }
+          );
+          const toDistToDest = haversineMeters(
+            { latitude: rawToCoords.lat, longitude: rawToCoords.lng },
+            { latitude: finalDestCoords.lat, longitude: finalDestCoords.lng }
+          );
+          const fromDistToOrig = haversineMeters(
+            { latitude: rawFromCoords.lat, longitude: rawFromCoords.lng },
+            { latitude: originCoords.lat, longitude: originCoords.lng }
+          );
+          const toDistToOrig = haversineMeters(
+            { latitude: rawToCoords.lat, longitude: rawToCoords.lng },
+            { latitude: originCoords.lat, longitude: originCoords.lng }
+          );
+          const minRequiredProgress = Math.min(180, directOriginDestDist * 0.2);
+          // 1) Il tragitto sul mezzo deve effettivamente ridurre la distanza dalla destinazione
+          // 2) La fermata di salita deve trovarsi sul lato dell'origine e quella di discesa sul lato della destinazione
+          if (
+            toDistToDest > fromDistToDest - minRequiredProgress ||
+            fromDistToOrig >= fromDistToDest + 40 ||
+            toDistToDest >= toDistToOrig + 40
+          ) {
+            continue;
+          }
+        }
+
         const rawIntermediate: any[] = Array.isArray(primaryLeg.intermediateStops)
           ? primaryLeg.intermediateStops
           : [];
@@ -2249,6 +2411,52 @@ export async function getStationTransitBoard(options: {
               lng: snapped.lng,
             };
           });
+
+        // Verifica anti-loop sulle fermate intermedie (es. corsa circolare presa sul lato opposto che fa tutto il giro della città)
+        if (isDirect && intermediateStopCoords.length >= 2 && directOriginDestDist > 250) {
+          const fromStopDistOrig = haversineMeters(
+            { latitude: rawFromCoords.lat, longitude: rawFromCoords.lng },
+            { latitude: originCoords.lat, longitude: originCoords.lng }
+          );
+          let hasCircularLoopBack = false;
+          let maxDistFromOriginAlongRide = fromStopDistOrig;
+          let cumulativeStopsDist = 0;
+          let prevPt = { latitude: rawFromCoords.lat, longitude: rawFromCoords.lng };
+          for (const intStop of intermediateStopCoords) {
+            const curPt = { latitude: intStop.lat, longitude: intStop.lng };
+            cumulativeStopsDist += haversineMeters(prevPt, curPt);
+            prevPt = curPt;
+            const dOrig = haversineMeters(curPt, {
+              latitude: originCoords.lat,
+              longitude: originCoords.lng,
+            });
+            if (dOrig > maxDistFromOriginAlongRide) {
+              maxDistFromOriginAlongRide = dOrig;
+            } else if (
+              maxDistFromOriginAlongRide > Math.max(700, fromStopDistOrig + 450) &&
+              dOrig <= Math.max(240, fromStopDistOrig + 80)
+            ) {
+              hasCircularLoopBack = true;
+              break;
+            }
+          }
+          cumulativeStopsDist += haversineMeters(prevPt, {
+            latitude: rawToCoords.lat,
+            longitude: rawToCoords.lng,
+          });
+          const straightRideDist = haversineMeters(
+            { latitude: rawFromCoords.lat, longitude: rawFromCoords.lng },
+            { latitude: rawToCoords.lat, longitude: rawToCoords.lng }
+          );
+          if (
+            hasCircularLoopBack ||
+            (straightRideDist > 350 &&
+              cumulativeStopsDist > Math.max(1500, straightRideDist * 2.4))
+          ) {
+            continue;
+          }
+        }
+
         let intermediateStopNames = intermediateStopCoords.map((s) => s.name);
 
         // OTTIMIZZAZIONE GENERICA PER IL MINOR TEMPO A PIEDI:
@@ -2259,6 +2467,7 @@ export async function getStationTransitBoard(options: {
             direction,
             currentStopName: toStopName,
             currentStopCoords: toStopCoords,
+            boardStopCoords: fromStopCoords,
             targetCoords: finalDestCoords,
             intermediateStops: intermediateStopCoords,
             lineShort,
@@ -2274,7 +2483,7 @@ export async function getStationTransitBoard(options: {
         }
         const intermediateStopsCount = intermediateStopNames.length + 1;
 
-        // Decodifica le polilinee reali del mezzo e dei tratti a piedi
+        // Decodifica le polilinee reali del mezzo e dei tratti a piedi (singolo passaggio di pruning in resolveOptimizedTransitPolyline)
         const rawTransitPolyline: LatLngPoint[] = [];
         for (const tl of transitLegs) {
           const pts = decodeEncodedPolyline(
@@ -2283,16 +2492,13 @@ export async function getStationTransitBoard(options: {
           );
           rawTransitPolyline.push(...pts);
         }
-        const smoothedRawTransit = rawTransitPolyline.length >= 3
-          ? pruneAnomalousLoopsAndSpikes(rawTransitPolyline)
-          : rawTransitPolyline;
 
         const optimizedTransitPolyline = resolveOptimizedTransitPolyline(
           primaryLeg.from?.name || '',
           lastTransitLeg.to?.name || '',
           fromStopCoords,
           toStopCoords,
-          smoothedRawTransit
+          rawTransitPolyline
         );
         const transitPolyline = ensureContinuousTransitPolyline(
           { latitude: fromStopCoords.lat, longitude: fromStopCoords.lng },
@@ -2352,27 +2558,29 @@ export async function getStationTransitBoard(options: {
           walkAfterPolyline.push(...preAfter.polyline);
         }
 
-        // Se l'utente è già in stazione (andata) e la fermata di salita fa parte dello stesso hub di stazione,
-        // considera il tragitto direttamente dalla fermata del mezzo senza inserire una camminata fittizia precedente.
-        const isAtOriginStationHub =
+        // Se l'utente parte dai binari di una stazione reale in andata (non da GPS libero),
+        // calcola sempre il tempo reale a piedi dal binario alla fermata di salita del mezzo/metro,
+        // garantendo una stima realistica minima per uscita banchina/sottopassaggio anche dentro l'hub stazione.
+        const isOriginRailwayStation =
           direction === 'to_campus' &&
+          Boolean(stationName) &&
+          !stationName.toLowerCase().includes('mia posizione');
+        const isAtOriginStationHub =
+          isOriginRailwayStation &&
           isStopInsideStationHub(
             originCoords,
             fromStopCoords,
             stationName,
             primaryLeg.from?.name || ''
           );
-        const effectiveOriginCoords = isAtOriginStationHub
-          ? fromStopCoords
-          : originCoords;
-        if (isAtOriginStationHub) {
-          walkBeforePolyline.length = 0;
-        }
+        const effectiveOriginCoords = originCoords;
 
         // Calcolo verificato della camminata reale (rete pedonale urbana reale senza deviazioni da cortili chiusi)
-        const realWalkBefore = isAtOriginStationHub
-          ? { minutes: 0, distanceMeters: 0 }
-          : calculateRealWalkMinutes(originCoords, fromStopCoords, walkBeforePolyline);
+        const realWalkBefore = calculateRealWalkMinutes(
+          originCoords,
+          fromStopCoords,
+          walkBeforePolyline
+        );
         const realWalkAfter = calculateRealWalkMinutes(toStopCoords, finalDestCoords, walkAfterPolyline);
 
         const walkBeforeSec = walkBeforeLegs.reduce(
@@ -2380,21 +2588,60 @@ export async function getStationTransitBoard(options: {
           0
         );
         const apiBeforeMin = Math.round(walkBeforeSec / 60);
-        const walkBeforeMinutes = isAtOriginStationHub
-          ? 0
-          : preBefore
-            ? preBefore.minutes
-            : apiBeforeMin > 0 && Math.abs(apiBeforeMin - realWalkBefore.minutes) <= 1
-              ? apiBeforeMin
-              : realWalkBefore.minutes;
+        const rawWalkBeforeMinutes = preBefore
+          ? preBefore.minutes
+          : apiBeforeMin > 0 && Math.abs(apiBeforeMin - realWalkBefore.minutes) <= 1
+            ? apiBeforeMin
+            : realWalkBefore.minutes;
 
-        // 2) Tragitto a bordo del mezzo fino alla fermata di discesa (inVehicle)
-        const transitStartMs = new Date(primaryLeg.startTime).getTime();
-        const transitEndMs = new Date(lastTransitLeg.endTime || primaryLeg.endTime).getTime();
+        let walkBeforeMinutes = rawWalkBeforeMinutes;
+        if (isOriginRailwayStation) {
+          const stLow = stationName.toLowerCase();
+          const isMajorRailHub =
+            stLow.includes('termini') ||
+            stLow.includes('tiburtina') ||
+            stLow.includes('ostiense') ||
+            stLow.includes('trastevere');
+          const minPlatformWalk = isAtOriginStationHub
+            ? isMajorRailHub && (mode === 'metro' || realWalkBefore.distanceMeters >= 80)
+              ? 3
+              : 2
+            : 1;
+          walkBeforeMinutes = Math.max(minPlatformWalk, rawWalkBeforeMinutes);
+        }
+
+        // 2) Tragitto sui mezzi dalla prima salita all'ultima discesa (inVehicle, coerente al minuto con HH:MM)
+        const activeDepTimeStr = isLiveContext ? estDep : schedDep;
+        const schedAlight = formatIsoToHHMM(
+          lastTransitLeg.scheduledEndTime ||
+            lastTransitLeg.endTime ||
+            primaryLeg.scheduledEndTime ||
+            primaryLeg.endTime
+        );
+        const estAlight = formatIsoToHHMM(lastTransitLeg.endTime || primaryLeg.endTime);
+        const activeAlightTimeStr = isLiveContext ? estAlight : schedAlight;
+        const activeDepMins = parseHHMMToMins(activeDepTimeStr);
+        const activeAlightMins = parseHHMMToMins(activeAlightTimeStr);
+
+        const transitStartMs = new Date(
+          isLiveContext
+            ? primaryLeg.startTime
+            : primaryLeg.scheduledStartTime || primaryLeg.startTime
+        ).getTime();
+        const transitEndMs = new Date(
+          isLiveContext
+            ? lastTransitLeg.endTime || primaryLeg.endTime
+            : lastTransitLeg.scheduledEndTime ||
+              lastTransitLeg.endTime ||
+              primaryLeg.scheduledEndTime ||
+              primaryLeg.endTime
+        ).getTime();
         const inVehicleMinutes =
-          !isNaN(transitStartMs) && !isNaN(transitEndMs) && transitEndMs > transitStartMs
-            ? Math.max(1, Math.round((transitEndMs - transitStartMs) / 60000))
-            : Math.max(1, Math.round((primaryLeg.duration || 420) / 60));
+          activeDepMins >= 0 && activeAlightMins >= 0
+            ? Math.max(1, clockDiffMins(activeDepMins, activeAlightMins))
+            : !isNaN(transitStartMs) && !isNaN(transitEndMs) && transitEndMs > transitStartMs
+              ? Math.max(1, Math.round((transitEndMs - transitStartMs) / 60000))
+              : Math.max(1, Math.round((primaryLeg.duration || 420) / 60));
 
         // 3) Camminata dalla fermata di discesa fino alla destinazione finale (walkAfter)
         const walkAfterSec = walkAfterLegs.reduce(
@@ -2416,8 +2663,10 @@ export async function getStationTransitBoard(options: {
           walkBeforeMinutes + durationMinutes
         );
 
-        const activeDepTimeStr = isLiveContext ? estDep : schedDep;
-        const activeDepMins = parseHHMMToMins(activeDepTimeStr);
+        const normalizedAlightTime =
+          activeDepMins >= 0
+            ? minsToHHMM(activeDepMins + inVehicleMinutes)
+            : activeAlightTimeStr || alightTime;
         const arrivalTime =
           activeDepMins >= 0
             ? minsToHHMM(activeDepMins + durationMinutes)
@@ -2480,13 +2729,27 @@ export async function getStationTransitBoard(options: {
               ? 'rail'
               : 'bus';
           const tlLine = tl.routeShortName || (tlMode === 'metro' ? 'Metro B' : 'Bus');
-          const startD = tl.startTime ? new Date(tl.startTime) : null;
-          const endD = tl.endTime ? new Date(tl.endTime) : null;
+          const effStartIso = isLiveContext
+            ? tl.startTime
+            : tl.scheduledStartTime || tl.startTime;
+          const effEndIso = isLiveContext
+            ? tl.endTime
+            : tl.scheduledEndTime || tl.endTime;
+          const startD = effStartIso ? new Date(effStartIso) : null;
+          const endD = effEndIso ? new Date(effEndIso) : null;
           const startM = startD && !isNaN(startD.getTime()) ? startD.getHours() * 60 + startD.getMinutes() : -1;
           const endM = endD && !isNaN(endD.getTime()) ? endD.getHours() * 60 + endD.getMinutes() : -1;
-          const dur = typeof tl.duration === 'number' && tl.duration > 0
-            ? Math.max(1, Math.round(tl.duration / 60))
-            : endM >= 0 && startM >= 0 && endM > startM ? endM - startM : 5;
+          const dur =
+            startM >= 0 && endM >= 0
+              ? Math.max(1, clockDiffMins(startM, endM))
+              : typeof tl.duration === 'number' && tl.duration > 0
+                ? Math.max(1, Math.round(tl.duration / 60))
+                : 5;
+          const legDelaySec =
+            typeof tl.departureDelay === 'number' ? tl.departureDelay : 0;
+          const legDelayMins = Math.max(0, Math.round(legDelaySec / 60));
+          const legIsLive =
+            tl.realTime === true || tl.departureTimestampReason === 'REALTIME';
           const intStops = Array.isArray(tl.intermediateStops)
             ? tl.intermediateStops.filter((s: any) => s?.name).map((s: any) => formatStopDisplayName(s.name))
             : [];
@@ -2528,29 +2791,40 @@ export async function getStationTransitBoard(options: {
             fromStopCoords: snappedLegFrom,
             toStopCoords: snappedLegTo,
             departureTime: startM >= 0 ? minsToHHMM(startM) : undefined,
+            scheduledDepartureTime: formatIsoToHHMM(tl.scheduledStartTime || tl.startTime) || undefined,
             arrivalTime: endM >= 0 ? minsToHHMM(endM) : undefined,
+            delayMinutes: legDelayMins,
+            isLive: legIsLive,
             durationMinutes: dur,
-            intermediateStopsCount: intStops.length,
+            intermediateStopsCount: intStops.length + 1,
             intermediateStopNames: intStops.length > 0 ? intStops : undefined,
             polyline: continuousLegPolyline,
           };
         });
 
-        // Estrai i tratti a piedi di interscambio tra un mezzo e l'altro
+        // Estrai i tratti a piedi di interscambio allineati 1-a-1 per ogni coppia di tratte consecutive
+        const transitLegIndices: number[] = [];
+        for (let i = 0; i < legs.length; i++) {
+          if (legs[i].mode !== 'WALK') transitLegIndices.push(i);
+        }
         const transferWalkPolylines: LatLngPoint[][] = [];
-        for (let i = firstTransitIdx + 1; i < lastTransitIdx; i++) {
-          const l = legs[i];
-          if (l.mode === 'WALK') {
-            const pts = decodeEncodedPolyline(l.legGeometry?.points, l.legGeometry?.precision || 6);
-            if (pts.length >= 2) {
-              transferWalkPolylines.push(pts);
-            } else if (l.from?.lat && l.to?.lat) {
-              transferWalkPolylines.push([
-                { latitude: l.from.lat, longitude: l.from.lon },
-                { latitude: l.to.lat, longitude: l.to.lon },
-              ]);
+        for (let k = 0; k < transitLegIndices.length - 1; k++) {
+          const gapPts: LatLngPoint[] = [];
+          for (let i = transitLegIndices[k] + 1; i < transitLegIndices[k + 1]; i++) {
+            const l = legs[i];
+            if (l.mode === 'WALK') {
+              const pts = decodeEncodedPolyline(l.legGeometry?.points, l.legGeometry?.precision || 6);
+              if (pts.length >= 2) {
+                gapPts.push(...pts);
+              } else if (l.from?.lat && l.to?.lat) {
+                gapPts.push(
+                  { latitude: l.from.lat, longitude: l.from.lon },
+                  { latitude: l.to.lat, longitude: l.to.lon }
+                );
+              }
             }
           }
+          transferWalkPolylines.push(gapPts);
         }
 
         const transferSummaryStr = transitLegs
@@ -2566,6 +2840,7 @@ export async function getStationTransitBoard(options: {
 
         pendingItems.push({
           primaryLeg,
+          transitLegs,
           draft: {
             id: `transitous-${itinIdx}-${tripKey}`,
             line: !isDirect
@@ -2582,7 +2857,7 @@ export async function getStationTransitBoard(options: {
               ),
             scheduledTime: schedDep,
             estimatedTime: estDep,
-            alightingTime: alightTime,
+            alightingTime: normalizedAlightTime,
             arrivalTime,
             delayMinutes: Math.max(0, delayMins),
             isLive,
@@ -2615,8 +2890,9 @@ export async function getStationTransitBoard(options: {
               walkBeforePolyline.length > 0 ? walkBeforePolyline : undefined,
             walkAfterPolyline:
               walkAfterPolyline.length > 0 ? walkAfterPolyline : undefined,
-            transferWalkPolylines:
-              transferWalkPolylines.length > 0 ? transferWalkPolylines : undefined,
+            transferWalkPolylines: transferWalkPolylines.some((pts) => pts.length >= 2)
+              ? transferWalkPolylines
+              : undefined,
             crowdingLevel,
             operator: primaryLeg.agencyName || (mode === 'metro' ? 'ATAC Metro Roma' : 'ATAC Roma'),
           },
@@ -2685,12 +2961,32 @@ export async function getStationTransitBoard(options: {
         }
       }
 
-      // Risolve in parallelo la direzione reale per tutte le corse utili (gestendo linee circolari come il 71 in modo generale)
+      // Risolve in parallelo la direzione reale per tutte le corse utili (inclusa ogni tratta nei viaggi con cambio)
       const finalDepartures: TransitDepartureItem[] = await Promise.all(
-        filteredPending.map(async (item) => ({
-          ...item.draft,
-          headsign: await resolveVerifiedHeadsign(item.primaryLeg),
-        }))
+        filteredPending.map(async (item) => {
+          const primaryHeadsign = await resolveVerifiedHeadsign(item.primaryLeg);
+          let resolvedLegs = item.draft.legs;
+          if (
+            resolvedLegs &&
+            resolvedLegs.length > 1 &&
+            item.transitLegs.length === resolvedLegs.length
+          ) {
+            const legHeadsigns = await Promise.all(
+              item.transitLegs.map((tl, idx) =>
+                idx === 0 ? Promise.resolve(primaryHeadsign) : resolveVerifiedHeadsign(tl)
+              )
+            );
+            resolvedLegs = resolvedLegs.map((leg, idx) => ({
+              ...leg,
+              headsign: legHeadsigns[idx] || leg.headsign,
+            }));
+          }
+          return {
+            ...item.draft,
+            headsign: primaryHeadsign,
+            legs: resolvedLegs,
+          };
+        })
       );
 
       const sortClockRef = isLiveContext

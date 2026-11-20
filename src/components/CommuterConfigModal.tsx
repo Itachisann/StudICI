@@ -47,7 +47,11 @@ import {
   getAllPreferredTrains,
   NormalizedPreferredTrain,
 } from "../utils/preferredTrains";
-import { ALL_STATIONS, searchStations } from "../utils/trenitaliaApi";
+import {
+  ALL_STATIONS,
+  searchStations,
+  searchStationsLocal,
+} from "../utils/trenitaliaApi";
 import { SwipeToDeleteRow } from "./SwipeToDeleteRow";
 
 const isNativeIos =
@@ -518,12 +522,14 @@ function CommuterConfigModalContent({
     if (
       !isUnconfigured ||
       initCarMode !== "yes" ||
+      placeSearchActive ||
       initOriginAddress.trim().length < 2 ||
       !initDepartureStation
     ) {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const fetchDriveEstimate = async () => {
       setInitCalculatingDriving(true);
       try {
@@ -532,8 +538,10 @@ function CommuterConfigModalContent({
           initDepartureStation.shortName || initDepartureStation.name,
           undefined,
           initOriginCoords,
+          undefined,
+          controller.signal,
         );
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           const ceilDuration = Math.ceil(est.durationMinutes);
           setInitDrivingEstimate({
             ...est,
@@ -541,7 +549,9 @@ function CommuterConfigModalContent({
           });
         }
       } catch (err) {
-        console.warn("Errore calcolo guida:", err);
+        if (!controller.signal.aborted) {
+          console.warn("Errore calcolo guida:", err);
+        }
       } finally {
         if (!cancelled) setInitCalculatingDriving(false);
       }
@@ -550,23 +560,42 @@ function CommuterConfigModalContent({
     const timer = setTimeout(fetchDriveEstimate, 350);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [
     isUnconfigured,
     initCarMode,
+    placeSearchActive,
     initOriginAddress,
     initOriginCoords,
     initDepartureStation,
   ]);
 
-  // Calcolo automatico della stima di guida all'apertura o modifica indirizzo / stazione (modalità modifica)
+  // Calcolo automatico della stima di guida in modalità modifica (salta se l'utente sta ancora digitando o se il valore salvato è già valido all'apertura)
   const originCoords = localConfig.originCoords;
+  const initialEditDrivingSigRef = useRef<string | null>(null);
+  const initialHasSavedDriveRef = useRef<boolean>(
+    Boolean(
+      config.carLeg.enabled &&
+        (config.carLeg.distanceKm ?? 0) > 0 &&
+        (config.carLeg.durationMinutes ?? 0) > 0,
+    ),
+  );
   useEffect(() => {
-    if (isUnconfigured) return;
+    if (isUnconfigured || !localConfig.carLeg.enabled || placeSearchActive) {
+      return;
+    }
+    const currentSig = `${localConfig.originAddress.trim()}|${originCoords?.lat?.toFixed(4) ?? ""}|${originCoords?.lon?.toFixed(4) ?? ""}|${localConfig.departureStation.shortName || localConfig.departureStation.name}`;
+    if (initialEditDrivingSigRef.current === null) {
+      initialEditDrivingSigRef.current = currentSig;
+      if (initialHasSavedDriveRef.current) {
+        return;
+      }
+    }
     let cancelled = false;
+    const controller = new AbortController();
     const fetchDriveEstimate = async () => {
-      if (!localConfig.carLeg.enabled) return;
       setCalculatingDriving(true);
       try {
         const est = await calculateDrivingEstimate(
@@ -575,8 +604,10 @@ function CommuterConfigModalContent({
             localConfig.departureStation.name,
           undefined,
           originCoords,
+          undefined,
+          controller.signal,
         );
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           const baseDuration = Math.ceil(
             est.baseDurationMinutes || est.durationMinutes,
           );
@@ -608,7 +639,9 @@ function CommuterConfigModalContent({
           }));
         }
       } catch (err) {
-        console.warn("Errore calcolo guida:", err);
+        if (!controller.signal.aborted) {
+          console.warn("Errore calcolo guida:", err);
+        }
       } finally {
         if (!cancelled) setCalculatingDriving(false);
       }
@@ -617,10 +650,12 @@ function CommuterConfigModalContent({
     const timer = setTimeout(fetchDriveEstimate, 400);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [
     isUnconfigured,
+    placeSearchActive,
     localConfig.originAddress,
     originCoords,
     localConfig.departureStation.shortName,
@@ -667,18 +702,68 @@ function CommuterConfigModalContent({
     [isUnconfigured],
   );
 
+  const stationSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const stationSearchAbortRef = useRef<AbortController | null>(null);
+  const stationSearchSeqRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (stationSearchTimerRef.current) {
+        clearTimeout(stationSearchTimerRef.current);
+      }
+      stationSearchAbortRef.current?.abort();
+    };
+  }, []);
+
   const handleStationSearchChange = useCallback((text: string) => {
     setStationSearchQuery(text);
-    if (!text.trim()) {
+    if (stationSearchTimerRef.current) {
+      clearTimeout(stationSearchTimerRef.current);
+      stationSearchTimerRef.current = null;
+    }
+    stationSearchAbortRef.current?.abort();
+    stationSearchAbortRef.current = null;
+
+    const trimmed = text.trim();
+    const seq = ++stationSearchSeqRef.current;
+
+    if (!trimmed) {
       setFilteredStations(ALL_STATIONS);
       setSearchingStations(false);
       return;
     }
-    setSearchingStations(true);
-    searchStations(text).then((res) => {
-      setFilteredStations(res);
+
+    // Risultati locali immediati (0ms, zero rete)
+    const localHits = searchStationsLocal(trimmed);
+    setFilteredStations(localHits.matches);
+
+    if (trimmed.length < 2 || localHits.strongCount >= 5) {
       setSearchingStations(false);
-    });
+      return;
+    }
+
+    setSearchingStations(true);
+    stationSearchTimerRef.current = setTimeout(() => {
+      const controller = new AbortController();
+      stationSearchAbortRef.current = controller;
+      searchStations(trimmed, controller.signal)
+        .then((res) => {
+          if (
+            !controller.signal.aborted &&
+            seq === stationSearchSeqRef.current
+          ) {
+            setFilteredStations(res);
+            setSearchingStations(false);
+          }
+        })
+        .catch(() => {
+          if (seq === stationSearchSeqRef.current) {
+            setSearchingStations(false);
+          }
+        });
+    }, 250);
   }, []);
 
   const handleSelectDeparture = useCallback((station: StationInfo) => {

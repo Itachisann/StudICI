@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { AppState, Platform, StyleSheet, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { AppState, type ColorValue, Platform, StyleSheet, Alert } from 'react-native';
 import { Tabs as ExpoTabs, router } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { BlurView } from 'expo-blur';
@@ -11,6 +11,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Linking from 'expo-linking';
 import { linkDeviceWithCode, subscribeToAppReset, subscribeToLiveSync } from '@/utils/cloudSync';
+import { subscribeToDegreeChanges, warmCourseStartupData } from '@/utils/scraper';
 import { refreshCommuterAlarmsInBackground } from '@/utils/alarmSync';
 import { pullExternalAppleCalendarChanges } from '@/utils/appleCalendar';
 import { prefetchViaggioStartupData } from '@/utils/commuterOptimizer';
@@ -56,6 +57,44 @@ ensureStrikeNotificationHandler();
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isNativeComponentAvailable = Platform.OS === 'ios' && !isExpoGo;
 
+const NATIVE_TAB_OPTIONS = {
+  index: { title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' as const }) },
+  viaggio: { title: 'Viaggio', tabBarIcon: () => ({ sfSymbol: 'tram.fill' as const }) },
+  aule: { title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' as const }) },
+  settings: { title: 'Profilo', tabBarIcon: () => ({ sfSymbol: 'person.crop.circle' as const }) },
+};
+
+const EXPO_TAB_OPTIONS = {
+  index: {
+    title: 'Orario',
+    tabBarIcon: ({ color, size }: { color: ColorValue; size: number }) => (
+      <Ionicons name="calendar-outline" size={size} color={color} />
+    ),
+  },
+  viaggio: {
+    title: 'Viaggio',
+    tabBarIcon: ({ color, size }: { color: ColorValue; size: number }) => (
+      <Ionicons name="train-outline" size={size} color={color} />
+    ),
+  },
+  aule: {
+    title: 'Aule',
+    tabBarIcon: ({ color, size }: { color: ColorValue; size: number }) => (
+      <Ionicons name="map-outline" size={size} color={color} />
+    ),
+  },
+  settings: {
+    title: 'Profilo',
+    tabBarIcon: ({ color, size }: { color: ColorValue; size: number }) => (
+      <Ionicons name="person-circle-outline" size={size} color={color} />
+    ),
+  },
+};
+
+const renderExpoTabBarBackground = () => (
+  <BlurView tint="dark" intensity={95} style={StyleSheet.absoluteFill} />
+);
+
 function AppLayoutContent() {
   const { theme } = useTheme();
   const [degreeUrl, setDegreeUrl] = useState<string | null>(null);
@@ -67,6 +106,9 @@ function AppLayoutContent() {
     try {
       const url = await AsyncStorage.getItem('selectedDegreeUrl');
       const name = await AsyncStorage.getItem('selectedDegreeName');
+      if (url) {
+        await warmCourseStartupData(url).catch(() => {});
+      }
       setStartupCheckDone(true); // L'onboarding ha appena scaricato tutto al 100%
       setDegreeUrl(url);
       if (name) setDegreeName(name);
@@ -116,28 +158,28 @@ function AppLayoutContent() {
       if (isMounted) setIsReady(true);
     });
 
-    const interval = setInterval(() => {
-      AsyncStorage.getItem('selectedDegreeUrl').then(url => {
-        if (isMounted) {
-          setDegreeUrl(prev => {
-            if (prev !== url) {
-              if (!url) {
-                setStartupCheckDone(false);
-              } else {
-                // Se il corso è appena stato configurato/cambiato, i dati sono già freschi al 100%
-                setStartupCheckDone(true);
-              }
-              return url;
-            }
-            return prev;
-          });
+    const unsubDegree = subscribeToDegreeChanges((url, name) => {
+      if (!isMounted) return;
+      if (name !== undefined) {
+        setDegreeName(name);
+      }
+      setDegreeUrl((prev) => {
+        if (prev !== url) {
+          if (!url) {
+            setStartupCheckDone(false);
+          } else {
+            // Se il corso è appena stato configurato/cambiato, i dati sono già freschi al 100%
+            setStartupCheckDone(true);
+          }
+          return url;
         }
-      }).catch(() => {});
-    }, 1000);
+        return prev;
+      });
+    });
 
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      unsubDegree();
     };
   }, []);
 
@@ -149,15 +191,28 @@ function AppLayoutContent() {
       setStartupCheckDone(false);
     });
 
-    const unsubSync = subscribeToLiveSync((status, updated) => {
+    const unsubSync = subscribeToLiveSync((_status, updated) => {
       if (updated) {
-        AsyncStorage.getItem('selectedDegreeUrl').then((url) => {
-          if (!url) {
-            setDegreeUrl(null);
-            setDegreeName('');
-            setStartupCheckDone(false);
-          }
-        }).catch(() => {});
+        AsyncStorage.multiGet(['selectedDegreeUrl', 'selectedDegreeName'])
+          .then((pairs) => {
+            const url = pairs[0]?.[1] || null;
+            const name = pairs[1]?.[1] || '';
+            if (!url) {
+              setDegreeUrl(null);
+              setDegreeName('');
+              setStartupCheckDone(false);
+            } else {
+              setDegreeName(name);
+              setDegreeUrl((prev) => {
+                if (prev !== url) {
+                  setStartupCheckDone(true);
+                  return url;
+                }
+                return prev;
+              });
+            }
+          })
+          .catch(() => {});
       }
     });
 
@@ -269,6 +324,42 @@ function AppLayoutContent() {
     return () => cancelAnimationFrame(frame);
   }, [isReady, startupCheckDone, degreeUrl]);
 
+  // Mantiene tutte e 4 le schermate montate e visivamente pronte in memoria (freezeOnBlur: false, lazy: false)
+  // per evitare il flash nero causato dalla sospensione React Freeze/Suspense prima del cambio tab nativo.
+  const nativeScreenOptions = useMemo(
+    () => ({
+      tabBarActiveTintColor: theme.primary,
+      lazy: false,
+      freezeOnBlur: false,
+      sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
+    }),
+    [theme.primary],
+  );
+
+  const expoScreenOptions = useMemo(
+    () => ({
+      headerShown: false,
+      lazy: false,
+      freezeOnBlur: false,
+      animation: 'none' as const,
+      sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
+      tabBarStyle: {
+        position: 'absolute' as const,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        elevation: 0,
+        backgroundColor: 'transparent',
+        borderTopWidth: 0,
+        display: (!degreeUrl ? 'none' : 'flex') as 'none' | 'flex',
+      },
+      tabBarBackground: renderExpoTabBarBackground,
+      tabBarActiveTintColor: theme.primary,
+      tabBarInactiveTintColor: '#8e8e93',
+    }),
+    [theme.primary, degreeUrl],
+  );
+
   if (!isReady) {
     return (
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }} />
@@ -303,18 +394,11 @@ function AppLayoutContent() {
     return (
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
         <StatusBar style="light" />
-        <NativeTabs
-          screenOptions={{
-            tabBarActiveTintColor: theme.primary,
-            lazy: false,
-            freezeOnBlur: false,
-            sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
-          }}
-        >
-          <NativeTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: () => ({ sfSymbol: 'calendar' }) }} />
-          <NativeTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: () => ({ sfSymbol: 'tram.fill' }) }} />
-          <NativeTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: () => ({ sfSymbol: 'map' }) }} />
-          <NativeTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: () => ({ sfSymbol: 'person.crop.circle' }) }} />
+        <NativeTabs screenOptions={nativeScreenOptions}>
+          <NativeTabs.Screen name="index" options={NATIVE_TAB_OPTIONS.index} />
+          <NativeTabs.Screen name="viaggio" options={NATIVE_TAB_OPTIONS.viaggio} />
+          <NativeTabs.Screen name="aule" options={NATIVE_TAB_OPTIONS.aule} />
+          <NativeTabs.Screen name="settings" options={NATIVE_TAB_OPTIONS.settings} />
         </NativeTabs>
       </GestureHandlerRootView>
     );
@@ -323,26 +407,11 @@ function AppLayoutContent() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: UNIFORM_SCREEN_BG }}>
       <StatusBar style="light" />
-      <ExpoTabs
-        screenOptions={{
-          headerShown: false,
-          lazy: false,
-          freezeOnBlur: false,
-          sceneStyle: { backgroundColor: UNIFORM_SCREEN_BG },
-          tabBarStyle: {
-            position: 'absolute', bottom: 0, left: 0, right: 0, elevation: 0,
-            backgroundColor: 'transparent', borderTopWidth: 0,
-            display: !degreeUrl ? 'none' : 'flex' // Nasconde la tab bar anche in /settings se in fase di onboarding
-          },
-          tabBarBackground: () => <BlurView tint="dark" intensity={95} style={StyleSheet.absoluteFill} />,
-          tabBarActiveTintColor: theme.primary,
-          tabBarInactiveTintColor: '#8e8e93',
-        }}
-      >
-        <ExpoTabs.Screen name="index" options={{ title: 'Orario', tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} /> }} />
-        <ExpoTabs.Screen name="viaggio" options={{ title: 'Viaggio', tabBarIcon: ({ color, size }) => <Ionicons name="train-outline" size={size} color={color} /> }} />
-        <ExpoTabs.Screen name="aule" options={{ title: 'Aule', tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size} color={color} /> }} />
-        <ExpoTabs.Screen name="settings" options={{ title: 'Profilo', tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} /> }} />
+      <ExpoTabs detachInactiveScreens={false} screenOptions={expoScreenOptions}>
+        <ExpoTabs.Screen name="index" options={EXPO_TAB_OPTIONS.index} />
+        <ExpoTabs.Screen name="viaggio" options={EXPO_TAB_OPTIONS.viaggio} />
+        <ExpoTabs.Screen name="aule" options={EXPO_TAB_OPTIONS.aule} />
+        <ExpoTabs.Screen name="settings" options={EXPO_TAB_OPTIONS.settings} />
       </ExpoTabs>
     </GestureHandlerRootView>
   );

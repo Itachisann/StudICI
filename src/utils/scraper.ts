@@ -3,8 +3,118 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseScheduleCells, parseTabsWithAI, parseHeaderWithGemini, cleanTabNameFallback, extractDeterministicSemester, hasDateInfo, fallbackParse } from './aiParser';
 import { getCanonicalRoomKey, normalizeDisplayName, formatSapienzaAddress, SAPIENZA_BUILDINGS, resolveClassroom } from './classroomLocations';
 
-// Cache in RAM per il testo della Mappa Edifici del corso (0ms latency)
+export interface WarmCourseStartupSnapshot {
+  degreeUrl: string;
+  defaultTabUrl: string | null;
+  tabs: Tab[];
+  schedules: Record<string, ScheduleData>;
+  selectedTab: Tab;
+  selectedSchedule: ScheduleData | null;
+}
+
+// Cache in RAM per il testo della Mappa Edifici e per gli orari completi del corso (0ms latency)
 const memoryMapTextCache = new Map<string, string>();
+const memoryAllSchedulesCache = new Map<
+  string,
+  { tabs: Tab[]; schedules: Record<string, ScheduleData>; fingerprint?: string }
+>();
+let warmCourseStartupSnapshot: WarmCourseStartupSnapshot | null = null;
+
+export function clearScraperMemoryCache(): void {
+  memoryAllSchedulesCache.clear();
+  memoryMapTextCache.clear();
+  warmCourseStartupSnapshot = null;
+}
+
+/**
+ * Restituisce in modo sincrono (0ms) lo snapshot del corso già pre-caricato in RAM durante
+ * StartupCheckScreen / onboarding, evitando spinner di caricamento al primo frame di Orario/Aule.
+ */
+export function getWarmCourseStartupSnapshot(
+  degreeUrl?: string | null
+): WarmCourseStartupSnapshot | null {
+  if (!warmCourseStartupSnapshot) return null;
+  if (degreeUrl && warmCourseStartupSnapshot.degreeUrl !== degreeUrl) {
+    return null;
+  }
+  return warmCourseStartupSnapshot;
+}
+
+/**
+ * Pre-carica in RAM (solo AsyncStorage / cache locale, 0 byte di rete) tabs, orari e canale
+ * predefinito del corso così le schermate Orario e Aule si aprono già complete sul frame 0.
+ */
+export async function warmCourseStartupData(
+  degreeUrl: string
+): Promise<WarmCourseStartupSnapshot | null> {
+  if (!degreeUrl) return null;
+  try {
+    const cacheKey = `allSchedules_v8_${degreeUrl}`;
+    const perCourseTabKey = `defaultTabUrl_${degreeUrl}`;
+    let courseData = memoryAllSchedulesCache.get(degreeUrl) || null;
+
+    const keysToRead = courseData
+      ? [perCourseTabKey, 'defaultTabUrl']
+      : [perCourseTabKey, 'defaultTabUrl', cacheKey];
+    const pairs = await AsyncStorage.multiGet(keysToRead);
+
+    const defaultTabUrl = pairs[0]?.[1] || pairs[1]?.[1] || null;
+    if (!courseData) {
+      const raw = pairs[2]?.[1];
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.tabs) && parsed.tabs.length > 0 && parsed.schedules) {
+        courseData = {
+          tabs: parsed.tabs,
+          schedules: parsed.schedules,
+          fingerprint: parsed.fingerprint,
+        };
+        memoryAllSchedulesCache.set(degreeUrl, courseData);
+      }
+    }
+
+    if (!courseData || courseData.tabs.length === 0) return null;
+
+    const selectedTab =
+      (defaultTabUrl
+        ? courseData.tabs.find((t) => t.url === defaultTabUrl)
+        : undefined) || courseData.tabs[0];
+    const selectedSchedule =
+      courseData.schedules[selectedTab.url] ||
+      courseData.schedules[selectedTab.name] ||
+      null;
+
+    warmCourseStartupSnapshot = {
+      degreeUrl,
+      defaultTabUrl,
+      tabs: courseData.tabs,
+      schedules: courseData.schedules,
+      selectedTab,
+      selectedSchedule,
+    };
+    return warmCourseStartupSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+type DegreeChangeListener = (url: string | null, name?: string) => void;
+const degreeChangeListeners = new Set<DegreeChangeListener>();
+
+export function subscribeToDegreeChanges(listener: DegreeChangeListener): () => void {
+  degreeChangeListeners.add(listener);
+  return () => {
+    degreeChangeListeners.delete(listener);
+  };
+}
+
+export function notifyDegreeChanged(url: string | null, name?: string): void {
+  degreeChangeListeners.forEach((cb) => {
+    try {
+      cb(url, name);
+    } catch {}
+  });
+}
 
 // Funzione di hashing (djb2) per rilevare cambiamenti nel foglio
 function hashCode(str: string): string {
@@ -63,19 +173,16 @@ export function cleanTdCellHtml(tdTag: string, innerHtml: string, classBgColors:
 }
 
 /**
- * Estrae un'impronta digitale (fingerprint) deterministica del foglio.
- * Rimuove i nonce e gli script dinamici generati a ogni richiesta da Google Sheets
- * ed estrae il testo effettivo di tutte le celle (intestazione, avvisi, aule, lezioni),
- * escludendo i testi invisibili di padding.
+ * Estrae le righe testuali pulite (rimuovendo script, nonce e span invisibili) in un'unica passata HTML.
  */
-export function extractSheetContentFingerprint(html: string): string {
-  if (!html) return '';
+function extractRowsFromHtml(html: string): string[][] {
+  if (!html) return [];
   const clean = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/nonce="[^"]*"/gi, '');
 
   const classBgColors = extractClassBgColors(clean);
-  const rows: string[] = [];
+  const rows: string[][] = [];
   const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let trMatch;
   while ((trMatch = trRegex.exec(clean)) !== null) {
@@ -85,11 +192,33 @@ export function extractSheetContentFingerprint(html: string): string {
     while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
       row.push(cleanTdCellHtml(tdMatch[1], tdMatch[2], classBgColors));
     }
-    if (row.some(Boolean)) {
-      rows.push(row.join('|'));
+    if (row.length > 0) {
+      rows.push(row);
     }
   }
-  return hashCode(rows.join('\n'));
+  return rows;
+}
+
+function computeRowsFingerprint(rows: string[][]): string {
+  const nonEmpty: string[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.some(Boolean)) {
+      nonEmpty.push(row.join('|'));
+    }
+  }
+  return hashCode(nonEmpty.join('\n'));
+}
+
+/**
+ * Estrae un'impronta digitale (fingerprint) deterministica del foglio.
+ * Rimuove i nonce e gli script dinamici generati a ogni richiesta da Google Sheets
+ * ed estrae il testo effettivo di tutte le celle (intestazione, avvisi, aule, lezioni),
+ * escludendo i testi invisibili di padding.
+ */
+export function extractSheetContentFingerprint(html: string): string {
+  if (!html) return '';
+  return computeRowsFingerprint(extractRowsFromHtml(html));
 }
 
 export interface Degree {
@@ -309,12 +438,21 @@ export async function fetchDegrees(forceRefresh = false): Promise<Degree[]> {
  * Recupera i canali/tab salvati in locale istantaneamente (0ms latency, nessun accesso di rete).
  */
 export async function getCachedTabs(url: string): Promise<Tab[] | null> {
+  const mem = memoryAllSchedulesCache.get(url);
+  if (mem && Array.isArray(mem.tabs) && mem.tabs.length > 0) {
+    return mem.tabs;
+  }
   try {
     const schedKey = `allSchedules_v8_${url}`;
     const schedStr = await AsyncStorage.getItem(schedKey);
     if (schedStr) {
       const parsed = JSON.parse(schedStr);
-      if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) return parsed.tabs;
+      if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) {
+        if (parsed.schedules) {
+          memoryAllSchedulesCache.set(url, parsed);
+        }
+        return parsed.tabs;
+      }
     }
     const cacheKey = `tabsCache_${url}`;
     const cachedStr = await AsyncStorage.getItem(cacheKey);
@@ -328,21 +466,8 @@ export async function getCachedTabs(url: string): Promise<Tab[] | null> {
 
 export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[]> {
   try {
-    const res = await axios.get(url);
+    const res = await axios.get(url, { timeout: 6000 });
     const data = res.data;
-    
-    // Check Cache
-    const contentHash = hashCode(data);
-    const cacheKey = `tabsCache_${url}`;
-    if (!forceRefresh) {
-      try {
-        const cachedStr = await AsyncStorage.getItem(cacheKey);
-        if (cachedStr) {
-          const cached = JSON.parse(cachedStr);
-          if (cached.hash === contentHash && cached.tabs) return cached.tabs;
-        }
-      } catch {}
-    }
 
     const itemsRegex = /items\.push\(\{(.*?)\}\);/g;
     let match;
@@ -371,10 +496,26 @@ export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[
       }
     }
 
-    const rawNames = rawTabs.map(t => t.rawName);
+    // Hash deterministico sui soli tab e URL mappa (ignora i nonce random dell'HTML di Google)
+    const contentHash = hashCode(JSON.stringify({ rawTabs, mapTabUrl }));
+    const cacheKey = `tabsCache_${url}`;
+    const baseSheetUrl = url.split('/sheet')[0];
 
-    const mapTask = (async () => {
+    const ensureMapLoaded = async () => {
       if (!mapTabUrl) return;
+      if (!forceRefresh) {
+        if (memoryMapTextCache.has(url) || memoryMapTextCache.has(baseSheetUrl)) {
+          return;
+        }
+        try {
+          const existingMap = await AsyncStorage.getItem(`courseMapText_${baseSheetUrl}`);
+          if (existingMap) {
+            memoryMapTextCache.set(url, existingMap);
+            memoryMapTextCache.set(baseSheetUrl, existingMap);
+            return;
+          }
+        } catch {}
+      }
       try {
         const mapRes = await axios.get(mapTabUrl, { timeout: 3500 });
         const cleanText = mapRes.data
@@ -383,7 +524,6 @@ export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[
           .replace(/<[^>]+>/g, ' ')
           .replace(/[ \t]+/g, ' ')
           .trim();
-        const baseSheetUrl = url.split('/sheet')[0];
         memoryMapTextCache.set(url, cleanText);
         memoryMapTextCache.set(baseSheetUrl, cleanText);
         await AsyncStorage.multiSet([
@@ -391,7 +531,23 @@ export async function fetchTabs(url: string, forceRefresh = false): Promise<Tab[
           [`courseMapText_${baseSheetUrl}`, cleanText],
         ]);
       } catch {}
-    })();
+    };
+
+    if (!forceRefresh) {
+      try {
+        const cachedStr = await AsyncStorage.getItem(cacheKey);
+        if (cachedStr) {
+          const cached = JSON.parse(cachedStr);
+          if (cached.hash === contentHash && Array.isArray(cached.tabs) && cached.tabs.length > 0) {
+            await ensureMapLoaded();
+            return cached.tabs;
+          }
+        }
+      } catch {}
+    }
+
+    const rawNames = rawTabs.map(t => t.rawName);
+    const mapTask = ensureMapLoaded();
 
     if (rawTabs.length === 0) {
       await mapTask;
@@ -439,8 +595,9 @@ export async function fetchScheduleData(
   try {
     const html = preloadedHtml || (await axios.get(tabUrl, { timeout: 6000 })).data;
 
-    // Check Cache con fingerprint deterministico (ignora i nonce variabili di Google)
-    const contentFingerprint = extractSheetContentFingerprint(html);
+    // Singola passata di parsing righe HTML: riutilizzata sia per fingerprint che per l'estrazione orario
+    const rows = extractRowsFromHtml(html);
+    const contentFingerprint = computeRowsFingerprint(rows);
     const cacheKey = `scheduleCache_v8_${tabUrl}`;
     const fpKey = `tabFingerprint_v8_${tabUrl}`;
     if (!forceRefresh) {
@@ -455,23 +612,6 @@ export async function fetchScheduleData(
           }
         }
       } catch {}
-    }
-    
-    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let trMatch;
-    const rows: string[][] = [];
-    
-    const classBgColors = extractClassBgColors(html);
-    while ((trMatch = trRegex.exec(html)) !== null) {
-      const trContent = trMatch[1];
-      const row: string[] = [];
-      const tdRegex = /(<td[^>]*>)([\s\S]*?)<\/td>/gi;
-      let tdMatch;
-      while ((tdMatch = tdRegex.exec(trContent)) !== null) {
-        const text = cleanTdCellHtml(tdMatch[1], tdMatch[2], classBgColors);
-        row.push(text);
-      }
-      if (row.length > 0) rows.push(row);
     }
 
     const data = { ...defaultData };
@@ -822,7 +962,7 @@ export async function fetchScheduleData(
 }
 
 /**
- * Legge l'orario più recente già presente nella cache locale AsyncStorage senza eseguire richieste di rete.
+ * Legge l'orario più recente già presente nella cache locale (RAM prima, poi AsyncStorage) senza eseguire richieste di rete.
  * Utile per sincronizzazioni calendario e preferenze in tempo reale.
  */
 export async function getCachedScheduleData(
@@ -831,11 +971,25 @@ export async function getCachedScheduleData(
 ): Promise<ScheduleData | null> {
   try {
     if (degreeUrl) {
+      const memAll = memoryAllSchedulesCache.get(degreeUrl);
+      if (memAll?.schedules && typeof memAll.schedules === 'object') {
+        if (tabUrl && memAll.schedules[tabUrl]?.days?.length) {
+          return memAll.schedules[tabUrl];
+        }
+        const firstValid = Object.values(memAll.schedules).find(
+          (s) => s && Array.isArray(s.days) && s.days.length > 0
+        );
+        if (firstValid) return firstValid;
+      }
+
       const allRaw = await AsyncStorage.getItem(`allSchedules_v8_${degreeUrl}`);
       if (allRaw) {
         const parsedAll = JSON.parse(allRaw);
         const schedulesMap = parsedAll?.schedules;
         if (schedulesMap && typeof schedulesMap === 'object') {
+          if (Array.isArray(parsedAll?.tabs) && parsedAll.tabs.length > 0) {
+            memoryAllSchedulesCache.set(degreeUrl, parsedAll);
+          }
           if (tabUrl && schedulesMap[tabUrl]?.days?.length) {
             return schedulesMap[tabUrl] as ScheduleData;
           }
@@ -860,70 +1014,140 @@ export async function getCachedScheduleData(
   return null;
 }
 
+export interface IncrementalFetchOptions {
+  changedTabUrls?: string[];
+  preloadedHtmlByUrl?: Record<string, string>;
+}
+
 /**
  * Scarica TUTTI i canali, orari e aule di un corso di laurea in una sola operazione ("in un'unica botta").
- * Memorizza tutto in un'unica cache locale in modo che Orario e Aule non debbano mai più fare richieste di rete.
+ * Supporta l'aggiornamento incrementale dei soli canali realmente modificati riutilizzando l'HTML già scaricato.
  */
 export async function fetchAllCourseData(
   degreeUrl: string,
   forceRefresh = false,
-  onProgress?: (step: string, current: number, total: number) => void
+  onProgress?: (step: string, current: number, total: number) => void,
+  incrementalOpts?: IncrementalFetchOptions
 ): Promise<{ tabs: Tab[]; schedules: Record<string, ScheduleData> }> {
   const cacheKey = `allSchedules_v8_${degreeUrl}`;
 
-  // Se non è richiesto un refresh forzato, prova a leggere dalla cache locale istantanea
+  // Se non è richiesto un refresh forzato, prova a leggere prima dalla RAM (0ms), poi da AsyncStorage
   if (!forceRefresh) {
+    const mem = memoryAllSchedulesCache.get(degreeUrl);
+    if (mem && mem.tabs.length > 0 && mem.schedules) {
+      return mem;
+    }
     try {
       const stored = await AsyncStorage.getItem(cacheKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.tabs && parsed.schedules && parsed.tabs.length > 0) {
+          memoryAllSchedulesCache.set(degreeUrl, parsed);
           return parsed;
         }
       }
     } catch {}
   }
 
-  onProgress?.('Caricamento canali disponibili...', 0, 1);
-  const tabs = await fetchTabs(degreeUrl, forceRefresh);
-  if (tabs.length === 0) {
-    return { tabs: [], schedules: {} };
+  // Modalità incrementale: se checkCourseUpdates ha già individuato i soli canali cambiati,
+  // evita di riscaricare la lista tab e i canali invariati e riutilizza l'HTML già in memoria
+  const changedSet =
+    incrementalOpts?.changedTabUrls && incrementalOpts.changedTabUrls.length > 0
+      ? new Set(incrementalOpts.changedTabUrls)
+      : null;
+
+  let existingCached: { tabs: Tab[]; schedules: Record<string, ScheduleData> } | null = null;
+  if (changedSet) {
+    existingCached = memoryAllSchedulesCache.get(degreeUrl) || null;
+    if (!existingCached) {
+      try {
+        const stored = await AsyncStorage.getItem(cacheKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed?.tabs) && parsed.tabs.length > 0 && parsed.schedules) {
+            existingCached = parsed;
+          }
+        }
+      } catch {}
+    }
   }
 
-  onProgress?.('Scaricamento canali del corso...', 0, tabs.length);
-  
-  // 1. Scarica in parallelo tutti gli HTML dei canali (~300ms totali anziché richieste sequenziali)
-  const htmlResults = await Promise.all(
-    tabs.map(t =>
-      axios.get(t.url, { timeout: 6000 })
-        .then(r => r.data)
-        .catch(err => {
-          console.warn(`Impossibile scaricare ${t.name}:`, err?.message);
-          return '';
-        })
-    )
-  );
-
-  // 2. Elabora TUTTI i canali in parallelo!
-  //    Le promesse in-flight in aiParser.ts deduplicano automaticamente intestazioni e celle condivise
-  //    tra canali diversi dello stesso corso, abbattendo il tempo totale a ~1.5-2.5 secondi con 0 errori 429!
+  let tabs: Tab[];
   const schedules: Record<string, ScheduleData> = {};
-  let completedCount = 0;
-  onProgress?.(`Analisi orari in corso (0/${tabs.length})...`, 0, tabs.length);
 
-  await Promise.all(
-    tabs.map(async (tab, i) => {
-      try {
-        const data = await fetchScheduleData(tab.url, forceRefresh, htmlResults[i]);
-        schedules[tab.url] = data;
-      } catch (e) {
-        console.warn(`Errore caricamento ${tab.name}:`, e);
-      } finally {
-        completedCount++;
-        onProgress?.(`Download ${completedCount}/${tabs.length}: ${tab.name}`, completedCount, tabs.length);
+  if (changedSet && existingCached && existingCached.tabs.length > 0) {
+    tabs = existingCached.tabs;
+    const tabsToUpdate = tabs.filter(
+      (t) => changedSet.has(t.url) || !existingCached!.schedules[t.url]
+    );
+    for (const t of tabs) {
+      if (!changedSet.has(t.url) && existingCached.schedules[t.url]) {
+        schedules[t.url] = existingCached.schedules[t.url];
       }
-    })
-  );
+    }
+
+    onProgress?.(`Aggiornamento di ${tabsToUpdate.length} canal${tabsToUpdate.length === 1 ? 'e' : 'i'}...`, 0, tabsToUpdate.length);
+
+    let completedCount = 0;
+    await Promise.all(
+      tabsToUpdate.map(async (tab) => {
+        try {
+          const preHtml = incrementalOpts?.preloadedHtmlByUrl?.[tab.url];
+          const data = await fetchScheduleData(tab.url, true, preHtml);
+          schedules[tab.url] = data;
+        } catch (e) {
+          console.warn(`Errore caricamento incrementale ${tab.name}:`, e);
+          if (existingCached!.schedules[tab.url]) {
+            schedules[tab.url] = existingCached!.schedules[tab.url];
+          }
+        } finally {
+          completedCount++;
+          onProgress?.(`Aggiornato ${completedCount}/${tabsToUpdate.length}: ${tab.name}`, completedCount, tabsToUpdate.length);
+        }
+      })
+    );
+  } else {
+    onProgress?.('Caricamento canali disponibili...', 0, 1);
+    tabs = await fetchTabs(degreeUrl, forceRefresh);
+    if (tabs.length === 0) {
+      return { tabs: [], schedules: {} };
+    }
+
+    onProgress?.('Scaricamento canali del corso...', 0, tabs.length);
+
+    // 1. Scarica in parallelo tutti gli HTML dei canali (riutilizzando eventuali HTML precaricati)
+    const htmlResults = await Promise.all(
+      tabs.map((t) => {
+        const pre = incrementalOpts?.preloadedHtmlByUrl?.[t.url];
+        if (pre) return Promise.resolve(pre);
+        return axios
+          .get(t.url, { timeout: 6000 })
+          .then((r) => r.data)
+          .catch((err) => {
+            console.warn(`Impossibile scaricare ${t.name}:`, err?.message);
+            return '';
+          });
+      })
+    );
+
+    // 2. Elabora TUTTI i canali in parallelo
+    let completedCount = 0;
+    onProgress?.(`Analisi orari in corso (0/${tabs.length})...`, 0, tabs.length);
+
+    await Promise.all(
+      tabs.map(async (tab, i) => {
+        try {
+          const data = await fetchScheduleData(tab.url, forceRefresh, htmlResults[i]);
+          schedules[tab.url] = data;
+        } catch (e) {
+          console.warn(`Errore caricamento ${tab.name}:`, e);
+        } finally {
+          completedCount++;
+          onProgress?.(`Download ${completedCount}/${tabs.length}: ${tab.name}`, completedCount, tabs.length);
+        }
+      })
+    );
+  }
 
   // Calcola e memorizza il fingerprint complessivo dei canali
   // IMPORTANTE: leggiamo i tabFingerprint_* DOPO che fetchScheduleData li ha già salvati
@@ -931,6 +1155,7 @@ export async function fetchAllCourseData(
   const combinedFingerprint = tabs.map((t, idx) => `${t.url}:${fpPairs[idx]?.[1] || 'missing'}`).join('|');
 
   const result = { tabs, schedules, fingerprint: combinedFingerprint };
+  memoryAllSchedulesCache.set(degreeUrl, result);
   try {
     await AsyncStorage.multiSet([
       [cacheKey, JSON.stringify(result)],
@@ -945,24 +1170,58 @@ export async function fetchAllCourseData(
 export interface UpdateCheckResult {
   hasChanges: boolean;
   reason?: string;
+  changedTabUrls?: string[];
+  preloadedHtmlByUrl?: Record<string, string>;
 }
+
+const COURSE_UPDATE_CHECK_COOLDOWN_MS = 60 * 1000;
 
 /**
  * Controlla all'avvio se il Google Sheet ufficiale ha subito modifiche
  * (es. variazione orario, spostamento aula, o nuovo avviso in bacheca).
- * Scarica in parallelo i tab noti e ne confronta l'impronta deterministica (~400ms).
+ * Applica un cooldown di 1 minuto per evitare download ridondanti su riaperture ravvicinate
+ * e restituisce i soli tab modificati con gli HTML già scaricati per l'aggiornamento incrementale.
  */
-export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheckResult> {
+export async function checkCourseUpdates(
+  degreeUrl: string,
+  forceCheck = false
+): Promise<UpdateCheckResult> {
   try {
     const cacheKey = `allSchedules_v8_${degreeUrl}`;
-    const stored = await AsyncStorage.getItem(cacheKey);
-    if (!stored) {
-      return { hasChanges: true, reason: 'Nessun dato locale trovato' };
+    const lastCheckKey = `lastCheckTime_${degreeUrl}`;
+
+    let parsed: { tabs?: Tab[]; schedules?: Record<string, ScheduleData> } | null =
+      memoryAllSchedulesCache.get(degreeUrl) || null;
+    let lastCheckRaw: string | null = null;
+
+    if (!parsed) {
+      const pairs = await AsyncStorage.multiGet([cacheKey, lastCheckKey]);
+      const stored = pairs[0]?.[1];
+      lastCheckRaw = pairs[1]?.[1] || null;
+      if (!stored) {
+        return { hasChanges: true, reason: 'Nessun dato locale trovato' };
+      }
+      parsed = JSON.parse(stored);
+      if (parsed && Array.isArray(parsed.tabs) && parsed.tabs.length > 0 && parsed.schedules) {
+        memoryAllSchedulesCache.set(degreeUrl, {
+          tabs: parsed.tabs,
+          schedules: parsed.schedules,
+        });
+      }
+    } else if (!forceCheck) {
+      lastCheckRaw = await AsyncStorage.getItem(lastCheckKey);
     }
 
-    const parsed = JSON.parse(stored);
-    if (!parsed.tabs || parsed.tabs.length === 0 || !parsed.schedules) {
+    if (!parsed || !parsed.tabs || parsed.tabs.length === 0 || !parsed.schedules) {
       return { hasChanges: true, reason: 'Dati locali incompleti' };
+    }
+
+    // Cooldown di 1 minuto: se i fogli sono già stati verificati di recente, entra subito con 0 byte di rete
+    if (!forceCheck && lastCheckRaw) {
+      const lastTs = parseInt(lastCheckRaw, 10);
+      if (!Number.isNaN(lastTs) && Date.now() - lastTs < COURSE_UPDATE_CHECK_COOLDOWN_MS) {
+        return { hasChanges: false };
+      }
     }
 
     // 1. Scarica in parallelo i soli tab del corso con timeout ridotto (3.0s) per ingresso fulmineo
@@ -972,21 +1231,21 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       )
     );
 
-    const validFetches = tabFetches.filter(Boolean);
+    const validFetches = tabFetches.filter(Boolean) as { url: string; html: string }[];
     if (validFetches.length === 0) {
       return { hasChanges: false }; // Offline o timeout: entra subito con i dati locali
     }
 
     const currentFps: Record<string, string> = {};
+    const preloadedHtmlByUrl: Record<string, string> = {};
     for (const item of validFetches) {
-      if (!item) continue;
       currentFps[item.url] = extractSheetContentFingerprint(item.html);
+      preloadedHtmlByUrl[item.url] = item.html;
     }
 
     // 2. Controllo canale per canale:
-    // C'è una modifica reale SOLO SE un tab scaricato con successo ha un'impronta diversa
-    // da quella memorizzata. Se un tab è andato in timeout, non generiamo falsi allarmi.
-    let hasRealChanges = false;
+    // Raccoglie TUTTI i tab effettivamente cambiati per aggiornare solo quelli
+    const changedTabUrls: string[] = [];
     let changeReason = '';
 
     const fpKeys = parsed.tabs
@@ -1010,9 +1269,10 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       }
 
       if (liveFp !== storedTabFp) {
-        hasRealChanges = true;
-        changeReason = `Rilevate modifiche per ${tab.name}`;
-        break;
+        changedTabUrls.push(tab.url);
+        if (!changeReason) {
+          changeReason = `Rilevate modifiche per ${tab.name}`;
+        }
       }
     }
 
@@ -1020,11 +1280,17 @@ export async function checkCourseUpdates(degreeUrl: string): Promise<UpdateCheck
       AsyncStorage.multiSet(missingFpWrites).catch(() => {});
     }
 
-    if (hasRealChanges) {
-      return { hasChanges: true, reason: changeReason || 'Rilevate modifiche all\'orario o agli avvisi' };
+    if (changedTabUrls.length > 0) {
+      return {
+        hasChanges: true,
+        reason: changeReason || 'Rilevate modifiche all\'orario o agli avvisi',
+        changedTabUrls,
+        preloadedHtmlByUrl,
+      };
     }
 
-    // Nessuna modifica rilevata: orari identici
+    // Nessuna modifica rilevata: aggiorna timestamp di verifica per il cooldown di 1 min
+    AsyncStorage.setItem(lastCheckKey, Date.now().toString()).catch(() => {});
     return { hasChanges: false };
   } catch (e) {
     console.warn('Verifica aggiornamenti saltata:', e);
