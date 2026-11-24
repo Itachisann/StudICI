@@ -5,6 +5,16 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 2.0.0
+
+### Smart Suggest Andata e Ritorno
+- **Calcolo reale su treni e mezzi (`commuterOptimizer.ts`, `commuter.ts`, `viaggio.tsx`)**: esteso e uniformato il sistema Smart Suggest su andata (`computeOutboundItinerary`) e ritorno (`computeReturnItinerary`) risolvendo in parallelo gli orari effettivi dei mezzi urbani tramite `getStationTransitBoard()` (`optimalDeparture || departures[0]`). Confronta i minuti effettivi di lezione persi in ingresso o in uscita con la tolleranza configurata dall'utente (`maxEarlyLeaveMinutes`), dà priorità alla combinazione più veloce che risparmia il maggior tempo totale di viaggio (`savedTotalTripMinutes`) e mantiene sincronizzati i minuti effettivi anche sugli aggiornamenti live in `handleOptimalTransitResolved()`.
+- **Banner e slider treni (`viaggio.tsx`)**: unificati i testi dei banner Smart (stato consigliato e stato attivo) con formato `Parti/Arrivi <durata> dopo/prima [alle HH:MM] (orario vs orario)` evidenziando in grassetto l'orario del treno attualmente selezionato, e convertiti automaticamente in ore e minuti (`formatDuration`) i guadagni `>= 60` minuti sia nei banner sia nei badge dello slider treni.
+
+### Interfaccia Schermata Viaggio
+- **Hero Card su due righe e pulizia header (`viaggio.tsx`)**: ristrutturati i dettagli della lezione nella Hero Card su due righe (posizione `Aula (Edificio)` sopra, stato/orario sotto con icona dedicata) coprendo tutti gli stati inclusi weekend, lezione terminata e lezioni in corso (in giallo con durata rimanente, anche per le lezioni escluse selezionate manualmente), senza troncamenti; rimossi il badge `+Xm ritardo` dalla Hero Card, il pulsante di aggiornamento dall'header in alto a destra e l'etichetta `da HH:MM` sulla timeline dei mezzi.
+- **Wrap completo su tappe del viaggio (`viaggio.tsx`)**: corretti i vincoli flex in `stepContentCard`, `stepTitleRow`, `stepTitleText` e `durationBadgeContainer` così il titolo `Arrivo a lezione: <Materia>` va a capo su più righe senza troncarsi né sovrapporsi al badge della durata rimanente.
+
 ## 1.9.9
 
 ### Mezzi Urbani, Percorsi e Dettaglio Corsa

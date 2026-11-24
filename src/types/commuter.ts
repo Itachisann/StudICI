@@ -57,6 +57,7 @@ export interface SmartReturnRecommendation {
   arrivalTime: string;
   lostLectureMinutes: number;
   savedArrivalMinutes: number;
+  savedTotalTripMinutes?: number;
   durationMinutes?: number;
   standardTrainNumber: string;
   standardDepartureTime: string;
@@ -73,6 +74,11 @@ export interface SmartOutboundRecommendation {
   arrivalTime: string;
   lostLectureMinutes: number;
   savedDepartureMinutes: number;
+  savedTotalTripMinutes?: number;
+  smartTotalTripMinutes?: number;
+  standardTotalTripMinutes?: number;
+  smartArrivalTime?: string;
+  transitLineLabel?: string;
   durationMinutes?: number;
   standardTrainNumber: string;
   standardDepartureTime: string;

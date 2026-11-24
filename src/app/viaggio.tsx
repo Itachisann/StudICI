@@ -1307,27 +1307,6 @@ export default function ViaggioScreen() {
     };
   }, [processStrikeNotificationTap]);
 
-  const heroDelayMin = useMemo(() => {
-    if (!isSelectedDayToday || !itinerary?.liveTrain) return 0;
-    if (
-      itinerary.liveTrain.isArrivedAtDestination ||
-      itinerary.liveTrain.trainStatusType === "arrived" ||
-      trainStatus?.badgeLabel === "Arrivato"
-    ) {
-      return 0;
-    }
-    const trainDelay = itinerary.liveTrain.delayMinutes ?? 0;
-    if (trainDelay > 0) return trainDelay;
-    if (trainStatus?.delayBadge) {
-      const parsed = parseInt(
-        trainStatus.delayBadge.label.replace(/\D/g, ""),
-        10,
-      );
-      return isNaN(parsed) ? 0 : parsed;
-    }
-    return 0;
-  }, [isSelectedDayToday, itinerary, trainStatus]);
-
   // Scorrimento automatico orizzontale della lista lezioni per visualizzare e centrare la lezione target
   useEffect(() => {
     if (dayClasses.length > 0 && activeSelectedClassIndex >= 0) {
@@ -2907,12 +2886,42 @@ export default function ViaggioScreen() {
               parseTimeToMinutes(prev.targetLecture.endTime),
         );
 
+        const nextSmartOutbound =
+          prev.direction === "outbound" &&
+          prev.smartOutboundRecommendation?.isCurrentlySelected &&
+          prev.targetLecture?.startTime
+            ? {
+                ...prev.smartOutboundRecommendation,
+                lostLectureMinutes: Math.max(
+                  0,
+                  normalizeRelativeMinutes(arrM, depM) -
+                    parseTimeToMinutes(prev.targetLecture.startTime),
+                ),
+                smartArrivalTime: newArrTime,
+              }
+            : prev.smartOutboundRecommendation;
+
+        const nextSmartReturn =
+          prev.direction === "return" &&
+          prev.smartReturnRecommendation?.isCurrentlySelected &&
+          prev.targetLecture?.endTime
+            ? {
+                ...prev.smartReturnRecommendation,
+                lostLectureMinutes: Math.max(
+                  0,
+                  parseTimeToMinutes(prev.targetLecture.endTime) - depM,
+                ),
+              }
+            : prev.smartReturnRecommendation;
+
         const nextItin: CommuterItinerary = {
           ...prev,
           departureTime: newDepTime,
           arrivalTime: newArrTime,
           totalDurationMinutes: newTotalDur,
           lectureTimeStatus: nextLectureTimeStatus,
+          smartOutboundRecommendation: nextSmartOutbound,
+          smartReturnRecommendation: nextSmartReturn,
           transitLiveContext: update.isLiveContext ?? prev.transitLiveContext,
           lastUsefulTransitDeparture: isPrevTargetFinished
             ? undefined
@@ -3427,28 +3436,6 @@ export default function ViaggioScreen() {
             </View>
             {config?.enabled !== false && (
               <View style={styles.headerActions}>
-                <TouchableOpacity
-                  style={styles.headerIconBtn}
-                  activeOpacity={0.7}
-                  disabled={refreshing}
-                  onPress={() => loadData(true)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Aggiorna orari treni"
-                >
-                  {isNativeIos && CallstackLiquidGlass?.LiquidGlassView ? (
-                    <CallstackLiquidGlass.LiquidGlassView
-                      effect="regular"
-                      colorScheme="dark"
-                      tintColor="rgba(255, 255, 255, 0.12)"
-                      style={[StyleSheet.absoluteFill, { borderRadius: 18 }]}
-                    />
-                  ) : null}
-                  {refreshing ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons name="refresh" size={19} color="#fff" />
-                  )}
-                </TouchableOpacity>
                 <View style={styles.headerAlertBtnWrapper}>
                   {hasSelectedDayStrike && (
                     <Animated.View
@@ -4017,46 +4004,6 @@ export default function ViaggioScreen() {
                                     )}
                                   </Text>
                                 </View>
-
-                                {isSelectedDayToday && heroDelayMin > 0 && (
-                                  <View
-                                    style={[
-                                      styles.heroDelayPill,
-                                      {
-                                        backgroundColor:
-                                          heroDelayMin > 5
-                                            ? "rgba(239, 68, 68, 0.16)"
-                                            : "rgba(245, 158, 11, 0.16)",
-                                        borderColor:
-                                          heroDelayMin > 5
-                                            ? "rgba(239, 68, 68, 0.35)"
-                                            : "rgba(245, 158, 11, 0.35)",
-                                      },
-                                    ]}
-                                  >
-                                    <Ionicons
-                                      name="time-outline"
-                                      size={11}
-                                      color={
-                                        heroDelayMin > 5 ? "#ef4444" : "#f59e0b"
-                                      }
-                                      style={{ marginRight: 3 }}
-                                    />
-                                    <Text
-                                      style={[
-                                        styles.heroDelayPillText,
-                                        {
-                                          color:
-                                            heroDelayMin > 5
-                                              ? "#ef4444"
-                                              : "#f59e0b",
-                                        },
-                                      ]}
-                                    >
-                                      {`+${heroDelayMin}m ritardo`}
-                                    </Text>
-                                  </View>
-                                )}
                               </View>
 
                               {/* Riga Intestazione Hero Card con Titolo */}
@@ -4092,7 +4039,9 @@ export default function ViaggioScreen() {
                                 const iconColor = theme.accent;
                                 const iconBg = "rgba(255, 255, 255, 0.08)";
                                 const roomLabel =
-                                  itinerary.targetLecture?.room?.trim() || "";
+                                  itinerary.targetLecture?.room?.trim() ||
+                                  activeSelectedClass?.room?.trim() ||
+                                  "";
                                 const buildingLabel =
                                   itinerary.targetLecture?.buildingName?.trim() ||
                                   "";
@@ -4104,6 +4053,43 @@ export default function ViaggioScreen() {
                                     .includes(buildingLabel.toLowerCase())
                                     ? `${roomLabel} (${buildingLabel})`
                                     : roomLabel || buildingLabel;
+
+                                const targetStartTime =
+                                  itinerary.targetLecture?.startTime ||
+                                  activeSelectedClass?.startTime ||
+                                  "";
+                                const targetEndTime =
+                                  itinerary.targetLecture?.endTime ||
+                                  activeSelectedClass?.endTime ||
+                                  "";
+                                const targetStartM =
+                                  parseTimeToMinutes(targetStartTime);
+                                const targetEndM =
+                                  parseTimeToMinutes(targetEndTime);
+                                const nowDateHero = new Date();
+                                const isTargetTodayHero =
+                                  selectedDayIdx === nowDateHero.getDay();
+                                const nowHeroM =
+                                  nowDateHero.getHours() * 60 +
+                                  nowDateHero.getMinutes();
+
+                                const isInProgressNow = Boolean(
+                                  !isWeekend &&
+                                  !hasNoActiveTargetLecture &&
+                                  !isTargetLectureFinished &&
+                                  isTargetTodayHero &&
+                                  targetStartM > 0 &&
+                                  targetEndM > targetStartM &&
+                                  nowHeroM >= targetStartM &&
+                                  nowHeroM < targetEndM,
+                                );
+                                const nowRemainingMins = isInProgressNow
+                                  ? Math.max(1, targetEndM - nowHeroM)
+                                  : 0;
+                                const nowRemainingText =
+                                  nowRemainingMins > 0
+                                    ? `${formatDuration(nowRemainingMins)} rimanenti`
+                                    : "";
 
                                 const mainTitle = isWeekend
                                   ? direction === "outbound"
@@ -4128,13 +4114,32 @@ export default function ViaggioScreen() {
                                         ? itinerary.targetLecture.subject
                                         : `Rientro ad ${config?.originAddress}`;
 
-                                const isLate =
+                                const isLateArrival = Boolean(
                                   !isWeekend &&
                                   !hasNoActiveTargetLecture &&
                                   !isTargetLectureFinished &&
                                   direction === "outbound" &&
                                   itinerary.lectureTimeStatus?.type ===
-                                    "late_arrival";
+                                    "late_arrival",
+                                );
+                                const isOutboundInProgress =
+                                  isLateArrival ||
+                                  (direction === "outbound" && isInProgressNow);
+                                const outboundRemainingText =
+                                  itinerary.lectureTimeStatus?.type ===
+                                    "late_arrival" &&
+                                  itinerary.lectureTimeStatus.badgeText
+                                    ? itinerary.lectureTimeStatus.badgeText
+                                    : nowRemainingText;
+                                const isReturnEarlyDeparture = Boolean(
+                                  !isWeekend &&
+                                  !hasNoActiveTargetLecture &&
+                                  !isTargetLectureFinished &&
+                                  direction === "return" &&
+                                  itinerary.lectureTimeStatus?.type ===
+                                    "early_departure" &&
+                                  itinerary.lectureTimeStatus.badgeText,
+                                );
 
                                 return (
                                   <View style={styles.heroTargetLectureBox}>
@@ -4189,84 +4194,177 @@ export default function ViaggioScreen() {
 
                                       <View style={styles.heroLectureMetaRow}>
                                         {isWeekend ? (
-                                          <Text
-                                            style={styles.heroLectureDetails}
-                                            numberOfLines={1}
-                                          >
-                                            Nessuna lezione collegata
-                                          </Text>
-                                        ) : hasNoActiveTargetLecture ? (
-                                          <Text
-                                            style={styles.heroLectureDetails}
-                                            numberOfLines={1}
-                                          >
-                                            {dayClasses.length > 0
-                                              ? "Tocca una lezione sopra per usarla"
-                                              : "Nessuna lezione attiva"}
-                                          </Text>
-                                        ) : isTargetLectureFinished ? (
-                                          <Text
-                                            style={[
-                                              styles.heroLectureDetails,
-                                              { color: theme.accent },
-                                            ]}
-                                            numberOfLines={1}
-                                          >
-                                            Terminata · Treni da adesso
-                                          </Text>
-                                        ) : direction === "outbound" ? (
                                           <View
                                             style={styles.heroLectureMetaItem}
                                           >
-                                            {Boolean(locationLabel) && (
-                                              <Ionicons
-                                                name="location-outline"
-                                                size={12}
-                                                color={
-                                                  isLate ? "#f59e0b" : "#94a3b8"
-                                                }
-                                              />
-                                            )}
+                                            <Ionicons
+                                              name="train-outline"
+                                              size={12}
+                                              color="#94a3b8"
+                                              style={{ marginTop: 2 }}
+                                            />
                                             <Text
-                                              style={[
-                                                styles.heroLectureDetails,
-                                                isLate && { color: "#fbbf24" },
-                                              ]}
-                                              numberOfLines={1}
+                                              style={styles.heroLectureDetails}
                                             >
-                                              {(() => {
-                                                const timeText = isLate
-                                                  ? `In corso (${itinerary.lectureTimeStatus?.badgeText})`
-                                                  : `Inizio ${itinerary.targetLecture?.startTime}`;
-                                                return locationLabel
-                                                  ? `${locationLabel} · ${timeText}`
-                                                  : timeText;
-                                              })()}
+                                              Nessuna lezione collegata
+                                            </Text>
+                                          </View>
+                                        ) : hasNoActiveTargetLecture ? (
+                                          <View
+                                            style={styles.heroLectureMetaItem}
+                                          >
+                                            <Ionicons
+                                              name="information-circle-outline"
+                                              size={12}
+                                              color="#94a3b8"
+                                              style={{ marginTop: 2 }}
+                                            />
+                                            <Text
+                                              style={styles.heroLectureDetails}
+                                            >
+                                              {dayClasses.length > 0
+                                                ? "Tocca una lezione sopra per usarla"
+                                                : "Nessuna lezione attiva"}
                                             </Text>
                                           </View>
                                         ) : (
-                                          <View
-                                            style={styles.heroLectureMetaItem}
-                                          >
+                                          <>
+                                            {/* Riga 1: Posizione (Aula + Edificio) */}
                                             {Boolean(locationLabel) && (
-                                              <Ionicons
-                                                name="location-outline"
-                                                size={12}
-                                                color="#94a3b8"
-                                              />
+                                              <View
+                                                style={
+                                                  styles.heroLectureMetaItem
+                                                }
+                                              >
+                                                <Ionicons
+                                                  name="location-outline"
+                                                  size={12}
+                                                  color="#94a3b8"
+                                                  style={{ marginTop: 2 }}
+                                                />
+                                                <Text
+                                                  style={
+                                                    styles.heroLectureDetails
+                                                  }
+                                                >
+                                                  {locationLabel}
+                                                </Text>
+                                              </View>
                                             )}
-                                            <Text
-                                              style={styles.heroLectureDetails}
-                                              numberOfLines={1}
-                                            >
-                                              {(() => {
-                                                const timeText = `Fine lezioni ${itinerary.targetLecture?.endTime}`;
-                                                return locationLabel
-                                                  ? `${locationLabel} · ${timeText}`
-                                                  : timeText;
-                                              })()}
-                                            </Text>
-                                          </View>
+
+                                            {/* Riga 2: Orario / Stato con icona dedicata */}
+                                            {isTargetLectureFinished ? (
+                                              <View
+                                                style={
+                                                  styles.heroLectureMetaItem
+                                                }
+                                              >
+                                                <Ionicons
+                                                  name="checkmark-circle-outline"
+                                                  size={12}
+                                                  color={theme.accent}
+                                                  style={{ marginTop: 2 }}
+                                                />
+                                                <Text
+                                                  style={[
+                                                    styles.heroLectureDetails,
+                                                    { color: theme.accent },
+                                                  ]}
+                                                >
+                                                  Terminata · Treni da adesso
+                                                </Text>
+                                              </View>
+                                            ) : direction === "outbound" ? (
+                                              <View
+                                                style={
+                                                  styles.heroLectureMetaItem
+                                                }
+                                              >
+                                                <Ionicons
+                                                  name="time-outline"
+                                                  size={12}
+                                                  color={
+                                                    isOutboundInProgress
+                                                      ? "#f59e0b"
+                                                      : "#94a3b8"
+                                                  }
+                                                  style={{ marginTop: 2 }}
+                                                />
+                                                <Text
+                                                  style={[
+                                                    styles.heroLectureDetails,
+                                                    isOutboundInProgress && {
+                                                      color: "#fbbf24",
+                                                    },
+                                                  ]}
+                                                >
+                                                  {isOutboundInProgress
+                                                    ? outboundRemainingText
+                                                      ? `In corso (${outboundRemainingText})`
+                                                      : "In corso"
+                                                    : targetStartTime
+                                                      ? `Inizio ore ${targetStartTime}`
+                                                      : "Orario non disponibile"}
+                                                </Text>
+                                              </View>
+                                            ) : isInProgressNow ? (
+                                              <View
+                                                style={
+                                                  styles.heroLectureMetaItem
+                                                }
+                                              >
+                                                <Ionicons
+                                                  name="time-outline"
+                                                  size={12}
+                                                  color="#f59e0b"
+                                                  style={{ marginTop: 2 }}
+                                                />
+                                                <Text
+                                                  style={[
+                                                    styles.heroLectureDetails,
+                                                    { color: "#fbbf24" },
+                                                  ]}
+                                                >
+                                                  {nowRemainingText
+                                                    ? `In corso (${nowRemainingText})${targetEndTime ? ` · Fine ore ${targetEndTime}` : ""}`
+                                                    : targetEndTime
+                                                      ? `In corso · Fine ore ${targetEndTime}`
+                                                      : "In corso"}
+                                                </Text>
+                                              </View>
+                                            ) : (
+                                              <View
+                                                style={
+                                                  styles.heroLectureMetaItem
+                                                }
+                                              >
+                                                <Ionicons
+                                                  name="time-outline"
+                                                  size={12}
+                                                  color={
+                                                    isReturnEarlyDeparture
+                                                      ? "#f59e0b"
+                                                      : "#94a3b8"
+                                                  }
+                                                  style={{ marginTop: 2 }}
+                                                />
+                                                <Text
+                                                  style={[
+                                                    styles.heroLectureDetails,
+                                                    isReturnEarlyDeparture && {
+                                                      color: "#fbbf24",
+                                                    },
+                                                  ]}
+                                                >
+                                                  {isReturnEarlyDeparture
+                                                    ? `Fine ore ${targetEndTime} · ${itinerary.lectureTimeStatus?.badgeText}`
+                                                    : targetEndTime
+                                                      ? `Fine ore ${targetEndTime}`
+                                                      : "Orario non disponibile"}
+                                                </Text>
+                                              </View>
+                                            )}
+                                          </>
                                         )}
                                       </View>
                                     </View>
@@ -5253,12 +5351,43 @@ export default function ViaggioScreen() {
                                         </View>
                                         <Text
                                           style={styles.smartReturnSub}
-                                          numberOfLines={2}
+                                          numberOfLines={3}
                                         >
-                                          {itinerary.smartReturnRecommendation
-                                            .isCurrentlySelected
-                                            ? `Esci ${itinerary.smartReturnRecommendation.lostLectureMinutes} min prima per tornare a casa ${itinerary.smartReturnRecommendation.savedArrivalMinutes} min prima (${itinerary.smartReturnRecommendation.smartHomeArrivalTime} vs ${itinerary.smartReturnRecommendation.standardHomeArrivalTime})`
-                                            : `Esci ${itinerary.smartReturnRecommendation.lostLectureMinutes} min prima dalla lezione per tornare a casa alle ${itinerary.smartReturnRecommendation.smartHomeArrivalTime} (${itinerary.smartReturnRecommendation.savedArrivalMinutes} min prima di ${itinerary.smartReturnRecommendation.standardTrainNumber})`}
+                                          {(() => {
+                                            const sr =
+                                              itinerary.smartReturnRecommendation!;
+                                            const savedSpan =
+                                              sr.savedArrivalMinutes >= 60
+                                                ? formatDuration(
+                                                    sr.savedArrivalMinutes,
+                                                  )
+                                                : `${sr.savedArrivalMinutes} min`;
+                                            const earlyPart =
+                                              sr.lostLectureMinutes > 0
+                                                ? `esci ${sr.lostLectureMinutes} min prima`
+                                                : "a fine lezione";
+                                            const boldTimeStyle = {
+                                              fontWeight: "700" as const,
+                                              color: "#ffffff",
+                                            };
+                                            return sr.isCurrentlySelected ? (
+                                              <>
+                                                {`Arrivi ${savedSpan} prima (`}
+                                                <Text style={boldTimeStyle}>
+                                                  {sr.smartHomeArrivalTime}
+                                                </Text>
+                                                {` vs ${sr.standardHomeArrivalTime}) • ${earlyPart}`}
+                                              </>
+                                            ) : (
+                                              <>
+                                                {`Arrivi ${savedSpan} prima alle ${sr.smartHomeArrivalTime} (${sr.smartHomeArrivalTime} vs `}
+                                                <Text style={boldTimeStyle}>
+                                                  {sr.standardHomeArrivalTime}
+                                                </Text>
+                                                {`) • ${earlyPart}`}
+                                              </>
+                                            );
+                                          })()}
                                         </Text>
                                       </View>
                                       <TouchableOpacity
@@ -5359,13 +5488,43 @@ export default function ViaggioScreen() {
                                         </View>
                                         <Text
                                           style={styles.smartReturnSub}
-                                          numberOfLines={2}
+                                          numberOfLines={3}
                                         >
-                                          {itinerary
-                                            .smartOutboundRecommendation
-                                            .isCurrentlySelected
-                                            ? `Parti ${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo da casa (${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} vs ${itinerary.smartOutboundRecommendation.standardHomeDepartureTime}) • ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min di ritardo`
-                                            : `Parti alle ${itinerary.smartOutboundRecommendation.smartHomeDepartureTime} (${itinerary.smartOutboundRecommendation.savedDepartureMinutes} min dopo di ${itinerary.smartOutboundRecommendation.standardTrainNumber}) entrando ${itinerary.smartOutboundRecommendation.lostLectureMinutes} min in ritardo`}
+                                          {(() => {
+                                            const so =
+                                              itinerary.smartOutboundRecommendation!;
+                                            const savedSpan =
+                                              so.savedDepartureMinutes >= 60
+                                                ? formatDuration(
+                                                    so.savedDepartureMinutes,
+                                                  )
+                                                : `${so.savedDepartureMinutes} min`;
+                                            const latePart =
+                                              so.lostLectureMinutes > 0
+                                                ? `${so.lostLectureMinutes} min di ritardo`
+                                                : "in orario";
+                                            const boldTimeStyle = {
+                                              fontWeight: "700" as const,
+                                              color: "#ffffff",
+                                            };
+                                            return so.isCurrentlySelected ? (
+                                              <>
+                                                {`Parti ${savedSpan} dopo (`}
+                                                <Text style={boldTimeStyle}>
+                                                  {so.smartHomeDepartureTime}
+                                                </Text>
+                                                {` vs ${so.standardHomeDepartureTime}) • ${latePart}`}
+                                              </>
+                                            ) : (
+                                              <>
+                                                {`Parti ${savedSpan} dopo alle ${so.smartHomeDepartureTime} (${so.smartHomeDepartureTime} vs `}
+                                                <Text style={boldTimeStyle}>
+                                                  {so.standardHomeDepartureTime}
+                                                </Text>
+                                                {`) • ${latePart}`}
+                                              </>
+                                            );
+                                          })()}
                                         </Text>
                                       </View>
                                       <TouchableOpacity
@@ -5631,10 +5790,10 @@ export default function ViaggioScreen() {
                                           const smartSavedBadge =
                                             direction === "return" &&
                                             itinerary.smartReturnRecommendation
-                                              ? `-${itinerary.smartReturnRecommendation.savedArrivalMinutes}m`
+                                              ? `-${formatDuration(itinerary.smartReturnRecommendation.savedArrivalMinutes)}`
                                               : direction === "outbound" &&
                                                   itinerary.smartOutboundRecommendation
-                                                ? `+${itinerary.smartOutboundRecommendation.savedDepartureMinutes}m`
+                                                ? `+${formatDuration(itinerary.smartOutboundRecommendation.savedDepartureMinutes)}`
                                                 : "";
                                           const isSmartRecommended = Boolean(
                                             smartRec &&
@@ -5923,9 +6082,6 @@ export default function ViaggioScreen() {
                                         ),
                                       )
                                     : leg.endTime);
-                                const firstVisibleBusDepStr =
-                                  leg.details?.firstAvailableDepartureTime ||
-                                  busDepTimeStr;
                                 const walkBeforeStartStr =
                                   parseTimeToMinutes(busDepTimeStr) >= 0 &&
                                   walkBeforeMins > 0
@@ -6081,7 +6237,7 @@ export default function ViaggioScreen() {
                                           </View>
                                         )}
 
-                                        {/* 2. Nodo mezzo pubblico ("da HH:MM" con HH:MM allineato agli altri orari e colore linea) */}
+                                        {/* 2. Nodo mezzo pubblico */}
                                         <View
                                           style={{
                                             flex: 1,
@@ -6089,46 +6245,7 @@ export default function ViaggioScreen() {
                                             alignItems: "stretch",
                                           }}
                                         >
-                                          <View
-                                            style={[
-                                              styles.timeColumn,
-                                              { paddingTop: 2 },
-                                            ]}
-                                          >
-                                            <View
-                                              style={{
-                                                alignSelf: "flex-end",
-                                                alignItems: "flex-start",
-                                              }}
-                                            >
-                                              <Text
-                                                numberOfLines={1}
-                                                style={{
-                                                  fontSize: 9.5,
-                                                  fontWeight: "700",
-                                                  color: "#c084fc",
-                                                  lineHeight: 11,
-                                                }}
-                                              >
-                                                da
-                                              </Text>
-                                              <Text
-                                                numberOfLines={1}
-                                                adjustsFontSizeToFit
-                                                style={[
-                                                  styles.timeStartText,
-                                                  {
-                                                    color: "#c084fc",
-                                                    fontVariant: [
-                                                      "tabular-nums",
-                                                    ],
-                                                  },
-                                                ]}
-                                              >
-                                                {firstVisibleBusDepStr}
-                                              </Text>
-                                            </View>
-                                          </View>
+                                          <View style={styles.timeColumn} />
                                           <View style={styles.lineIconColumn}>
                                             <View
                                               style={[
@@ -7809,22 +7926,25 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   heroLectureMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 2.5,
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 3,
+    marginTop: 4,
   },
   heroLectureMetaItem: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    flexShrink: 1,
+    alignItems: "flex-start",
+    gap: 5,
+    minWidth: 0,
   },
   heroLectureDetails: {
     fontSize: 12,
+    lineHeight: 16,
     color: "#94a3b8",
     fontWeight: "500",
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
   },
 
   /* Card Treno Risaltato */
@@ -8218,6 +8338,7 @@ const styles = StyleSheet.create({
   },
   stepContentCard: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: "rgba(255,255,255,0.04)",
     borderRadius: CARD_RADIUS.cardLarge,
     padding: 12,
@@ -8232,6 +8353,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
+    gap: 8,
     marginBottom: 3,
   },
   stepTitleText: {
@@ -8239,11 +8361,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#ffffff",
     flex: 1,
-    marginRight: 8,
+    flexShrink: 1,
+    minWidth: 0,
     lineHeight: 19,
   },
   durationBadgeContainer: {
     paddingTop: 1,
+    flexShrink: 0,
+    alignSelf: "flex-start",
   },
   stepDurationText: {
     fontSize: 11,
@@ -8254,6 +8379,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
     marginBottom: 4,
+    flexShrink: 1,
   },
   inlineTransitSelectorRow: {
     flexDirection: "row",
