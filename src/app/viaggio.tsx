@@ -6871,16 +6871,30 @@ export default function ViaggioScreen() {
 
                                               // In ritorno a lezioni terminate (con treno ancora da prendere) il tabellone è live da subito;
                                               // in altri contesti con lezione attiva usa il contesto calcolato dall'itinerario
+                                              const transitLegStartM =
+                                                parseTimeToMinutes(
+                                                  leg.startTime || "",
+                                                );
+                                              const isNearTransitNow =
+                                                Boolean(isSelectedDayToday) &&
+                                                transitLegStartM >= 0 &&
+                                                Math.abs(
+                                                  normalizeRelativeMinutes(
+                                                    transitLegStartM,
+                                                    currentNowMins,
+                                                  ) - currentNowMins,
+                                                ) <= 90;
                                               const isTransitLiveContext =
                                                 direction === "return" &&
                                                 Boolean(isSelectedDayToday) &&
                                                 isTargetLectureFinished &&
                                                 !isPastReturnTrain
                                                   ? true
-                                                  : Boolean(
+                                                  : isNearTransitNow ||
+                                                    (Boolean(
                                                       isSelectedDayToday,
                                                     ) &&
-                                                    !isLectureActiveOrFinished;
+                                                      !isLectureActiveOrFinished);
 
                                               const constraintTimeForTransit =
                                                 direction === "return"

@@ -239,6 +239,10 @@ let memoryDisruptionsCache: { timestamp: number; data: DisruptionEvent[] } | nul
 let inFlightDisruptionsPromise: Promise<DisruptionEvent[]> | null = null;
 let inFlightForceDisruptionsPromise: Promise<DisruptionEvent[]> | null = null;
 
+export function getCachedDisruptionsSync(): DisruptionEvent[] {
+  return memoryDisruptionsCache?.data || [];
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},

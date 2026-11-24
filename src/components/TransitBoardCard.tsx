@@ -73,9 +73,7 @@ function toOptimalTimingUpdate(
 ): OptimalTransitTimingUpdate | null {
   const opt = board.optimalDeparture || board.departures[0];
   if (!opt) return null;
-  const busDepTime = useLive
-    ? opt.estimatedTime || opt.scheduledTime
-    : opt.scheduledTime;
+  const busDepTime = opt.estimatedTime || opt.scheduledTime;
   const walkBefore = Math.max(0, opt.walkBeforeMinutes || 0);
   const walkAfter = Math.max(0, opt.walkAfterMinutes || 0);
   const inVehicle =
@@ -107,9 +105,7 @@ function toOptimalTimingUpdate(
   let firstAvailDepStr = busDepTime;
 
   for (const dep of listForFirst) {
-    const dStr = useLive
-      ? dep.estimatedTime || dep.scheduledTime
-      : dep.scheduledTime;
+    const dStr = dep.estimatedTime || dep.scheduledTime;
     const dM = parseHHMMToMins(dStr);
     if (dM < 0) continue;
     const dWalkBefore = Math.max(0, dep.walkBeforeMinutes || 0);
@@ -1208,33 +1204,46 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
    */
   const getDepartureLiveInfo = useCallback(
     (dep: TransitDepartureItem, index: number) => {
-      // 1. Controllo giorno attivo: se non è il giorno odierno, disattiva preventivamente qualsiasi logica live
+      const effectiveDepStr = dep.estimatedTime || dep.scheduledTime;
+      const delayMins =
+        typeof dep.delayMinutes === "number" ? Math.max(0, dep.delayMinutes) : 0;
+      const trafficMins =
+        typeof dep.trafficDelayMinutes === "number"
+          ? Math.max(0, dep.trafficDelayMinutes)
+          : 0;
+      const hasShift = Boolean(
+        (dep.scheduledTime &&
+          effectiveDepStr &&
+          dep.scheduledTime !== effectiveDepStr) ||
+          delayMins >= 1 ||
+          trafficMins >= 1 ||
+          dep.statusType === "delayed",
+      );
+
       if (!isSelectedDayActiveToday) {
         return {
           isLiveActive: false,
-          displayTime: dep.scheduledTime || dep.estimatedTime,
-          isDelayed: false,
-          isHeavyDelay: false,
-          dotColor: undefined,
-          delayText: null,
+          displayTime: effectiveDepStr,
+          isDelayed: hasShift,
+          isHeavyDelay: delayMins >= 5,
+          dotColor: hasShift ? "#fbbf24" : undefined,
+          delayText: delayMins > 0 ? `+${delayMins}m` : null,
           countdownText: null,
         };
       }
 
-      // 2. Giorno odierno attivo: calcola la posizione temporale rispetto all'orario reale attuale
       const now = new Date();
       const currentNowMins = now.getHours() * 60 + now.getMinutes();
-      const depTimeStr = dep.estimatedTime || dep.scheduledTime;
-      const depMins = parseHHMMToMins(depTimeStr);
+      const depMins = parseHHMMToMins(effectiveDepStr);
 
       if (depMins < 0) {
         return {
           isLiveActive: false,
-          displayTime: dep.scheduledTime || depTimeStr,
-          isDelayed: false,
-          isHeavyDelay: false,
-          dotColor: undefined,
-          delayText: null,
+          displayTime: effectiveDepStr,
+          isDelayed: hasShift,
+          isHeavyDelay: delayMins >= 5,
+          dotColor: hasShift ? "#fbbf24" : undefined,
+          delayText: delayMins > 0 ? `+${delayMins}m` : null,
           countdownText: null,
         };
       }
@@ -1243,18 +1252,16 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       if (diff < -720) diff += 1440;
       if (diff > 720) diff -= 1440;
 
-      // La fascia oraria in corso comprende i passaggi da -3 min fa fino a +50 min nel futuro
-      const isInCurrentTimeWindow = diff >= -3 && diff <= 50;
+      const isInCurrentTimeWindow = diff >= -3 && diff <= 75;
 
-      // 3. Controlla se il mezzo dispone effettivamente di dati live (GTFS-RT satellitare o segnalazione ritardo)
       const hasRealtimeData = Boolean(
         dep.isLive &&
-        (dep.statusType !== "scheduled" ||
-          (typeof dep.delayMinutes === "number" && dep.delayMinutes !== 0) ||
-          (dep.estimatedTime &&
-            dep.scheduledTime &&
-            dep.estimatedTime !== dep.scheduledTime) ||
-          isInCurrentTimeWindow),
+          (dep.statusType !== "scheduled" ||
+            delayMins > 0 ||
+            (dep.estimatedTime &&
+              dep.scheduledTime &&
+              dep.estimatedTime !== dep.scheduledTime) ||
+            isInCurrentTimeWindow),
       );
 
       const isLiveActive = isInCurrentTimeWindow && hasRealtimeData;
@@ -1262,32 +1269,32 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       if (!isLiveActive) {
         return {
           isLiveActive: false,
-          displayTime: dep.scheduledTime || depTimeStr,
-          isDelayed: false,
-          isHeavyDelay: false,
-          dotColor: undefined,
-          delayText: null,
+          displayTime: effectiveDepStr,
+          isDelayed: hasShift,
+          isHeavyDelay: delayMins >= 5,
+          dotColor: hasShift ? "#fbbf24" : undefined,
+          delayText: delayMins > 0 ? `+${delayMins}m` : null,
           countdownText: null,
         };
       }
 
-      const delayMins =
-        typeof dep.delayMinutes === "number" ? dep.delayMinutes : 0;
-      const isDelayed = dep.statusType === "delayed" || delayMins > 1;
-      const isHeavyDelay = isDelayed && delayMins >= 5;
-      const dotColor = isDelayed
-        ? isHeavyDelay
+      const liveDelayMins =
+        typeof dep.liveDelayMinutes === "number"
+          ? Math.max(0, dep.liveDelayMinutes)
+          : 0;
+      const isLiveDelayed = liveDelayMins >= 1;
+      const isHeavyLiveDelay = isLiveDelayed && liveDelayMins >= 5;
+      const dotColor = isLiveDelayed
+        ? isHeavyLiveDelay
           ? "#ef4444"
           : "#f59e0b"
         : "#10b981";
-      const delayText = isDelayed && delayMins > 0 ? `+${delayMins}m` : null;
+      const delayText = isLiveDelayed ? `+${liveDelayMins}m live` : "In orario";
 
-      // Calcolo testo countdown: "In arrivo", "tra Xm" o cadenzamento ad alta frequenza "ogni Xm"
       let countdownText: string | null = null;
       if (diff <= 1) {
         countdownText = "In arrivo";
       } else {
-        // Verifica se si tratta di una linea ad alta frequenza (es. Metro B) con corse cadenzate
         let headwayMins: number | null = null;
         for (let j = index + 1; j < filteredDepartures.length; j++) {
           const nextDep = filteredDepartures[j];
@@ -1315,9 +1322,9 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
 
       return {
         isLiveActive: true,
-        displayTime: dep.estimatedTime || dep.scheduledTime,
-        isDelayed,
-        isHeavyDelay,
+        displayTime: effectiveDepStr,
+        isDelayed: hasShift,
+        isHeavyDelay: isHeavyLiveDelay,
         dotColor,
         delayText,
         countdownText,
@@ -1601,8 +1608,6 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
             const liveInfo = getDepartureLiveInfo(dep, index);
             const displayTime = liveInfo.displayTime;
             const countdown = liveInfo.countdownText;
-            const isDelayed = liveInfo.isDelayed;
-            const isHeavyDelay = liveInfo.isHeavyDelay;
             const dotColor = liveInfo.dotColor;
             const isLiveTrip = liveInfo.isLiveActive;
             const isSuggested = Boolean(
@@ -1645,119 +1650,244 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                   </View>
                 )}
 
-                {/* Riga 1: Badge Linea + Pallino Live a sinistra; Orario + Durata (e sotto Countdown) a destra */}
-                <View style={styles.schematicTopRow}>
-                  <View style={styles.schematicTopLeft}>
-                    {/* Badge Linea / Soluzione con cambio compatta */}
-                    {renderLineBadges(dep)}
+                {/* Riga 1: Badge Linea + Pallino Ufficiale Live a sinistra; Orario (giallo sopra + barrato sotto) + Durata a destra */}
+                {(() => {
+                  const effSpanMins = getDepartureTransitSpanMinutes(dep);
+                  const schedSpanMins =
+                    typeof dep.scheduledInVehicleMinutes === "number" &&
+                    dep.scheduledInVehicleMinutes > 0
+                      ? dep.scheduledInVehicleMinutes
+                      : effSpanMins;
+                  const hasDepTimeShift = Boolean(
+                    dep.scheduledTime &&
+                      displayTime &&
+                      dep.scheduledTime !== displayTime,
+                  );
+                  const hasSpanShift = effSpanMins > schedSpanMins;
+                  const trafficMins = Math.max(0, dep.trafficDelayMinutes ?? 0);
+                  const liveMins = Math.max(0, dep.liveDelayMinutes ?? 0);
+                  const trafficIsHeavy = trafficMins >= 5;
+                  const trafficRingColor = trafficIsHeavy
+                    ? "#f87171"
+                    : "#fbbf24";
+                  const trafficBorderColor = trafficIsHeavy
+                    ? "rgba(239, 68, 68, 0.44)"
+                    : "rgba(251, 191, 36, 0.42)";
+                  const trafficBgColor = trafficIsHeavy
+                    ? "rgba(239, 68, 68, 0.10)"
+                    : "rgba(251, 191, 36, 0.08)";
 
-                    {/* Pallino di stato Live e ritardo affiancato al badge della linea */}
-                    {isLiveTrip && dotColor && (
-                      <View style={styles.liveStatusDotWrap}>
-                        <View
-                          style={[
-                            styles.liveStatusDot,
-                            { backgroundColor: dotColor },
-                          ]}
-                        />
-                        {isDelayed && dep.delayMinutes > 0 && (
-                          <Text
+                  return (
+                    <>
+                      <View style={styles.schematicTopRow}>
+                        <View style={styles.schematicTopLeft}>
+                          {renderLineBadges(dep)}
+
+                          {/* Livello 1: Pallino pieno SOLO per stato ufficiale live GTFS-RT */}
+                          {isLiveTrip && dotColor && (
+                            <View
+                              style={[
+                                styles.liveStatusDotWrap,
+                                {
+                                  borderColor:
+                                    liveMins > 0
+                                      ? "rgba(245, 158, 11, 0.38)"
+                                      : "rgba(16, 185, 129, 0.34)",
+                                  backgroundColor:
+                                    liveMins > 0
+                                      ? "rgba(245, 158, 11, 0.12)"
+                                      : "rgba(16, 185, 129, 0.12)",
+                                },
+                              ]}
+                            >
+                              <View
+                                style={[
+                                  styles.liveStatusDot,
+                                  { backgroundColor: dotColor },
+                                ]}
+                              />
+                              <Text
+                                style={[
+                                  styles.liveDelayText,
+                                  {
+                                    color:
+                                      liveMins === 0
+                                        ? "#34d399"
+                                        : liveMins >= 5
+                                          ? "#fca5a5"
+                                          : "#fbbf24",
+                                  },
+                                ]}
+                              >
+                                {liveMins > 0 ? `+${liveMins}m live` : "Live"}
+                              </Text>
+                            </View>
+                          )}
+
+                          {/* Livello 2: Pallino ad anello distinto SOLO per possibile ritardo aggiuntivo da traffico/semafori */}
+                          {trafficMins > 0 && (
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 4,
+                                paddingHorizontal: 6,
+                                paddingVertical: 2.5,
+                                borderRadius: 6,
+                                borderWidth: 1,
+                                borderStyle: "dashed",
+                                borderColor: trafficBorderColor,
+                                backgroundColor: trafficBgColor,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: 7,
+                                  height: 7,
+                                  borderRadius: 3.5,
+                                  borderWidth: 1.6,
+                                  borderColor: trafficRingColor,
+                                  backgroundColor: "transparent",
+                                }}
+                              />
+                              <Text
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: "700",
+                                  color: trafficRingColor,
+                                }}
+                              >
+                                ~+{trafficMins}m traffico
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={styles.schematicTopRight}>
+                          <View
                             style={[
-                              styles.liveDelayText,
-                              isHeavyDelay && { color: "#f87171" },
+                              styles.schematicTimeAndDurationRow,
+                              { alignItems: "flex-start" },
                             ]}
                           >
-                            +{dep.delayMinutes}m
+                            {/* Orario: modificato in giallo SOPRA, originale barrato SOTTO */}
+                            <View style={{ alignItems: "flex-end" }}>
+                              <Text
+                                style={[
+                                  styles.departureTimeMain,
+                                  hasDepTimeShift && { color: "#fbbf24" },
+                                ]}
+                              >
+                                {displayTime}
+                              </Text>
+                              {hasDepTimeShift && (
+                                <Text
+                                  style={[
+                                    styles.timeScheduledStrike,
+                                    { marginTop: 1 },
+                                  ]}
+                                >
+                                  {dep.scheduledTime}
+                                </Text>
+                              )}
+                            </View>
+
+                            <View
+                              style={[
+                                styles.durationInlineBadge,
+                                hasSpanShift && {
+                                  alignItems: "center",
+                                  paddingVertical: 3,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="time-outline"
+                                size={11}
+                                color={hasSpanShift ? "#fbbf24" : "#94a3b8"}
+                                style={{ marginRight: 3 }}
+                              />
+                              <View style={{ alignItems: "flex-end" }}>
+                                <Text
+                                  style={[
+                                    styles.durationInlineBadgeText,
+                                    hasSpanShift && { color: "#fbbf24" },
+                                  ]}
+                                >
+                                  {effSpanMins}m
+                                </Text>
+                                {hasSpanShift && (
+                                  <Text
+                                    style={{
+                                      color: "#64748b",
+                                      fontSize: 9.5,
+                                      fontWeight: "600",
+                                      textDecorationLine: "line-through",
+                                      lineHeight: 11,
+                                    }}
+                                  >
+                                    {schedSpanMins}m
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                          </View>
+
+                          {isLiveTrip && countdown && !isLastUseful && (
+                            <View style={styles.countdownBadge}>
+                              <Ionicons
+                                name="time-outline"
+                                size={11}
+                                color="#34d399"
+                                style={{ marginRight: 3 }}
+                              />
+                              <Text
+                                style={styles.countdownText}
+                                numberOfLines={1}
+                              >
+                                {countdown}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+
+                      {(!dep.isDirect || dep.transfersCount > 0) && (
+                        <View style={styles.transferBadgeRow}>
+                          <Ionicons
+                            name="git-branch-outline"
+                            size={11}
+                            color="#c084fc"
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={styles.transferBadgeText}>
+                            {dep.transfersCount && dep.transfersCount > 1
+                              ? `Con ${dep.transfersCount} cambi`
+                              : "Con un cambio"}
                           </Text>
-                        )}
-                      </View>
-                    )}
-                  </View>
+                        </View>
+                      )}
 
-                  {/* Colonna Destra: Orario + Durata sopra; Badge "tra xm" allineato a destra sotto */}
-                  <View style={styles.schematicTopRight}>
-                    <View style={styles.schematicTimeAndDurationRow}>
-                      {isDelayed &&
-                        dep.scheduledTime &&
-                        dep.scheduledTime !== displayTime && (
-                          <Text style={styles.timeScheduledStrike}>
-                            {dep.scheduledTime}
+                      <View style={styles.schematicBody}>
+                        <View style={styles.schemaFieldRow}>
+                          <Text style={styles.schemaFieldLabel}>Direzione:</Text>
+                          <Text
+                            style={styles.schemaFieldValue}
+                            numberOfLines={1}
+                          >
+                            {dep.headsign}
                           </Text>
-                        )}
-                      <Text
-                        style={[
-                          styles.departureTimeMain,
-                          isDelayed && {
-                            color: isHeavyDelay ? "#f87171" : "#fb923c",
-                          },
-                        ]}
-                      >
-                        {displayTime}
-                      </Text>
-
-                      {/* Durata effettiva della tratta sui mezzi (dalla prima salita all'ultima discesa, inclusi eventuali cambi) */}
-                      <View style={styles.durationInlineBadge}>
-                        <Ionicons
-                          name="time-outline"
-                          size={11}
-                          color="#94a3b8"
-                          style={{ marginRight: 3 }}
-                        />
-                        <Text style={styles.durationInlineBadgeText}>
-                          {getDepartureTransitSpanMinutes(dep)}m
-                        </Text>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={13}
+                            color="#64748b"
+                            style={{ marginLeft: 6, marginTop: 2 }}
+                          />
+                        </View>
                       </View>
-                    </View>
-
-                    {/* Badge "tra xm" posizionato SOTTO quello della durata (escluso su ULTIMA CORSA) */}
-                    {isLiveTrip && countdown && !isLastUseful && (
-                      <View style={styles.countdownBadge}>
-                        <Ionicons
-                          name="time-outline"
-                          size={11}
-                          color="#34d399"
-                          style={{ marginRight: 3 }}
-                        />
-                        <Text style={styles.countdownText} numberOfLines={1}>
-                          {countdown}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-
-                {/* Badge Soluzione con Cambio: esclusivamente "Con un cambio" senza numeri */}
-                {(!dep.isDirect || dep.transfersCount > 0) && (
-                  <View style={styles.transferBadgeRow}>
-                    <Ionicons
-                      name="git-branch-outline"
-                      size={11}
-                      color="#c084fc"
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text style={styles.transferBadgeText}>
-                      {dep.transfersCount && dep.transfersCount > 1
-                        ? `Con ${dep.transfersCount} cambi`
-                        : "Con un cambio"}
-                    </Text>
-                  </View>
-                )}
-
-                {/* Blocco Schematico: Direzione per esteso */}
-                <View style={styles.schematicBody}>
-                  <View style={styles.schemaFieldRow}>
-                    <Text style={styles.schemaFieldLabel}>Direzione:</Text>
-                    <Text style={styles.schemaFieldValue} numberOfLines={1}>
-                      {dep.headsign}
-                    </Text>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={13}
-                      color="#64748b"
-                      style={{ marginLeft: 6, marginTop: 2 }}
-                    />
-                  </View>
-                </View>
+                    </>
+                  );
+                })()}
               </TouchableOpacity>
             );
           })}
@@ -1785,9 +1915,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
               onPress={() => setSelectedDepartureModal(lastDep)}
               style={styles.lastUsefulSummaryBar}
             >
-              {/* Riga 1: Etichetta informativa Ultima Corsa a sinistra, Orario partenza -> discesa mezzo a destra */}
+              {/* Riga 1: Etichetta informativa Ultima Corsa (+ eventuali minuti di ritardo) a sinistra, Orario partenza -> discesa mezzo a destra */}
               <View style={styles.lastUsefulBarTopRow}>
-                <View style={styles.lastUsefulSummaryLeft}>
+                <View
+                  style={[
+                    styles.lastUsefulSummaryLeft,
+                    { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+                  ]}
+                >
                   <View style={styles.lastUsefulRolePill}>
                     <Ionicons
                       name="timer-outline"
@@ -1799,13 +1934,165 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                       ULTIMA CORSA
                     </Text>
                   </View>
+
+                  {(() => {
+                    const lastLiveMins = Math.max(0, lastDep.liveDelayMinutes ?? 0);
+                    const lastTrafficMins = Math.max(0, lastDep.trafficDelayMinutes ?? 0);
+                    return (
+                      <>
+                        {lastLiveInfo.isLiveActive && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 4,
+                              paddingHorizontal: 5.5,
+                              paddingVertical: 2,
+                              borderRadius: 5,
+                              borderWidth: 1,
+                              borderColor:
+                                lastLiveMins > 0
+                                  ? lastLiveMins >= 5
+                                    ? "rgba(239, 68, 68, 0.42)"
+                                    : "rgba(245, 158, 11, 0.40)"
+                                  : "rgba(16, 185, 129, 0.36)",
+                              backgroundColor:
+                                lastLiveMins > 0
+                                  ? lastLiveMins >= 5
+                                    ? "rgba(239, 68, 68, 0.14)"
+                                    : "rgba(245, 158, 11, 0.14)"
+                                  : "rgba(16, 185, 129, 0.12)",
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: 3,
+                                backgroundColor:
+                                  lastLiveMins > 0
+                                    ? lastLiveMins >= 5
+                                      ? "#ef4444"
+                                      : "#f59e0b"
+                                    : "#10b981",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                fontSize: 9.5,
+                                fontWeight: "700",
+                                color:
+                                  lastLiveMins > 0
+                                    ? lastLiveMins >= 5
+                                      ? "#fca5a5"
+                                      : "#fbbf24"
+                                    : "#34d399",
+                              }}
+                            >
+                              {lastLiveMins > 0 ? `+${lastLiveMins}m live` : "Live"}
+                            </Text>
+                          </View>
+                        )}
+                        {lastTrafficMins > 0 && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 4,
+                              paddingHorizontal: 5.5,
+                              paddingVertical: 2,
+                              borderRadius: 5,
+                              borderWidth: 1,
+                              borderStyle: "dashed",
+                              borderColor:
+                                lastTrafficMins >= 5
+                                  ? "rgba(239, 68, 68, 0.44)"
+                                  : "rgba(251, 191, 36, 0.42)",
+                              backgroundColor:
+                                lastTrafficMins >= 5
+                                  ? "rgba(239, 68, 68, 0.10)"
+                                  : "rgba(251, 191, 36, 0.08)",
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: 3,
+                                borderWidth: 1.5,
+                                borderColor:
+                                  lastTrafficMins >= 5 ? "#f87171" : "#fbbf24",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                fontSize: 9.5,
+                                fontWeight: "700",
+                                color:
+                                  lastTrafficMins >= 5 ? "#f87171" : "#fbbf24",
+                              }}
+                            >
+                              +{lastTrafficMins}m traffico
+                            </Text>
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
                 </View>
 
                 <View style={styles.lastUsefulSummaryRight}>
-                  <Text style={styles.lastUsefulSummaryTime}>
-                    {lastDepTime}
-                    {lastBusAlightingTime ? ` → ${lastBusAlightingTime}` : ""}
-                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "flex-start",
+                      gap: 5,
+                    }}
+                  >
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text
+                        style={[
+                          styles.lastUsefulSummaryTime,
+                          lastDep.scheduledTime &&
+                            lastDep.scheduledTime !== lastDepTime && {
+                              color: "#fbbf24",
+                            },
+                        ]}
+                      >
+                        {lastDepTime}
+                      </Text>
+                      {lastDep.scheduledTime &&
+                        lastDep.scheduledTime !== lastDepTime && (
+                          <Text style={styles.timeScheduledStrike}>
+                            {lastDep.scheduledTime}
+                          </Text>
+                        )}
+                    </View>
+                    {lastBusAlightingTime ? (
+                      <>
+                        <Text style={styles.lastUsefulSummaryTime}>→</Text>
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text
+                            style={[
+                              styles.lastUsefulSummaryTime,
+                              lastDep.scheduledAlightingTime &&
+                                lastDep.scheduledAlightingTime !==
+                                  lastBusAlightingTime && { color: "#fbbf24" },
+                            ]}
+                          >
+                            {lastBusAlightingTime}
+                          </Text>
+                          {lastDep.scheduledAlightingTime &&
+                            lastDep.scheduledAlightingTime !==
+                              lastBusAlightingTime && (
+                              <Text style={styles.timeScheduledStrike}>
+                                {lastDep.scheduledAlightingTime}
+                              </Text>
+                            )}
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
                 </View>
               </View>
 

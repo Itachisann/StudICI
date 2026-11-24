@@ -2095,6 +2095,454 @@ export function analyzeRouteFluency(options: {
   };
 }
 
+export interface LiveUrbanWeather {
+  condition:
+    | "sereno"
+    | "pioggia_debole"
+    | "pioggia_forte"
+    | "temporale"
+    | "vento_freddo";
+  precipitationMm: number;
+  trafficFrictionMultiplier: number;
+  crowdingDelta: number;
+  label: string;
+}
+
+const weatherMemoryCache = new Map<
+  string,
+  { timestamp: number; data: LiveUrbanWeather }
+>();
+const weatherInFlight = new Map<string, Promise<LiveUrbanWeather | null>>();
+const WEATHER_TTL_MS = 15 * 60 * 1000; // 15 minuti
+
+/**
+ * Rileva il meteo urbano REALE in corso (Open-Meteo, 0 API key, cache RAM 15m)
+ * per modulare dinamicamente sia i rallentamenti stradali sia la stima dell'affollamento a bordo.
+ */
+export async function fetchLiveUrbanWeather(
+  lat = 41.9028,
+  lon = 12.4964,
+): Promise<LiveUrbanWeather | null> {
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const now = Date.now();
+  const cached = weatherMemoryCache.get(key);
+  if (cached && now - cached.timestamp < WEATHER_TTL_MS) {
+    return cached.data;
+  }
+  const inflight = weatherInFlight.get(key);
+  if (inflight) return inflight;
+
+  const p = (async (): Promise<LiveUrbanWeather | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&current=precipitation,rain,showers,weather_code,wind_speed_10m,temperature_2m&forecast_days=1`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return cached?.data ?? null;
+      const json = await res.json();
+      const cur = json?.current;
+      if (!cur) return cached?.data ?? null;
+
+      const precip = Math.max(
+        0,
+        Number(cur.precipitation ?? 0),
+        Number(cur.rain ?? 0) + Number(cur.showers ?? 0),
+      );
+      const code = Number(cur.weather_code ?? 0);
+      const wind = Number(cur.wind_speed_10m ?? 0);
+      const temp = Number(cur.temperature_2m ?? 16);
+
+      let result: LiveUrbanWeather = {
+        condition: "sereno",
+        precipitationMm: precip,
+        trafficFrictionMultiplier: 1.0,
+        crowdingDelta: 0,
+        label: "",
+      };
+
+      if (code >= 95 || precip >= 4.0) {
+        result = {
+          condition: "temporale",
+          precipitationMm: precip,
+          trafficFrictionMultiplier: 1.65,
+          crowdingDelta: 0.55,
+          label: "temporale in corso",
+        };
+      } else if (
+        precip >= 1.2 ||
+        code === 63 ||
+        code === 65 ||
+        code === 81 ||
+        code === 82
+      ) {
+        result = {
+          condition: "pioggia_forte",
+          precipitationMm: precip,
+          trafficFrictionMultiplier: 1.45,
+          crowdingDelta: 0.48,
+          label: "pioggia intensa in corso",
+        };
+      } else if (
+        precip > 0.1 ||
+        (code >= 51 && code <= 67) ||
+        code === 80 ||
+        (code >= 71 && code <= 77)
+      ) {
+        result = {
+          condition: "pioggia_debole",
+          precipitationMm: precip,
+          trafficFrictionMultiplier: 1.24,
+          crowdingDelta: 0.28,
+          label: "pioggia in corso",
+        };
+      } else if (wind >= 28 || (temp <= 6 && wind >= 18)) {
+        result = {
+          condition: "vento_freddo",
+          precipitationMm: 0,
+          trafficFrictionMultiplier: 1.06,
+          crowdingDelta: 0.16,
+          label: "",
+        };
+      }
+
+      weatherMemoryCache.set(key, { timestamp: Date.now(), data: result });
+      return result;
+    } catch {
+      clearTimeout(timer);
+      return cached?.data ?? null;
+    } finally {
+      weatherInFlight.delete(key);
+    }
+  })();
+
+  weatherInFlight.set(key, p);
+  return p;
+}
+
+export interface TransitTrafficFluencyResult {
+  departureTrafficDelayMinutes: number;
+  rideTrafficDelayMinutes: number;
+  totalTrafficDelayMinutes: number;
+  status: "scorrevole" | "moderato" | "rallentamenti" | "intenso";
+  conditionDescription: string;
+  isPeakHour: boolean;
+  distanceKm: number;
+}
+
+/**
+ * Analisi DINAMICA multi-fattore (mai statica, variabile giorno per giorno e ora per ora)
+ * del possibile ritardo aggiuntivo da traffico stradale per i mezzi urbani:
+ * - Attiva solo nella finestra temporale ravvicinata (~1h dall'orario attuale, quando ci sono dati reali su mezzi e viabilità);
+ * - Non forza ritardi quando la viabilità è regolare (ritardo = 0 min);
+ * - Combina geometria reale della tratta, calendario festivo/feriale, curva oraria continua,
+ *   telemetria GPS reale osservata sulle corse vicine dello stesso corridoio, eventi live di viabilità/lavori e meteo reale in corso.
+ */
+export function analyzeTransitRouteFluency(params: {
+  mode: "bus" | "tram" | "metro" | "rail";
+  distanceKm: number;
+  baseRideMinutes: number;
+  intersectionsCount: number;
+  stopsCount: number;
+  isOriginTerminus: boolean;
+  targetTimeStr?: string;
+  targetDate?: Date;
+  isWithinLiveWindow?: boolean;
+  observedCorridorDelayMins?: number | null;
+  weather?: LiveUrbanWeather | null;
+  hasActiveRoadAlert?: boolean;
+  hasActiveUrbanDisruption?: boolean;
+}): TransitTrafficFluencyResult {
+  const {
+    mode,
+    distanceKm,
+    baseRideMinutes,
+    intersectionsCount,
+    stopsCount,
+    isOriginTerminus,
+    targetTimeStr,
+    targetDate,
+    isWithinLiveWindow = false,
+    observedCorridorDelayMins = null,
+    weather = null,
+    hasActiveRoadAlert = false,
+    hasActiveUrbanDisruption = false,
+  } = params;
+
+  const cleanKm = Math.max(0.25, +distanceKm.toFixed(1));
+
+  // Metro e ferrovie urbane viaggiano su sede propria esclusiva: zero ritardo da traffico stradale
+  if (mode === "metro" || mode === "rail") {
+    return {
+      departureTrafficDelayMinutes: 0,
+      rideTrafficDelayMinutes: 0,
+      totalTrafficDelayMinutes: 0,
+      status: "scorrevole",
+      conditionDescription:
+        "Circolazione su sede propria (esente dal traffico stradale)",
+      isPeakHour: false,
+      distanceKm: cleanKm,
+    };
+  }
+
+  // Fuori dalla finestra ravvicinata (~1 ora dall'orario attuale di oggi) non si applicano stime speculative di traffico
+  if (!isWithinLiveWindow) {
+    return {
+      departureTrafficDelayMinutes: 0,
+      rideTrafficDelayMinutes: 0,
+      totalTrafficDelayMinutes: 0,
+      status: "scorrevole",
+      conditionDescription: `Traffico scorrevole lungo i ${cleanKm} km della tratta`,
+      isPeakHour: false,
+      distanceKm: cleanKm,
+    };
+  }
+
+  let totalMins = 8 * 60;
+  if (targetTimeStr && /^\d{1,2}:\d{2}$/.test(targetTimeStr.trim())) {
+    const [hStr, mStr] = targetTimeStr.trim().split(":");
+    const h = parseInt(hStr, 10);
+    const m = parseInt(mStr, 10);
+    if (!isNaN(h) && !isNaN(m)) {
+      totalMins = h * 60 + m;
+    }
+  } else {
+    const now = new Date();
+    totalMins = now.getHours() * 60 + now.getMinutes();
+  }
+
+  const dateObj = targetDate || new Date();
+  const dayOfWeek = dateObj.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  const holidayProfile = getItalianHolidayProfile(dateObj, totalMins, cleanKm);
+
+  const intersectionsPerKm = cleanKm > 0 ? intersectionsCount / cleanKm : 2;
+  const stopsPerKm = cleanKm > 0 ? stopsCount / cleanKm : 2.5;
+  const scheduledHours = Math.max(1, baseRideMinutes) / 60;
+  const commercialSpeedKmh = cleanKm / scheduledHours;
+
+  const geometryFriction =
+    1 +
+    Math.min(
+      0.45,
+      Math.max(
+        0,
+        (intersectionsPerKm - 1.3) * 0.09 +
+          (stopsPerKm - 2.2) * 0.07 +
+          (commercialSpeedKmh > 19 ? 0.1 : 0),
+      ),
+    );
+  const modeFactor = mode === "tram" ? 0.52 : 1.0;
+  const weatherFactor = weather?.trafficFrictionMultiplier ?? 1.0;
+  const disruptionFactor =
+    (hasActiveRoadAlert ? 1.25 : 1.0) * (hasActiveUrbanDisruption ? 1.22 : 1.0);
+
+  let effectiveIntensity = 0;
+  let isPeakHour = false;
+
+  if (holidayProfile.isHoliday || isWeekend) {
+    const midWeekendDiff = totalMins - 690; // 11:30
+    const eveWeekendDiff = totalMins - 1095; // 18:15
+    const wkIntensity = Math.max(
+      0.24 * Math.exp(-(midWeekendDiff * midWeekendDiff) / (2 * 70 * 70)),
+      0.34 * Math.exp(-(eveWeekendDiff * eveWeekendDiff) / (2 * 75 * 75)),
+    );
+    effectiveIntensity = holidayProfile.isHoliday
+      ? wkIntensity * 0.65
+      : wkIntensity;
+    isPeakHour = false;
+  } else {
+    const morningDiff = totalMins - 495; // 08:15
+    const morningIntensity = Math.exp(
+      -(morningDiff * morningDiff) / (2 * 44 * 44),
+    );
+
+    const middayDiff = totalMins - 820; // 13:40
+    const middayIntensity =
+      0.62 * Math.exp(-(middayDiff * middayDiff) / (2 * 38 * 38));
+
+    const eveningDiff = totalMins - 1080; // 18:00
+    const eveningIntensity =
+      0.92 * Math.exp(-(eveningDiff * eveningDiff) / (2 * 50 * 50));
+
+    const offPeakBaseline =
+      totalMins >= 450 && totalMins <= 1200 ? 0.12 : 0.03;
+
+    let dayWeight = 1.0;
+    if (dayOfWeek === 1) dayWeight = 0.94;
+    else if (dayOfWeek === 5) dayWeight = 0.97;
+
+    effectiveIntensity =
+      Math.max(
+        offPeakBaseline,
+        morningIntensity,
+        middayIntensity,
+        eveningIntensity,
+      ) *
+      dayWeight *
+      holidayProfile.commuterReductionFactor;
+
+    isPeakHour = effectiveIntensity >= 0.5;
+  }
+
+  let liveCorridorCalibration = 1.0;
+  let observedExtraBoost = 0;
+  if (typeof observedCorridorDelayMins === "number") {
+    if (
+      observedCorridorDelayMins <= 0 &&
+      weatherFactor <= 1.05 &&
+      !hasActiveRoadAlert &&
+      !hasActiveUrbanDisruption
+    ) {
+      liveCorridorCalibration = 0.42;
+    } else if (observedCorridorDelayMins >= 3) {
+      liveCorridorCalibration = 1.18;
+      observedExtraBoost = Math.min(
+        3,
+        Math.floor((observedCorridorDelayMins - 1) * 0.35),
+      );
+    }
+  }
+
+  const combinedFactor =
+    geometryFriction *
+    modeFactor *
+    weatherFactor *
+    disruptionFactor *
+    liveCorridorCalibration;
+
+  const rawRideDelay =
+    (baseRideMinutes * 0.2 + cleanKm * 0.45) *
+      combinedFactor *
+      effectiveIntensity +
+    observedExtraBoost * 0.55 +
+    (hasActiveRoadAlert && effectiveIntensity > 0.2 ? 0.7 : 0);
+
+  const rideTrafficDelayMinutes =
+    rawRideDelay >= 1.15 ? Math.min(7, Math.round(rawRideDelay)) : 0;
+
+  const upstreamExposure = isOriginTerminus ? 0.34 : 0.82;
+  const rawUpstreamDelay =
+    (1.4 + Math.min(2.4, cleanKm * 0.3)) *
+      combinedFactor *
+      upstreamExposure *
+      effectiveIntensity +
+    observedExtraBoost * 0.45;
+  const departureTrafficDelayMinutes =
+    rawUpstreamDelay >= 1.2 ? Math.min(6, Math.round(rawUpstreamDelay)) : 0;
+
+  const totalTrafficDelayMinutes =
+    departureTrafficDelayMinutes + rideTrafficDelayMinutes;
+
+  const weatherNote = weather?.label ? ` (${weather.label})` : "";
+  let status: "scorrevole" | "moderato" | "rallentamenti" | "intenso" =
+    "scorrevole";
+  let conditionDescription = `Traffico scorrevole lungo i ${cleanKm} km della tratta${weatherNote}`;
+
+  if (totalTrafficDelayMinutes <= 0) {
+    status = "scorrevole";
+    conditionDescription = `Traffico scorrevole lungo i ${cleanKm} km della tratta${weatherNote}`;
+  } else if (totalTrafficDelayMinutes <= 2) {
+    status = "moderato";
+    conditionDescription = `Traffico moderato lungo i ${cleanKm} km della tratta${weatherNote}`;
+  } else if (totalTrafficDelayMinutes <= 4) {
+    status = "rallentamenti";
+    conditionDescription = `Traffico con rallentamenti lungo i ${cleanKm} km della tratta${weatherNote}`;
+  } else {
+    status = "intenso";
+    conditionDescription = `Traffico intenso lungo i ${cleanKm} km della tratta${weatherNote}`;
+  }
+
+  return {
+    departureTrafficDelayMinutes,
+    rideTrafficDelayMinutes,
+    totalTrafficDelayMinutes,
+    status,
+    conditionDescription,
+    isPeakHour,
+    distanceKm: cleanKm,
+  };
+}
+
+/**
+ * Stima dinamica dell'affollamento a bordo ("low" | "medium" | "high") combinando:
+ * fascia oraria pendolare/universitaria, calendario feriale/festivo, maltempo live (pioggia/temporali/vento freddo),
+ * accumulo passeggeri per ritardi/traffico in corso (bus bunching) ed eventuali scioperi TPL attivi.
+ */
+export function estimateDynamicTransitCrowding(params: {
+  mode: "bus" | "tram" | "metro" | "rail";
+  targetTimeStr?: string;
+  targetDate?: Date;
+  isMajorHub?: boolean;
+  weather?: LiveUrbanWeather | null;
+  liveDelayMinutes?: number;
+  trafficDelayMinutes?: number;
+  hasActiveTplStrike?: boolean;
+}): "low" | "medium" | "high" {
+  const {
+    mode,
+    targetTimeStr,
+    targetDate,
+    isMajorHub = false,
+    weather = null,
+    liveDelayMinutes = 0,
+    trafficDelayMinutes = 0,
+    hasActiveTplStrike = false,
+  } = params;
+
+  let totalMins = 12 * 60;
+  if (targetTimeStr && /^\d{1,2}:\d{2}$/.test(targetTimeStr.trim())) {
+    const [hStr, mStr] = targetTimeStr.trim().split(":");
+    const h = parseInt(hStr, 10);
+    const m = parseInt(mStr, 10);
+    if (!isNaN(h) && !isNaN(m)) {
+      totalMins = h * 60 + m;
+    }
+  }
+
+  const dateObj = targetDate || new Date();
+  const dayOfWeek = dateObj.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const holidayProfile = getItalianHolidayProfile(dateObj, totalMins, 3);
+
+  let demandScore = 0.15;
+  if (holidayProfile.isHoliday || isWeekend) {
+    const wkMid = Math.exp(-((totalMins - 720) * (totalMins - 720)) / (2 * 90 * 90));
+    const wkEve = Math.exp(-((totalMins - 1080) * (totalMins - 1080)) / (2 * 85 * 85));
+    demandScore = 0.12 + 0.32 * Math.max(wkMid, wkEve);
+  } else {
+    const wMorning = Math.exp(-((totalMins - 495) * (totalMins - 495)) / (2 * 48 * 48));
+    const wMidday =
+      0.72 * Math.exp(-((totalMins - 810) * (totalMins - 810)) / (2 * 44 * 44));
+    const wEvening =
+      0.92 * Math.exp(-((totalMins - 1065) * (totalMins - 1065)) / (2 * 56 * 56));
+    const daytimeBase = totalMins >= 450 && totalMins <= 1185 ? 0.26 : 0.1;
+    demandScore =
+      Math.max(daytimeBase, wMorning, wMidday, wEvening) *
+      holidayProfile.commuterReductionFactor;
+  }
+
+  if (mode === "metro") demandScore += 0.16;
+  if (isMajorHub) demandScore += 0.08;
+
+  if (weather) {
+    demandScore += weather.crowdingDelta;
+  }
+
+  const effectiveDelay = Math.max(liveDelayMinutes, trafficDelayMinutes);
+  if (effectiveDelay >= 6) demandScore += 0.26;
+  else if (effectiveDelay >= 3) demandScore += 0.15;
+
+  if (hasActiveTplStrike) {
+    demandScore += 0.45;
+  }
+
+  if (demandScore >= 0.78) return "high";
+  if (demandScore >= 0.44) return "medium";
+  return "low";
+}
+
 /**
  * Calcola in modo REALE e PRECISO la distanza stradale e il tempo di percorrenza
  * (comprensivo di traffico aggiunto alla tempistica base) tra l'indirizzo scelto e la stazione scelta.

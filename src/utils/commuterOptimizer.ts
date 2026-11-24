@@ -1043,12 +1043,8 @@ async function computeOutboundItinerary(
 
     const resolveOutboundBoard = async (lecture: DayLectureTarget) => {
       try {
-        const isTrainAlreadyArrived = Boolean(
-          train.isArrivedAtDestination || train.trainStatusType === 'arrived'
-        );
         const isTransitLive = Boolean(
           isToday &&
-            !isTrainAlreadyArrived &&
             Math.abs(normalizeRelativeMinutes(trainArrMins, nowMins) - nowMins) <= 90
         );
         const lectureEndM = parseTimeToMinutes(lecture.endTime);
@@ -1089,9 +1085,7 @@ async function computeOutboundItinerary(
         );
         const opt = boardData.optimalDeparture || boardData.departures[0];
         if (opt) {
-          const optDepStr = isTransitLive
-            ? opt.estimatedTime || opt.scheduledTime
-            : opt.scheduledTime;
+          const optDepStr = opt.estimatedTime || opt.scheduledTime;
           const optDepM = parseTimeToMinutes(optDepStr);
           const optArrM = parseTimeToMinutes(opt.arrivalTime);
           const walkBefore = Math.max(0, opt.walkBeforeMinutes ?? 0);
@@ -1114,9 +1108,7 @@ async function computeOutboundItinerary(
             let earliestBusM = optDepM >= 0 ? optDepM : Infinity;
             let firstAvailDepStr = optDepStr;
             for (const dep of boardData.departures.slice(0, 4)) {
-              const dStr = isTransitLive
-                ? dep.estimatedTime || dep.scheduledTime
-                : dep.scheduledTime;
+              const dStr = dep.estimatedTime || dep.scheduledTime;
               const dM = parseTimeToMinutes(dStr);
               if (dM >= 0 && dM < earliestBusM) {
                 earliestBusM = dM;
@@ -2033,9 +2025,7 @@ async function computeReturnItinerary(
         );
         const opt = boardData.optimalDeparture || boardData.departures[0];
         if (opt) {
-          const depStr = isTransitLive
-            ? opt.estimatedTime || opt.scheduledTime
-            : opt.scheduledTime;
+          const depStr = opt.estimatedTime || opt.scheduledTime;
           const sM = parseTimeToMinutes(depStr);
           const eM = parseTimeToMinutes(opt.arrivalTime);
           const walkBefore = Math.max(0, opt.walkBeforeMinutes ?? 0);
@@ -2059,9 +2049,7 @@ async function computeReturnItinerary(
             let earliestLeaveM = userStartM;
             let firstAvailDepStr = depStr;
             for (const dep of boardData.departures.slice(0, 4)) {
-              const dStr = isTransitLive
-                ? dep.estimatedTime || dep.scheduledTime
-                : dep.scheduledTime;
+              const dStr = dep.estimatedTime || dep.scheduledTime;
               const dM = parseTimeToMinutes(dStr);
               if (dM < 0) continue;
               const dWalkBefore = Math.max(0, dep.walkBeforeMinutes ?? 0);
@@ -2686,9 +2674,7 @@ async function computeReturnItinerary(
             });
             const opt = board.optimalDeparture || board.departures?.[0];
             if (opt) {
-              const depStr = isTransitLive
-                ? opt.estimatedTime || opt.scheduledTime
-                : opt.scheduledTime;
+              const depStr = opt.estimatedTime || opt.scheduledTime;
               const sM = parseTimeToMinutes(depStr);
               const walkBefore = Math.max(0, opt.walkBeforeMinutes ?? 0);
               if (sM > 0) {

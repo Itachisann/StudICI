@@ -22,6 +22,12 @@ import {
   getTransitRoadwayPolylineSync,
   detectActiveDetours,
 } from './transitRoadwayRouter';
+import {
+  analyzeTransitRouteFluency,
+  estimateDynamicTransitCrowding,
+  fetchLiveUrbanWeather,
+} from './drivingRouter';
+import { getCachedDisruptionsSync } from './disruptionsService';
 
 export {
   pruneAnomalousLoopsAndSpikes,
@@ -46,9 +52,15 @@ export interface TransitLegDetail {
   departureTime?: string;
   scheduledDepartureTime?: string;
   arrivalTime?: string;
+  scheduledArrivalTime?: string;
   delayMinutes?: number;
+  liveDelayMinutes?: number;
+  trafficDelayMinutes?: number;
+  trafficFluency?: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
+  trafficCondition?: string;
   isLive?: boolean;
   durationMinutes: number;
+  scheduledDurationMinutes?: number;
   intermediateStopsCount?: number;
   intermediateStopNames?: string[];
   polyline?: LatLngPoint[];
@@ -62,10 +74,20 @@ export interface TransitDepartureItem {
   fromStop: string; // Fermata di salita (es. "Staz.ne Tiburtina (MB)")
   toStop: string; // Fermata di discesa ("quella dove scendo", es. "Tiburtina / Castro Laurenziano")
   scheduledTime: string; // Orario programmato partenza mezzo (es. "08:10")
-  estimatedTime: string; // Orario stimato/live partenza mezzo (es. "08:10")
-  alightingTime: string; // Orario di arrivo del mezzo alla fermata di discesa (es. "08:18")
-  arrivalTime: string; // Orario di arrivo finale a destinazione inclusa camminata a piedi (es. "08:21")
-  delayMinutes: number;
+  estimatedTime: string; // Orario effettivo/stimato partenza mezzo incluso traffico/live (es. "08:12")
+  scheduledAlightingTime?: string; // Orario programmato discesa mezzo (es. "08:18")
+  alightingTime: string; // Orario effettivo discesa mezzo incluso traffico/live (es. "08:22")
+  scheduledArrivalTime?: string; // Orario programmato arrivo finale a destinazione (es. "08:21")
+  arrivalTime: string; // Orario effettivo arrivo finale a destinazione inclusa camminata a piedi (es. "08:25")
+  scheduledLeaveOriginTime?: string; // Orario programmato partenza utente dall'origine (es. "08:08")
+  scheduledInVehicleMinutes?: number; // Minuti programmati sui mezzi senza ritardi/traffico
+  delayMinutes: number; // Ritardo complessivo su arrivo/corsa (live GTFS-RT + traffico stradale dinamico)
+  liveDelayMinutes?: number; // Quota di ritardo rilevata da telemetria live GTFS-RT
+  trafficDelayMinutes?: number; // Minutaggio di ritardo possibile aggiuntivo da traffico stradale (dinamico)
+  trafficDepDelayMinutes?: number; // Quota traffico prima della fermata di salita
+  trafficRideDelayMinutes?: number; // Quota traffico lungo la tratta a bordo
+  trafficFluency?: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso';
+  trafficCondition?: string;
   isLive: boolean;
   durationMinutes: number; // Durata reale dal mezzo fino a destinazione (inVehicleMinutes + walkAfterMinutes)
   totalDoorToDoorMinutes: number; // Durata totale (walkBeforeMinutes + inVehicleMinutes + walkAfterMinutes)
@@ -1285,9 +1307,7 @@ export function findOptimalTransitDeparture(
     rawMinDepMins > 0 ? unwrapMinutesFromRef(rawMinDepMins, rawClockBase) : -1;
 
   const getDepMins = (d: TransitDepartureItem) => {
-    const raw = parseHHMMToMins(
-      isLiveContext && d.isLive ? d.estimatedTime || d.scheduledTime : d.scheduledTime
-    );
+    const raw = parseHHMMToMins(d.estimatedTime || d.scheduledTime);
     return unwrapMinutesFromRef(raw, rawClockBase);
   };
 
@@ -1692,7 +1712,7 @@ function buildBoardCacheEntry(
   rawMinDepMins: number
 ): CachedTransitBoardEntry {
   const depMinsList = data.departures
-    .map((d) => parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime))
+    .map((d) => parseHHMMToMins(d.estimatedTime || d.scheduledTime))
     .filter((m) => m >= 0);
   const minDepCoveredMins = depMinsList.length > 0 ? Math.min(...depMinsList) : -1;
   const maxDepCoveredMins = depMinsList.length > 0 ? Math.max(...depMinsList) : -1;
@@ -1884,7 +1904,7 @@ export async function getStationTransitBoard(options: {
           : unwrapMinutesFromRef(reqMinDepMins, reuseRefMins);
         const reachableFromOrigin = reusedDeps.filter((d) => {
           const depM = unwrapMinutesFromRef(
-            parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime),
+            parseHHMMToMins(d.estimatedTime || d.scheduledTime),
             reuseRefMins
           );
           return depM >= 0 && depM - (d.walkBeforeMinutes || 0) >= effectiveReuseMin;
@@ -1897,7 +1917,7 @@ export async function getStationTransitBoard(options: {
           if (arrM >= 0) {
             return unwrapMinutesFromRef(arrM, reuseRefMins) <= relConstraint + 2;
           }
-          const depM = parseHHMMToMins(isLiveContext ? d.estimatedTime : d.scheduledTime);
+          const depM = parseHHMMToMins(d.estimatedTime || d.scheduledTime);
           return (
             depM >= 0 &&
             unwrapMinutesFromRef(depM, reuseRefMins) + d.durationMinutes <= relConstraint + 2
@@ -2070,7 +2090,13 @@ export async function getStationTransitBoard(options: {
         Accept: 'application/json',
       };
 
-      const [res, secRes] = await Promise.all([
+      const isQueryToday = (() => {
+        if (!targetDate) return true;
+        const todayIso = new Date().toISOString().slice(0, 10);
+        return targetDate.trim() === todayIso;
+      })();
+
+      const [res, secRes, liveWeather] = await Promise.all([
         fetch(planUrl, {
           signal: controller.signal,
           headers: reqHeaders,
@@ -2080,6 +2106,11 @@ export async function getStationTransitBoard(options: {
               signal: controller.signal,
               headers: reqHeaders,
             }).catch(() => null)
+          : Promise.resolve(null),
+        isQueryToday
+          ? fetchLiveUrbanWeather(effectiveOrigin.lat, effectiveOrigin.lng).catch(
+              () => null
+            )
           : Promise.resolve(null),
       ]);
 
@@ -2306,6 +2337,184 @@ export async function getStationTransitBoard(options: {
         let diff = endMins - startMins;
         if (diff < -720) diff += 1440;
         return Math.max(0, diff);
+      };
+      const signedClockDiffMins = (schedMins: number, actualMins: number): number => {
+        if (schedMins < 0 || actualMins < 0) return 0;
+        let diff = actualMins - schedMins;
+        if (diff < -720) diff += 1440;
+        if (diff > 720) diff -= 1440;
+        return diff;
+      };
+      const resolvedTripDate = (() => {
+        if (targetDate && /^\d{4}-\d{2}-\d{2}$/.test(targetDate.trim())) {
+          const parsed = new Date(`${targetDate.trim()}T12:00:00`);
+          if (!isNaN(parsed.getTime())) return parsed;
+        }
+        return new Date();
+      })();
+      const nowClockDate = new Date();
+      const nowClockMins =
+        nowClockDate.getHours() * 60 + nowClockDate.getMinutes();
+      const todayIsoStr = nowClockDate.toISOString().slice(0, 10);
+      const isTargetDayToday =
+        resolvedTripDate.toDateString() === nowClockDate.toDateString();
+
+      // Raccoglie i ritardi GPS reali osservati adesso sulle corse di superficie dello stesso corridoio
+      const liveCorridorSamples: { line: string; delayMins: number }[] = [];
+      if (isTargetDayToday) {
+        for (const itSample of itineraries) {
+          const sampleLegs: any[] = Array.isArray(itSample?.legs)
+            ? itSample.legs
+            : [];
+          for (const sl of sampleLegs) {
+            if (
+              !sl ||
+              sl.mode === 'WALK' ||
+              sl.mode === 'SUBWAY' ||
+              sl.mode === 'METRO' ||
+              sl.mode === 'RAIL'
+            ) {
+              continue;
+            }
+            const isSlRealtime =
+              sl.realTime === true ||
+              sl.departureTimestampReason === 'REALTIME' ||
+              sl.arrivalTimestampReason === 'REALTIME';
+            if (!isSlRealtime) continue;
+            const sSched = parseHHMMToMins(
+              formatIsoToHHMM(sl.scheduledStartTime || sl.startTime)
+            );
+            const sLive = parseHHMMToMins(formatIsoToHHMM(sl.startTime));
+            if (sSched < 0 || sLive < 0) continue;
+            const deltaFromNow = signedClockDiffMins(nowClockMins, sLive);
+            if (deltaFromNow < -10 || deltaFromNow > 65) continue;
+            const dM = Math.max(0, signedClockDiffMins(sSched, sLive));
+            liveCorridorSamples.push({
+              line: String(sl.routeShortName || '').trim().toUpperCase(),
+              delayMins: dM,
+            });
+          }
+        }
+      }
+      const getObservedCorridorDelay = (lineName: string): number | null => {
+        if (!isTargetDayToday || liveCorridorSamples.length === 0) return null;
+        const normL = lineName.trim().toUpperCase();
+        const sameLine = liveCorridorSamples.filter((s) => s.line === normL);
+        if (sameLine.length > 0) {
+          const sum = sameLine.reduce((a, b) => a + b.delayMins, 0);
+          return Math.round(sum / sameLine.length);
+        }
+        const sumAll = liveCorridorSamples.reduce((a, b) => a + b.delayMins, 0);
+        return Math.round(sumAll / liveCorridorSamples.length);
+      };
+
+      // Eventi reali di viabilità e scioperi TPL attivi oggi dalla cache di disruptionsService
+      const todayActiveDisruptions = isTargetDayToday
+        ? getCachedDisruptionsSync().filter(
+            (ev) =>
+              ev.startDate <= todayIsoStr &&
+              ev.endDate >= todayIsoStr &&
+              !ev.isNocturnal &&
+              ev.aiImpactsPassengerService !== false
+          )
+        : [];
+      const hasActiveTplStrikeToday = todayActiveDisruptions.some(
+        (ev) => ev.category === 'sciopero_tpl'
+      );
+      const hasUrbanDisruptionForLine = (lineName: string): boolean => {
+        if (todayActiveDisruptions.length === 0) return false;
+        const cleanL = lineName.replace(/[^\w]/g, '');
+        const lineRe = cleanL ? new RegExp(`\\b${cleanL}\\b`, 'i') : null;
+        return todayActiveDisruptions.some((ev) => {
+          if (ev.category === 'sciopero_treni' || ev.category === 'sciopero_tpl') {
+            return false;
+          }
+          const txt = `${ev.title} ${ev.notes || ''} ${(ev.affectedAreas || []).join(' ')}`;
+          return Boolean(
+            (lineRe && lineRe.test(txt)) ||
+              /tiburtin|regina elena|policlinic|sapienza|termini|nomentan|verano|castro pretorio/i.test(
+                txt
+              )
+          );
+        });
+      };
+      const computePolylineGeometryMetrics = (
+        pts: LatLngPoint[],
+        fbFrom?: { lat: number; lng: number },
+        fbTo?: { lat: number; lng: number }
+      ): { distanceKm: number; intersectionsCount: number } => {
+        if (pts.length >= 2) {
+          let meters = 0;
+          let turns = 0;
+          let distSincePrevBearing = 0;
+          let prevBearing: number | null = null;
+          for (let i = 1; i < pts.length; i++) {
+            const p0 = pts[i - 1];
+            const p1 = pts[i];
+            const segM = haversineMeters(p0, p1);
+            meters += segM;
+            distSincePrevBearing += segM;
+            if (distSincePrevBearing >= 45) {
+              const dLat = p1.latitude - p0.latitude;
+              const dLon =
+                (p1.longitude - p0.longitude) *
+                Math.cos(((p0.latitude + p1.latitude) * 0.5 * Math.PI) / 180);
+              const bearing = (Math.atan2(dLon, dLat) * 180) / Math.PI;
+              if (prevBearing !== null) {
+                let delta = Math.abs(bearing - prevBearing);
+                if (delta > 180) delta = 360 - delta;
+                if (delta >= 26) turns++;
+              }
+              prevBearing = bearing;
+              distSincePrevBearing = 0;
+            }
+          }
+          const distanceKm = Math.max(0.25, meters / 1000);
+          // Somma svolte geometriche reali + incroci semaforici tipici lungo i rettilinei urbani
+          const intersectionsCount = Math.max(
+            1,
+            turns + Math.round(distanceKm * 1.35)
+          );
+          return { distanceKm, intersectionsCount };
+        }
+        if (fbFrom && fbTo) {
+          const straightM = haversineMeters(
+            { latitude: fbFrom.lat, longitude: fbFrom.lng },
+            { latitude: fbTo.lat, longitude: fbTo.lng }
+          );
+          const distanceKm = Math.max(0.25, (straightM * 1.28) / 1000);
+          return {
+            distanceKm,
+            intersectionsCount: Math.max(2, Math.round(distanceKm * 2.2)),
+          };
+        }
+        return { distanceKm: 1.5, intersectionsCount: 3 };
+      };
+      const isOuterOriginRailwayStation =
+        direction === 'to_campus' &&
+        Boolean(stationName) &&
+        !stationName.toLowerCase().includes('mia posizione');
+      const isLikelyTerminusStop = (stopName: string): boolean => {
+        const low = (stopName || '').toLowerCase();
+        if (!low) return false;
+        if (
+          isOuterOriginRailwayStation &&
+          (low.includes('staz') ||
+            low.includes('termini') ||
+            low.includes('tiburtina') ||
+            low.includes('ostiense') ||
+            low.includes('trastevere') ||
+            low.includes('tuscolana') ||
+            low.includes('nomentana') ||
+            low.includes('san pietro'))
+        ) {
+          return true;
+        }
+        return (
+          low.includes('staz.ne') ||
+          low.includes('capolinea') ||
+          low.includes('autostazione')
+        );
       };
       const directLinesSet = new Set<string>();
       const seenTripIds = new Set<string>();
@@ -2610,164 +2819,137 @@ export async function getStationTransitBoard(options: {
           walkBeforeMinutes = Math.max(minPlatformWalk, rawWalkBeforeMinutes);
         }
 
-        // 2) Tragitto sui mezzi dalla prima salita all'ultima discesa (inVehicle, coerente al minuto con HH:MM)
-        const activeDepTimeStr = isLiveContext ? estDep : schedDep;
-        const schedAlight = formatIsoToHHMM(
-          lastTransitLeg.scheduledEndTime ||
-            lastTransitLeg.endTime ||
-            primaryLeg.scheduledEndTime ||
-            primaryLeg.endTime
-        );
-        const estAlight = formatIsoToHHMM(lastTransitLeg.endTime || primaryLeg.endTime);
-        const activeAlightTimeStr = isLiveContext ? estAlight : schedAlight;
-        const activeDepMins = parseHHMMToMins(activeDepTimeStr);
-        const activeAlightMins = parseHHMMToMins(activeAlightTimeStr);
-
-        const transitStartMs = new Date(
-          isLiveContext
-            ? primaryLeg.startTime
-            : primaryLeg.scheduledStartTime || primaryLeg.startTime
-        ).getTime();
-        const transitEndMs = new Date(
-          isLiveContext
-            ? lastTransitLeg.endTime || primaryLeg.endTime
-            : lastTransitLeg.scheduledEndTime ||
-              lastTransitLeg.endTime ||
-              primaryLeg.scheduledEndTime ||
-              primaryLeg.endTime
-        ).getTime();
-        const inVehicleMinutes =
-          activeDepMins >= 0 && activeAlightMins >= 0
-            ? Math.max(1, clockDiffMins(activeDepMins, activeAlightMins))
-            : !isNaN(transitStartMs) && !isNaN(transitEndMs) && transitEndMs > transitStartMs
-              ? Math.max(1, Math.round((transitEndMs - transitStartMs) / 60000))
-              : Math.max(1, Math.round((primaryLeg.duration || 420) / 60));
-
-        // 3) Camminata dalla fermata di discesa fino alla destinazione finale (walkAfter)
-        const walkAfterSec = walkAfterLegs.reduce(
-          (acc, l) => acc + (typeof l.duration === 'number' ? l.duration : 0),
-          0
-        );
-        const apiAfterMin = Math.round(walkAfterSec / 60);
-        // Se l'API restituisce un percorso pedonale con deviazioni anomale (> 2 min di scarto rispetto alla distanza stradale reale), usa il calcolo stradale verificato
-        const walkAfterMinutes = preAfter
-          ? preAfter.minutes
-          : apiAfterMin > 0 && Math.abs(apiAfterMin - realWalkAfter.minutes) <= 2
-            ? apiAfterMin
-            : realWalkAfter.minutes;
-
-        // Durata effettiva dal momento in cui parte il mezzo fino all'arrivo a destinazione (aula o stazione)
-        const durationMinutes = Math.max(1, inVehicleMinutes + walkAfterMinutes);
-        const totalDoorToDoorMinutes = Math.max(
-          durationMinutes,
-          walkBeforeMinutes + durationMinutes
-        );
-
-        const normalizedAlightTime =
-          activeDepMins >= 0
-            ? minsToHHMM(activeDepMins + inVehicleMinutes)
-            : activeAlightTimeStr || alightTime;
-        const arrivalTime =
-          activeDepMins >= 0
-            ? minsToHHMM(activeDepMins + durationMinutes)
-            : formatIsoToHHMM(it.endTime || lastTransitLeg.endTime);
-
-        const delaySec =
-          typeof primaryLeg.departureDelay === 'number' ? primaryLeg.departureDelay : 0;
-        const delayMins = Math.round(delaySec / 60);
-        // Rileva se la corsa dispone effettivamente di dati in tempo reale via feed satellitare GTFS-RT
-        const isRealtimeFeed =
-          primaryLeg.realTime === true || primaryLeg.departureTimestampReason === 'REALTIME';
-        const isLive = isRealtimeFeed;
-
-        let statusType: TransitDepartureItem['statusType'] = 'scheduled';
-        let statusLabel = 'Programmata';
-
-        if (primaryLeg.cancelled) {
-          statusType = 'cancelled';
-          statusLabel = 'Cancellata';
-        } else if (isRealtimeFeed) {
-          if (delayMins > 1) {
-            statusType = 'delayed';
-            statusLabel = `In ritardo (+${delayMins}m)`;
-          } else {
-            statusType = 'on_time';
-            statusLabel = 'In orario';
-          }
-        }
-
+        // 2) Raccolta avvisi attivi su tutte le tratte (inclusi cantieri/deviazioni/traffico)
         const alertMsgs: string[] = [];
-        if (Array.isArray(primaryLeg.alerts)) {
-          for (const al of primaryLeg.alerts) {
-            const header = (al.headerText || '').trim();
-            const desc = (al.descriptionText || '').replace(/\r\n/g, ' ').replace(/\s+/g, ' ').trim();
-            const combined = header && desc && !desc.startsWith(header)
-              ? `${header}: ${desc}`
-              : header || desc;
-            if (combined && !alertMsgs.includes(combined)) {
-              alertMsgs.push(combined);
+        for (const tl of transitLegs) {
+          if (Array.isArray(tl.alerts)) {
+            for (const al of tl.alerts) {
+              const header = (al.headerText || '').trim();
+              const desc = (al.descriptionText || '')
+                .replace(/\r\n/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              const combined =
+                header && desc && !desc.startsWith(header)
+                  ? `${header}: ${desc}`
+                  : header || desc;
+              if (combined && !alertMsgs.includes(combined)) {
+                alertMsgs.push(combined);
+              }
             }
           }
         }
+        const hasActiveRoadAlert = alertMsgs.some((msg) =>
+          /deviazion|traffico|rallentament|lavori|cantiere|chiusur|incidente/i.test(msg)
+        );
 
-        const depHour = parseInt((isLiveContext ? estDep : schedDep).split(':')[0], 10);
-        const isPeakHour =
-          !isNaN(depHour) && ((depHour >= 7 && depHour <= 9) || (depHour >= 17 && depHour <= 19));
-        const crowdingLevel: 'low' | 'medium' | 'high' = isPeakHour
-          ? mode === 'metro'
-            ? 'high'
-            : 'medium'
-          : 'low';
-
-        const transferLegDetails: TransitLegDetail[] = transitLegs.map((tl) => {
+        // 3) Costruzione tratte con estrazione completa ritardi live GTFS-RT (anche da scostamento ISO MOTIS v5)
+        //    + calcolo DINAMICO del ritardo da traffico stradale (stesso motore fisico/temporale dell'andata)
+        let prevLegEffEndM = -1;
+        let prevLegSchedEndM = -1;
+        const transferLegDetails: TransitLegDetail[] = transitLegs.map((tl, legIdx) => {
           const tlMode: 'bus' | 'metro' | 'tram' | 'rail' =
             tl.mode === 'SUBWAY' || tl.mode === 'METRO'
               ? 'metro'
               : tl.mode === 'TRAM'
-              ? 'tram'
-              : tl.mode === 'RAIL'
-              ? 'rail'
-              : 'bus';
+                ? 'tram'
+                : tl.mode === 'RAIL'
+                  ? 'rail'
+                  : 'bus';
           const tlLine = tl.routeShortName || (tlMode === 'metro' ? 'Metro B' : 'Bus');
-          const effStartIso = isLiveContext
-            ? tl.startTime
-            : tl.scheduledStartTime || tl.startTime;
-          const effEndIso = isLiveContext
-            ? tl.endTime
-            : tl.scheduledEndTime || tl.endTime;
-          const startD = effStartIso ? new Date(effStartIso) : null;
-          const endD = effEndIso ? new Date(effEndIso) : null;
-          const startM = startD && !isNaN(startD.getTime()) ? startD.getHours() * 60 + startD.getMinutes() : -1;
-          const endM = endD && !isNaN(endD.getTime()) ? endD.getHours() * 60 + endD.getMinutes() : -1;
-          const dur =
-            startM >= 0 && endM >= 0
-              ? Math.max(1, clockDiffMins(startM, endM))
+
+          const schedStartStr = formatIsoToHHMM(tl.scheduledStartTime || tl.startTime);
+          const schedEndStr = formatIsoToHHMM(tl.scheduledEndTime || tl.endTime);
+          const liveStartStr = formatIsoToHHMM(tl.startTime);
+          const liveEndStr = formatIsoToHHMM(tl.endTime);
+
+          const schedStartM = parseHHMMToMins(schedStartStr);
+          const schedEndM = parseHHMMToMins(schedEndStr);
+          const liveStartM = parseHHMMToMins(liveStartStr);
+          const liveEndM = parseHHMMToMins(liveEndStr);
+
+          const schedDur =
+            schedStartM >= 0 && schedEndM >= 0
+              ? Math.max(1, clockDiffMins(schedStartM, schedEndM))
               : typeof tl.duration === 'number' && tl.duration > 0
                 ? Math.max(1, Math.round(tl.duration / 60))
                 : 5;
-          const legDelaySec =
-            typeof tl.departureDelay === 'number' ? tl.departureDelay : 0;
-          const legDelayMins = Math.max(0, Math.round(legDelaySec / 60));
-          const legIsLive =
-            tl.realTime === true || tl.departureTimestampReason === 'REALTIME';
+
+          const startEpoch = tl.startTime ? new Date(tl.startTime).getTime() : NaN;
+          const schedStartEpoch = tl.scheduledStartTime
+            ? new Date(tl.scheduledStartTime).getTime()
+            : startEpoch;
+          const endEpoch = tl.endTime ? new Date(tl.endTime).getTime() : NaN;
+          const schedEndEpoch = tl.scheduledEndTime
+            ? new Date(tl.scheduledEndTime).getTime()
+            : endEpoch;
+
+          const isoDepDiffSec =
+            !isNaN(startEpoch) && !isNaN(schedStartEpoch)
+              ? (startEpoch - schedStartEpoch) / 1000
+              : 0;
+          const isoArrDiffSec =
+            !isNaN(endEpoch) && !isNaN(schedEndEpoch)
+              ? (endEpoch - schedEndEpoch) / 1000
+              : 0;
+
+          const rawDepDelaySec =
+            typeof tl.departureDelay === 'number' ? tl.departureDelay : isoDepDiffSec;
+          const rawArrDelaySec =
+            typeof tl.arrivalDelay === 'number' ? tl.arrivalDelay : isoArrDiffSec;
+
+          const legHasRealtimeFlag = Boolean(
+            isLiveContext &&
+              (tl.realTime === true ||
+                tl.departureTimestampReason === 'REALTIME' ||
+                tl.arrivalTimestampReason === 'REALTIME' ||
+                Math.abs(rawDepDelaySec) >= 45 ||
+                Math.abs(rawArrDelaySec) >= 45)
+          );
+
+          const liveDepDelayMins = legHasRealtimeFlag
+            ? Math.max(
+                0,
+                schedStartM >= 0 && liveStartM >= 0
+                  ? signedClockDiffMins(schedStartM, liveStartM)
+                  : Math.round(rawDepDelaySec / 60)
+              )
+            : 0;
+          const liveRideDur =
+            legHasRealtimeFlag && liveStartM >= 0 && liveEndM >= 0
+              ? Math.max(1, clockDiffMins(liveStartM, liveEndM))
+              : schedDur;
+
           const intStops = Array.isArray(tl.intermediateStops)
-            ? tl.intermediateStops.filter((s: any) => s?.name).map((s: any) => formatStopDisplayName(s.name))
+            ? tl.intermediateStops
+                .filter((s: any) => s?.name)
+                .map((s: any) => formatStopDisplayName(s.name))
             : [];
           const legPts = decodeEncodedPolyline(
             tl.legGeometry?.points,
             tl.legGeometry?.precision || 6
           );
-          const rawFrom = tl.from && typeof tl.from.lat === 'number' ? { lat: tl.from.lat, lng: tl.from.lon } : undefined;
-          const rawTo = tl.to && typeof tl.to.lat === 'number' ? { lat: tl.to.lat, lng: tl.to.lon } : undefined;
-          const cleanedLegPts = legPts.length >= 2 ? pruneAnomalousLoopsAndSpikes(legPts) : legPts;
-          const continuousLegPolyline = cleanedLegPts.length >= 2
-            ? ensureContinuousTransitPolyline(
-                rawFrom ? { latitude: rawFrom.lat, longitude: rawFrom.lng } : undefined,
-                rawTo ? { latitude: rawTo.lat, longitude: rawTo.lng } : undefined,
-                [],
-                cleanedLegPts
-              )
-            : undefined;
+          const rawFrom =
+            tl.from && typeof tl.from.lat === 'number'
+              ? { lat: tl.from.lat, lng: tl.from.lon }
+              : undefined;
+          const rawTo =
+            tl.to && typeof tl.to.lat === 'number'
+              ? { lat: tl.to.lat, lng: tl.to.lon }
+              : undefined;
+          const cleanedLegPts =
+            legPts.length >= 2 ? pruneAnomalousLoopsAndSpikes(legPts) : legPts;
+          const continuousLegPolyline =
+            legIdx === 0 && isDirect && transitPolyline.length >= 2
+              ? transitPolyline
+              : cleanedLegPts.length >= 2
+                ? ensureContinuousTransitPolyline(
+                    rawFrom ? { latitude: rawFrom.lat, longitude: rawFrom.lng } : undefined,
+                    rawTo ? { latitude: rawTo.lat, longitude: rawTo.lng } : undefined,
+                    [],
+                    cleanedLegPts
+                  )
+                : undefined;
 
           let snappedLegFrom = rawFrom;
           let snappedLegTo = rawTo;
@@ -2782,6 +2964,78 @@ export async function getStationTransitBoard(options: {
             }
           }
 
+          const legStopsCount =
+            legIdx === 0 && isDirect ? intermediateStopsCount : intStops.length + 1;
+          const geom = computePolylineGeometryMetrics(
+            continuousLegPolyline || [],
+            snappedLegFrom,
+            snappedLegTo
+          );
+          // Il traffico previsto non ufficiale si calcola SOLO nella finestra ravvicinata (~1 ora da adesso, oggi)
+          const refCheckM = liveStartM >= 0 ? liveStartM : schedStartM;
+          const diffFromNowM =
+            isTargetDayToday && refCheckM >= 0
+              ? signedClockDiffMins(nowClockMins, refCheckM)
+              : 9999;
+          const isWithinLiveTrafficWindow =
+            isTargetDayToday && diffFromNowM >= -5 && diffFromNowM <= 65;
+
+          const fluency = analyzeTransitRouteFluency({
+            mode: tlMode,
+            distanceKm: geom.distanceKm,
+            baseRideMinutes: schedDur,
+            intersectionsCount: geom.intersectionsCount,
+            stopsCount: legStopsCount,
+            isOriginTerminus:
+              legIdx === 0 && isLikelyTerminusStop(tl.from?.name || ''),
+            targetTimeStr: schedStartStr || liveStartStr,
+            targetDate: resolvedTripDate,
+            isWithinLiveWindow: isWithinLiveTrafficWindow,
+            observedCorridorDelayMins: getObservedCorridorDelay(tlLine),
+            weather: isWithinLiveTrafficWindow ? liveWeather : null,
+            hasActiveRoadAlert,
+            hasActiveUrbanDisruption: hasUrbanDisruptionForLine(tlLine),
+          });
+
+          // Se il mezzo trasmette già telemetria live GTFS-RT, la partenza usa il dato satellitare reale
+          // (evitando doppio conteggio del traffico a monte); altrimenti usa la stima dinamica a monte.
+          const appliedDepTraffic = legHasRealtimeFlag
+            ? 0
+            : fluency.departureTrafficDelayMinutes;
+          let effStartM =
+            schedStartM >= 0
+              ? (schedStartM + (legHasRealtimeFlag ? liveDepDelayMins : appliedDepTraffic)) % 1440
+              : liveStartM;
+
+          // Nei cambi multi-tratta preserva il tempo minimo di interscambio se la tratta precedente ha accumulato ritardo
+          if (legIdx > 0 && prevLegEffEndM >= 0) {
+            const minTransferGap =
+              prevLegSchedEndM >= 0 && schedStartM >= 0
+                ? Math.min(4, clockDiffMins(prevLegSchedEndM, schedStartM))
+                : 1;
+            const minNextBoardM = (prevLegEffEndM + minTransferGap) % 1440;
+            if (effStartM >= 0 && signedClockDiffMins(minNextBoardM, effStartM) < 0) {
+              effStartM = minNextBoardM;
+            }
+          }
+
+          const liveRideStretch = Math.max(0, liveRideDur - schedDur);
+          const effRideStretch = Math.max(liveRideStretch, fluency.rideTrafficDelayMinutes);
+          const appliedRideTraffic = Math.max(0, effRideStretch - liveRideStretch);
+          const effDur = Math.max(1, schedDur + effRideStretch);
+          const effEndM =
+            effStartM >= 0 ? (effStartM + effDur) % 1440 : liveEndM;
+
+          prevLegEffEndM = effEndM;
+          prevLegSchedEndM = schedEndM;
+
+          const legLiveTotal = liveDepDelayMins + liveRideStretch;
+          const legTrafficTotal = appliedDepTraffic + appliedRideTraffic;
+          const legTotalDelay =
+            schedEndM >= 0 && effEndM >= 0
+              ? Math.max(0, signedClockDiffMins(schedEndM, effEndM))
+              : legLiveTotal + legTrafficTotal;
+
           return {
             line: tlLine,
             mode: tlMode,
@@ -2790,16 +3044,178 @@ export async function getStationTransitBoard(options: {
             toStop: formatStopDisplayName(tl.to?.name || ''),
             fromStopCoords: snappedLegFrom,
             toStopCoords: snappedLegTo,
-            departureTime: startM >= 0 ? minsToHHMM(startM) : undefined,
-            scheduledDepartureTime: formatIsoToHHMM(tl.scheduledStartTime || tl.startTime) || undefined,
-            arrivalTime: endM >= 0 ? minsToHHMM(endM) : undefined,
-            delayMinutes: legDelayMins,
-            isLive: legIsLive,
-            durationMinutes: dur,
-            intermediateStopsCount: intStops.length + 1,
-            intermediateStopNames: intStops.length > 0 ? intStops : undefined,
+            departureTime: effStartM >= 0 ? minsToHHMM(effStartM) : liveStartStr || undefined,
+            scheduledDepartureTime: schedStartStr || undefined,
+            arrivalTime: effEndM >= 0 ? minsToHHMM(effEndM) : liveEndStr || undefined,
+            scheduledArrivalTime: schedEndStr || undefined,
+            delayMinutes: legTotalDelay,
+            liveDelayMinutes: legLiveTotal,
+            trafficDelayMinutes: legTrafficTotal,
+            trafficFluency: fluency.status,
+            trafficCondition: fluency.conditionDescription,
+            isLive: legHasRealtimeFlag,
+            durationMinutes: effDur,
+            scheduledDurationMinutes: schedDur,
+            intermediateStopsCount: legStopsCount,
+            intermediateStopNames:
+              legIdx === 0 && isDirect
+                ? intermediateStopNames.length > 0
+                  ? intermediateStopNames
+                  : undefined
+                : intStops.length > 0
+                  ? intStops
+                  : undefined,
             polyline: continuousLegPolyline,
           };
+        });
+
+        const firstLegDetail = transferLegDetails[0];
+        const lastLegDetail = transferLegDetails[transferLegDetails.length - 1];
+
+        const resolvedSchedDep = firstLegDetail?.scheduledDepartureTime || schedDep;
+        const resolvedEstDep = firstLegDetail?.departureTime || estDep || resolvedSchedDep;
+        const resolvedSchedAlight =
+          lastLegDetail?.scheduledArrivalTime ||
+          formatIsoToHHMM(
+            lastTransitLeg.scheduledEndTime ||
+              lastTransitLeg.endTime ||
+              primaryLeg.scheduledEndTime ||
+              primaryLeg.endTime
+          );
+        const resolvedEstAlight =
+          lastLegDetail?.arrivalTime || alightTime || resolvedSchedAlight;
+
+        const schedDepMins = parseHHMMToMins(resolvedSchedDep);
+        const estDepMins = parseHHMMToMins(resolvedEstDep);
+        const schedAlightMins = parseHHMMToMins(resolvedSchedAlight);
+        const estAlightMins = parseHHMMToMins(resolvedEstAlight);
+
+        const scheduledInVehicleMinutes =
+          schedDepMins >= 0 && schedAlightMins >= 0
+            ? Math.max(1, clockDiffMins(schedDepMins, schedAlightMins))
+            : Math.max(1, firstLegDetail?.scheduledDurationMinutes || 7);
+        const inVehicleMinutes =
+          estDepMins >= 0 && estAlightMins >= 0
+            ? Math.max(1, clockDiffMins(estDepMins, estAlightMins))
+            : Math.max(1, firstLegDetail?.durationMinutes || scheduledInVehicleMinutes);
+
+        // 4) Camminata dalla fermata di discesa fino alla destinazione finale (walkAfter)
+        const walkAfterSec = walkAfterLegs.reduce(
+          (acc, l) => acc + (typeof l.duration === 'number' ? l.duration : 0),
+          0
+        );
+        const apiAfterMin = Math.round(walkAfterSec / 60);
+        const walkAfterMinutes = preAfter
+          ? preAfter.minutes
+          : apiAfterMin > 0 && Math.abs(apiAfterMin - realWalkAfter.minutes) <= 2
+            ? apiAfterMin
+            : realWalkAfter.minutes;
+
+        const durationMinutes = Math.max(1, inVehicleMinutes + walkAfterMinutes);
+        const totalDoorToDoorMinutes = Math.max(
+          durationMinutes,
+          walkBeforeMinutes + durationMinutes
+        );
+
+        const normalizedAlightTime =
+          estDepMins >= 0
+            ? minsToHHMM(estDepMins + inVehicleMinutes)
+            : resolvedEstAlight;
+        const scheduledAlightingTime =
+          schedDepMins >= 0
+            ? minsToHHMM(schedDepMins + scheduledInVehicleMinutes)
+            : resolvedSchedAlight;
+        const arrivalTime =
+          estDepMins >= 0
+            ? minsToHHMM(estDepMins + durationMinutes)
+            : formatIsoToHHMM(it.endTime || lastTransitLeg.endTime);
+        const scheduledArrivalTime =
+          schedDepMins >= 0
+            ? minsToHHMM(schedDepMins + scheduledInVehicleMinutes + walkAfterMinutes)
+            : arrivalTime;
+        const scheduledLeaveOriginTime =
+          schedDepMins >= 0
+            ? minsToHHMM(schedDepMins - walkBeforeMinutes)
+            : undefined;
+
+        const isRealtimeFeed = transferLegDetails.some((l) => Boolean(l.isLive));
+        const isLive = isRealtimeFeed;
+
+        const totalLiveDelayMins = transferLegDetails.reduce(
+          (acc, l) => acc + (l.liveDelayMinutes || 0),
+          0
+        );
+        const totalTrafficDelayMins = transferLegDetails.reduce(
+          (acc, l) => acc + (l.trafficDelayMinutes || 0),
+          0
+        );
+        const depTrafficMins = isRealtimeFeed
+          ? 0
+          : Math.max(0, signedClockDiffMins(schedDepMins, estDepMins));
+        const rideTrafficMins = Math.max(0, totalTrafficDelayMins - depTrafficMins);
+
+        const schedArrM = parseHHMMToMins(scheduledArrivalTime);
+        const estArrM = parseHHMMToMins(arrivalTime);
+        const arrShiftMins =
+          schedArrM >= 0 && estArrM >= 0
+            ? Math.max(0, signedClockDiffMins(schedArrM, estArrM))
+            : 0;
+        const depShiftMins =
+          schedDepMins >= 0 && estDepMins >= 0
+            ? Math.max(0, signedClockDiffMins(schedDepMins, estDepMins))
+            : 0;
+        const delayMins = Math.max(arrShiftMins, depShiftMins, totalTrafficDelayMins);
+
+        const fluencyRank: Record<'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso', number> = {
+          scorrevole: 0,
+          moderato: 1,
+          rallentamenti: 2,
+          intenso: 3,
+        };
+        let worstFluency: 'scorrevole' | 'moderato' | 'rallentamenti' | 'intenso' = 'scorrevole';
+        let worstCondition = firstLegDetail?.trafficCondition || '';
+        for (const l of transferLegDetails) {
+          const st = l.trafficFluency || 'scorrevole';
+          if (fluencyRank[st] > fluencyRank[worstFluency]) {
+            worstFluency = st;
+            worstCondition = l.trafficCondition || worstCondition;
+          }
+        }
+
+        let statusType: TransitDepartureItem['statusType'] = 'scheduled';
+        let statusLabel = 'Programmata';
+
+        if (primaryLeg.cancelled) {
+          statusType = 'cancelled';
+          statusLabel = 'Cancellata';
+        } else if (delayMins >= 1) {
+          statusType = 'delayed';
+          if (isRealtimeFeed && totalTrafficDelayMins > 0) {
+            statusLabel = `In ritardo (+${delayMins}m · incluso traffico)`;
+          } else if (isRealtimeFeed) {
+            statusLabel = `In ritardo (+${delayMins}m)`;
+          } else {
+            statusLabel = `Traffico stimato (+${delayMins}m)`;
+          }
+        } else if (isRealtimeFeed) {
+          statusType = 'on_time';
+          statusLabel = 'In orario';
+        }
+
+        const stLowForCrowding = stationName.toLowerCase();
+        const isMajorHubForCrowding =
+          stLowForCrowding.includes('termini') ||
+          stLowForCrowding.includes('tiburtina') ||
+          stLowForCrowding.includes('ostiense');
+        const crowdingLevel = estimateDynamicTransitCrowding({
+          mode,
+          targetTimeStr: resolvedEstDep,
+          targetDate: resolvedTripDate,
+          isMajorHub: isMajorHubForCrowding,
+          weather: isTargetDayToday ? liveWeather : null,
+          liveDelayMinutes: totalLiveDelayMins,
+          trafficDelayMinutes: totalTrafficDelayMins,
+          hasActiveTplStrike: hasActiveTplStrikeToday,
         });
 
         // Estrai i tratti a piedi di interscambio allineati 1-a-1 per ogni coppia di tratte consecutive
@@ -2855,11 +3271,21 @@ export async function getStationTransitBoard(options: {
               formatStopDisplayName(
                 lastTransitLeg.to?.name || (direction === 'to_station' ? stationName : targetName)
               ),
-            scheduledTime: schedDep,
-            estimatedTime: estDep,
+            scheduledTime: resolvedSchedDep,
+            estimatedTime: resolvedEstDep,
+            scheduledAlightingTime,
             alightingTime: normalizedAlightTime,
+            scheduledArrivalTime,
             arrivalTime,
+            scheduledLeaveOriginTime,
+            scheduledInVehicleMinutes,
             delayMinutes: Math.max(0, delayMins),
+            liveDelayMinutes: totalLiveDelayMins,
+            trafficDelayMinutes: totalTrafficDelayMins,
+            trafficDepDelayMinutes: depTrafficMins,
+            trafficRideDelayMinutes: rideTrafficMins,
+            trafficFluency: worstFluency,
+            trafficCondition: worstCondition || undefined,
             isLive,
             durationMinutes,
             totalDoorToDoorMinutes,
@@ -2951,7 +3377,7 @@ export async function getStationTransitBoard(options: {
           : minDepMins;
         const afterMinDep = candidatePending.filter((item) => {
           const depM = unwrapMinutesFromRef(
-            parseHHMMToMins(isLiveContext ? item.draft.estimatedTime : item.draft.scheduledTime),
+            parseHHMMToMins(item.draft.estimatedTime || item.draft.scheduledTime),
             filterRefMins
           );
           return depM >= 0 && depM - (item.draft.walkBeforeMinutes || 0) >= effectiveMinOrigin;
@@ -2999,12 +3425,8 @@ export async function getStationTransitBoard(options: {
 
       // Ordine rigorosamente cronologico per orario di partenza crescente
       finalDepartures.sort((a, b) => {
-        const aTimeStr = isLiveContext
-          ? a.estimatedTime || a.scheduledTime
-          : a.scheduledTime || a.estimatedTime;
-        const bTimeStr = isLiveContext
-          ? b.estimatedTime || b.scheduledTime
-          : b.scheduledTime || b.estimatedTime;
+        const aTimeStr = a.estimatedTime || a.scheduledTime;
+        const bTimeStr = b.estimatedTime || b.scheduledTime;
         const aDep = unwrapMinutesFromRef(parseHHMMToMins(aTimeStr), sortClockRef);
         const bDep = unwrapMinutesFromRef(parseHHMMToMins(bTimeStr), sortClockRef);
         if (aDep !== bDep) {

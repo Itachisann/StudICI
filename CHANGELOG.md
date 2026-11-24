@@ -5,6 +5,15 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 2.0.1
+
+[Aggiornamento non obbligatorio]
+
+### Mezzi Urbani, Ritardi Live e Traffico Dinamico
+- **Estrazione ritardi GTFS-RT e contesto live (`transitBoardService.ts`, `commuterOptimizer.ts`, `viaggio.tsx`)**: corretto il calcolo dello scostamento live da MOTIS v5 ricavando i minuti di ritardo anche dalla differenza diretta tra `startTime`/`scheduledStartTime` ed `endTime`/`scheduledEndTime` quando `departureDelay`/`arrivalDelay` non è valorizzato, preservando i riferimenti programmati (`scheduledTime`, `scheduledAlightingTime`, `scheduledArrivalTime`, `scheduledLeaveOriginTime`, `scheduledInVehicleMinutes`) e mantenendo attivo il contesto live anche nella fascia odierna a treno già arrivato.
+- **Calcolo dinamico di traffico e affollamento (`drivingRouter.ts`, `transitBoardService.ts`, `disruptionsService.ts`)**: introdotti `analyzeTransitRouteFluency()`, `fetchLiveUrbanWeather()` (Open-Meteo, cache RAM 15m) ed `estimateDynamicTransitCrowding()`. Il traffico stradale non ufficiale viene calcolato esclusivamente nella finestra ravvicinata (`[-5m, +65m]` dall'orario attuale di oggi) e solo quando emergono rallentamenti reali, incrociando geometria su polilinea, calendario feriale/festivo, ritardi GPS osservati sul corridoio (`getObservedCorridorDelay`), meteo live ed eventi di viabilità attivi (`getCachedDisruptionsSync()`), modulando dinamicamente anche il livello di affollamento in caso di pioggia, ritardi o scioperi TPL (`metro` e `rail` esenti dal traffico stradale).
+- **Orari in giallo barrati e gerarchia visiva (`TransitBoardCard.tsx`, `TransitDepartureModal.tsx`)**: in lista mezzi (inclusa la barra `ULTIMA CORSA`) e nel modale dettaglio (`IL TUO VIAGGIO`, timeline verticale e card corsa singola/multi-tratta), gli orari e le durate variati sono mostrati in giallo con il valore originale programmato barrato sotto. Separati graficamente il dato ufficiale GPS (`●` pieno: `+Xm live` o `Live`) dal possibile ritardo da traffico (`○` ad anello con badge `~+Xm traffico` / `+X min traffico` nel colore della severità del ritardo) con riquadro dedicato alle considerazioni sul traffico nel modale.
+
 ## 2.0.0
 
 ### Smart Suggest Andata e Ritorno
