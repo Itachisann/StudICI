@@ -12,14 +12,14 @@
       "name": "StudICI (Dev)",
       "bundleIdentifier": "com.vitor.studici.dev",
       "developerName": "Vitor",
-      "version": "2.0.0-dev.45373133934",
-      "versionDate": "2026-11-24",
+      "version": "2.0.1-dev.45512849800",
+      "versionDate": "2026-11-25",
       "versionDescription": "Build Dev Client con anteprima PDF nativa in-app, Segmented UI e sincronizzazione cloud.",
       "downloadURL": "https://github.com/Itachisann/StudICI/releases/download/dev-client-latest/StudICI-DevClient.ipa",
       "localizedDescription": "Versione Development Client di StudICI per testare nuove funzionalità e librerie native senza sovrascrivere l'app di produzione.",
       "iconURL": "https://raw.githubusercontent.com/Itachisann/StudICI/main/assets/images/icon.png",
       "tintColor": "822433",
-      "size": 32038983,
+      "size": 32038987,
       "screenshotURLs": []
     }
   ],
