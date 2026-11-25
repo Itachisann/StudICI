@@ -328,6 +328,10 @@ async function fetchViaggiaTrenoRawText(
 async function fetchViaggiaTrenoJson(url: string, timeoutMs = 3500, retries = 0): Promise<any | null> {
   const text = await fetchViaggiaTrenoRawText(url, timeoutMs, retries);
   if (text === null) return null;
+  if (!text.trim()) {
+    // ViaggiaTreno restituisce corpo vuoto (0 caratteri) quando andamentoTreno è N.D.
+    return null;
+  }
   try {
     const json = JSON.parse(text);
     fetchOk++;
@@ -1717,14 +1721,19 @@ export async function fetchLiveTrenitaliaTimetable(
       // Durata ragionevole tra stazioni nella stessa direzione (tra 2 min e 15 ore)
       if (dur < 2 || dur > 900) continue;
 
-      // Ritardo reale: preferisce quello alla partenza, altrimenti quello riportato sull'arrivo
+      // Ritardo reale: considera sia partenza sia tabellone arrivi a destinazione
+      const depRit = typeof dep.ritardo === 'number' ? dep.ritardo : undefined;
+      const arrRit = typeof arr.ritardo === 'number' ? arr.ritardo : undefined;
       const liveDelay =
-        typeof dep.ritardo === 'number'
-          ? dep.ritardo
-          : typeof arr.ritardo === 'number'
-            ? arr.ritardo
-            : 0;
+        depRit !== undefined && arrRit !== undefined
+          ? Math.max(depRit, arrRit)
+          : depRit !== undefined
+            ? depRit
+            : arrRit !== undefined
+              ? arrRit
+              : 0;
       const delay = isToday ? liveDelay : 0;
+      const arrDelay = isToday ? (arrRit !== undefined ? arrRit : delay) : 0;
 
       const isOriginStation = Boolean(
         dep.codOrigine === depCode ||
@@ -1754,9 +1763,15 @@ export async function fetchLiveTrenitaliaTimetable(
       const cleanLiveArr = cleanViaggiaTrenoTime(arr.compOrarioEffettivoArrivo);
       if (isToday && cleanLiveArr && parseTimeToMinutes(cleanLiveArr) >= parseTimeToMinutes(arrPlanned)) {
         arrActual = cleanLiveArr;
-      } else if (delay > 0) {
-        arrActual = minutesToTime(ah * 60 + am + delay);
+      } else if (arrDelay > 0) {
+        arrActual = minutesToTime(ah * 60 + am + arrDelay);
       }
+      const isArrivedFromArrBoard = Boolean(
+        isToday &&
+          (arr.arrivato === true ||
+            (Array.isArray(arr.compInStazioneArrivo) &&
+              Boolean(arr.compInStazioneArrivo[0]?.toLowerCase().includes('arrivato'))))
+      );
 
       const isPartitoAtStation =
         Array.isArray(dep.compInStazionePartenza) &&
@@ -1959,8 +1974,11 @@ export async function fetchLiveTrenitaliaTimetable(
         arrivalTimeActual: arrActual,
         platformPlanned: cleanPlatform(platformPlanned),
         platformActual: cleanPlatform(platformActual),
-        delayMinutes: effectiveDelay,
-        statusDescription,
+        delayMinutes: isDepartedFromStation && arrDelay !== 0 ? arrDelay : effectiveDelay,
+        arrivalDelayAtStation: isDepartedFromStation ? arrDelay : undefined,
+        isArrivedAtDestination: isArrivedFromArrBoard,
+        trainStatusType: isArrivedFromArrBoard ? 'arrived' : undefined,
+        statusDescription: isArrivedFromArrBoard ? 'Arrivato' : statusDescription,
         isLive: true,
         durationMinutes: dur,
         isFast,
@@ -4336,9 +4354,6 @@ export function evaluateTrainStatus(
   // 5. Se è oggi: verifica orario attuale rispetto alla corsa
   const nowMins = now.getHours() * 60 + now.getMinutes();
   const plannedDepMins = parseTimeToMinutes(train.departureTimePlanned || '00:00');
-  const actualArrMins = parseTimeToMinutes(
-    train.arrivalTimeActual || train.arrivalTimePlanned || '00:00'
-  );
   const isAtCommuterStation =
     !train.stoppedStationName ||
     !stationName ||
@@ -4533,12 +4548,12 @@ export function evaluateTrainStatus(
           }
         : undefined;
 
+    // Considera il treno arrivato SOLO se ViaggiaTreno lo conferma esplicitamente (andamentoTreno o tabellone /arrivi):
+    // mai dedurre "Arrivato" dal solo orologio se mancano dati live (es. andamentoTreno N.D.).
     const isTrainArrivedAtDest = Boolean(
       train.isArrivedAtDestination ||
       train.trainStatusType === 'arrived' ||
-      (train.statusDescription && train.statusDescription.toLowerCase().includes('arrivato')) ||
-      (train.isDepartedFromStation && actualArrMins > 0 && nowMins >= actualArrMins) ||
-      (actualArrMins > 0 && nowMins >= actualArrMins && train.isDeparted)
+      (train.statusDescription && train.statusDescription.toLowerCase().includes('arrivato'))
     );
 
     if (isTrainArrivedAtDest) {

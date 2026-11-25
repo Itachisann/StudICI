@@ -5,6 +5,17 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 2.0.2
+
+### Mezzi Urbani e Dettaglio Corsa
+- **Corse precedenti e Recenti aperti persistenti (`transitBoardService.ts`, `TransitBoardCard.tsx`)**: introdotta una chiamata dedicata per le corse partite negli ultimi 30 minuti (`pastDepartures`, `Corse precedenti` in stile grigio con indicazione `"Partito X min fa"`), mantenendo tra le attuali le corse in ritardo non ancora transitate. Aggiunta la persistenza per singolo viaggio dei `Recenti` aperti (`@studici_recent_transit_departures_v1`, reset dopo 2 ore o al cambio giornata) con riaggancio automatico ai dati live, affiancata a `Corse precedenti` in una riga compatta espandibile.
+- **Layout card mezzi e allineamento (`TransitBoardCard.tsx`)**: allineati sulla riga primaria badge linea, pallino di stato (senza scritta `"Live"` né riquadro di sfondo) con eventuale `+Xm` e orario all'estrema destra (giallo in linea con il badge e originale barrato sotto, senza pillola durata). Spostati nel riquadro `Direzione:` il countdown compatto (`tra Xm` / `In arrivo` / `ogni Xm` su tutte le corse nella finestra `-3m .. +120m`) a destra e l'eventuale `Ritardo aggiuntivo: ○ ~+Xm traffico` sotto la direzione.
+- **Modale mezzi e aggiornamento live (`TransitDepartureModal.tsx`, `TransitBoardCard.tsx`)**: aggiunto l'aggiornamento live automatico e su pull-to-refresh dentro al modale (`onRefreshDeparture`, `Aggiornato alle HH:MM:SS`), rimossa l'intestazione `"IL TUO VIAGGIO"` allineando i badge di stato (`In orario`, `+Xm`, traffico) in alto a sinistra e sincronizzate le `LINEE CONSIGLIATE` con il livello di espansione attivo nella lista.
+- **Stabilità GPS in movimento (`transitBoardService.ts`, `TransitBoardCard.tsx`)**: evitato il doppio fetch con annullamento immediato al refresh manuale in modalità GPS e preservate le ultime corse GPS valide della stessa direzione durante il cambio posizione o in caso di risposte vuote transitorie.
+
+### Treni e ViaggiaTreno
+- **Stato arrivo e ritardi da tabellone `/arrivi/` (`trenitaliaApi.ts`)**: rimosso il passaggio automatico allo stato `"Arrivato"` basato sul solo orario programmato quando `andamentoTreno` restituisce `N.D.` (gestendo inoltre la risposta vuota a 0 caratteri senza errori di parsing), e integrato il ritardo/stato del tabellone `/arrivi/` della stazione di destinazione in `fetchStationBoardTrains()`.
+
 ## 2.0.1
 
 [Aggiornamento non obbligatorio]
