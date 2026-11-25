@@ -125,6 +125,7 @@ export interface TransitBoardResult {
   destinationName: string;
   directLines: string[];
   departures: TransitDepartureItem[];
+  pastDepartures?: TransitDepartureItem[];
   optimalDeparture?: TransitDepartureItem;
   optimalIndex: number;
   lastUsefulDeparture?: TransitDepartureItem;
@@ -1907,7 +1908,15 @@ export async function getStationTransitBoard(options: {
             parseHHMMToMins(d.estimatedTime || d.scheduledTime),
             reuseRefMins
           );
-          return depM >= 0 && depM - (d.walkBeforeMinutes || 0) >= effectiveReuseMin;
+          if (depM < 0) return false;
+          const isDelayedPendingArrival = Boolean(
+            (d.delayMinutes > 0 || (d.liveDelayMinutes ?? 0) > 0) &&
+              depM >= effectiveReuseMin
+          );
+          return (
+            depM - (d.walkBeforeMinutes || 0) >= effectiveReuseMin ||
+            isDelayedPendingArrival
+          );
         });
         reusedDeps = reachableFromOrigin;
       } else if (direction === 'to_station' && reqConstraintMins > 0) {
@@ -1952,6 +1961,7 @@ export async function getStationTransitBoard(options: {
         ...entry.data,
         directLines: Array.from(directSet),
         departures: reusedDeps,
+        pastDepartures: entry.data.pastDepartures,
         optimalDeparture: optimal,
         optimalIndex,
         lastUsefulDeparture: lastUseful,
@@ -2044,6 +2054,21 @@ export async function getStationTransitBoard(options: {
     ]);
     const planUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(queryIso)}${useArriveBy ? '&arriveBy=true' : ''}&numItineraries=20&detailedTransfers=false`;
 
+    // Query parallela dedicata alle corse precedenti (-30 min) così non satura i risultati futuri su corridoi frequenti
+    let pastDepUrl: string | null = null;
+    if (!useArriveBy && (isLiveContext || queryTimeForApi === 'now')) {
+      const anchorM = queryTimeForApi === 'now' ? nowMins : minDepMins;
+      if (anchorM >= 0) {
+        const lookbackM = (anchorM - 30 + 1440) % 1440;
+        let pastDate = isLiveContext && queryTimeForApi === 'now' ? undefined : targetDate;
+        if (anchorM < 30) {
+          pastDate = resolveDateWithDayOffset(pastDate, -1);
+        }
+        const pastIso = buildQueryIsoTime(pastDate, minsToHHMM(lookbackM));
+        pastDepUrl = `https://api.transitous.org/api/v5/plan?fromPlace=${effectiveOrigin.lat.toFixed(5)},${effectiveOrigin.lng.toFixed(5)}&toPlace=${effectiveDest.lat.toFixed(5)},${effectiveDest.lng.toFixed(5)}&time=${encodeURIComponent(pastIso)}&numItineraries=12&detailedTransfers=false`;
+      }
+    }
+
     // Query secondaria con arriveBy=true sul vincolo comprensivo di anticipo per identificare con precisione l'ultima corsa utile
     let secondaryDepUrl: string | null = null;
     if (!useArriveBy && constraintMins >= 0) {
@@ -2096,13 +2121,19 @@ export async function getStationTransitBoard(options: {
         return targetDate.trim() === todayIso;
       })();
 
-      const [res, secRes, liveWeather] = await Promise.all([
+      const [res, secRes, pastRes, liveWeather] = await Promise.all([
         fetch(planUrl, {
           signal: controller.signal,
           headers: reqHeaders,
         }),
         secondaryDepUrl
           ? fetch(secondaryDepUrl, {
+              signal: controller.signal,
+              headers: reqHeaders,
+            }).catch(() => null)
+          : Promise.resolve(null),
+        pastDepUrl
+          ? fetch(pastDepUrl, {
               signal: controller.signal,
               headers: reqHeaders,
             }).catch(() => null)
@@ -2136,7 +2167,22 @@ export async function getStationTransitBoard(options: {
           // Ignora errore opzionale sulla query secondaria
         }
       }
-      const itineraries: any[] = [...primaryItineraries, ...secondaryItineraries];
+      let pastItineraries: any[] = [];
+      if (pastRes && pastRes.ok) {
+        try {
+          const pastData = await pastRes.json();
+          if (Array.isArray(pastData?.itineraries)) {
+            pastItineraries = pastData.itineraries;
+          }
+        } catch {
+          // Ignora errore opzionale sulla query lookback
+        }
+      }
+      const itineraries: any[] = [
+        ...primaryItineraries,
+        ...secondaryItineraries,
+        ...pastItineraries,
+      ];
 
       const existingTripIds = new Set<string>();
       const preferredLinesHint = new Set<string>();
@@ -3369,51 +3415,75 @@ export async function getStationTransitBoard(options: {
       // dell'orario minimo utile (fine lezione, arrivo del treno o orario attuale in live/GPS),
       // tenendo sempre conto del tempo reale a piedi fino alla fermata di salita (walkBeforeMinutes).
       let filteredPending = candidatePending;
+      let pastPending: typeof candidatePending = [];
       const isNowQuery = isLiveContext || targetTime === 'now';
       if (minDepMins > 0 || isNowQuery) {
         const filterRefMins = isNowQuery ? nowMins : minDepMins;
         const effectiveMinOrigin = isNowQuery
           ? Math.max(nowMins, minDepMins > 0 ? unwrapMinutesFromRef(minDepMins, nowMins) : 0)
           : minDepMins;
-        const afterMinDep = candidatePending.filter((item) => {
+        const afterMinDep: typeof candidatePending = [];
+        const pastLookback: typeof candidatePending = [];
+        for (const item of candidatePending) {
           const depM = unwrapMinutesFromRef(
             parseHHMMToMins(item.draft.estimatedTime || item.draft.scheduledTime),
             filterRefMins
           );
-          return depM >= 0 && depM - (item.draft.walkBeforeMinutes || 0) >= effectiveMinOrigin;
-        });
+          if (depM < 0) continue;
+          const leaveM = depM - (item.draft.walkBeforeMinutes || 0);
+          const isDelayedPendingArrival = Boolean(
+            (item.draft.delayMinutes > 0 || (item.draft.liveDelayMinutes ?? 0) > 0) &&
+              depM >= effectiveMinOrigin
+          );
+          if (leaveM >= effectiveMinOrigin || isDelayedPendingArrival) {
+            afterMinDep.push(item);
+          } else if (isNowQuery && depM >= effectiveMinOrigin - 30) {
+            pastLookback.push(item);
+          }
+        }
         if (afterMinDep.length > 0) {
           filteredPending = afterMinDep;
         }
+        pastPending = pastLookback.slice(0, 10);
       }
 
-      // Risolve in parallelo la direzione reale per tutte le corse utili (inclusa ogni tratta nei viaggi con cambio)
-      const finalDepartures: TransitDepartureItem[] = await Promise.all(
-        filteredPending.map(async (item) => {
-          const primaryHeadsign = await resolveVerifiedHeadsign(item.primaryLeg);
-          let resolvedLegs = item.draft.legs;
-          if (
-            resolvedLegs &&
-            resolvedLegs.length > 1 &&
-            item.transitLegs.length === resolvedLegs.length
-          ) {
-            const legHeadsigns = await Promise.all(
-              item.transitLegs.map((tl, idx) =>
-                idx === 0 ? Promise.resolve(primaryHeadsign) : resolveVerifiedHeadsign(tl)
-              )
-            );
-            resolvedLegs = resolvedLegs.map((leg, idx) => ({
-              ...leg,
-              headsign: legHeadsigns[idx] || leg.headsign,
-            }));
-          }
-          return {
-            ...item.draft,
-            headsign: primaryHeadsign,
-            legs: resolvedLegs,
-          };
-        })
-      );
+      const resolveHeadsignsForItems = async (
+        items: typeof candidatePending
+      ): Promise<TransitDepartureItem[]> =>
+        Promise.all(
+          items.map(async (item) => {
+            const primaryHeadsign = await resolveVerifiedHeadsign(item.primaryLeg);
+            let resolvedLegs = item.draft.legs;
+            if (
+              resolvedLegs &&
+              resolvedLegs.length > 1 &&
+              item.transitLegs.length === resolvedLegs.length
+            ) {
+              const legHeadsigns = await Promise.all(
+                item.transitLegs.map((tl, idx) =>
+                  idx === 0 ? Promise.resolve(primaryHeadsign) : resolveVerifiedHeadsign(tl)
+                )
+              );
+              resolvedLegs = resolvedLegs.map((leg, idx) => ({
+                ...leg,
+                headsign: legHeadsigns[idx] || leg.headsign,
+              }));
+            }
+            return {
+              ...item.draft,
+              headsign: primaryHeadsign,
+              legs: resolvedLegs,
+            };
+          })
+        );
+
+      // Risolve in parallelo la direzione reale per corse future e corse passate negli ultimi 30 minuti
+      const [finalDepartures, pastDepartures] = await Promise.all([
+        resolveHeadsignsForItems(filteredPending),
+        pastPending.length > 0
+          ? resolveHeadsignsForItems(pastPending)
+          : Promise.resolve([]),
+      ]);
 
       const sortClockRef = isLiveContext
         ? nowMins
@@ -3422,6 +3492,16 @@ export async function getStationTransitBoard(options: {
           : constraintMins > 0
             ? Math.max(0, constraintMins - 60)
             : nowMins;
+
+      if (pastDepartures.length > 1) {
+        pastDepartures.sort((a, b) => {
+          const aTimeStr = a.estimatedTime || a.scheduledTime;
+          const bTimeStr = b.estimatedTime || b.scheduledTime;
+          const aDep = unwrapMinutesFromRef(parseHHMMToMins(aTimeStr), sortClockRef);
+          const bDep = unwrapMinutesFromRef(parseHHMMToMins(bTimeStr), sortClockRef);
+          return bDep - aDep;
+        });
+      }
 
       // Ordine rigorosamente cronologico per orario di partenza crescente
       finalDepartures.sort((a, b) => {
@@ -3476,6 +3556,7 @@ export async function getStationTransitBoard(options: {
         destinationName: targetName,
         directLines,
         departures: finalDepartures,
+        pastDepartures: pastDepartures.length > 0 ? pastDepartures : undefined,
         optimalDeparture: optimal,
         optimalIndex,
         lastUsefulDeparture: lastUseful,
@@ -3529,4 +3610,151 @@ export async function getStationTransitBoard(options: {
   });
   inFlightBoardRequests.set(cacheKey, promise);
   return promise;
+}
+
+// ── Persistenza "Recenti aperti" per singolo viaggio (reset automatico dopo 2 ore o al cambio giorno) ──
+const RECENT_TRANSIT_STORAGE_KEY = '@studici_recent_transit_departures_v1';
+export const RECENT_TRANSIT_TTL_MS = 2 * 60 * 60 * 1000; // 2 ore
+const MAX_RECENT_PER_TRIP = 5;
+
+export interface RecentTransitEntry {
+  tripKey: string;
+  openedAt: number;
+  dateIso: string;
+  departure: TransitDepartureItem;
+}
+
+let recentTransitMemCache: RecentTransitEntry[] | null = null;
+
+function buildRecentTripKey(stationName: string, destinationName: string): string {
+  return `${(stationName || '').trim().toLowerCase()}|${(destinationName || '').trim().toLowerCase()}`;
+}
+
+function getDepartureMatchSignature(dep: TransitDepartureItem): string {
+  return `${(dep.line || '').trim().toLowerCase()}|${(dep.scheduledTime || '').trim()}|${(dep.fromStop || '').trim().toLowerCase()}`;
+}
+
+function compactDepartureForRecentStorage(dep: TransitDepartureItem): TransitDepartureItem {
+  return {
+    ...dep,
+    transitPolyline: undefined,
+    walkBeforePolyline: undefined,
+    walkAfterPolyline: undefined,
+    transferWalkPolylines: undefined,
+    legs: dep.legs?.map((l) => ({ ...l, polyline: undefined })),
+  };
+}
+
+function pruneExpiredRecentEntries(entries: RecentTransitEntry[]): RecentTransitEntry[] {
+  const now = Date.now();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  return entries.filter(
+    (e) =>
+      e &&
+      typeof e.openedAt === 'number' &&
+      now - e.openedAt <= RECENT_TRANSIT_TTL_MS &&
+      e.dateIso === todayIso &&
+      Boolean(e.departure?.line)
+  );
+}
+
+async function loadAllRecentEntries(): Promise<RecentTransitEntry[]> {
+  if (recentTransitMemCache) {
+    const pruned = pruneExpiredRecentEntries(recentTransitMemCache);
+    if (pruned.length !== recentTransitMemCache.length) {
+      recentTransitMemCache = pruned;
+      AsyncStorage.setItem(RECENT_TRANSIT_STORAGE_KEY, JSON.stringify(pruned)).catch(() => {});
+    }
+    return pruned;
+  }
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_TRANSIT_STORAGE_KEY);
+    if (!raw) {
+      recentTransitMemCache = [];
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    const list: RecentTransitEntry[] = Array.isArray(parsed) ? parsed : [];
+    const pruned = pruneExpiredRecentEntries(list);
+    recentTransitMemCache = pruned;
+    if (pruned.length !== list.length) {
+      AsyncStorage.setItem(RECENT_TRANSIT_STORAGE_KEY, JSON.stringify(pruned)).catch(() => {});
+    }
+    return pruned;
+  } catch {
+    recentTransitMemCache = [];
+    return [];
+  }
+}
+
+export async function getRecentTransitDepartures(
+  stationName: string,
+  destinationName: string
+): Promise<RecentTransitEntry[]> {
+  const tripKey = buildRecentTripKey(stationName, destinationName);
+  const all = await loadAllRecentEntries();
+  return all.filter((e) => e.tripKey === tripKey);
+}
+
+export async function recordRecentTransitDeparture(
+  stationName: string,
+  destinationName: string,
+  departure: TransitDepartureItem
+): Promise<RecentTransitEntry[]> {
+  const tripKey = buildRecentTripKey(stationName, destinationName);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const sig = getDepartureMatchSignature(departure);
+  const all = await loadAllRecentEntries();
+
+  const others = all.filter((e) => e.tripKey !== tripKey);
+  const sameTrip = all.filter(
+    (e) => e.tripKey === tripKey && getDepartureMatchSignature(e.departure) !== sig
+  );
+
+  const nextForTrip: RecentTransitEntry[] = [
+    {
+      tripKey,
+      openedAt: Date.now(),
+      dateIso: todayIso,
+      departure: compactDepartureForRecentStorage(departure),
+    },
+    ...sameTrip,
+  ].slice(0, MAX_RECENT_PER_TRIP);
+
+  const nextAll = [...nextForTrip, ...others];
+  recentTransitMemCache = nextAll;
+  try {
+    await AsyncStorage.setItem(RECENT_TRANSIT_STORAGE_KEY, JSON.stringify(nextAll));
+  } catch {
+    // ignore storage errors
+  }
+  return nextForTrip;
+}
+
+export async function clearRecentTransitDepartures(
+  stationName: string,
+  destinationName: string
+): Promise<void> {
+  const tripKey = buildRecentTripKey(stationName, destinationName);
+  const all = await loadAllRecentEntries();
+  const nextAll = all.filter((e) => e.tripKey !== tripKey);
+  recentTransitMemCache = nextAll;
+  try {
+    await AsyncStorage.setItem(RECENT_TRANSIT_STORAGE_KEY, JSON.stringify(nextAll));
+  } catch {
+    // ignore
+  }
+}
+
+export function findMatchingDepartureInBoard(
+  target: TransitDepartureItem,
+  board: TransitBoardResult | null | undefined
+): TransitDepartureItem | null {
+  if (!board) return null;
+  const pool = [...(board.departures || []), ...(board.pastDepartures || [])];
+  if (pool.length === 0) return null;
+  const byId = pool.find((d) => d.id === target.id);
+  if (byId) return byId;
+  const targetSig = getDepartureMatchSignature(target);
+  return pool.find((d) => getDepartureMatchSignature(d) === targetSig) || null;
 }

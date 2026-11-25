@@ -3,12 +3,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { MenuAction, MenuView } from "@expo/ui/community/menu";
 import { BlurView } from "expo-blur";
 import Constants, { ExecutionEnvironment } from "expo-constants";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
   Linking,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -239,6 +240,10 @@ export interface TransitDepartureModalProps {
   theme: AppTheme;
   onClose: () => void;
   onSelectDeparture?: (dep: TransitDepartureItem) => void;
+  onRefreshDeparture?: (
+    currentDep: TransitDepartureItem,
+  ) => Promise<TransitDepartureItem | null>;
+  lastUpdatedLabel?: string;
 }
 
 export const TransitDepartureModal: React.FC<TransitDepartureModalProps> = (
@@ -266,7 +271,51 @@ const TransitDepartureModalContent: React.FC<
   theme,
   onClose,
   onSelectDeparture,
+  onRefreshDeparture,
+  lastUpdatedLabel,
 }) => {
+  const [refreshingLive, setRefreshingLive] = useState(false);
+  const [modalLastUpdated, setModalLastUpdated] = useState<string | null>(null);
+  const departureRef = useRef<TransitDepartureItem>(departure);
+  useEffect(() => {
+    departureRef.current = departure;
+  }, [departure]);
+  const refreshInFlightRef = useRef(false);
+
+  const triggerModalLiveRefresh = useCallback(async () => {
+    if (!onRefreshDeparture || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setRefreshingLive(true);
+    try {
+      const updated = await onRefreshDeparture(departureRef.current);
+      if (updated) {
+        onSelectDeparture?.(updated);
+      }
+      setModalLastUpdated(
+        new Date().toLocaleTimeString("it-IT", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      );
+    } catch {
+      // ignore transient errors inside modal live polling
+    } finally {
+      refreshInFlightRef.current = false;
+      setRefreshingLive(false);
+    }
+  }, [onRefreshDeparture, onSelectDeparture]);
+
+  // Aggiornamento live automatico ogni 20 secondi mentre il modale è aperto
+  useEffect(() => {
+    if (!visible || !onRefreshDeparture) return;
+    const intervalMs = isLiveContext ? 20000 : 45000;
+    const timer = setInterval(() => {
+      triggerModalLiveRefresh();
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [visible, isLiveContext, onRefreshDeparture, triggerModalLiveRefresh]);
+
   const [expandedDevByDepId, setExpandedDevByDepId] = useState<
     Record<string, boolean>
   >({});
@@ -1481,7 +1530,35 @@ const TransitDepartureModalContent: React.FC<
         style={styles.scrollRoot}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          onRefreshDeparture ? (
+            <RefreshControl
+              refreshing={refreshingLive}
+              onRefresh={triggerModalLiveRefresh}
+              tintColor="#34d399"
+              colors={["#34d399"]}
+            />
+          ) : undefined
+        }
       >
+        {/* ── Orario aggiornamento compatto (senza badge né riquadro) ── */}
+        {onRefreshDeparture &&
+          (refreshingLive || modalLastUpdated || lastUpdatedLabel) && (
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: "500",
+                color: "#64748b",
+                textAlign: "center",
+                marginBottom: 8,
+              }}
+              numberOfLines={1}
+            >
+              {refreshingLive
+                ? "Aggiornamento in corso..."
+                : `Aggiornato alle ${modalLastUpdated || lastUpdatedLabel}`}
+            </Text>
+          )}
         {/* ── Sezione "Linee consigliate" con colori specifici preservati ── */}
         {directLines.length > 0 && (
           <View style={styles.recommendedSection}>
@@ -1549,15 +1626,7 @@ const TransitDepartureModalContent: React.FC<
             {/* 1. Riquadro Principale: PARTI TU / ARRIVI TU + Barra proporzionale + Timeline verticale */}
             <View style={styles.heroJourneyCard}>
               <View style={styles.heroJourneyHeaderRow}>
-                <View style={styles.heroScheduleTagRow}>
-                  <Ionicons
-                    name="walk"
-                    size={12}
-                    color={effectiveWalkTextColor}
-                  />
-                  <Text style={styles.heroScheduleTagText}>IL TUO VIAGGIO</Text>
-                </View>
-
+                {/* Badge di stato direttamente in alto a sinistra (senza titolo "IL TUO VIAGGIO") */}
                 <View
                   style={{
                     flexDirection: "row",
@@ -1610,8 +1679,8 @@ const TransitDepartureModalContent: React.FC<
                         ]}
                       >
                         {liveDelayMins > 0
-                          ? `+${liveDelayMins}m live`
-                          : "Live in orario"}
+                          ? `+${liveDelayMins}m`
+                          : "In orario"}
                       </Text>
                     </View>
                   )}

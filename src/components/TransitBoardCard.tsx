@@ -18,11 +18,16 @@ import {
   View,
 } from "react-native";
 import {
+  clearRecentTransitDepartures,
+  findMatchingDepartureInBoard,
   getLineBadgeColor,
+  getRecentTransitDepartures,
   getStationTransitBoard,
   getTransitModeIcon,
   minsToHHMM,
   parseHHMMToMins,
+  RecentTransitEntry,
+  recordRecentTransitDeparture,
   TransitBoardResult,
   TransitDepartureItem,
 } from "../utils/transitBoardService";
@@ -380,7 +385,12 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     ? fetchedBoardEntry!.data
     : prefetchedMatchesCurrent
       ? prefetchedBoard!
-      : fetchedBoardEntry && fetchedBoardEntry.queryKey === activeQueryKey
+      : fetchedBoardEntry &&
+          (fetchedBoardEntry.queryKey === activeQueryKey ||
+            (originMode === "current_location" &&
+              fetchedBoardEntry.queryKey.startsWith(`${direction}|`) &&
+              fetchedBoardEntry.queryKey.includes("gps:") &&
+              fetchedBoardEntry.data.departures.length > 0))
         ? fetchedBoardEntry.data
         : null;
   const [lineFilterState, setLineFilterState] = useState<{
@@ -416,6 +426,46 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   // Stato per il nuovo modale di dettaglio della singola corsa
   const [selectedDepartureModal, setSelectedDepartureModal] =
     useState<TransitDepartureItem | null>(null);
+  const [pastOpenForKey, setPastOpenForKey] = useState<string | null>(null);
+  const showPastDepartures = pastOpenForKey === activeQueryKey;
+  const setShowPastDepartures = useCallback(
+    (updater: boolean | ((prev: boolean) => boolean)) => {
+      setPastOpenForKey((prevKey) => {
+        const cur = prevKey === activeQueryKey;
+        const next = typeof updater === "function" ? updater(cur) : updater;
+        return next ? activeQueryKey : null;
+      });
+    },
+    [activeQueryKey],
+  );
+  const [showRecentDepartures, setShowRecentDepartures] =
+    useState<boolean>(false);
+  const [recentEntries, setRecentEntries] = useState<RecentTransitEntry[]>([]);
+
+  const tripOriginLabel = stationName || "";
+  const tripDestLabel = targetName || "";
+
+  useEffect(() => {
+    let active = true;
+    getRecentTransitDepartures(tripOriginLabel, tripDestLabel)
+      .then((list) => {
+        if (active) setRecentEntries(list);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [tripOriginLabel, tripDestLabel]);
+
+  const openDepartureModal = useCallback(
+    (dep: TransitDepartureItem) => {
+      setSelectedDepartureModal(dep);
+      recordRecentTransitDeparture(tripOriginLabel, tripDestLabel, dep)
+        .then((nextList) => setRecentEntries(nextList))
+        .catch(() => {});
+    },
+    [tripOriginLabel, tripDestLabel],
+  );
 
   const prevManualRefreshCountRef = useRef<number>(0);
   const manualForcePendingRef = useRef<boolean>(false);
@@ -430,6 +480,66 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
     undefined,
   );
   const prevNotifiedQueryKeyRef = useRef<string>("");
+  const latestBoardParamsRef = useRef<{
+    queryKey: string;
+    cacheKey: string;
+    stationName: string;
+    stationCoords?: { lat: number; lng: number };
+    targetCoords?: { lat: number; lng: number };
+    targetName: string;
+    targetDate?: string;
+    targetTime?: string;
+    direction: "to_campus" | "to_station";
+    isLiveContext: boolean;
+    constraintTime?: string;
+    minDepartureTime?: string;
+    arrivalBufferMinutes: number;
+    preferLatestBeforeDeadline?: boolean;
+  } | null>(null);
+
+  const handleRefreshModalDeparture = useCallback(
+    async (
+      currentDep: TransitDepartureItem,
+    ): Promise<TransitDepartureItem | null> => {
+      const params = latestBoardParamsRef.current;
+      if (!params) {
+        const fallback = findMatchingDepartureInBoard(currentDep, boardData);
+        return fallback;
+      }
+      const fresh = await getStationTransitBoard({
+        stationName: params.stationName,
+        stationCoords: params.stationCoords,
+        targetCoords: params.targetCoords,
+        targetName: params.targetName,
+        targetDate: params.targetDate,
+        targetTime: params.targetTime,
+        direction: params.direction,
+        isLiveContext: params.isLiveContext,
+        constraintTime: params.constraintTime,
+        minDepartureTime: params.minDepartureTime,
+        arrivalBufferMinutes: params.arrivalBufferMinutes,
+        preferLatestBeforeDeadline: params.preferLatestBeforeDeadline,
+        forceRefresh: true,
+      });
+      if (!fresh.fetchFailed && fresh.departures.length > 0) {
+        setTransitCardMemoryCache(params.cacheKey, fresh);
+        setFetchedBoardEntry({
+          queryKey: params.queryKey,
+          prefetchedSource: prefetchedBoard,
+          data: fresh,
+        });
+      }
+      const matched = findMatchingDepartureInBoard(currentDep, fresh);
+      if (matched) {
+        recordRecentTransitDeparture(tripOriginLabel, tripDestLabel, matched)
+          .then((nextList) => setRecentEntries(nextList))
+          .catch(() => {});
+        return matched;
+      }
+      return null;
+    },
+    [boardData, prefetchedBoard, tripOriginLabel, tripDestLabel],
+  );
 
   useEffect(() => {
     userCoordsRef.current = userCoords;
@@ -465,10 +575,12 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   }, []);
 
   // Acquisizione o aggiornamento manuale della posizione GPS reale con supporto interregionale
+  // Ritorna true se setUserCoords ha aggiornato le coordinate (così il caller evita una doppia fetch/abort)
   const acquireOrRefreshGpsLocation = useCallback(
-    async (isManualRefresh = false) => {
+    async (isManualRefresh = false): Promise<boolean> => {
       setLocationError(null);
       setIsLocating(true);
+      let didUpdateCoords = false;
 
       try {
         // 1. Verifica e richiesta autorizzazione permessi di localizzazione in primo piano
@@ -485,7 +597,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           );
           setIsLocating(false);
           setLoading(false);
-          return;
+          return false;
         }
 
         // 2. Controllo posizione recente nella cache di sistema:
@@ -514,6 +626,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           ) {
             userCoordsRef.current = nextCoords;
             setUserCoords(nextCoords);
+            didUpdateCoords = true;
             return true;
           }
           return false;
@@ -529,7 +642,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           // Se il fix nella cache di sistema è recente (<60s) e preciso (<=100m), evita la doppia chiamata GPS + doppia fetch tabellone
           const cachedAcc = lastKnown.coords.accuracy ?? 999;
           if (cachedAcc <= 100) {
-            return;
+            return didUpdateCoords;
           }
         }
 
@@ -580,6 +693,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       } finally {
         setIsLocating(false);
       }
+      return didUpdateCoords;
     },
     [resolveLocationName],
   );
@@ -624,11 +738,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       spinAnim.setValue(0);
     });
 
-    if (originMode === "current_location") {
-      await acquireOrRefreshGpsLocation(true);
-    }
+    const coordsUpdated =
+      originMode === "current_location"
+        ? await acquireOrRefreshGpsLocation(true)
+        : false;
 
-    setManualRefreshCount((k) => k + 1);
+    if (!coordsUpdated) {
+      setManualRefreshCount((k) => k + 1);
+    }
   }, [spinAnim, originMode, acquireOrRefreshGpsLocation]);
 
   const stLat = stationCoords?.lat;
@@ -771,11 +888,34 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
 
     const abortController = new AbortController();
 
+    latestBoardParamsRef.current = {
+      queryKey: currentQueryKey,
+      cacheKey,
+      stationName: qStationName,
+      stationCoords: qStationCoords,
+      targetCoords: qTargetCoords,
+      targetName: qTargetName || targetName || "",
+      targetDate: isCurrentLoc
+        ? undefined
+        : canUseLive
+          ? undefined
+          : targetDate,
+      targetTime: isCurrentLoc ? "now" : canUseLive ? "now" : targetTime,
+      direction,
+      isLiveContext: canUseLive,
+      constraintTime: effectiveGpsConstraint,
+      minDepartureTime: isCurrentLoc ? undefined : minDepartureTime,
+      arrivalBufferMinutes: effectiveArrivalBuffer,
+      preferLatestBeforeDeadline: isCurrentLoc
+        ? false
+        : preferLatestBeforeDeadline,
+    };
+
     getStationTransitBoard({
       stationName: qStationName,
       stationCoords: qStationCoords,
       targetCoords: qTargetCoords,
-      targetName: qTargetName,
+      targetName: qTargetName || targetName || "",
       targetDate: isCurrentLoc
         ? undefined
         : canUseLive
@@ -818,9 +958,15 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           }
           let keptPrevious = false;
           setFetchedBoardEntry((prev) => {
+            const sameGpsDirection =
+              isCurrentLoc &&
+              prev &&
+              prev.queryKey.startsWith(`${direction}|`) &&
+              prev.queryKey.includes("gps:") &&
+              prev.data.departures.length > 0;
             if (
               prev &&
-              prev.queryKey === currentQueryKey &&
+              (prev.queryKey === currentQueryKey || sameGpsDirection) &&
               prev.data.departures.length > 0
             ) {
               keptPrevious = true;
@@ -1084,12 +1230,16 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
   ]);
 
   const renderLineBadges = useCallback(
-    (dep: TransitDepartureItem, forceCompact = false) => {
+    (dep: TransitDepartureItem, forceCompact = false, muted = false) => {
+      const mutedBg = "#334155";
+      const mutedFg = "#94a3b8";
       if (dep.legs && dep.legs.length > 1) {
         return (
           <View style={styles.multiLegBadgeContainer}>
             {dep.legs.map((leg, lIdx) => {
-              const lColor = getLineBadgeColor(leg.line, leg.mode);
+              const lColor = muted
+                ? mutedBg
+                : getLineBadgeColor(leg.line, leg.mode);
               const lIcon = getTransitModeIcon(leg.mode, leg.line);
               const shortLine = leg.line.replace(/^Metro\s+/i, "M");
               return (
@@ -1098,7 +1248,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                     <Ionicons
                       name="arrow-forward"
                       size={10}
-                      color="#94a3b8"
+                      color={muted ? "#64748b" : "#94a3b8"}
                       style={{ marginHorizontal: 2 }}
                     />
                   )}
@@ -1111,10 +1261,17 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                     <Ionicons
                       name={lIcon}
                       size={10}
-                      color="#ffffff"
+                      color={muted ? mutedFg : "#ffffff"}
                       style={{ marginRight: 3 }}
                     />
-                    <Text style={styles.lineBadgeTextCompact}>{shortLine}</Text>
+                    <Text
+                      style={[
+                        styles.lineBadgeTextCompact,
+                        muted && { color: mutedFg },
+                      ]}
+                    >
+                      {shortLine}
+                    </Text>
                   </View>
                 </React.Fragment>
               );
@@ -1128,7 +1285,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           <View style={styles.multiLegBadgeContainer}>
             {dep.line.split(" + ").map((part, pIdx) => {
               const pTrim = part.trim();
-              const pColor = getLineBadgeColor(pTrim);
+              const pColor = muted ? mutedBg : getLineBadgeColor(pTrim);
               const pIcon = getTransitModeIcon(undefined, pTrim);
               const shortPart = pTrim.replace(/^Metro\s+/i, "M");
               return (
@@ -1137,7 +1294,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                     <Ionicons
                       name="arrow-forward"
                       size={10}
-                      color="#94a3b8"
+                      color={muted ? "#64748b" : "#94a3b8"}
                       style={{ marginHorizontal: 2 }}
                     />
                   )}
@@ -1150,10 +1307,17 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                     <Ionicons
                       name={pIcon}
                       size={10}
-                      color="#ffffff"
+                      color={muted ? mutedFg : "#ffffff"}
                       style={{ marginRight: 3 }}
                     />
-                    <Text style={styles.lineBadgeTextCompact}>{shortPart}</Text>
+                    <Text
+                      style={[
+                        styles.lineBadgeTextCompact,
+                        muted && { color: mutedFg },
+                      ]}
+                    >
+                      {shortPart}
+                    </Text>
                   </View>
                 </React.Fragment>
               );
@@ -1162,7 +1326,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         );
       }
 
-      const badgeBg = getLineBadgeColor(dep.line, dep.mode);
+      const badgeBg = muted ? mutedBg : getLineBadgeColor(dep.line, dep.mode);
       const modeIcon = getTransitModeIcon(dep.mode, dep.line);
       if (forceCompact) {
         return (
@@ -1172,10 +1336,14 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
             <Ionicons
               name={modeIcon}
               size={10}
-              color="#ffffff"
+              color={muted ? mutedFg : "#ffffff"}
               style={{ marginRight: 3 }}
             />
-            <Text style={styles.lineBadgeTextCompact}>{dep.line}</Text>
+            <Text
+              style={[styles.lineBadgeTextCompact, muted && { color: mutedFg }]}
+            >
+              {dep.line}
+            </Text>
           </View>
         );
       }
@@ -1253,6 +1421,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       if (diff > 720) diff -= 1440;
 
       const isInCurrentTimeWindow = diff >= -3 && diff <= 75;
+      const isInCountdownWindow = diff >= -3 && diff <= 120;
 
       const hasRealtimeData = Boolean(
         dep.isLive &&
@@ -1264,6 +1433,37 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
             isInCurrentTimeWindow),
       );
 
+      let countdownText: string | null = null;
+      if (isInCountdownWindow) {
+        if (diff <= 1) {
+          countdownText = "In arrivo";
+        } else {
+          let headwayMins: number | null = null;
+          for (let j = index + 1; j < filteredDepartures.length; j++) {
+            const nextDep = filteredDepartures[j];
+            if (nextDep.line.toLowerCase() === dep.line.toLowerCase()) {
+              const nextMins = parseHHMMToMins(
+                nextDep.estimatedTime || nextDep.scheduledTime,
+              );
+              if (nextMins >= 0) {
+                let hDiff = nextMins - depMins;
+                if (hDiff < -720) hDiff += 1440;
+                if (hDiff >= 3 && hDiff <= 15) {
+                  headwayMins = hDiff;
+                }
+              }
+              break;
+            }
+          }
+
+          if (dep.mode === "metro" && headwayMins && diff > 6) {
+            countdownText = `ogni ${headwayMins}m`;
+          } else {
+            countdownText = `tra ${diff}m`;
+          }
+        }
+      }
+
       const isLiveActive = isInCurrentTimeWindow && hasRealtimeData;
 
       if (!isLiveActive) {
@@ -1274,7 +1474,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           isHeavyDelay: delayMins >= 5,
           dotColor: hasShift ? "#fbbf24" : undefined,
           delayText: delayMins > 0 ? `+${delayMins}m` : null,
-          countdownText: null,
+          countdownText,
         };
       }
 
@@ -1289,36 +1489,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           ? "#ef4444"
           : "#f59e0b"
         : "#10b981";
-      const delayText = isLiveDelayed ? `+${liveDelayMins}m live` : "In orario";
-
-      let countdownText: string | null = null;
-      if (diff <= 1) {
-        countdownText = "In arrivo";
-      } else {
-        let headwayMins: number | null = null;
-        for (let j = index + 1; j < filteredDepartures.length; j++) {
-          const nextDep = filteredDepartures[j];
-          if (nextDep.line.toLowerCase() === dep.line.toLowerCase()) {
-            const nextMins = parseHHMMToMins(
-              nextDep.estimatedTime || nextDep.scheduledTime,
-            );
-            if (nextMins >= 0) {
-              let hDiff = nextMins - depMins;
-              if (hDiff < -720) hDiff += 1440;
-              if (hDiff >= 3 && hDiff <= 15) {
-                headwayMins = hDiff;
-              }
-            }
-            break;
-          }
-        }
-
-        if (dep.mode === "metro" && headwayMins && diff > 6) {
-          countdownText = `ogni ${headwayMins}m`;
-        } else {
-          countdownText = `tra ${diff}m`;
-        }
-      }
+      const delayText = isLiveDelayed ? `+${liveDelayMins}m` : "In orario";
 
       return {
         isLiveActive: true,
@@ -1575,6 +1746,436 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
         </View>
       )}
 
+      {/* ── SEZIONE 3.5 & 3.6: Barra compatta Recenti aperti + Corse precedenti ── */}
+      {(() => {
+        const pastList = (boardData?.pastDepartures || []).filter((d) => {
+          if (!selectedLineFilter) return true;
+          return d.line.toLowerCase() === selectedLineFilter.toLowerCase();
+        });
+        const hasRecent = recentEntries.length > 0;
+        const hasPast = pastList.length > 0;
+        if (!hasRecent && !hasPast) return null;
+
+        const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+
+        return (
+          <View style={{ marginBottom: 8, gap: 6 }}>
+            {/* Riga singola compatta con pulsanti espandibili */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              {hasRecent && (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() =>
+                    setShowRecentDepartures((p) => {
+                      const next = !p;
+                      if (next && showPastDepartures) setShowPastDepartures(false);
+                      return next;
+                    })
+                  }
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 9,
+                    paddingVertical: 6.5,
+                    borderRadius: 9,
+                    borderWidth: 1,
+                    borderColor: showRecentDepartures
+                      ? "rgba(96, 165, 250, 0.42)"
+                      : "rgba(96, 165, 250, 0.22)",
+                    backgroundColor: showRecentDepartures
+                      ? "rgba(30, 58, 138, 0.28)"
+                      : "rgba(15, 23, 42, 0.55)",
+                    gap: 4,
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 5,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Ionicons
+                      name="bookmark-outline"
+                      size={12}
+                      color="#60a5fa"
+                    />
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "700",
+                        color: "#e2e8f0",
+                        flexShrink: 1,
+                      }}
+                      numberOfLines={1}
+                    >
+                      Recenti ({recentEntries.length})
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={showRecentDepartures ? "chevron-up" : "chevron-down"}
+                    size={12}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
+              )}
+
+              {hasPast && (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() =>
+                    setShowPastDepartures((p) => {
+                      const next = !p;
+                      if (next && showRecentDepartures)
+                        setShowRecentDepartures(false);
+                      return next;
+                    })
+                  }
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 9,
+                    paddingVertical: 6.5,
+                    borderRadius: 9,
+                    borderWidth: 1,
+                    borderColor: showPastDepartures
+                      ? "rgba(148, 163, 184, 0.42)"
+                      : "rgba(148, 163, 184, 0.22)",
+                    backgroundColor: showPastDepartures
+                      ? "rgba(51, 65, 85, 0.38)"
+                      : "rgba(15, 23, 42, 0.45)",
+                    gap: 4,
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 5,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Ionicons name="time-outline" size={12} color="#94a3b8" />
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "700",
+                        color: "#cbd5e1",
+                        flexShrink: 1,
+                      }}
+                      numberOfLines={1}
+                    >
+                      Corse precedenti ({pastList.length})
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={showPastDepartures ? "chevron-up" : "chevron-down"}
+                    size={12}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Pannello espanso compatto Recenti aperti */}
+            {hasRecent && showRecentDepartures && (
+              <View
+                style={{
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: "rgba(96, 165, 250, 0.22)",
+                  backgroundColor: "rgba(15, 23, 42, 0.55)",
+                  padding: 7,
+                  gap: 5,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 2,
+                    marginBottom: 1,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 10,
+                      fontWeight: "700",
+                      color: "#60a5fa",
+                      letterSpacing: 0.3,
+                    }}
+                  >
+                    RECENTI APERTI
+                  </Text>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      clearRecentTransitDepartures(tripOriginLabel, tripDestLabel)
+                        .then(() => {
+                          setRecentEntries([]);
+                          setShowRecentDepartures(false);
+                        })
+                        .catch(() => {});
+                    }}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 10,
+                        fontWeight: "600",
+                        color: "#64748b",
+                      }}
+                    >
+                      Pulisci
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {recentEntries.map((entry, rIdx) => {
+                  const liveMatched =
+                    findMatchingDepartureInBoard(entry.departure, boardData) ||
+                    entry.departure;
+                  const recDepStr =
+                    liveMatched.estimatedTime || liveMatched.scheduledTime;
+                  const hasRecShift = Boolean(
+                    liveMatched.scheduledTime &&
+                      recDepStr &&
+                      liveMatched.scheduledTime !== recDepStr,
+                  );
+                  const recLiveM = Math.max(0, liveMatched.liveDelayMinutes ?? 0);
+                  const recTrafficM = Math.max(
+                    0,
+                    liveMatched.trafficDelayMinutes ?? 0,
+                  );
+                  return (
+                    <TouchableOpacity
+                      key={`recent-${entry.departure.id || rIdx}`}
+                      activeOpacity={0.78}
+                      onPress={() => openDepartureModal(liveMatched)}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        backgroundColor: "rgba(30, 41, 59, 0.65)",
+                        borderColor: "rgba(255, 255, 255, 0.07)",
+                        borderWidth: 1,
+                        borderRadius: 8,
+                        paddingHorizontal: 8,
+                        paddingVertical: 5.5,
+                        gap: 6,
+                      }}
+                    >
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {renderLineBadges(liveMatched, true)}
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            fontWeight: "600",
+                            color: "#e2e8f0",
+                            flex: 1,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {liveMatched.headsign || liveMatched.fromStop}
+                        </Text>
+                      </View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        {(recLiveM > 0 || recTrafficM > 0) && (
+                          <Text
+                            style={{
+                              fontSize: 9.5,
+                              fontWeight: "700",
+                              color:
+                                Math.max(recLiveM, recTrafficM) >= 5
+                                  ? "#fca5a5"
+                                  : "#fbbf24",
+                            }}
+                          >
+                            +{Math.max(recLiveM, recTrafficM)}m
+                          </Text>
+                        )}
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text
+                            style={{
+                              fontSize: 12,
+                              fontWeight: "800",
+                              color: hasRecShift ? "#fbbf24" : "#ffffff",
+                              fontVariant: ["tabular-nums"],
+                            }}
+                          >
+                            {recDepStr}
+                          </Text>
+                          {hasRecShift && (
+                            <Text
+                              style={[
+                                styles.timeScheduledStrike,
+                                { fontSize: 9 },
+                              ]}
+                            >
+                              {liveMatched.scheduledTime}
+                            </Text>
+                          )}
+                        </View>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={12}
+                          color="#64748b"
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Pannello espanso compatto Corse precedenti */}
+            {hasPast && showPastDepartures && (
+              <View
+                style={{
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: "rgba(148, 163, 184, 0.22)",
+                  backgroundColor: "rgba(15, 23, 42, 0.45)",
+                  padding: 7,
+                  gap: 5,
+                }}
+              >
+                {pastList.map((pDep, pIdx) => {
+                  const pTime = pDep.estimatedTime || pDep.scheduledTime;
+                  const pMins = parseHHMMToMins(pTime);
+                  let minsAgo = pMins >= 0 ? nowM - pMins : -1;
+                  if (minsAgo < -720) minsAgo += 1440;
+                  const hasPShift = Boolean(
+                    pDep.scheduledTime &&
+                      pTime &&
+                      pDep.scheduledTime !== pTime,
+                  );
+                  return (
+                    <TouchableOpacity
+                      key={`past-${pDep.id || pIdx}`}
+                      activeOpacity={0.78}
+                      onPress={() => openDepartureModal(pDep)}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        backgroundColor: "rgba(30, 35, 46, 0.55)",
+                        borderColor: "rgba(148, 163, 184, 0.10)",
+                        borderWidth: 1,
+                        borderRadius: 8,
+                        paddingHorizontal: 8,
+                        paddingVertical: 5.5,
+                        opacity: 0.72,
+                        gap: 6,
+                      }}
+                    >
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {renderLineBadges(pDep, true, true)}
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            fontWeight: "600",
+                            color: "#94a3b8",
+                            flex: 1,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {pDep.headsign || pDep.fromStop}
+                        </Text>
+                      </View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        {minsAgo >= 0 && minsAgo <= 60 && (
+                          <Text
+                            style={{
+                              fontSize: 9.5,
+                              fontWeight: "600",
+                              color: "#64748b",
+                            }}
+                          >
+                            {minsAgo === 0 ? "ora" : `-${minsAgo}m`}
+                          </Text>
+                        )}
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text
+                            style={{
+                              fontSize: 12,
+                              fontWeight: "800",
+                              color: "#94a3b8",
+                              fontVariant: ["tabular-nums"],
+                            }}
+                          >
+                            {pTime}
+                          </Text>
+                          {hasPShift && (
+                            <Text
+                              style={[
+                                styles.timeScheduledStrike,
+                                { fontSize: 9 },
+                              ]}
+                            >
+                              {pDep.scheduledTime}
+                            </Text>
+                          )}
+                        </View>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={12}
+                          color="#64748b"
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        );
+      })()}
+
       {/* ── SEZIONE 4: Lista schematica dei mezzi senza alcun troncamento del testo ── */}
       {loading && !boardData ? (
         <View style={styles.loadingBox}>
@@ -1625,7 +2226,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
               <TouchableOpacity
                 key={dep.id || `dep-${index}`}
                 activeOpacity={0.8}
-                onPress={() => setSelectedDepartureModal(dep)}
+                onPress={() => openDepartureModal(dep)}
                 style={[
                   styles.schematicCard,
                   isSuggested && styles.schematicCardSuggested,
@@ -1650,205 +2251,102 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                   </View>
                 )}
 
-                {/* Riga 1: Badge Linea + Pallino Ufficiale Live a sinistra; Orario (giallo sopra + barrato sotto) + Durata a destra */}
+                {/* Riga 1: Badge Linea + Pallino Ufficiale Live a sinistra; Orario (giallo sopra + barrato sotto) a destra */}
                 {(() => {
-                  const effSpanMins = getDepartureTransitSpanMinutes(dep);
-                  const schedSpanMins =
-                    typeof dep.scheduledInVehicleMinutes === "number" &&
-                    dep.scheduledInVehicleMinutes > 0
-                      ? dep.scheduledInVehicleMinutes
-                      : effSpanMins;
                   const hasDepTimeShift = Boolean(
                     dep.scheduledTime &&
                       displayTime &&
                       dep.scheduledTime !== displayTime,
                   );
-                  const hasSpanShift = effSpanMins > schedSpanMins;
                   const trafficMins = Math.max(0, dep.trafficDelayMinutes ?? 0);
                   const liveMins = Math.max(0, dep.liveDelayMinutes ?? 0);
                   const trafficIsHeavy = trafficMins >= 5;
-                  const trafficRingColor = trafficIsHeavy
-                    ? "#f87171"
-                    : "#fbbf24";
-                  const trafficBorderColor = trafficIsHeavy
-                    ? "rgba(239, 68, 68, 0.44)"
-                    : "rgba(251, 191, 36, 0.42)";
-                  const trafficBgColor = trafficIsHeavy
-                    ? "rgba(239, 68, 68, 0.10)"
-                    : "rgba(251, 191, 36, 0.08)";
 
                   return (
                     <>
+                      {/* SEZIONE 1: Riga unica – badge linea | pallino/+Xm | orario | durata */}
                       <View style={styles.schematicTopRow}>
-                        <View style={styles.schematicTopLeft}>
-                          {renderLineBadges(dep)}
+                        {/* Sinistra: numero bus + pallino ufficiale + eventuale ritardo live */}
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            minHeight: 24,
+                            flex: 1,
+                            minWidth: 0,
+                            gap: 8,
+                            marginRight: 8,
+                          }}
+                        >
+                          <View style={{ flexShrink: 0 }}>
+                            {renderLineBadges(dep)}
+                          </View>
 
-                          {/* Livello 1: Pallino pieno SOLO per stato ufficiale live GTFS-RT */}
-                          {isLiveTrip && dotColor && (
-                            <View
-                              style={[
-                                styles.liveStatusDotWrap,
-                                {
-                                  borderColor:
-                                    liveMins > 0
-                                      ? "rgba(245, 158, 11, 0.38)"
-                                      : "rgba(16, 185, 129, 0.34)",
-                                  backgroundColor:
-                                    liveMins > 0
-                                      ? "rgba(245, 158, 11, 0.12)"
-                                      : "rgba(16, 185, 129, 0.12)",
-                                },
-                              ]}
-                            >
+                          {isLiveTrip &&
+                            dotColor &&
+                            (liveMins > 0 ? (
+                              <View style={styles.liveStatusDotWrap}>
+                                <View
+                                  style={[
+                                    styles.liveStatusDot,
+                                    { backgroundColor: dotColor },
+                                  ]}
+                                />
+                                <Text
+                                  style={[
+                                    styles.liveDelayText,
+                                    {
+                                      color:
+                                        liveMins >= 5 ? "#fca5a5" : "#fbbf24",
+                                    },
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  +{liveMins}m
+                                </Text>
+                              </View>
+                            ) : (
                               <View
                                 style={[
                                   styles.liveStatusDot,
                                   { backgroundColor: dotColor },
                                 ]}
                               />
-                              <Text
-                                style={[
-                                  styles.liveDelayText,
-                                  {
-                                    color:
-                                      liveMins === 0
-                                        ? "#34d399"
-                                        : liveMins >= 5
-                                          ? "#fca5a5"
-                                          : "#fbbf24",
-                                  },
-                                ]}
-                              >
-                                {liveMins > 0 ? `+${liveMins}m live` : "Live"}
-                              </Text>
-                            </View>
-                          )}
-
-                          {/* Livello 2: Pallino ad anello distinto SOLO per possibile ritardo aggiuntivo da traffico/semafori */}
-                          {trafficMins > 0 && (
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 4,
-                                paddingHorizontal: 6,
-                                paddingVertical: 2.5,
-                                borderRadius: 6,
-                                borderWidth: 1,
-                                borderStyle: "dashed",
-                                borderColor: trafficBorderColor,
-                                backgroundColor: trafficBgColor,
-                              }}
-                            >
-                              <View
-                                style={{
-                                  width: 7,
-                                  height: 7,
-                                  borderRadius: 3.5,
-                                  borderWidth: 1.6,
-                                  borderColor: trafficRingColor,
-                                  backgroundColor: "transparent",
-                                }}
-                              />
-                              <Text
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: "700",
-                                  color: trafficRingColor,
-                                }}
-                              >
-                                ~+{trafficMins}m traffico
-                              </Text>
-                            </View>
-                          )}
+                            ))}
                         </View>
 
+                        {/* Orario a destra: riga primaria allineata a bus/pallino, eventuale barrato sotto */}
                         <View style={styles.schematicTopRight}>
-                          <View
-                            style={[
-                              styles.schematicTimeAndDurationRow,
-                              { alignItems: "flex-start" },
-                            ]}
-                          >
-                            {/* Orario: modificato in giallo SOPRA, originale barrato SOTTO */}
-                            <View style={{ alignItems: "flex-end" }}>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <View
+                              style={{
+                                height: 24,
+                                justifyContent: "center",
+                                alignItems: "flex-end",
+                              }}
+                            >
                               <Text
                                 style={[
                                   styles.departureTimeMain,
                                   hasDepTimeShift && { color: "#fbbf24" },
                                 ]}
+                                numberOfLines={1}
                               >
                                 {displayTime}
                               </Text>
-                              {hasDepTimeShift && (
-                                <Text
-                                  style={[
-                                    styles.timeScheduledStrike,
-                                    { marginTop: 1 },
-                                  ]}
-                                >
-                                  {dep.scheduledTime}
-                                </Text>
-                              )}
                             </View>
-
-                            <View
-                              style={[
-                                styles.durationInlineBadge,
-                                hasSpanShift && {
-                                  alignItems: "center",
-                                  paddingVertical: 3,
-                                },
-                              ]}
-                            >
-                              <Ionicons
-                                name="time-outline"
-                                size={11}
-                                color={hasSpanShift ? "#fbbf24" : "#94a3b8"}
-                                style={{ marginRight: 3 }}
-                              />
-                              <View style={{ alignItems: "flex-end" }}>
-                                <Text
-                                  style={[
-                                    styles.durationInlineBadgeText,
-                                    hasSpanShift && { color: "#fbbf24" },
-                                  ]}
-                                >
-                                  {effSpanMins}m
-                                </Text>
-                                {hasSpanShift && (
-                                  <Text
-                                    style={{
-                                      color: "#64748b",
-                                      fontSize: 9.5,
-                                      fontWeight: "600",
-                                      textDecorationLine: "line-through",
-                                      lineHeight: 11,
-                                    }}
-                                  >
-                                    {schedSpanMins}m
-                                  </Text>
-                                )}
-                              </View>
-                            </View>
-                          </View>
-
-                          {isLiveTrip && countdown && !isLastUseful && (
-                            <View style={styles.countdownBadge}>
-                              <Ionicons
-                                name="time-outline"
-                                size={11}
-                                color="#34d399"
-                                style={{ marginRight: 3 }}
-                              />
+                            {hasDepTimeShift && (
                               <Text
-                                style={styles.countdownText}
+                                style={[
+                                  styles.timeScheduledStrike,
+                                  { marginTop: 1 },
+                                ]}
                                 numberOfLines={1}
                               >
-                                {countdown}
+                                {dep.scheduledTime}
                               </Text>
-                            </View>
-                          )}
+                            )}
+                          </View>
                         </View>
                       </View>
 
@@ -1868,22 +2366,94 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                         </View>
                       )}
 
+                      {/* SEZIONE 2: Riquadro direzione + traffico a sinistra + countdown a destra */}
                       <View style={styles.schematicBody}>
-                        <View style={styles.schemaFieldRow}>
-                          <Text style={styles.schemaFieldLabel}>Direzione:</Text>
-                          <Text
-                            style={styles.schemaFieldValue}
-                            numberOfLines={1}
-                          >
-                            {dep.headsign}
-                          </Text>
-                          <Ionicons
-                            name="chevron-forward"
-                            size={13}
-                            color="#64748b"
-                            style={{ marginLeft: 6, marginTop: 2 }}
-                          />
+                        {/* Riga direzione con traffico + countdown */}
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                          {/* Sinistra: Direzione (con chevron) */}
+                          <View style={{ flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0 }}>
+                            <Text style={styles.schemaFieldLabel}>Direzione:</Text>
+                            <Text
+                              style={[styles.schemaFieldValue, { flexShrink: 1 }]}
+                              numberOfLines={1}
+                            >
+                              {dep.headsign}
+                            </Text>
+                            <Ionicons
+                              name="chevron-forward"
+                              size={13}
+                              color="#64748b"
+                              style={{ marginLeft: 4, flexShrink: 0 }}
+                            />
+                          </View>
+
+                          {/* Destra: countdown compatto */}
+                          {countdown && (
+                            <Text
+                              style={{
+                                fontSize: 10.5,
+                                fontWeight: "700",
+                                color: "#34d399",
+                                marginLeft: 8,
+                                flexShrink: 0,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {countdown}
+                            </Text>
+                          )}
                         </View>
+
+                        {/* Riga traffico sotto direzione (solo se presente) */}
+                        {trafficMins > 0 && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              marginTop: 4,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: "#64748b",
+                                fontSize: 10.5,
+                                fontWeight: "700",
+                                marginRight: 6,
+                              }}
+                            >
+                              Ritardo aggiuntivo:
+                            </Text>
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: 6.5,
+                                  height: 6.5,
+                                  borderRadius: 3.25,
+                                  borderWidth: 1.5,
+                                  borderColor: trafficIsHeavy
+                                    ? "#f87171"
+                                    : "#fbbf24",
+                                  backgroundColor: "transparent",
+                                }}
+                              />
+                              <Text
+                                style={{
+                                  fontSize: 10.5,
+                                  fontWeight: "700",
+                                  color: trafficIsHeavy ? "#f87171" : "#fbbf24",
+                                }}
+                              >
+                                ~+{trafficMins}m traffico
+                              </Text>
+                            </View>
+                          </View>
+                        )}
                       </View>
                     </>
                   );
@@ -1912,7 +2482,7 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
           return (
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={() => setSelectedDepartureModal(lastDep)}
+              onPress={() => openDepartureModal(lastDep)}
               style={styles.lastUsefulSummaryBar}
             >
               {/* Riga 1: Etichetta informativa Ultima Corsa (+ eventuali minuti di ritardo) a sinistra, Orario partenza -> discesa mezzo a destra */}
@@ -1940,59 +2510,45 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                     const lastTrafficMins = Math.max(0, lastDep.trafficDelayMinutes ?? 0);
                     return (
                       <>
-                        {lastLiveInfo.isLiveActive && (
-                          <View
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 4,
-                              paddingHorizontal: 5.5,
-                              paddingVertical: 2,
-                              borderRadius: 5,
-                              borderWidth: 1,
-                              borderColor:
-                                lastLiveMins > 0
-                                  ? lastLiveMins >= 5
-                                    ? "rgba(239, 68, 68, 0.42)"
-                                    : "rgba(245, 158, 11, 0.40)"
-                                  : "rgba(16, 185, 129, 0.36)",
-                              backgroundColor:
-                                lastLiveMins > 0
-                                  ? lastLiveMins >= 5
-                                    ? "rgba(239, 68, 68, 0.14)"
-                                    : "rgba(245, 158, 11, 0.14)"
-                                  : "rgba(16, 185, 129, 0.12)",
-                            }}
-                          >
+                        {lastLiveInfo.isLiveActive &&
+                          (lastLiveMins > 0 ? (
                             <View
                               style={{
-                                width: 6,
-                                height: 6,
-                                borderRadius: 3,
-                                backgroundColor:
-                                  lastLiveMins > 0
-                                    ? lastLiveMins >= 5
-                                      ? "#ef4444"
-                                      : "#f59e0b"
-                                    : "#10b981",
-                              }}
-                            />
-                            <Text
-                              style={{
-                                fontSize: 9.5,
-                                fontWeight: "700",
-                                color:
-                                  lastLiveMins > 0
-                                    ? lastLiveMins >= 5
-                                      ? "#fca5a5"
-                                      : "#fbbf24"
-                                    : "#34d399",
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 4,
                               }}
                             >
-                              {lastLiveMins > 0 ? `+${lastLiveMins}m live` : "Live"}
-                            </Text>
-                          </View>
-                        )}
+                              <View
+                                style={{
+                                  width: 6,
+                                  height: 6,
+                                  borderRadius: 3,
+                                  backgroundColor:
+                                    lastLiveMins >= 5 ? "#ef4444" : "#f59e0b",
+                                }}
+                              />
+                              <Text
+                                style={{
+                                  fontSize: 9.5,
+                                  fontWeight: "700",
+                                  color:
+                                    lastLiveMins >= 5 ? "#fca5a5" : "#fbbf24",
+                                }}
+                              >
+                                +{lastLiveMins}m
+                              </Text>
+                            </View>
+                          ) : (
+                            <View
+                              style={{
+                                width: 7,
+                                height: 7,
+                                borderRadius: 3.5,
+                                backgroundColor: "#10b981",
+                              }}
+                            />
+                          ))}
                         {lastTrafficMins > 0 && (
                           <View
                             style={{
@@ -2156,12 +2712,18 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       <TransitDepartureModal
         visible={Boolean(selectedDepartureModal)}
         departure={selectedDepartureModal}
-        allDepartures={boardData?.departures || []}
-        directLines={boardData?.directLines || []}
+        allDepartures={
+          unfilteredDisplayedDepartures.length > 0
+            ? unfilteredDisplayedDepartures
+            : boardData?.departures || []
+        }
+        directLines={visibleDirectLines}
         isLiveContext={canUseLive}
         theme={theme}
         onClose={() => setSelectedDepartureModal(null)}
-        onSelectDeparture={(newDep) => setSelectedDepartureModal(newDep)}
+        onSelectDeparture={(newDep) => openDepartureModal(newDep)}
+        onRefreshDeparture={handleRefreshModalDeparture}
+        lastUpdatedLabel={boardData?.lastUpdated}
       />
     </View>
   );
@@ -2450,15 +3012,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(0, 0, 0, 0.32)",
     paddingHorizontal: 7,
-    paddingVertical: 3.5,
+    paddingVertical: 2,
+    minHeight: 24,
     borderRadius: 7,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.08)",
   },
   durationInlineBadgeText: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#cbd5e1",
+    includeFontPadding: false,
   },
   transferBadgeRow: {
     flexDirection: "row",
@@ -2481,6 +3045,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 8,
     paddingVertical: 3.5,
+    minHeight: 24,
     borderRadius: 7,
     minWidth: 50,
     justifyContent: "center",
@@ -2489,12 +3054,13 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 11.5,
     fontWeight: "800",
+    includeFontPadding: false,
   },
   liveStatusDotWrap: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: 2,
+    flexShrink: 0,
   },
   liveStatusDot: {
     width: 7,
@@ -2503,20 +3069,24 @@ const styles = StyleSheet.create({
   },
   liveDelayText: {
     color: "#fbbf24",
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: "700",
+    includeFontPadding: false,
   },
   timeScheduledStrike: {
     color: "#64748b",
     fontSize: 11,
     fontWeight: "600",
+    lineHeight: 14,
     textDecorationLine: "line-through",
+    includeFontPadding: false,
   },
   departureTimeMain: {
     color: "#ffffff",
     fontSize: 15,
     fontWeight: "800",
     letterSpacing: -0.3,
+    includeFontPadding: false,
   },
   countdownBadge: {
     flexDirection: "row",
