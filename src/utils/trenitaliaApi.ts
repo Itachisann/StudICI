@@ -3138,6 +3138,254 @@ function applyAndamentoToTrain(
   return true;
 }
 
+function signedMinutesDiff(fromMins: number, toMins: number): number {
+  let diff = toMins - fromMins;
+  if (diff < -720) diff += 1440;
+  if (diff > 720) diff -= 1440;
+  return diff;
+}
+
+/**
+ * Intercetta stati anomali della telemetria andamentoTreno:
+ * - risposta vuota/N.D.
+ * - ritardo "N.D." o nullo sull'ultimo rilevamento
+ * - orario stimato di arrivo già superato senza arrivoReale valorizzato alla discesa
+ */
+function isAndamentoAnomalousOrND(
+  aData: any | null,
+  train: LiveTrainInfo
+): boolean {
+  if (!aData) return true;
+  if (
+    train.trainStatusType === 'cancelled' ||
+    train.trainStatusType === 'diverted' ||
+    train.isArrivedAtDestination
+  ) {
+    return false;
+  }
+
+  const compRitStr = Array.isArray(aData.compRitardo)
+    ? String(aData.compRitardo[0] || '')
+    : '';
+  const hasNdText = /n\.?d\.?|non\s+disponibil/i.test(compRitStr);
+  const hasNullDelay = aData.ritardo === null || aData.ritardo === undefined;
+  const missingDetection =
+    !aData.stazioneUltimoRilevamento && typeof aData.oraUltimoRilevamento !== 'number';
+  if (hasNdText || (hasNullDelay && missingDetection)) {
+    return true;
+  }
+
+  const nowObj = new Date();
+  const nowM = nowObj.getHours() * 60 + nowObj.getMinutes();
+  const estArrStr = train.arrivalTimeActual || train.arrivalTimePlanned || '';
+  const estArrM = parseTimeToMinutes(estArrStr);
+  if (estArrM > 0 && signedMinutesDiff(estArrM, nowM) >= 0 && !train.isArrivedAtDestination) {
+    return true;
+  }
+
+  const planDepM = parseTimeToMinutes(train.departureTimePlanned || '');
+  if (
+    !train.isDeparted &&
+    !train.isDepartedFromStation &&
+    planDepM > 0 &&
+    signedMinutesDiff(planDepM, nowM) >= 2 &&
+    hasNullDelay
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Cross-check sul tabellone della stazione di riferimento (/arrivi o /partenze) quando andamentoTreno
+ * è N.D. o anomalo: usa il tabellone come fonte primaria se fornisce arrivo, ritardo o avvisi;
+ * altrimenti imposta TELEMETRY_UNAVAILABLE e blocca stime basate su ritardi precedenti.
+ */
+async function crossCheckStationBoardForTrain(
+  train: LiveTrainInfo,
+  departureStation: { code: string; name: string },
+  arrivalStation: { code: string; name: string },
+  targetDate: Date
+): Promise<void> {
+  const cleanNum = (train.trainNumber || '').replace(/\D/g, '');
+  if (!cleanNum) return;
+
+  const nowObj = new Date();
+  const nowM = nowObj.getHours() * 60 + nowObj.getMinutes();
+  const planDepM = parseTimeToMinutes(train.departureTimePlanned || '');
+  const isPreDeparture =
+    !train.isDeparted &&
+    !train.isDepartedFromStation &&
+    planDepM > 0 &&
+    signedMinutesDiff(planDepM, nowM) < 0;
+
+  const boardEndpoint = isPreDeparture ? 'partenze' : 'arrivi';
+  const stationCode = isPreDeparture ? departureStation.code : arrivalStation.code;
+  const url = `${VIAGGIATRENO_BASE_URL}/${boardEndpoint}/${stationCode}/${encodeURIComponent(
+    formatViaggiaTrenoDate(targetDate)
+  )}`;
+
+  const list = await fetchViaggiaTrenoJson(url, 3500, 0);
+  const entry = Array.isArray(list)
+    ? list.find((t: any) => String(t?.numeroTreno || '').replace(/\D/g, '') === cleanNum)
+    : undefined;
+
+  const markUnavailable = () => {
+    train.isTelemetryUnavailable = true;
+    train.trainStatusType = 'telemetry_unavailable';
+    train.statusDescription = 'Info non disponibili';
+    train.delayMinutes = 0;
+    train.arrivalDelayAtStation = undefined;
+    train.departureDelayAtStation = undefined;
+    train.arrivalTimeActual = train.arrivalTimePlanned;
+    if (!train.isDepartedFromStation) {
+      train.departureTimeActual = train.departureTimePlanned;
+    }
+    train.isArrivedAtDestination = false;
+    train.isLive = false;
+  };
+
+  if (!entry) {
+    markUnavailable();
+    return;
+  }
+
+  const rawNotice = (
+    entry.segnalazioni ||
+    entry.subTitle ||
+    entry.avviso ||
+    ''
+  ).trim();
+  const delayReason = (entry.motivoRitardoPrevalente || '').trim();
+  const hasNotice = Boolean(rawNotice || delayReason);
+  if (rawNotice) {
+    train.alertMessage = rawNotice;
+  } else if (delayReason) {
+    train.alertMessage = `Causa ritardo: ${delayReason}`;
+  }
+
+  if (entry.provvedimento === 1 || entry.statoTreno === 'SOPPRESSO') {
+    train.isTelemetryUnavailable = false;
+    train.trainStatusType = 'cancelled';
+    train.statusDescription = 'Soppresso';
+    train.isLive = true;
+    return;
+  }
+
+  if (entry.provvedimento === 3 || entry.statoTreno === 'DEVIATO') {
+    train.isTelemetryUnavailable = false;
+    train.trainStatusType = 'diverted';
+    train.statusDescription = 'Deviato';
+    train.isLive = true;
+    if (!train.alertMessage) {
+      train.alertMessage = 'Treno deviato su percorso alternativo da Trenitalia';
+    }
+    return;
+  }
+
+  const entryCompRit = Array.isArray(entry.compRitardo)
+    ? String(entry.compRitardo[0] || '')
+    : '';
+  const entrySaysNd = /n\.?d\.?|non\s+disponibil/i.test(entryCompRit);
+
+  if (!isPreDeparture) {
+    const isArrivedBoard = Boolean(
+      entry.arrivato === true ||
+        (Array.isArray(entry.compInStazioneArrivo) &&
+          String(entry.compInStazioneArrivo[0] || '')
+            .toLowerCase()
+            .includes('arrivato'))
+    );
+    const cleanEffArr = cleanViaggiaTrenoTime(entry.compOrarioEffettivoArrivo);
+    const boardDelay =
+      !entrySaysNd && typeof entry.ritardo === 'number' ? entry.ritardo : undefined;
+    const planArrM = parseTimeToMinutes(train.arrivalTimePlanned || '');
+
+    if (isArrivedBoard) {
+      const resolvedDelay =
+        boardDelay !== undefined
+          ? boardDelay
+          : cleanEffArr && planArrM > 0
+            ? signedMinutesDiff(planArrM, parseTimeToMinutes(cleanEffArr))
+            : 0;
+      train.isTelemetryUnavailable = false;
+      train.isArrivedAtDestination = true;
+      train.isDeparted = true;
+      train.isDepartedFromStation = true;
+      train.trainStatusType = 'arrived';
+      train.statusDescription = 'Arrivato';
+      train.delayMinutes = resolvedDelay;
+      train.arrivalDelayAtStation = resolvedDelay;
+      train.arrivalTimeActual =
+        cleanEffArr ||
+        (planArrM > 0 ? minutesToTime(planArrM + resolvedDelay) : train.arrivalTimePlanned);
+      train.isLive = true;
+      return;
+    }
+
+    if (!entrySaysNd && (boardDelay !== undefined || cleanEffArr || hasNotice)) {
+      const resolvedDelay =
+        boardDelay !== undefined
+          ? boardDelay
+          : cleanEffArr && planArrM > 0
+            ? signedMinutesDiff(planArrM, parseTimeToMinutes(cleanEffArr))
+            : 0;
+      train.isTelemetryUnavailable = false;
+      train.isArrivedAtDestination = false;
+      train.trainStatusType = resolvedDelay > 0 ? 'delayed' : 'running';
+      train.statusDescription =
+        resolvedDelay > 0
+          ? `Ritardo di ${resolvedDelay} min`
+          : resolvedDelay < 0
+            ? `Anticipo di ${Math.abs(resolvedDelay)} min`
+            : 'In viaggio';
+      train.delayMinutes = resolvedDelay;
+      train.arrivalDelayAtStation = resolvedDelay;
+      train.arrivalTimeActual =
+        cleanEffArr ||
+        (planArrM > 0 ? minutesToTime(planArrM + resolvedDelay) : train.arrivalTimePlanned);
+      train.isLive = true;
+      return;
+    }
+
+    markUnavailable();
+    return;
+  }
+
+  // Pre-partenza (/partenze): verifica ritardo aggiornato o avvisi
+  const cleanEffDep = cleanViaggiaTrenoTime(entry.compOrarioEffettivoPartenza);
+  const boardDepDelay =
+    !entrySaysNd && typeof entry.ritardo === 'number' ? entry.ritardo : undefined;
+  const planArrM = parseTimeToMinutes(train.arrivalTimePlanned || '');
+
+  if (!entrySaysNd && (boardDepDelay !== undefined || cleanEffDep || hasNotice)) {
+    const resolvedDelay =
+      boardDepDelay !== undefined
+        ? boardDepDelay
+        : cleanEffDep && planDepM > 0
+          ? signedMinutesDiff(planDepM, parseTimeToMinutes(cleanEffDep))
+          : 0;
+    train.isTelemetryUnavailable = false;
+    train.trainStatusType = resolvedDelay > 0 ? 'delayed' : 'scheduled';
+    train.statusDescription =
+      resolvedDelay > 0 ? `Ritardo di ${resolvedDelay} min` : 'Non partito';
+    train.delayMinutes = resolvedDelay;
+    train.departureDelayAtStation = resolvedDelay;
+    train.departureTimeActual =
+      cleanEffDep ||
+      (planDepM > 0 ? minutesToTime(planDepM + resolvedDelay) : train.departureTimePlanned);
+    if (planArrM > 0) {
+      train.arrivalDelayAtStation = resolvedDelay;
+      train.arrivalTimeActual = minutesToTime(planArrM + resolvedDelay);
+    }
+    train.isLive = true;
+    return;
+  }
+
+  markUnavailable();
+}
+
 /**
  * Calcola con precisione astronomica l'offset UTC in ore del fuso orario italiano
  * (Europe/Rome: CET UTC+1 in inverno, CEST UTC+2 in estate con ora legale).
@@ -3925,11 +4173,11 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
   const isFastOrIC = (t: LiveTrainInfo) => Boolean(t.isFast || t.category === 'IC');
 
   if (isOutbound) {
-    // Cerchiamo treni che arrivano in tempo (entro targetMins + 3 di tolleranza) e prendibili
+    // Cerchiamo treni che arrivano in tempo (entro targetMins) e prendibili
     const onTimeIndices: number[] = [];
     allTrains.forEach((t, idx) => {
       const arr = parseTimeToMinutes(t.arrivalTimePlanned || t.arrivalTimeActual || '');
-      if (arr <= targetMins + 3 && isTrainCatchable(t)) {
+      if (arr <= targetMins && isTrainCatchable(t)) {
         onTimeIndices.push(idx);
       }
     });
@@ -4128,7 +4376,20 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
       targetDate.getTime(),
       forceRefresh
     );
-    if (aData && applyAndamentoToTrain(chosenTrain, aData, departureStation, arrivalStation)) {
+    const appliedAndamento = Boolean(
+      aData && applyAndamentoToTrain(chosenTrain, aData, departureStation, arrivalStation)
+    );
+    if (appliedAndamento) {
+      allTrains[selectedIndexSafe] = chosenTrain;
+    }
+
+    if (!appliedAndamento || isAndamentoAnomalousOrND(aData, chosenTrain)) {
+      await crossCheckStationBoardForTrain(
+        chosenTrain,
+        departureStation,
+        arrivalStation,
+        targetDate
+      );
       allTrains[selectedIndexSafe] = chosenTrain;
     }
 
@@ -4149,10 +4410,20 @@ export async function findOptimalCommuterTrain(options: OptimalTrainOptions): Pr
           targetDate.getTime(),
           forceRefresh
         );
-        if (
+        const appliedNext = Boolean(
           nextAData &&
-          applyAndamentoToTrain(chosenTrain, nextAData, departureStation, arrivalStation)
-        ) {
+            applyAndamentoToTrain(chosenTrain, nextAData, departureStation, arrivalStation)
+        );
+        if (appliedNext) {
+          allTrains[selectedIndexSafe] = chosenTrain;
+        }
+        if (!appliedNext || isAndamentoAnomalousOrND(nextAData, chosenTrain)) {
+          await crossCheckStationBoardForTrain(
+            chosenTrain,
+            departureStation,
+            arrivalStation,
+            targetDate
+          );
           allTrains[selectedIndexSafe] = chosenTrain;
         }
       }
@@ -4348,6 +4619,21 @@ export function evaluateTrainStatus(
       badgeBg: 'rgba(148, 163, 184, 0.12)',
       badgeBorder: 'rgba(148, 163, 184, 0.25)',
       iconName: 'calendar-outline',
+    };
+  }
+
+  // 4B. Se la telemetria risulta non disponibile (es. N.D. su andamentoTreno e tabellone stazione):
+  if (train.isTelemetryUnavailable || train.trainStatusType === 'telemetry_unavailable') {
+    return {
+      statusType: 'warning',
+      badgeLabel: 'Info non disponibili',
+      badgeColor: '#94a3b8',
+      badgeBg: 'rgba(148, 163, 184, 0.14)',
+      badgeBorder: 'rgba(148, 163, 184, 0.3)',
+      iconName: 'alert-circle',
+      alertMessage: train.alertMessage,
+      capacityWarning: train.capacityWarning,
+      delayBadge: undefined,
     };
   }
 

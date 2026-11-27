@@ -172,10 +172,15 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     isOriginCommuter,
   ]);
 
+  const isTelemetryUnavailable = Boolean(
+    liveTrain.isTelemetryUnavailable ||
+      liveTrain.trainStatusType === "telemetry_unavailable"
+  );
+
   // Rileva se il convoglio ha effettivamente iniziato la sua corsa (è partito dall'origine / partenza)
-  // Finchè il treno non è partito, ovunque sia posizionata la partenza, il pallino deve restare grigio
+  // Finchè il treno non è partito o la telemetria è N.D., il pallino deve restare inattivo/grigio
   const isTrainDeparted = useMemo(() => {
-    if (!isToday) return false;
+    if (!isToday || isTelemetryUnavailable) return false;
     if (
       liveTrain.trainStatusType === "cancelled" ||
       liveTrain.statusDescription?.toLowerCase().includes("soppress")
@@ -243,6 +248,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     return Boolean(liveTrain.isDeparted);
   }, [
     isToday,
+    isTelemetryUnavailable,
     liveTrain.isDeparted,
     liveTrain.isDepartedFromStation,
     liveTrain.isArrivedAtDestination,
@@ -263,6 +269,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
   );
   const shouldTickLive = Boolean(
     isToday &&
+      !isTelemetryUnavailable &&
       isFocused &&
       isAppActive &&
       isTrainDeparted &&
@@ -284,7 +291,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
 
   // Calcolo continuo e proporzionato della posizione del convoglio (0.0 a 1.0)
   const trainProgress = useMemo(() => {
-    if (!isToday || !isTrainDeparted) return 0.0;
+    if (!isToday || isTelemetryUnavailable || !isTrainDeparted) return 0.0;
     if (
       liveTrain.trainStatusType === "cancelled" ||
       liveTrain.statusDescription?.toLowerCase().includes("soppress")
@@ -360,6 +367,7 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     return Math.min(progress, 0.97);
   }, [
     isToday,
+    isTelemetryUnavailable,
     isTrainDeparted,
     liveTrain,
     nowDate,
@@ -580,20 +588,22 @@ export const TrainRouteProgress: React.FC<TrainRouteProgressProps> = ({
     nowDate,
   ]);
 
-  // Colore della linea: rossa se ritardo rosso (>5m), gialla se ha ritardo, verde se in orario
+  // Colore della linea: neutra se telemetria N.D., rossa se soppresso o ritardo >5m, gialla se ritardo, verde se in orario
   const trainLineColor = useMemo(() => {
+    if (isTelemetryUnavailable) return "#64748b";
     if (liveTrain.trainStatusType === "cancelled") return "#ef4444";
     if (delayMinutes > 5) return "#ef4444"; // Ritardo rosso (>5m)
     if (delayMinutes > 0) return "#f59e0b"; // Ritardo giallo (1-5m)
     return "#10b981"; // In orario verde
-  }, [liveTrain.trainStatusType, delayMinutes]);
+  }, [isTelemetryUnavailable, liveTrain.trainStatusType, delayMinutes]);
 
   const trainBorderColor = useMemo(() => {
+    if (isTelemetryUnavailable) return "#94a3b8";
     if (liveTrain.trainStatusType === "cancelled") return "#f87171";
     if (delayMinutes > 5) return "#f87171";
     if (delayMinutes > 0) return "#fbbf24";
     return "#34d399";
-  }, [liveTrain.trainStatusType, delayMinutes]);
+  }, [isTelemetryUnavailable, liveTrain.trainStatusType, delayMinutes]);
 
   const depPixelX = trackWidth > 0 ? pDep * trackWidth : 0;
 

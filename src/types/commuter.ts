@@ -175,7 +175,8 @@ export interface LiveTrainInfo {
   originDepartureTimeActual?: string; // orario effettivo di partenza dall'origine
   hasEarlierTrain?: boolean;
   hasLaterTrain?: boolean;
-  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'arrived' | 'cancelled' | 'diverted' | 'interrupted' | 'warning';
+  isTelemetryUnavailable?: boolean;
+  trainStatusType?: 'scheduled' | 'running' | 'on_time' | 'delayed' | 'early' | 'arrived' | 'cancelled' | 'diverted' | 'interrupted' | 'warning' | 'telemetry_unavailable';
   statusBadgeLabel?: string;
   alertMessage?: string;
   capacityWarning?: string;

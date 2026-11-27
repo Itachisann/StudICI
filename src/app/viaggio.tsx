@@ -951,37 +951,102 @@ export default function ViaggioScreen() {
 
   const trainChipsScrollRef = useRef<ScrollView>(null);
   const trainScrollWidthRef = useRef<number>(0);
+  const trainContentWidthRef = useRef<number>(0);
   const chipLayoutsRef = useRef<{
     [key: string]: { x: number; width: number };
   }>({});
+  const centerTrainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lecturesScrollRef = useRef<ScrollView>(null);
 
-  const centerSelectedTrain = useCallback((trainNum: string) => {
-    const cleanNum = trainNum.replace(/\D/g, "");
-    const entry = Object.entries(chipLayoutsRef.current).find(
-      ([k]) => k.replace(/\D/g, "") === cleanNum,
-    );
-    if (!entry) return;
-    const layout = entry[1];
-    const containerWidth = trainScrollWidthRef.current;
-    if (layout && containerWidth > 0 && trainChipsScrollRef.current) {
-      const targetX = layout.x + layout.width / 2 - containerWidth / 2;
-      trainChipsScrollRef.current.scrollTo({
-        x: Math.max(0, targetX),
-        animated: true,
-      });
-    }
-  }, []);
-
   const currentTrainNumber = itinerary?.liveTrain?.trainNumber;
+  const activeSliderTrainNumber = pendingTrainNumber || currentTrainNumber || "";
+  const availableTrainsKey = useMemo(
+    () =>
+      (itinerary?.availableTrains || [])
+        .map((t) => t.trainNumber)
+        .join("|"),
+    [itinerary?.availableTrains],
+  );
+
+  // Chiave di contesto per isolare i layout delle chip tra Andata/Ritorno, giorno e lista treni
+  const sliderLayoutContextKey = `${direction}_${selectedDayIdx}_${availableTrainsKey}`;
+
+  const centerSelectedTrain = useCallback(
+    (trainNum: string, ctxKey: string): boolean => {
+      const cleanNum = trainNum.replace(/\D/g, "");
+      if (!cleanNum) return false;
+      const prefix = `${ctxKey}__`;
+      const entry = Object.entries(chipLayoutsRef.current).find(
+        ([k]) =>
+          k.startsWith(prefix) &&
+          k.slice(prefix.length).replace(/\D/g, "") === cleanNum,
+      );
+      if (!entry) return false;
+      const layout = entry[1];
+      const containerWidth = trainScrollWidthRef.current;
+      if (
+        layout &&
+        containerWidth > 0 &&
+        trainContentWidthRef.current > 0 &&
+        trainChipsScrollRef.current
+      ) {
+        const rawTargetX = layout.x + layout.width / 2 - containerWidth / 2;
+        const maxScrollX =
+          trainContentWidthRef.current > containerWidth
+            ? trainContentWidthRef.current - containerWidth
+            : rawTargetX;
+        const clampedX = Math.max(0, Math.min(maxScrollX, rawTargetX));
+        trainChipsScrollRef.current.scrollTo({
+          x: clampedX,
+          animated: true,
+        });
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  const scheduleCenterSelectedTrain = useCallback(
+    (trainNum: string, delayMs = 80) => {
+      if (!trainNum) return;
+      const runAttempt = (waitMs: number, attempt: number) => {
+        if (centerTrainTimerRef.current) {
+          clearTimeout(centerTrainTimerRef.current);
+        }
+        centerTrainTimerRef.current = setTimeout(() => {
+          centerTrainTimerRef.current = null;
+          const centered = centerSelectedTrain(
+            trainNum,
+            sliderLayoutContextKey,
+          );
+          if (!centered && attempt < 6) {
+            runAttempt(100, attempt + 1);
+          }
+        }, waitMs);
+      };
+      runAttempt(delayMs, 0);
+    },
+    [centerSelectedTrain, sliderLayoutContextKey],
+  );
+
   useEffect(() => {
-    if (currentTrainNumber) {
-      const t = setTimeout(() => {
-        centerSelectedTrain(currentTrainNumber);
-      }, 100);
-      return () => clearTimeout(t);
+    if (activeSliderTrainNumber) {
+      scheduleCenterSelectedTrain(activeSliderTrainNumber, 90);
     }
-  }, [currentTrainNumber, centerSelectedTrain]);
+    return () => {
+      if (centerTrainTimerRef.current) {
+        clearTimeout(centerTrainTimerRef.current);
+        centerTrainTimerRef.current = null;
+      }
+    };
+  }, [
+    activeSliderTrainNumber,
+    direction,
+    selectedDayIdx,
+    availableTrainsKey,
+    scheduleCenterSelectedTrain,
+  ]);
 
   // Stato live, programmato, avvisi e capienza Trenitalia del treno
   const liveTrain = itinerary?.liveTrain;
@@ -2009,7 +2074,7 @@ export default function ViaggioScreen() {
             didEnrichFromCache)),
     );
 
-    centerSelectedTrain(trainNum);
+    scheduleCenterSelectedTrain(trainNum, 0);
     selectedTrainNumberRef.current = trainNum;
     selectedTrainOffsetRef.current = 0;
     setSelectedTrainNumber(trainNum);
@@ -4741,6 +4806,33 @@ export default function ViaggioScreen() {
                                           </Text>
                                         );
                                       }
+                                      const isDepTelemetryUnavailable = Boolean(
+                                        (itinerary.liveTrain
+                                          .isTelemetryUnavailable ||
+                                          itinerary.liveTrain.trainStatusType ===
+                                            "telemetry_unavailable") &&
+                                        !itinerary.liveTrain
+                                          .isDepartedFromStation,
+                                      );
+                                      if (isDepTelemetryUnavailable) {
+                                        return (
+                                          <>
+                                            <Text style={styles.trainTimeText}>
+                                              {depPlanTime}
+                                            </Text>
+                                            <Text
+                                              style={{
+                                                fontSize: 10,
+                                                fontWeight: "700",
+                                                color: "#94a3b8",
+                                                marginTop: 1,
+                                              }}
+                                            >
+                                              N.D.
+                                            </Text>
+                                          </>
+                                        );
+                                      }
 
                                       const depPlanM =
                                         parseTimeToMinutes(depPlanTime);
@@ -5003,6 +5095,30 @@ export default function ViaggioScreen() {
                                           <Text style={styles.trainTimeText}>
                                             {arrPlanTime}
                                           </Text>
+                                        );
+                                      }
+                                      if (
+                                        itinerary.liveTrain
+                                          .isTelemetryUnavailable ||
+                                        itinerary.liveTrain.trainStatusType ===
+                                          "telemetry_unavailable"
+                                      ) {
+                                        return (
+                                          <>
+                                            <Text style={styles.trainTimeText}>
+                                              {arrPlanTime}
+                                            </Text>
+                                            <Text
+                                              style={{
+                                                fontSize: 10,
+                                                fontWeight: "700",
+                                                color: "#94a3b8",
+                                                marginTop: 1,
+                                              }}
+                                            >
+                                              N.D.
+                                            </Text>
+                                          </>
                                         );
                                       }
 
@@ -5708,9 +5824,19 @@ export default function ViaggioScreen() {
                                         onLayout={(e) => {
                                           trainScrollWidthRef.current =
                                             e.nativeEvent.layout.width;
-                                          if (itinerary.liveTrain?.trainNumber) {
-                                            centerSelectedTrain(
-                                              itinerary.liveTrain.trainNumber,
+                                          if (activeSliderTrainNumber) {
+                                            scheduleCenterSelectedTrain(
+                                              activeSliderTrainNumber,
+                                              60,
+                                            );
+                                          }
+                                        }}
+                                        onContentSizeChange={(w) => {
+                                          trainContentWidthRef.current = w;
+                                          if (activeSliderTrainNumber) {
+                                            scheduleCenterSelectedTrain(
+                                              activeSliderTrainNumber,
+                                              60,
                                             );
                                           }
                                         }}
@@ -5864,15 +5990,16 @@ export default function ViaggioScreen() {
                                               activeOpacity={0.78}
                                               onLayout={(e) => {
                                                 chipLayoutsRef.current[
-                                                  at.trainNumber
+                                                  `${sliderLayoutContextKey}__${at.trainNumber}`
                                                 ] = {
                                                   x: e.nativeEvent.layout.x,
                                                   width:
                                                     e.nativeEvent.layout.width,
                                                 };
                                                 if (isCurrent) {
-                                                  centerSelectedTrain(
+                                                  scheduleCenterSelectedTrain(
                                                     at.trainNumber,
+                                                    60,
                                                   );
                                                 }
                                               }}
@@ -8451,17 +8578,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     alignSelf: "flex-start",
+    maxWidth: "100%",
     marginTop: 3,
     marginBottom: 4,
   },
   legCustomBadgeText: {
     fontSize: 11,
     fontWeight: "600",
+    flexShrink: 1,
   },
   stepNotesText: {
     fontSize: 11,
     color: "#cbd5e1",
     marginTop: 2,
+    flexShrink: 1,
   },
 
   /* Avviso Traffico Prominente */

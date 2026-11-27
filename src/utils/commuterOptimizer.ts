@@ -638,7 +638,7 @@ async function computeOutboundItinerary(
   let resolvedOutboundLiveContext: boolean | undefined;
   let resolvedOutboundConstraintTime: string | undefined;
   let resolvedOutboundMinDepTime: string | undefined;
-  const actualRomeStation = getRomeStationName(config, train, 'outbound');
+  let actualRomeStation = getRomeStationName(config, train, 'outbound');
 
   let activeTransitSolution = transitSolution;
   let activeTransitMins = transitMins;
@@ -872,6 +872,138 @@ async function computeOutboundItinerary(
     }
   }
 
+  const targetDateStr = targetDate.toISOString().slice(0, 10);
+
+  // Verifica con il tabellone reale dei bus che il treno standard selezionato automaticamente non faccia
+  // perdere minuti di lezione (es. attesa coincidenza bus più lunga della stima statica).
+  // Se fa arrivare dopo l'inizio della lezione e non c'è una scelta manuale/preferita, scala al treno precedente utile.
+  if (
+    targetLecture &&
+    activeTransitSolution &&
+    activeTransitSolution.mode !== 'walk' &&
+    !fastCalendarMode &&
+    selectedTrainOffset === 0 &&
+    !selectedTrainNumber &&
+    !hasPreferredOutbound &&
+    selectedIndex > 0
+  ) {
+    const lectureStartM = parseTimeToMinutes(targetLecture.startTime);
+    const lectureEndM = parseTimeToMinutes(targetLecture.endTime);
+    const lectureNotStartedYet = !isToday || nowMins < lectureStartM;
+
+    if (lectureNotStartedYet && lectureEndM > lectureStartM) {
+      const targetLabel = targetLecture.buildingName
+        ? `${targetLecture.buildingName} (${targetLecture.room})`
+        : targetLecture.room;
+      const targetCoords =
+        targetLecture.latitude && targetLecture.longitude
+          ? { lat: targetLecture.latitude, lng: targetLecture.longitude }
+          : undefined;
+
+      const estimateRealArrivalForTrain = async (
+        candTrain: LiveTrainInfo,
+        candRomeStation: string,
+        candStaticTransitMins: number,
+        isWalk: boolean
+      ): Promise<number | null> => {
+        const cDepM = parseTimeToMinutes(
+          candTrain.departureTimePlanned || candTrain.departureTimeActual || ''
+        );
+        const cArrStr =
+          (isToday
+            ? candTrain.arrivalTimeActual || candTrain.arrivalTimePlanned
+            : candTrain.arrivalTimePlanned || candTrain.arrivalTimeActual) || '';
+        const cArrM = parseTimeToMinutes(cArrStr);
+        if (cDepM <= 0 || cArrM <= 0) return null;
+
+        const cArrRel = normalizeRelativeMinutes(cArrM, cDepM);
+        if (isWalk) return cArrRel + candStaticTransitMins;
+
+        try {
+          const isTransitLive = Boolean(
+            isToday && Math.abs(normalizeRelativeMinutes(cArrM, nowMins) - nowMins) <= 90
+          );
+          const board = await getStationTransitBoard({
+            stationName: candRomeStation,
+            targetName: targetLabel,
+            targetCoords,
+            targetDate: isTransitLive ? undefined : targetDateStr,
+            targetTime: isTransitLive ? 'now' : targetLecture!.startTime,
+            direction: 'to_campus',
+            isLiveContext: isTransitLive,
+            constraintTime: targetLecture!.startTime,
+            minDepartureTime: cArrStr,
+            arrivalBufferMinutes: bufferMins,
+            forceRefresh,
+          });
+          const opt = board.optimalDeparture || board.departures[0];
+          const optArrM = opt ? parseTimeToMinutes(opt.arrivalTime) : -1;
+          if (optArrM >= 0) {
+            return normalizeRelativeMinutes(optArrM, cArrRel);
+          }
+        } catch {
+          // fallback alla stima statica
+        }
+        return cArrRel + candStaticTransitMins;
+      };
+
+      const currentRealArrM = await estimateRealArrivalForTrain(
+        train,
+        actualRomeStation,
+        activeTransitMins,
+        false
+      );
+
+      if (currentRealArrM !== null && currentRealArrM > lectureStartM) {
+        for (let prevIdx = selectedIndex - 1; prevIdx >= Math.max(0, selectedIndex - 3); prevIdx--) {
+          const cand = availableTrains[prevIdx];
+          if (!cand || !isTrainCatchable(cand)) continue;
+
+          const candStation = getRomeStationName(config, cand, 'outbound');
+          let candTransit = activeTransitSolution;
+          let candTransitMins = activeTransitMins;
+          if (candStation !== actualRomeStation) {
+            const recalc = getOptimalRomeTransit({
+              fromStationCode: config.arrivalStation.code,
+              fromStationName: candStation,
+              classroom: {
+                displayName: targetLecture.room,
+                buildingName: targetLecture.buildingName || '',
+                buildingCode: targetLecture.buildingCode || '',
+                address: targetLecture.address,
+                latitude: targetLecture.latitude,
+                longitude: targetLecture.longitude,
+              },
+              direction: 'to_campus',
+              preferredMode: config.transitLeg?.preferredMode || 'auto',
+            });
+            if (recalc) {
+              candTransit = recalc;
+              candTransitMins = recalc.durationMinutes;
+            }
+          }
+
+          const candRealArrM = await estimateRealArrivalForTrain(
+            cand,
+            candStation,
+            candTransitMins,
+            candTransit.mode === 'walk'
+          );
+
+          if (candRealArrM !== null && candRealArrM <= lectureStartM) {
+            train = cand;
+            selectedIndex = prevIdx;
+            optimalTrainResult.recommendedIndex = prevIdx;
+            actualRomeStation = candStation;
+            activeTransitSolution = candTransit;
+            activeTransitMins = candTransitMins;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // NOTA COMMUTER: La partenza del treno a cui ancorare il viaggio per non perdere la coincidenza
   // deve essere SEMPRE l'orario programmato ufficiale (il ritardo non posticipa la partenza programmata da casa).
   // Se la data è oggi, l'arrivo effettivo a destinazione incorpora il ritardo reale (arrivalTimeActual);
@@ -885,8 +1017,6 @@ async function computeOutboundItinerary(
   const stationReachMins = trainDepMins - parkDuration;
   // Orario di partenza da casa (anticipato dell'intera durata auto comprensiva di ritardo traffico)
   const homeDepartureMins = stationReachMins - carDuration;
-
-  const targetDateStr = targetDate.toISOString().slice(0, 10);
 
   // Calcola orari intermedi
   const legs: TripLeg[] = [];

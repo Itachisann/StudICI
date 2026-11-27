@@ -2954,12 +2954,9 @@ export async function getStationTransitBoard(options: {
           );
 
           const liveDepDelayMins = legHasRealtimeFlag
-            ? Math.max(
-                0,
-                schedStartM >= 0 && liveStartM >= 0
-                  ? signedClockDiffMins(schedStartM, liveStartM)
-                  : Math.round(rawDepDelaySec / 60)
-              )
+            ? schedStartM >= 0 && liveStartM >= 0
+              ? signedClockDiffMins(schedStartM, liveStartM)
+              : Math.round(rawDepDelaySec / 60)
             : 0;
           const liveRideDur =
             legHasRealtimeFlag && liveStartM >= 0 && liveEndM >= 0
@@ -3050,7 +3047,7 @@ export async function getStationTransitBoard(options: {
             : fluency.departureTrafficDelayMinutes;
           let effStartM =
             schedStartM >= 0
-              ? (schedStartM + (legHasRealtimeFlag ? liveDepDelayMins : appliedDepTraffic)) % 1440
+              ? (schedStartM + (legHasRealtimeFlag ? liveDepDelayMins : appliedDepTraffic) + 1440) % 1440
               : liveStartM;
 
           // Nei cambi multi-tratta preserva il tempo minimo di interscambio se la tratta precedente ha accumulato ritardo
@@ -3243,6 +3240,9 @@ export async function getStationTransitBoard(options: {
           } else {
             statusLabel = `Traffico stimato (+${delayMins}m)`;
           }
+        } else if (totalLiveDelayMins <= -1) {
+          statusType = 'on_time';
+          statusLabel = `In anticipo (${totalLiveDelayMins}m)`;
         } else if (isRealtimeFeed) {
           statusType = 'on_time';
           statusLabel = 'In orario';
