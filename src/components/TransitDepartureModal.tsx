@@ -3011,9 +3011,6 @@ const TransitDepartureModalContent: React.FC<
               const trafficDelayText = isHeavyTrafficDelay
                 ? "#fca5a5"
                 : "#fbbf24";
-              const trafficDelayPillBg = isHeavyTrafficDelay
-                ? "rgba(239, 68, 68, 0.18)"
-                : "rgba(245, 158, 11, 0.18)";
               const trafficDelayPillBorder = isHeavyTrafficDelay
                 ? "rgba(239, 68, 68, 0.45)"
                 : "rgba(245, 158, 11, 0.44)";
@@ -3128,28 +3125,6 @@ const TransitDepartureModalContent: React.FC<
                       >
                         {boxStyle.title}
                       </Text>
-                      {trafficDelayMins > 0 && (
-                        <View
-                          style={{
-                            backgroundColor: trafficDelayPillBg,
-                            borderColor: trafficDelayPillBorder,
-                            borderWidth: 1,
-                            borderRadius: 6,
-                            paddingHorizontal: 6,
-                            paddingVertical: 1.5,
-                          }}
-                        >
-                          <Text
-                            style={{
-                              fontSize: 10,
-                              fontWeight: "800",
-                              color: trafficDelayText,
-                            }}
-                          >
-                            +{trafficDelayMins} min traffico
-                          </Text>
-                        </View>
-                      )}
                     </View>
                     <Text
                       style={{

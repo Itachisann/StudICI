@@ -1479,17 +1479,22 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
       }
 
       const liveDelayMins =
-        typeof dep.liveDelayMinutes === "number"
-          ? Math.max(0, dep.liveDelayMinutes)
-          : 0;
+        typeof dep.liveDelayMinutes === "number" ? dep.liveDelayMinutes : 0;
       const isLiveDelayed = liveDelayMins >= 1;
+      const isLiveEarly = liveDelayMins <= -1;
       const isHeavyLiveDelay = isLiveDelayed && liveDelayMins >= 5;
       const dotColor = isLiveDelayed
         ? isHeavyLiveDelay
           ? "#ef4444"
           : "#f59e0b"
-        : "#10b981";
-      const delayText = isLiveDelayed ? `+${liveDelayMins}m` : "In orario";
+        : isLiveEarly
+          ? "#10b981"
+          : undefined;
+      const delayText = isLiveDelayed
+        ? `+${liveDelayMins}m`
+        : isLiveEarly
+          ? `${liveDelayMins}m`
+          : null;
 
       return {
         isLiveActive: true,
@@ -2259,14 +2264,45 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                       dep.scheduledTime !== displayTime,
                   );
                   const trafficMins = Math.max(0, dep.trafficDelayMinutes ?? 0);
-                  const liveMins = Math.max(0, dep.liveDelayMinutes ?? 0);
-                  const trafficIsHeavy = trafficMins >= 5;
+                  const liveMins = dep.liveDelayMinutes ?? 0;
+                  const trafficIsHeavy =
+                    trafficMins >= 5 || dep.trafficFluency === "intenso";
+                  const isMultiLeg = Boolean(
+                    !dep.isDirect || dep.transfersCount > 0,
+                  );
+                  const liveDelayNode =
+                    isLiveTrip && dotColor && liveMins !== 0 ? (
+                      <View style={styles.liveStatusDotWrap}>
+                        <View
+                          style={[
+                            styles.liveStatusDot,
+                            { backgroundColor: dotColor },
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.liveDelayText,
+                            {
+                              color:
+                                liveMins < 0
+                                  ? "#34d399"
+                                  : liveMins >= 5
+                                    ? "#fca5a5"
+                                    : "#fbbf24",
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {liveMins > 0 ? `+${liveMins}m` : `${liveMins}m`}
+                        </Text>
+                      </View>
+                    ) : null;
 
                   return (
                     <>
-                      {/* SEZIONE 1: Riga unica – badge linea | pallino/+Xm | orario | durata */}
+                      {/* SEZIONE 1: Riga unica – badge linea | pallino/+Xm inline (tratta diretta) | orario */}
                       <View style={styles.schematicTopRow}>
-                        {/* Sinistra: numero bus + pallino ufficiale + eventuale ritardo live */}
+                        {/* Sinistra: badge linea + (se diretta) pallino/ritardo inline */}
                         <View
                           style={{
                             flexDirection: "row",
@@ -2278,41 +2314,18 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                             marginRight: 8,
                           }}
                         >
-                          <View style={{ flexShrink: 0 }}>
+                          <View
+                            style={{
+                              flexShrink: 0,
+                              minHeight: 24,
+                              justifyContent: "center",
+                            }}
+                          >
                             {renderLineBadges(dep)}
                           </View>
 
-                          {isLiveTrip &&
-                            dotColor &&
-                            (liveMins > 0 ? (
-                              <View style={styles.liveStatusDotWrap}>
-                                <View
-                                  style={[
-                                    styles.liveStatusDot,
-                                    { backgroundColor: dotColor },
-                                  ]}
-                                />
-                                <Text
-                                  style={[
-                                    styles.liveDelayText,
-                                    {
-                                      color:
-                                        liveMins >= 5 ? "#fca5a5" : "#fbbf24",
-                                    },
-                                  ]}
-                                  numberOfLines={1}
-                                >
-                                  +{liveMins}m
-                                </Text>
-                              </View>
-                            ) : (
-                              <View
-                                style={[
-                                  styles.liveStatusDot,
-                                  { backgroundColor: dotColor },
-                                ]}
-                              />
-                            ))}
+                          {/* Ritardo/anticipo inline solo per tratte dirette */}
+                          {!isMultiLeg && liveDelayNode}
                         </View>
 
                         {/* Orario a destra: riga primaria allineata a bus/pallino, eventuale barrato sotto */}
@@ -2328,7 +2341,10 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                               <Text
                                 style={[
                                   styles.departureTimeMain,
-                                  hasDepTimeShift && { color: "#fbbf24" },
+                                  hasDepTimeShift && {
+                                    color:
+                                      liveMins < 0 ? "#34d399" : "#fbbf24",
+                                  },
                                 ]}
                                 numberOfLines={1}
                               >
@@ -2350,6 +2366,13 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                         </View>
                       </View>
 
+                      {/* Ritardo/anticipo su riga dedicata sotto i badge (solo tratte con cambio) */}
+                      {isMultiLeg && liveDelayNode && (
+                        <View style={{ marginTop: 4 }}>
+                          {liveDelayNode}
+                        </View>
+                      )}
+
                       {(!dep.isDirect || dep.transfersCount > 0) && (
                         <View style={styles.transferBadgeRow}>
                           <Ionicons
@@ -2368,11 +2391,25 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
 
                       {/* SEZIONE 2: Riquadro direzione + traffico a sinistra + countdown a destra */}
                       <View style={styles.schematicBody}>
-                        {/* Riga direzione con traffico + countdown */}
+                        {/* Riga direzione + countdown */}
                         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                          {/* Sinistra: Direzione (con chevron) */}
+                          {/* Sinistra: freccia direzione (colonna fissa 14px) + destinazione */}
                           <View style={{ flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0 }}>
-                            <Text style={styles.schemaFieldLabel}>Direzione:</Text>
+                            <View
+                              style={{
+                                width: 14,
+                                alignItems: "center",
+                                justifyContent: "center",
+                                marginRight: 6,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Ionicons
+                                name="arrow-forward"
+                                size={12}
+                                color="#64748b"
+                              />
+                            </View>
                             <Text
                               style={[styles.schemaFieldValue, { flexShrink: 1 }]}
                               numberOfLines={1}
@@ -2387,69 +2424,103 @@ export const TransitBoardCard: React.FC<TransitBoardCardProps> = ({
                             />
                           </View>
 
-                          {/* Destra: countdown compatto */}
-                          {countdown && (
-                            <Text
+                          {/* Destra: countdown compatto (larghezza condivisa per allineare la chevron al traffico) */}
+                          {(countdown || trafficMins > 0) && (
+                            <View
                               style={{
-                                fontSize: 10.5,
-                                fontWeight: "700",
-                                color: "#34d399",
+                                minWidth: 46,
+                                alignItems: "flex-end",
                                 marginLeft: 8,
                                 flexShrink: 0,
                               }}
-                              numberOfLines={1}
                             >
-                              {countdown}
-                            </Text>
+                              {countdown && (
+                                <Text
+                                  style={{
+                                    fontSize: 10.5,
+                                    fontWeight: "700",
+                                    color: "#34d399",
+                                  }}
+                                  numberOfLines={1}
+                                >
+                                  {countdown}
+                                </Text>
+                              )}
+                            </View>
                           )}
                         </View>
 
-                        {/* Riga traffico sotto direzione (solo se presente) */}
+                        {/* Riga traffico sotto direzione: pallino allineato a freccia, testo e chevron allineati sopra, +X min a destra */}
                         {trafficMins > 0 && (
                           <View
                             style={{
                               flexDirection: "row",
                               alignItems: "center",
+                              justifyContent: "space-between",
                               marginTop: 4,
                             }}
                           >
-                            <Text
-                              style={{
-                                color: "#64748b",
-                                fontSize: 10.5,
-                                fontWeight: "700",
-                                marginRight: 6,
-                              }}
-                            >
-                              Ritardo aggiuntivo:
-                            </Text>
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 4,
-                              }}
-                            >
+                            <View style={{ flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0 }}>
                               <View
                                 style={{
-                                  width: 6.5,
-                                  height: 6.5,
-                                  borderRadius: 3.25,
-                                  borderWidth: 1.5,
-                                  borderColor: trafficIsHeavy
-                                    ? "#f87171"
-                                    : "#fbbf24",
-                                  backgroundColor: "transparent",
+                                  width: 14,
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  marginRight: 6,
+                                  flexShrink: 0,
                                 }}
+                              >
+                                <View
+                                  style={{
+                                    width: 7,
+                                    height: 7,
+                                    borderRadius: 3.5,
+                                    borderWidth: 1.5,
+                                    borderColor: trafficIsHeavy
+                                      ? "#f87171"
+                                      : "#fbbf24",
+                                    backgroundColor: "transparent",
+                                  }}
+                                />
+                              </View>
+                              <Text
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  fontSize: 10.5,
+                                  fontWeight: "600",
+                                  color: "#94a3b8",
+                                }}
+                                numberOfLines={1}
+                              >
+                                {trafficIsHeavy
+                                  ? "Traffico intenso"
+                                  : "Traffico moderato"}
+                              </Text>
+                              <Ionicons
+                                name="chevron-forward"
+                                size={13}
+                                color="#64748b"
+                                style={{ marginLeft: 4, flexShrink: 0 }}
                               />
+                            </View>
+                            <View
+                              style={{
+                                minWidth: 46,
+                                alignItems: "flex-end",
+                                marginLeft: 8,
+                                flexShrink: 0,
+                              }}
+                            >
                               <Text
                                 style={{
                                   fontSize: 10.5,
                                   fontWeight: "700",
                                   color: trafficIsHeavy ? "#f87171" : "#fbbf24",
                                 }}
+                                numberOfLines={1}
                               >
-                                ~+{trafficMins}m traffico
+                                +{trafficMins} min
                               </Text>
                             </View>
                           </View>

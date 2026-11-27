@@ -5,6 +5,16 @@ pubblicato automaticamente come note della **GitHub Release** (vedi `.github/wor
 
 > **Regola di rilascio:** a ogni nuova versione aggiungere qui una sezione `## 1.x.y` _prima_ del push.
 
+## 2.0.3
+
+### Treni e ViaggiaTreno
+- **Cross-check tabellone stazione e stato N.D. (`trenitaliaApi.ts`, `TrainRouteProgress.tsx`, `viaggio.tsx`, `commuter.ts`)**: intercettate le risposte `andamentoTreno` vuote, `N.D.` o con orario di arrivo superato senza `arrivoReale` valorizzato (`isAndamentoAnomalousOrND()`, `crossCheckStationBoardForTrain()`). In questi casi viene interrogato il tabellone della stazione (`/arrivi` della discesa o `/partenze` della salita): se il tabellone conferma arrivo, ritardo o avvisi diventa la fonte primaria; altrimenti lo stato passa a `telemetry_unavailable` con badge `"Info non disponibili"` senza badge di ritardo, orari mostrati come programmati con indicazione `"N.D."` e barra di progresso in stato neutro inattivo.
+- **Centratura slider treni (`viaggio.tsx`)**: corretto lo scorrimento dello slider dei treni all'avvio, al cambio tab `Andata` ↔ `Ritorno` e al tap su `Treno prima` / `Treno dopo` tramite reset sincrono delle misure al cambio contesto (`lastSliderLayoutContextRef`), limite massimo basato su `onContentSizeChange` e retry automatico finché i layout delle chip non sono pronti.
+- **Selezione treno standard e wrapping card finale (`trenitaliaApi.ts`, `commuterOptimizer.ts`, `viaggio.tsx`)**: rimossa la tolleranza `+3` minuti nella selezione automatica outbound e aggiunto un controllo post-risoluzione sul tabellone reale dei mezzi urbani (`getStationTransitBoard`) in modo che, se il treno standard fa arrivare in aula dopo l'inizio della lezione, venga selezionato automaticamente il treno precedente utile. Aggiunto inoltre il wrapping completo (`maxWidth: "100%"`, `flexShrink: 1`) su badge e note della card finale di arrivo a lezione.
+
+### Mezzi Urbani e Dettaglio Corsa
+- **Anticipi live e layout card mezzi (`transitBoardService.ts`, `TransitBoardCard.tsx`, `TransitDepartureModal.tsx`)**: preservati gli anticipi negativi GTFS-RT (`-Xm`), assegnando il pallino verde (`#10b981`) esclusivamente alle corse in anticipo e rimuovendolo dalle corse semplicemente in orario. Sostituita l'etichetta `"Direzione:"` con l'icona freccia destra e allineata la riga traffico a griglia sotto la direzione (pallino sotto la freccia, `"Traffico moderato"` / `"Traffico intenso"`, chevron allineata a quella superiore della direzione e `+X min` a destra); sulle tratte con cambio (`isMultiLeg`), l'indicatore di ritardo o anticipo è posizionato sotto i badge delle linee. Rimosso infine il badge `+{trafficDelayMins} min traffico` dall'intestazione del riquadro traffico in `TransitDepartureModal.tsx`.
+
 ## 2.0.2
 
 ### Mezzi Urbani e Dettaglio Corsa
